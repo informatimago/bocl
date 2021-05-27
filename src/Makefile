@@ -64,5 +64,8 @@ kernel_objects.h kernel_objects.c : generate-kernel-objects.lisp
 kernel.o:kernel.c kernel.h kernel_objects.h
 
 
-check:bocl
-    ./bocl
+test:bocl
+	$(VERBOSE) output=$$(./bocl 2>&1) || ( status=$$? ;\
+	[ "$$output" = $$'\n'"ERROR: in bocl_read_eval_loop_cstring: NOT IMPLEMENTED YET" ] \
+	&& [ $$status -eq 2 ] )
+	@echo Success
