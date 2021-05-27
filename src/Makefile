@@ -72,7 +72,8 @@ kernel.o:kernel.c kernel.h kernel_objects.h
 
 
 test:bocl
+	@printf "# Testing\n"
 	$(VERBOSE) output=$$(./bocl 2>&1) || ( status=$$? ;\
 	[ "$$output" = $$'\n'"ERROR: in bocl_read_eval_loop_cstring: NOT IMPLEMENTED YET" ] \
 	&& [ $$status -eq 2 ] )
-	@echo Success
+	@printf "# Success\n"
