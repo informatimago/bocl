@@ -1,6 +1,7 @@
 #ifndef kernel_types_h
 #define kernel_types_h
 #include <stdio.h>
+#include <stdint.h>
 
 #ifdef _POSIX_V6_LP64_OFF64
 typedef int64_t  word;
@@ -144,7 +145,7 @@ typedef struct FileStream {
     BLOCK_HEADER; \
     Object* name; \
     Object* direct_superclasses
-    
+
 typedef struct Class {
     CLASS_HEADER;
 } Class;
