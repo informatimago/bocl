@@ -3,6 +3,8 @@ all:bocl
 VERBOSE=@
 #VERBOSE=
 
+UNAME=$(shell uname)
+
 CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                              \
             -fsanitize=bounds -fsanitize=vla-bound                                  \
             -fsanitize=unreachable -fsanitize=return -fsanitize=shift               \
@@ -15,15 +17,20 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
             -fstack-check
 
 LD_SANITIZE_FLAGS = -fsanitize=leak
-DEBUG_FLAGS       = -g -g3 -ggdb -O0
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
+DEBUG_FLAGS       = -g -g3 -ggdb -O0
 
+ifeq ($(UNAME),Darwin)
 CFLAGS    = -x c -std=c11  $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS)
 LDFLAGS   = $(LD_SANITIZE_FLAGS) $(DEBUG_FLAGS)
-
 LIBRARIES = \
 	-L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin \
 	-lclang_rt.asan_osx_dynamic
+else
+CFLAGS    = -x c -std=c11 $(DEBUG_FLAGS)
+LDFLAGS   = $(DEBUG_FLAGS)
+LIBRARIES =
+endif
 
 %.o:%.c
 	@ printf "# Compiling %s from %s\n" "$@" "$<"
