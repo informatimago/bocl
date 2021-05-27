@@ -10,7 +10,7 @@ build-code-job:
     - make bocl
   artifacts:
     paths:
-      - bocl
+      - src/bocl
     expire_in: 3 days
 
 test-code-job:
