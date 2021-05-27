@@ -8,6 +8,10 @@ build-code-job:
   script:
     - echo "Compile the bocl executable:"
     - make bocl
+  artifacts:
+    paths:
+      - bocl
+    expire_in: 3 days
 
 test-code-job:
   stage: test
