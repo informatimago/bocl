@@ -1,0 +1,1366 @@
+# -*- mode:org;coding:utf-8 -*-
+
+#+AUTHOR: Pascal J. Bourguignon
+#+EMAIL: pjb@informatimago.com
+#+DATE: Tue May 25 14:54:23 CEST 2021
+#+TITLE: Specifications of the BOCL Bootstrap Common Lisp Implementation
+
+* Prologue                                                         :noexport:
+
+#+LATEX_HEADER: \usepackage[english]{babel}
+#+LATEX_HEADER: \usepackage[autolanguage]{numprint} % Must be loaded *after* babel.
+#+LATEX_HEADER: \usepackage{rotating}
+#+LATEX_HEADER: \usepackage{float}
+#+LATEX_HEADER: \usepackage{fancyhdr}
+#+LATEX_HEADER: \usepackage[margin=0.75in]{geometry}
+
+# LATEX_HEADER: \usepackage{indentfirst}
+# LATEX_HEADER: \setlength{\parindent}{0pt}
+#+LATEX_HEADER: \usepackage{parskip}
+
+#+LATEX_HEADER: \usepackage{tikz}
+#+LATEX_HEADER: \usetikzlibrary{positioning, fit, calc, shapes, arrows}
+#+LATEX_HEADER: \usepackage[underline=false]{pgf-umlsd}
+#+LATEX_HEADER: \usepackage{lastpage}
+#+LATEX_HEADER: \pagestyle{fancyplain}
+#+LATEX_HEADER: \pagenumbering{arabic}
+#+LATEX_HEADER: \lhead{\small{Bootstrap Common Lisp}}
+#+LATEX_HEADER: \chead{}
+#+LATEX_HEADER: \rhead{\small{Specifications}}
+#+LATEX_HEADER: \lfoot{}
+#+LATEX_HEADER: \cfoot{\tiny{\copyright{} Pascal J. Bourguignon}}
+#+LATEX_HEADER: \rfoot{\small{Page \thepage \hspace{1pt} de \pageref{LastPage}}}
+
+* Welcome to Bootstrap Common Lisp, or BOCL for short.
+
+From Robert Strandh
+
+BOCL is (meant to one day be) a fully conforming Common Lisp
+implementation with a twist.  It is only meant for bootstrapping other
+Common Lisp implementations on platforms where, for some reason, no
+Common Lisp implementation is already available.  It is not meant for
+writing end-user applications.
+
+This main purpose of BOCL has some consequences to the way it is
+implemented.  In particular, there is no attempt to make it fast.
+Instead, the emphasis is on simplicity, maintainability, and
+correctness.  Specifically:
+
+- We use the Boehm-Weiser conservative garbage collector.
+
+- We take advantage of all situations in which the Common Lisp
+  standard states that some behavior is undefined or implementation
+  defined, in that we then do whatever is the easiest solution for the
+  situation.
+
+- The type FIXNUM does not have a corresponding class.  All integers
+  are represented the same way.
+
+- All objects have the same basic representation as a header
+  containing a pointer to the class of the object and a pointer to a
+  vector (not a Common Lisp vector) with the objects-specific
+  contents.
+
+- The only specialized arrays are those mandated by the Common Lisp
+  standard, and even those arrays do not use any special
+  representation.  Thus an array of single bits will still have a full
+  BOCL object for each element, but that object is either the integer
+  0 or the integer 1.
+
+- More generally, we make no attempt to save space.
+
+- Hash tables are internally implemented as lists for simplicity.
+
+- There is no attempt to handle tail-call merging.
+
+- All functions are called with a Common Lisp list of arguments.
+
+Currently, several free (or, more generally, FLOSS) implementations of
+Common Lisp are built from sources in some other language.  That
+language is typically C, but sometimes something else, like C++.
+There are probably several reasons for these implementations to be
+written this way, including historical (there was no widespread
+existing Common Lisp implementation when they were written), limited
+knowledge (the author did not know how to write a Common Lisp
+implementation in Common Lisp), and more.
+
+The process of building a Common Lisp system from sources written in
+some other language is a painful one, especially if one of the main
+objectives is for it to be fast, safe, and helpful to the programmer.
+Large parts of the system must be written in a language that is not
+very well adapted to expressing the semantics of Common Lisp.  Even
+though large parts of the system can be written in Common Lisp,
+because of the way the system is built, many system modules must be
+written in a subset of Common Lisp, making also that part painful to
+write.  For instance, it is common that CLOS not be available until
+very late in the bootstrapping process.
+
+The existence of BOCL will relieve most of the pain of maintainers of
+Common Lisp systems by concentrating that pain into BOCL.  These
+maintainers can now migrate their code from the existing
+implementation language to Common Lisp, relying on BOCL to exist.  At
+the same time, there is considerably less pain because of the
+simplifications to BOCL listed above.
+
+BOCL is (or rather, will be) implemented in ISO C.  We (will) do our
+utmost to avoid using constructs with undefined semantics, as the C
+standard indicates.  Only readily available shell tools are used in
+order to maximize portability.
+
+As an exception to the goal of simplicity, BOCL will contain a full
+implementation of the CLOS meta-object protocol (MOP) so as to allow
+implementers of other Common Lisp systems to take advantage of the MOP
+in their own implementations.
+
+In addition to being a bootstrapping tool for Common Lisp
+implementers, we think that BOCL will be an excellent illustration of
+the semantics of Common Lisp.  To make it easier for people interested
+in that topic, we think it is important that the BOCL code be highly
+idiomatic, uniform, and well documented.
+
+BOCL will not happen unless it is contributed to by others, so if you
+have knowledge of how to implement Common Lisp in C or interest in
+learning how to do it, please consider contributing.
+
+* BOCL
+** Generalities
+
+We implement in standard C a minimum subset of CL, which can be used to
+implement a complete CL (modulo implementation defined limitations).
+
+Emphasis is on:
+- *simplicity*;
+- *maintainability*;
+- *correctness*.
+
+Notably these 3 goals imply the use of a standard C code, without
+tricks or C implementation specific behavior or undefined behavior.
+
+The purpose is to be able to compile the kernel without difficulty on
+any standard C compiler on any platform.
+
+We may target C11 or C17 standard C, or some other specific recent C
+standard.
+
+A kernel is implemented in C, providing a subset of Common Lisp, in
+which a CL library can be loaded to complete the implementation into a
+CL implementation sufficient to bootstrap another CL implementatiaon.
+
+Writing more than the minimum CL implementation in C would not be
+manageable (not simple or maintainable, and therefore we couldn't
+ensure correctness).  It is expected that the CL library be way
+bigger than the C kernel, and also it will shadow or facade most
+operators of the kernel with normal CL operators (notably to deal with
+genericity, eg CL:+ dispatches to kernel:+/i (integer) or kernel:+/f
+(floating-point) or bocl:+/c (complex), etc).
+
+
+*** Usage
+
+It is expected that the bocl implementation would be used mostly in
+batch mode, to compile other Common Lisp implementation.
+
+However a standard REPL is provided for tests.
+A debugger may be not provided, or just a minimal debugger.
+
+Batch example:
+#+BEGIN_EXAMPLE
+bocl --norc --eval '(form)' --load 'file.lisp' --quit
+#+END_EXAMPLE
+
+Interactive example:
+#+BEGIN_EXAMPLE
+> bocl
+$ (/ 0)
+ERROR: Division by zero    ; note : no debugger.
+$ (quit)
+#+END_EXAMPLE
+
+*** Kernel Implemented in C
+
+The Kernel implemented in Standard C provides:
+
+- a garbage collected heap of fundamental lisp objects (classes);
+
+- fundamental functions for the fundamental lisp objects (classes);
+
+- an =EVAL= function.  The =EVAL= function implements the special
+  operators;
+
+- a few functions needed to load the CL library:
+   + Tiny Lisp Reader,
+   + LOAD open (loop (eval (read))) close;
+
+- basic error handling.
+
+- two symbol tables: one for the kernel symbols, and one for keywords
+  (self valued).  We need keywords to read CL library sources.
+
+- a few macros to define objects in toplevel forms for the CL library
+  sources.
+
+- platform functions such as I/O, environment, etc, that couldn't be
+  implemented in conforming Lisp.
+
+*** CL Library
+
+The CL library defines:
+
+- all the macros in the CL standard;
+
+- all the functions in the CL standard, possibly in a trivial way
+  (eg. =DELETE= ≡ =REMOVE=).
+
+- a complete lisp reader, package manager, etc.
+
+- CLOS, LOOP, formatter, (pretty-) printer,
+
+- semi-standard additions, such as: Gray Streams, MOP, etc.
+
+** Kernel Implemented in C
+*** Garbage Collected Heap
+
+We could use the Boehm-Weiser conservative garbage collector, but:
+- this would be an additionnal dependency, and
+- this is not standard C.
+
+The Boehm-Weiser conservative garbage collector is designed to garbage
+collect C objects, not just a heap of Lisp objects.  So it also has
+complexicities that are not really required for a CL implementation.
+(On the other hand, it would be handy if we wanted a C FFI).
+
+So it might be better for our purpose, to implement a garbage
+collected heap in standard  C.
+
+*** Fundamental Lisp Objects
+
+Goals: simplicity, homogeneity.
+
+The principle here is to implement only classes, and not types, since
+types are only sets of values, and we don't optimize them.
+
+Classes are used as type-tag for the lisp objects.
+
+All objects have the same basic representation as a header containing
+a pointer to the class of the object, and a pointer the slots with the
+objects-specific contents.  We use this indirection for the slots of
+the object to allow for easy redimensionning, (eg. ADJUST-ARRAY, or
+CHANGE-CLASS), without losing the identity of the object.
+
+While we would avoid optimize for space, using 64-bit slots to store
+characters or octets makes things more complicated in other parts of
+the implementation: vectors of characters and octets are processed
+during I/O, where we would have to convert between C byte arrays.
+Also, there are slot contents that are subject to garbage collection
+walking (references), while others are not (values).  Therefore we
+want to implement different types of slot records.
+
+It would be very costly, to use 64-bit words for all slots, including
+character slots, so ascii strings would use 8 times the space…  (and
+even if we used unicode, unicode strings would use 2.67 times more
+space than needed).  It would also be inconvenient, since strings
+(pathnames) would have to be expanded and compressed back each time
+they're or written, or a path is obtained or to be used.
+
+
+
+So an exception is made for vectors of character aka strings, and
+vectors of bit aka bit-vector, where each slot will be one byte long
+instead of one word long.  It will also make processing I/O and string
+from C code simplier than if we have to deal with long int vectors for
+our string operations.
+
+Notes:
+
+  1- make-array returns objects of class bit-vector or string or
+     vector or array.
+  2- so we can dispatch on bit-vector and string classes, to select
+     the optimized representation, but we would also want to
+     use it for multidimentional arrays and vectors of octets (I/O):
+         - (array (unsigned-byte 8) (*))
+         - (array character (*))
+         - (array bit (*))
+  3- since there's no classes specific to those optimization cases,
+     we'd need to keep a tag to select the slot representation.
+  4- also, classes don't hold the specfics of an array instance (rank,
+     dimensions, element-type), so we have to record that anyways.
+
+
+We only provide ISO-8859-1 characters to avoid having to deal with
+unicode complexity (types of characters, encodings, etc).  ISO-8859-1
+is prefered since it's a 8-bit 1-1 encoding, instead of US-ASCII which
+is a 7-bit encoding.
+
+The kernel will provide internal API to brand and implement other
+built-in classes in CL.
+
+Note: packages will be implemented in CL; therefore the Kernel is
+agnostic to package: all symbols exist are interned in one of two
+tables: a kernel symbol table, and a keyword symbol table.  The
+keywords are assigned to themselves when interning.  The CL library
+will sort out the kernel symbols into a "KERNEL" package, the keywords
+into "KEYWORD" package, and define other packages including CL,
+setting their home package, or shadowing them with other CL symbols
+and definitions.
+
+**** Classes
+
+| Class                              | Layer    | Notes                                                                            |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+| CHARACTER                          | C        | We may restrict ourselves to iso-8859-1 characters, to simplify implementation   |
+|                                    |          | of funcions such as alphanumericp graphic-char-p char-name, etc.                 |
+|                                    |          |                                                                                  |
+| HASH-TABLE                         |          | If we implement in CL, then (setf gethash) is not fundamental                    |
+| PACKAGE                            |          |                                                                                  |
+| READTABLE                          |          |                                                                                  |
+| RANDOM-STATE                       |          |                                                                                  |
+| RESTART                            |          |                                                                                  |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+| NUMBER                             | Abstract |                                                                                  |
+| REAL                               | Abstract |                                                                                  |
+| FLOAT                              | C        | Not really needed in the kernel?                                                 |
+| RATIONAL                           | Abstract |                                                                                  |
+| RATIO                              |          | (numerator denominator)                                                          |
+| INTEGER                            | C        | Only number needed in the kernel.                                                |
+| COMPLEX                            |          | (realpart imagpart)                                                              |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+| ARRAY                              | C        |                                                                                  |
+| SEQUENCE                           | Abstract |                                                                                  |
+| VECTOR                             | C        |                                                                                  |
+| BIT-VECTOR                         | C        |                                                                                  |
+| STRING                             | C        |                                                                                  |
+| LIST                               | Abstract |                                                                                  |
+| CONS                               | C        |                                                                                  |
+| SYMBOL                             | C        |                                                                                  |
+| NULL                               | C        |                                                                                  |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+| PATHNAME                           | Abstract |                                                                                  |
+| LOGICAL-PATHNAME                   |          | Not needed in the kernel.                                                        |
+| PHYSICAL-PATHNAME                  | C        | We need a BOCL:PHYSICAL-PATHNAME class (path string wrapper) in the kernel.      |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+| STREAM                             | Abstract |                                                                                  |
+| FILE-STREAM                        | C        | Needed to LOAD the CL library.                                                   |
+| STRING-STREAM                      |          |                                                                                  |
+| TWO-WAY-STREAM                     |          |                                                                                  |
+| BROADCAST-STREAM                   |          |                                                                                  |
+| ECHO-STREAM                        |          |                                                                                  |
+| SYNONYM-STREAM                     |          | Might be convenient in the kernel.                                               |
+| CONCATENATED-STREAM                |          |                                                                                  |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+| CONDITION                          | C        | Depending on the fundamental error handling.                                     |
+| SIMPLE-CONDITION                   |          |                                                                                  |
+| WARNING                            |          |                                                                                  |
+| STYLE-WARNING                      |          |                                                                                  |
+| SIMPLE-WARNING                     |          |                                                                                  |
+| SERIOUS-CONDITION                  |          |                                                                                  |
+| STORAGE-CONDITION                  |          |                                                                                  |
+| ERROR                              |          |                                                                                  |
+| SIMPLE-ERROR                       |          |                                                                                  |
+| TYPE-ERROR                         |          |                                                                                  |
+| SIMPLE-TYPE-ERROR                  |          |                                                                                  |
+| CONTROL-ERROR                      |          |                                                                                  |
+| PROGRAM-ERROR                      |          |                                                                                  |
+| CELL-ERROR                         |          |                                                                                  |
+| UNBOUND-VARIABLE-ERROR             |          |                                                                                  |
+| UNBOUND-SLOT                       |          |                                                                                  |
+| UNDEFINED-FUNCTION                 |          |                                                                                  |
+| PACKAGE-ERROR                      |          |                                                                                  |
+| ARITHMETIC-ERROR                   |          |                                                                                  |
+| FLOATING-POINT-OVERFLOW            |          |                                                                                  |
+| FLOATING-POINT-INEXACT             |          |                                                                                  |
+| FLOATING-POINT-INVALID-OPERATION   |          |                                                                                  |
+| FLOATING-POINT-UNDERFLOW           |          |                                                                                  |
+| DIVISION-BY-ZERO                   |          |                                                                                  |
+| PRINT-NOT-READABLE                 |          |                                                                                  |
+| FILE-ERROR                         |          |                                                                                  |
+| STREAM-ERROR                       |          |                                                                                  |
+| END-OF-FILE                        |          |                                                                                  |
+| PARSE-ERROR                        |          |                                                                                  |
+| READER-ERROR                       |          |                                                                                  |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+| FUNCTION                           | C        |                                                                                  |
+| COMPILED-FUNCTION                  |          | Definitely not in C.                                                             |
+| STANDARD-OBJECT                    | C        | The class may exist in the kernel, but no instance is implemented in the kernel. |
+| FUNCALLABLE-STANDARD-OBJECT        | MOP      |                                                                                  |
+| METAOBJECT                         | MOP      |                                                                                  |
+| GENERIC-FUNCTION                   | MOP      |                                                                                  |
+| STANDARD-GENERIC-FUNCTION          | MOP      |                                                                                  |
+| METHOD-COMBINATION                 | MOP      |                                                                                  |
+| SLOT-DEFINITION                    | MOP      |                                                                                  |
+| DIRECT-SLOT-DEFINITION             | MOP      |                                                                                  |
+| STANDARD-SLOT-DEFINITION           | MOP      |                                                                                  |
+| EFFECTIVE-SLOT-DEFINITION          | MOP      |                                                                                  |
+| STANDARD-DIRECT-SLOT-DEFINITION    | MOP      |                                                                                  |
+| STANDARD-EFFECTIVE-SLOT-DEFINITION | MOP      |                                                                                  |
+| SPECIALISER                        | MOP      |                                                                                  |
+| EQL-SPECIALISER                    | MOP      |                                                                                  |
+| CLASS                              | MOP      |                                                                                  |
+| FUNCALLABLE-STANDARD-CLASS         | MOP      |                                                                                  |
+| FORWARD-REFERENCED-CLASS           | MOP      |                                                                                  |
+| STANDARD-CLASS                     | C        | The class may exist in the kernel, but no instance is implemented in the kernel. |
+| STRUCTURE-CLASS                    | C        | Created by DEFSTRUCT with a BOCL-specific fundamental operator.                  |
+| STRUCTURE-OBJECT                   | C        | Created by DEFSTRUCT with a BOCL-specific fundamental operator.                  |
+| BUILT-IN-CLASS                     | C        | Created with a BOCL-specific fundamental operator. (probably by a DEFSTRUCT).    |
+| METHOD                             | MOP      |                                                                                  |
+| STANDARD-METHOD                    | C        | The class may exist in the kernel, but no instance is implemented in the kernel. |
+| STANDARD-ACCESSOR-METHOD           | MOP      |                                                                                  |
+| STANDARD-WRITER-METHOD             | MOP      |                                                                                  |
+| STANDARD-READER-METHOD             | MOP      |                                                                                  |
+|------------------------------------+----------+----------------------------------------------------------------------------------|
+
+*** Fundamental Lisp Functions
+
+We need to implement in C Fundamental Lisp Function related to the
+Fundamental Lisp Objects, and others functions that serve as interface
+to the platform.
+
+We don't want to implement functions dispatching on the type (or
+class) of arguments in C.  Therefore we'll implement separate
+operators for the different classes of arguments.  =+/f= for floats,
+=+/i= for integers.  The CL library will define a =CL:+= function that
+will call the right kernel function and convert the arguments and
+results as specified.  Class (not type) checking is performed.
+
+
+| Class             | Layer | Fundamental Functions                                                                                                |
+|-------------------+-------+----------------------------------------------------------------------------------------------------------------------|
+| CHARACTER         | C     | char-code code-char char-name name-char char= char/= char< char<= char> char>=                                       |
+|                   |       | char-equal char-greaterp char-lessp char-upcase char-downcase                                                        |
+|                   |       |                                                                                                                      |
+| FLOAT             | C     | floatp float +/f -/f */f //f =/f /=/f </f >/f <=/ >=/f                                                               |
+|                   |       | floor/f ffloor/f ceiling/f fceiling/f truncate/f ftruncate/f round/f fround/f mod/f rem/f                            |
+|                   |       | sqrt/f                                                                                                               |
+|                   |       | sin/f cos/f tan/f asin/f acos/f atan/f sinh/f cosh/f tanh/f asinh/f acosh/f atanh/f exp/f expt/f log/f               |
+|                   |       | integer-decode-float decode-float                                                                                    |
+|                   |       |                                                                                                                      |
+| INTEGER           | C     | integerp +/i -/i */i //i =/i /=/i </i >/i <=/ >=/i                                                                   |
+|                   |       | floor/i ffloor/i ceiling/i fceiling/i truncate/i ftruncate/i round/i fround/i mod/i rem/i                            |
+|                   |       | sqrt/i isqrt/i                                                                                                       |
+|                   |       | exp/i expt/i integer-legth logbitp logcount logtest dpb ldb  ash                                                     |
+|                   |       | LOGAND LOGANDC1 LOGANDC2 LOGEQV LOGIOR LOGNAND LOGNOR LOGNOT LOGORC1 LOGORC2 LOGXOR                                  |
+|                   |       |                                                                                                                      |
+| ARRAY             | C     | make-array, adjust-array, adjustable-array-p, aref, array-dimension, array-dimensions, array-element-type            |
+|                   |       | array-displacement array-in-bounds-p array-rank array-row-major-index array-total-size array-p                       |
+|                   |       | row-major-aref upgraded-array-element-type (always T)                                                                |
+|                   |       | array-dimension-limit array-rank-limit array-total-size-limit                                                        |
+|                   |       |                                                                                                                      |
+| VECTOR            | C     | fill-pointer simple-vector-p svref vector vector-pop vector-push vector-push-extend vectorp                          |
+|                   |       |                                                                                                                      |
+| BIT-VECTOR        | C     | bit sbit BIT-AND BIT-ANDC1 BIT-ANDC2 BIT-EQV BIT-IOR BIT-NAND BIT-NOR BIT-NOT BIT-ORC1 BIT-ORC2 BIT-XOR              |
+|                   |       | bit-vector-p simple-bit-vector-p                                                                                     |
+|                   |       |                                                                                                                      |
+| STRING            | C     | simple-string-p char schar string string-upcase string-downcase string-capitalize                                    |
+|                   |       | nstring-upcase nstring-downcase nstring-capitalize                                                                   |
+|                   |       | string-trim string-left-trim string-right-trim                                                                       |
+|                   |       | string= string/= string< string> string<= string>=                                                                   |
+|                   |       | string-equal string-not-equal string-lessp string-not-lessp string-greaterp string-not-greaterp                      |
+|                   |       | stringp make-string                                                                                                  |
+|                   |       |                                                                                                                      |
+| CONS              | C     | cons consp car cdr rplaca rplacd                                                                                     |
+|                   |       |                                                                                                                      |
+| SYMBOL            | C     | make-symbol symbol-name symbol-package symbol-variable symbol-function symbol-plist                                  |
+|                   |       | set-symbol-package set set-symbol-function set-symbol-plist                                                          |
+|                   |       | kernel:intern                                                                                                        |
+|                   |       |                                                                                                                      |
+| NULL              | C     | null                                                                                                                 |
+|-------------------+-------+----------------------------------------------------------------------------------------------------------------------|
+| PHYSICAL-PATHNAME | C     | make-pathname/pp bocl-kernel:physical-pathname-p merge-pathnames/pp                                                  |
+|                   |       | namestring/pp file-namestring/pp directory-namestring/pp host-namestring/pp enough-namestring/pp parse-namestring/pp |
+|                   |       |                                                                                                                      |
+| FILE-STREAM       | C     | Cf. § Stream Functions below.                                                                                        |
+|                   |       |                                                                                                                      |
+| SIMPLE-ERROR      |       | Cf. § Condtions - Fundamental Error Handling below.                                                                  |
+| SIMPLE-WARNING    |       |                                                                                                                      |
+|-------------------+-------+----------------------------------------------------------------------------------------------------------------------|
+| FUNCTION          | C     | There are three types of functions:                                                                                  |
+|                   |       | - kernel built-in-functions implemented in C,                                                                        |
+|                   |       | - lisp functions (closures), interpreted, without minimal compilation, (with macros).                                |
+| COMPILED-FUNCTION |       | - lisp functions (closures), interpreted, with minimal compilation (macroexpanded).                                  |
+|                   |       | A Kernel C function produces built-in-function wrappers.                                                             |
+|                   |       | (FUNCTION (LAMBDA …)) produces interpreted lisp closures.                                                            |
+|                   |       |                                                                                                                      |
+| BUILT-IN-CLASS    | C     | Created with a BOCL-specific fundamental operator. (probably by a DEFSTRUCT).                                        |
+|                   |       |                                                                                                                      |
+| STRUCTURE-CLASS   | C     | Created by DEFSTRUCT with a BOCL-specific fundamental operator.                                                      |
+|                   |       |                                                                                                                      |
+| STRUCTURE-OBJET   | C     | bocl-kernel:make-structure-class bocl-kernel:make-structure-object copy-structure                                    |
+|                   |       |                                                                                                                      |
+| STANDARD-CLASS    | C     | The class may exist in the kernel, but no instance is implemented in the kernel.                                     |
+| STANDARD-OBJECT   | C     | The class may exist in the kernel, but no instance is implemented in the kernel.                                     |
+| STANDARD-METHOD   | C     | The class may exist in the kernel, but no instance is implemented in the kernel.                                     |
+
+
+#+BEGIN_CODE lisp
+
+(make-class 't)
+(make-class 'structure-object '(t))
+(make-class 'standard-object '(t))
+(make-class 'class '(standard-object))
+(make-class 'standard-class '(class))
+(make-class 'built-in-class '(class))
+(make-class 'structure-class '(class))
+
+(make-object 'structure-class size)
+#+END_COD
+**** 7. Objects
+
+The kernel only provides some infrastructure operators, since we use
+classes as type-tag in the objects.
+
+- =class-of=
+- =class-name=
+- =find-class=
+- =bocl-kernel:set-class-name=
+
+- an operator to declare a class and its superclassess, ot be used by
+  =bocl-kernel:instancep= (aka =typep= but we don't deal with types in
+  the kernel).
+  
+**** 9. Conditions - Fundamental Error Handling
+
+We don't want to implement a full CL condition system in CL.  Instead
+the C kernel will provide primitive operators that can be used to
+implement the CL condition system.
+
+**** 13. Characters
+
+To have some fun, on input we'll map CR-LF, CR or LF to NEL.
+and on output, we'll map NEL to either CR-LF, CR or LF depending
+on the line-terminator specified (:dos :crlf :mac :cr or :unix :lf)
+in the external-format.
+
+Note: NEL would be the only character with char-code>127 mapped to a
+:US-ASCII stream!
+
+
+**** 18. Hashtables
+
+We may need to provide functions to help computing the sxhash of
+fundamental objects.  For example, we may provide an bocl-kernel:ID
+function.
+
+**** 20. File System Functions
+
+- =directory=
+- =probe-file=
+- =ensure-directories-exist=
+- =truename=
+- =file-author=
+- =file-write-date=
+- =rename-file=
+- =delete-file=
+
+**** 21. Stream Functions
+
+=file-stream=
+=bocl-kernel:fd-stream=
+
+- =open=
+- =close=
+  
+- =read-byte=
+- =write-byte=
+- =read-sequence=
+- =write-sequence=
+
+- =listen=
+- =read-char=
+- =read-char-no-hang=
+- =unread-char=
+- =peek-char=
+- =write-char=
+- =read-line=
+
+- =write-string=
+- =write-line=
+- =file-length=
+- =file-position=
+- =file-string-length=
+
+- =clear-input=
+- =finish-output=
+- =force-output=
+- =clear-output=
+  
+**** 22. Tiny Lisp Printer
+
+We need a kernel implementation of the lisp printer for verbose,
+debugging and other purposes.
+
+Possibly with hardwired settings of the =*PRINT-…*= variables.
+(since the *readtable* is also hardwired).
+
+- =PRINT=
+- =PRIN1=  
+- =PRINC=
+- =TERPRI=
+- simplified =FORMATTER=
+- =FORMAT=  
+
+No pretty printed.
+Basically, we'd want to be able to have a minimal REPL for testing,
+and to be able to write a =FASL= file containing readable sexps.
+
+**** 23. Tiny Lisp Reader
+
+We need a minimal Lisp Reader implemented in C in the Kernel to be
+able to further load the CL library lisp code.  A subset of the
+standard readtable is hardwired.
+
+Functions implemented:
+
+- =read=
+- =read-preserving-whitespace=
+- =read-delimited-list=
+- =read-from-string= (or not; without =string-stream= we'd have to use a specific internal API).
+
+**** 24. System Construction
+
+- =load=     is needed to load the CL library.
+- =provide=  could be provided to help loading the CL library.
+- =require=  could be provided to help loading the CL library.
+
+**** 25. Environment
+
+- =get-universal-time=
+- =sleep=
+- =get-internal-read-time=
+- =get-internal-run-time=
+- =room=
+- =lisp-implementation-type=
+- =lisp-implementation-version=
+- =short-site-name=
+- =long-site-name=
+- =machine-instance=
+- =machine-type=
+- =sofware-type=
+- =software-version=
+- =user-homedir-pathname=
+
+*** Fundamental Error Handling
+
+Error Handling is not implemented in the Kernel.
+
+Errors from the C kernel functions are signaled with the =SIGNAL=
+function, instanciating only =SIMPLE-ERROR= conditions.
+
+They can be handled with the condition system implemented in the CL
+library.
+
+TODO: see how to provide non-local exits.
+
+Non-local exits are only initiated from error handlers, or from the
+debugger in =INVOKE-DEBUGGER=.
+
+Catching non-local exits is the job of =handler-bind= =handler-case=,
+=restart-case=, =with-simple-restart=, =block=, =catch=, =tagbody=,
+etc.
+
+#+BEGIN_CODE lisp
+;; Note: the following lisp code would be written in C in the Kernel.
+
+(defvar *break-on-signals* nil)
+(defvar *debugger-hook* nil)
+
+(defvar *debugger-function* nil)
+(defvar *handlers* '()
+  ;; Note: we expect dynamic binding to deal with it.
+  "A list of a-list mapping condition class names to handler function.")
+
+(defun instancep (object class-designator)
+  ;; We don't deal with types in the kernel; but we must deal with
+  ;; class hierarchy (with possibly multiple-inheritance).  This
+  ;; hierarchy must be declared in the C kernel.
+  (typep objet class-designator))
+
+(defun fatal (condition)
+  ;; Note: instead of format, we can use printf, if we restrict
+  ;; ourselves to simple format specifier that can easily be mapped to
+  ;; printf format specifiers.
+  (format *error-output* "~%FATAL ERROR: no handler for ~?~%"
+          (simple-condition-format-control condition)
+          (simple-condition-format-arguments condition))
+  (finish-output *error-output*)
+  (exit 1))
+
+(defun invoke-debugger (condition)
+  (when *debugger-hook*
+    (let ((hook *debugger-hook*)
+          (*debugger-hook* nil))
+      (funcall hook condition)))
+  (if *debugger-function*
+      (funcall *debugger-function* condition)
+      (progn
+        (format *error-output* "~%FATAL ERROR: no debugger in ~A~%"
+                (lisp-implementation-type))
+        (fatal condition))))
+  
+(defun signal (datum &rest arguments)
+  (let ((condition
+          (cond
+            ((instancep datum 'condition)
+             datum)
+            ((stringp datum)
+             (make-condition 'simple-error
+                             :format-control datum
+                             :format-arguments arguments)
+             (t
+              (apply (function make-condition) datum arguments))))))
+    (if *break-on-signals*
+      (invoke-debugger condition))
+      (do ((handlers *handlers* (cdr handlers))
+           (handler  (assoc-if (lambda (entry)
+                                 (instancep condition (car entry)))
+                               (car handlers))
+                     (assoc-if (lambda (entry)
+                                 (instancep condition (car entry)))
+                               (car handlers))))
+          ((or (null handlers)
+               handler)
+           (if handler
+               (let ((*handlers* (cdr handlers)))
+                  (funcall handler condition))
+               (fatal condition))))))
+
+(defun error (datum &rest arguments)
+  (let ((condition
+          (if (stringp datum)
+              (make-condition 'simple-error
+                              :format-control datum
+                              :format-arguments arguments)
+              (apply (function make-condition) datum arguments))))
+    (signal condition)
+    (invoke-debugger condition)))
+
+#+END_CODE
+
+Note: it may be enough to use the non-local exits provided by the
+kernel =EVAL=, and not need setjmp/longjmp.
+
+- =setjmp= / =longjmp= from C?  
+
+- =backtrace= 
+
+- =signal=
+- =warn= (simple-warning)
+- =error= (simple-error)
+- =unwind-protect= is a special operator.
+
+*** EVAL
+
+An =EVAL= intepreter must be implemented in C.  We may reduce and
+simplify it a lot, by applying metacircular techniques to implement
+special operators as macros using other special operators.
+
+Metacircular Semantics for Common Lisp Special Forms
+Henry G. Baker
+https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.46.9657&rep=rep1&type=pdf
+
+The =EVAL= function must manage the lexical environments (value,
+function) and dynamic environment (bindings).
+
+| Special operator     | Notes                                       |
+|----------------------+---------------------------------------------|
+| function             | create a closure ; or metacircular -> macro |
+| quote                |                                             |
+| if                   |                                             |
+| block                | metacircular -> catch/throw                 |
+| return-from          | metacircular -> catch/throw                 |
+| catch                |                                             |
+| throw                |                                             |
+| unwind-protect       | metacircular -> catch/throw                 |
+| tagbody              | metacircular -> catch/throw                 |
+| go                   | metacircular -> catch/throw                 |
+| flet                 | metacircular -> macrolet                    |
+| labels               | metacircular -> flet                        |
+| setq                 |                                             |
+| let                  | metacircular -> ((lambda))                  |
+| let*                 | metacircular -> let                         |
+| multiple-value-call  |                                             |
+| multiple-value-prog1 |                                             |
+| progn                | metacircular -> ((lambda))                  |
+| progv                |                                             |
+| locally              | deal only with SPECIAL declarations         |
+| the                  | ignored or let + declare                    |
+| eval-when            | No compile-file => only :execute situation  |
+| macrolet             |                                             |
+| symbol-macrolet      |                                             |
+| load-time-value      | No FASL, so = progn                         |
+|----------------------+---------------------------------------------|
+| ((lambda (…) …) …)   | anonymous function call                     |
+| (fun args…)          | function call                               |
+| (mac args…)          | macroexpansion                              |
+|----------------------+---------------------------------------------|
+| values               |                                             |
+| apply                |                                             |
+| funcall              | -> apply                                    |
+
+*** Tiny Lisp Reader
+
+A minimal lisp reader, with hard-wired readtable must be provided to
+read CL library lisp files.
+
+- parse symbols without package qualifier, and without escapes.
+- parse keywords with a colon prefix.
+- parse integers
+- parse floating-point numbers
+
+Hard-wired reader macros:
+
+| character | lisp object | example                   |
+|-----------+-------------+---------------------------|
+| ;         | comments    | ; foo                     |
+| '         | quote       | 'foo                      |
+| "         | strings     | "foo"  \\ and \" escapes. |
+| (         | lists       | (f o o) (no dotted list)  |
+| #\        | characters  | #\f                       |
+| #(        | vectors     | #(f o o)                  |
+| #*        | bit-vectors | #*101010                  |
+
+
+Not read by the Tiny Lisp Reader (an error is signaled):
+
+| character | lisp object                    | example                    |
+|-----------+--------------------------------+----------------------------|
+|           | conses and dotted lists        | (a . d)                    |
+| #'        | functions -> (function foo)    | #'foo                      |
+| `         | backquote  unquote             | `(,x ,@xs)                 |
+| #:        | uninterned symbols             | #:foo                      |
+| #.        | read-eval                      | #.(+ 1 2)                  |
+| #B        | binary numbers                 | #B10101                    |
+| #O        | octal numbers                  | #O01234567                 |
+| #X        | hexadecimal numbers            | #X0123456789ABCDEF         |
+| #R        | radix numbres                  | #5R01234                   |
+| #C        | complexes                      | #C(r i)                    |
+| #A        | arrays                         | #A((…))                    |
+| #S        | structures                     | #S(foo :x x :y y)          |
+| #P        | pathnames -> (pathname "/foo") | #P"/foo"                   |
+| #=/##     | references                     | #1=(foo . #1#)             |
+| #+/#-     | features                       | #+foo (foo)                |
+| #¦        | comments                       | #¦ foo ¦#                  |
+| #<        | unreadable                     | #<foo> -> signals an error |
+
+*** LOAD
+
+In addition to =EVAL=, we still need to provide a few macros to be able
+to load useful lisp code:
+
+- =defvar=
+- =defparameter=
+- =defmacro=
+- =defconstant= = =defvar=
+- =defun=
+- =defstruct=
+- =define-condition=
+- =define-symbol-macro=    
+
+- =kernel:in-package= do nothing, but provided so the lisp sources may
+  be compiled or reloaded when the package system is defined.
+
+** Common Lisp Library Implemented in Common-Lisp
+*** 2. Syntax - Lisp Reader
+
+A conforming lisp reader is implemented in Common Lisp
+(eclector, COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.READER, etc).
+
+cf. chapter 23. Reader.
+
+*** 3. Evaluation and Compilation
+
+Do we need a compiler?
+
+The C kernel provides only an =EVAL= interpreter.
+
+The =COMPILE= function performs the minimal compilation (macroexpansion).
+
+We could provid a =COMPILE-FILE= function that would generate a
+pre-macroexpanded "fasl" file, which would imply :compile-toplevel and
+:load-toplevel situations.
+
+Let's run with just the interpreter, and see if the performances are
+enough for the stated goal: compile a CL implementation.  Only if it's
+really too slow, would we seek to implement eg. a virtual machine and
+a byte-code compiler.  But we'd basically reproduce the clisp
+implementation.
+
+*** 4. Types and Classes
+
+Operators to implement:
+
+- =COERCE=  since that may change the class
+#+BEGIN_CODE lisp                         
+  (coerce #(#\a #\b #\c) 'string) --> "abc"
+#+END_CODE
+
+- =SUBTYPEP= since that tests the class hierarchy too (parallelism
+  between classes and types).
+
+- =TYPE-OF= = =class-of=
+
+- =TYPEP=   
+
+and =DEFTYPE= and a descriptive type system, but that is not used in
+the kernel.
+
+  
+| Type           | COMPILED-FUNCTION                                   |
+| Type           | SIMPLE-ARRAY                                        |
+| Type           | SIMPLE-BIT-VECTOR                                   |
+| Type           | SIMPLE-VECTOR                                       |
+|----------------+-----------------------------------------------------|
+| Type Specifier | AND                                                 |
+| Type Specifier | EQL                                                 |
+| Type Specifier | MEMBER                                              |
+| Type Specifier | MOD                                                 |
+| Type Specifier | NOT                                                 |
+| Type Specifier | OR                                                  |
+| Type Specifier | SATISFIES                                           |
+| Type Specifier | VALUES                                              |
+
+#+BEGIN_CODE lisp
+
+(deftype atom () '(not cons))
+(deftype boolean () '(member nil t))
+
+(deftype base-char () 'character)
+(deftype standard-char () 'character)
+(deftype extended-char () 'nil)
+
+(deftype base-string (&optional size)
+  (if size
+      `(string ,size)
+      'string))
+
+(deftype simple-base-string (&optional size)
+  (if size
+      `(simple-array base-char (,size))
+      '(simple-array base-char)))
+
+
+(deftype bit () '(integer 0 1))
+  
+(deftype signed-byte (&optional size)
+  (if (eql '* size)
+      'integer
+      `(integer ,(- (expt 2 (- size 1)))
+                ,(- (expt 2 (- size 1)) 1))))
+
+(deftype unsigned-byte (&optional size)
+  (if (eql '* size)
+      '(integer 0)
+      `(integer 0  ,(- (expt 2 size) 1))))
+
+(deftype fixnum () '(signed-byte 32))
+(deftype bignum () '(and integer (not fixnum)))
+(deftype integer (&optional lower-limit upper-limit) 'integer)
+
+(deftype keyword () '(and symbol (satisfies keywordp)))
+(deftype nil () '(member))
+
+(deftype short-float (&optional lower upper)
+  (if lower
+      (if upper
+          `(single-float ,lower ,upper)
+          `(single-float ,lower))
+      'single-float))
+
+(deftype double-float (&optional lower upper)
+  (if lower
+      (if upper
+          `(single-float ,lower ,upper)
+          `(single-float ,lower))
+      'single-float))
+
+(deftype long-float (&optional lower upper)
+  (if lower
+      (if upper
+          `(single-float ,lower ,upper)
+          `(single-float ,lower))
+      'single-float))
+
+#+END_CODE
+
+*** 5. Data and Control Flow
+*** 6. Iteration
+
+- =DO= =DO*=
+- =DOTIMES=
+- =DOLIST=
+
+- =LOOP= and =LOOP-FINISH= implementation can be taken from some
+  implementation.
+
+*** 7. Objects
+
+CLOS and MOP can be taken from PCL and/or other implementations.
+
+*** 8. Structures
+
+The kernel implements the primitive needed to define structure classes
+and instances.  Remains to implement the DEFSTRUCT macro to generate
+the associated functions (accessors, copiers, predicates,
+constructors, printer function, etc).
+
+*** 9. Conditions
+
+An implementation of the condition system may be taken from Kent
+Pitman's canonical implementation or from some other implementation.
+
+*** 10. Symbols
+
+✓ cf. eg. COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.PACKAGE
+
+*** 11. Packages
+
+✓ cf. eg. COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.PACKAGE
+
+*** 12. Numbers
+
+Implement the CL numbers in CL, using the kernel integers and floats.
+Adding the RATIO and COMPLEX classes, and providing all the operations
+dispatching on the class of arguments.
+
+*** 13. Characters
+
+✓ almost all implemented in the kernel.
+
+US-ASCII provides the STANDARD-CHARACTER set.
+
+ISO-8859-1 provides those additionnal characters:
+#+BEGIN_EXAMPLE
+" ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
+#+END_EXAMPLE
+
+The advantage of using iso-8859-1 over US-ASCII, is that US-ASCII is a
+7-bit code while iso-8859-1 is a 1-1 8-bit code.  This simplifies the
+external-format and I/O processing by the kernel.
+
+*** 14. Conses
+
+✓ Nice list functions to be implemented.
+
+We can simplify a lot with function aliases (first = car, delete =
+remove), etc.
+
+For some operations such as set operations, we may still want to
+provide an optimized implmentation using hash-tables, but it would
+depend on the usage made of those functions in CL implementations.
+They probably don't have to deal with sets that are too big, so a
+simplistic implementation using only the lists could be enough.
+
+*** 15. Arrays
+
+✓ Most of array operators are implemented in the kernel.
+
+*** 16. Strings
+
+✓ Most of string operators are implemented in the kernel.
+
+*** 17. Sequences
+
+Sequence functions are generic (dispatch on the class of arguments),
+so they'll be implemented in CL using either the cons operators or the
+array operators.  Code from implementations can be scavenged.
+
+*** 18. Hash Tables
+
+Honests hash-tables can be implemented  in CL.  The kernel provides an
+ID function that  let us implement an efficient hash  function for EQL
+hash-tables.
+
+*** 19. Filenames
+
+A logical pathname implementation can be obtained from
+com.informatimago/future/vfs/filenames.lisp
+
+The kernel implements a physical-pathnames wrapper (posix paths).
+
+Remains to implement the generic pathname functions, and pathname
+translations.
+
+*** 20. Files
+
+✓ File operators are mostly implemented in the kernel.
+
+We need to implement wrappers to process the pathname arguments
+(=TRANSLATE-PATHNAME=).
+
+*** 21. Streams
+
+✓ Stream operators on FILE-STREAM (and perhaps FD-STREAM) are
+implemented in the kernel.
+
+We may import a Gray Stream implementation to wrap them and provide
+the other classes of streams, notably STRING-STREAM.
+
+Implement query functions such as =Y-OR-N-P=, etc
+
+*** 22. Printer
+
+- base lisp printing operators print prin1 princ terpri may use the
+  print-object generic function (CLOS). So we may want to implement
+  them with a hook.
+
+- pretty-printer from some library or implementation.
+
+- formatter from some library or implementation.  
+
+*** 23. Reader
+
+A conforming lisp reader is implemented in Common Lisp
+(eclector, COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.READER, etc).
+
+*** 24. System Construction
+
+The kernel provides =LOAD=, and =PROVIDE= and =REQUIRE= for a minimal
+module management. (It cannot run ASDF, so it may be useful to load a
+multi-file CL library.)
+
+We may implement in CL a =COMPILE-FILE= performing at least the
+minimal-compilation saving the result in "fasl" files.
+
+The variables must be defined and used where relevant (=LOAD=,
+=COMPILE-FILE=, =#+/#-= etc).
+
+*** 25. Environment
+
+The kernel provide environment operators that depend on the platform.
+The other operators can be implemented in CL or disabled.
+
+For example we may not record docstrings, so =DOCUMENTATION= may do
+nothing, and =DESCRIBE= may do a minimum (eg. just CLASS-OF).
+
+No =DISASSEMBLE= output, minimal =INSPECT=.
+
+We may implement =DRIBBLE= along with the REPL, but =bocl= would be
+used in batch in general.
+
+- =decode-universal-time=
+- =encode-universal-time=
+- =get-decoded-time=
+- =apropos=, =apropos-list= (from the packages)
+- =describe=
+- =describe-object= (generic function)
+- =trace=, =untrace=, =step=  if we hooked cl-stepper, or integrated
+  it in the =kernel:eval=
+- =documentation=, =(setf documentation)= (NOP)
+- =time=
+- =ed= (let's have fun and hook com.informatimago.common-lisp.ed.ed)
+- =inspect=
+- =dribble=
+
+** Implementation Extensions
+
+As any other implementation the =bocl= implementation will provide a
+few extensions to the CL standard.
+
+*** The Garbage Collector
+**** Function ID
+
+Syntax:
+
+    ID (object) => id
+
+Arguments and Values:
+
+    object -- a lisp object
+
+    id -- an integer
+    
+Description:
+
+    The unique ID of the object could be its address converted to
+    integer, if the garbage collector is not moving the objects, or a
+    cached unique integer if the garbage collector may move the
+    object.  The ID of an object won't change while the object is
+    alive.
+    
+Result:
+
+    Returns a unique ID of the object.  
+
+**** Function GC
+
+Syntax:
+
+    GC (&optional command) => state
+
+Arguments and Values:
+
+    command -- NIL, :ON or :OFF
+
+    state -- an integer or :ON or :OFF
+
+Description:
+
+	If `command` is NIL, the garbage collector is called now.
+    If `command` is :ON then the garbage collector is enabled (initial
+    state).
+    If `command` is :OFF then the garbage collector is disabled.
+
+Results:
+
+    If `command` is NIL, then the number of bytes collected.
+    If `command` is :ON or :OFF, then the previous state of the
+    garbage collector.
+    
+*** Float
+
+#+BEGIN_CODE lisp
+(declaim
+
+ (ftype (function (float) bool)
+        floatp)
+ 
+ (ftype (function (float) float)
+        sin/f cos/f tan/f asin/f acos/f
+        sinh/f cosh/f tanh/f asinh/f acosh/f atanh/f
+        exp/f)
+
+ (ftype (function (float &optional float) float)
+        atan/f log/f)
+ 
+ (ftype (function (float float) float)
+        +/f -/f */f //f mod/f rem/f sqrt/f
+        expt/f)
+
+ (ftype (function (float float) bool)
+        =/f /=/f </f >/f <=/ >=/f) 
+
+ (ftype (function (float &optional float) (values integer float))
+        floor/f  ceiling/f truncate/f round/f)
+
+ (ftype (function (float &optional float) (values float float))
+        ffloor/f fceiling/f ftruncate/f fround/f)
+
+ (ftype (function (float) (values float integer float))
+        decode-float)
+ (ftype (function (float integer) float)
+        scale-float)
+ (ftype (function (float) integer)
+        float-radix)
+ (ftype (function (float &optional float) float)
+        float-sign)
+ (ftype (function (float) integer)
+        float-digits)
+ (ftype (function (float) integer)
+        float-precision)
+ (ftype (function (float) (values float integer integer))
+        integer-decode-float))
+#+END_CODE
+
+*** Integer
+
+#+BEGIN_CODE lisp
+(declaim
+ (ftype (function (integer integer) byte-specifier)
+        byte)
+ (ftype (function (byte-specifier) integer)
+        byte-size byte-position))
+
+(declaim
+
+ (ftype (function (integer) bool)
+        integerp)
+   
+ (ftype (function (integer) integer)
+        exp/i integer-length logcount)
+
+ (ftype (function (integer byte-specifier integer) integer)
+        dpb deposit-field)
+
+ (ftype (function (byte-specifier integer) integer)
+        ldb mask-field)  
+   
+ (ftype (function (integer integer) integer)
+        +/i -/i */i //i mod/i rem/i sqrt/i
+        expt/i  gcd/i lcm/i ash)
+
+ (ftype (function (integer integer) bool)
+        =/i /=/i </i >/i <=/ >=/i
+        logbitp logtest) 
+
+ (ftype (function (integer) integer)
+        isqrt/i)
+
+ (ftype (function (integer &optional integer) (values integer integer))
+        floor/i  ceiling/i truncate/i round/i)
+
+ (ftype (function (integer &optional integer) (values integer integer))
+        ffloor/i fceiling/i ftruncate/i fround/i)
+
+ (ftype (function (string integer integer integer bool) (values integer integer))
+        parse-integer/i))
+#+END_CODE
+
+*** 
+*** The REPL
+
+The REPL is a standard REPL.
+
+
+**** Function QUIT
+
+Syntax:
+
+    QUIT (&optional (status 0)) => non-local-exit
+
+Arguments and Values:
+
+    status -- an integer
+
+Description:
+
+    Exits the =bocl= process, with the given STATUS.
+
+*** External-format
+
+External-formats can be:
+
+- :DEFAULT in place of (:iso-8859-1 :lf :error)
+
+- a keyword denoting an encoding in (:us-ascii :iso-8859-1);
+  the default line-termination is :lf, and 
+  the default encoding error handling is :error (signal an error).
+
+- a list containing:
+
+  + a keyword denoting an encoding in (:us-ascii :iso-8859-1),
+
+  + a line-termination keyword (:dos :crlf :mac :cr :unix :lf),
+   
+  + an object specifing the handling of encoding errors:
+
+    * a character used as substitution character #\sub is suggested,
+      or an integer used as substitution code 26 (SUB) is suggested.
+      (code-char code) is used on input encoding error.
+      (char-code char) is used on output decoding error.
+
+    * the keyword :error asking for a continuable encoding-error to be
+      signaled, with a substitute-code restart.
+
+    * the symbol NIL asking to ignore and skip the unencodable
+      character.
+      
+Encoding or decoding errors can only occur with a code>127 given with
+:us-ascii, since we deal only with :us-ascii (7-bit) and :iso-8859-1
+(8-bit) and internal coding is iso-8859-1.
+
+
+Note: kernel:stream-external-format accept only (:crlf :cr :lf) as
+line-termination; the mapping is done in the CL layer.
+
+#+BEGIN_EXAMPLE
+(:us-ascii :crlf #\SUB)     Write the #\SUB character instead.
+(:us-ascii :crlf :error)    Signal an error.
+(:us-ascii :crlf nil)       Ignore and skip the invalid character.
+#+END_EXAMPLE
+
+* Epilogue                                                         :noexport:
+
+# not-eval: (set-input-method 'latin-1-prefix)
+
+# Local Variables:
+# eval: (auto-fill-mode 1)
+# End:
+

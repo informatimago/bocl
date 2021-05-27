@@ -1,0 +1,1331 @@
+
+* Control Codes
+
+https://www.aivosto.com/articles/control-characters.html#iso8859
+
+** ISO-8859-1 Control Codes (C1)
+
+†) The 2-character mnemonics for C1 are from RFC 1345. They are not standardized.
+
+| Dec | Hex | Char  | Description                                                        | Octal | Pos  | †) |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 128 | $80 | PAD   | unassigned, "Padding Character"                                    |   200 | 8/0  | PA |
+|     |     |       |                                                                    |       |      |    |
+|   X |     | ESC @ | A reserved control code. Intended for use as PAD Padding           |       |      |    |
+|     |     |       | Character in draft DIS 10646, rejected, never standardized (not    |       |      |    |
+|     |     |       | accepted to ISO 10646).                                            |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: Not part of ISO/IEC 6429 or ECMA-48.                         |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Unicode lists this character as XXX and provides PAD as an alias.  |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 129 | $81 | HOP   | unassigned, "High Octet Preset"                                    |   201 | 8/1  | HO |
+|     |     |       |                                                                    |       |      |    |
+|   X |     | ESC A | A reserved control code. Intended for use as HOP High Octet        |       |      |    |
+|     |     |       | Preset in draft DIS 10646, rejected, never standardized (not       |       |      |    |
+|     |     |       | accepted to ISO 10646).                                            |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: Not part of ISO/IEC 6429 or ECMA-48. Listed as XXX in        |       |      |    |
+|     |     |       | Unicode.                                                           |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Unicode lists this character as XXX and provides HOP as an alias.  |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 130 | $82 | BPH   | Break Permitted Here                                               |   202 | 8/2  | BH |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC B | A point where a line break may occur.                              |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: Roughly equivalent to a soft hyphen except that the means    |       |      |    |
+|     |     |       | for indicating a line break is not necessarily a hyphen. Compare   |       |      |    |
+|     |     |       | to Unicode U+200B ZERO WIDTH SPACE.                                |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 131 | $83 | NBH   | No Break Here                                                      |   203 | 8/3  | NH |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC C | A point where a line break may not occur.                          |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: Compare to Unicode U+2060 WORD JOINER.                       |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 132 | $84 | IND   | Index                                                              |   204 | 8/4  | IN |
+|     |     |       |                                                                    |       |      |    |
+|   X |     | ESC D | Moves to the next line keeping the current horizontal position.    |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: According to ECMA-48:1986, IND was provided for use in       |       |      |    |
+|     |     |       | those cases where LF was implemented as New Line.                  |       |      |    |
+|     |     |       | IND was deprecated in 1988 and withdrawn in 1992 from ISO/IEC 6429 |       |      |    |
+|     |     |       | (1986 and 1991 respectively for ECMA-48).                          |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | See also:LFRI                                                      |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 133 | $85 | NEL   | Next Line                                                          |   205 | 8/5  | NL |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC E | Moves to the first position of the next line. Alternatively, to    |       |      |    |
+|     |     |       | line home or line limit position.                                  |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: NEL maps to the control character NL (New Line) in the       |       |      |    |
+|     |     |       | EBCDIC character set used on IBM mainframes.                       |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | See also:LF                                                        |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 134 | $86 | SSA   | Start of Selected Area                                             |   206 | 8/6  | SA |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC F | Starts a string of character positions whose contents can be       |       |      |    |
+|     |     |       | transmitted. The string ends at EPA (or end of display).           |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 135 | $87 | ESA   | End of Selected Area                                               |   207 | 8/7  | ES |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC G | Ends a string of character positions (started by SPA) whose        |       |      |    |
+|     |     |       | contents can be transmitted.                                       |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 136 | $88 | HTS   | Horizontal Tabulation Set, Character Tabulation Set                |   210 | 8/8  | HS |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC H | Sets a tab stop at the active position.                            |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: ISO 6429:1992, ECMA-48:1986 and ECMA-48:1991 have renamed    |       |      |    |
+|     |     |       | HTS as Character Tabulation Set.                                   |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 137 | $89 | HTJ   | Horizontal Tabulation with Justification, Character Tabulation     |   211 | 8/9  | HJ |
+|     |     |       | with Justification                                                 |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC I | Moves text to the following tab stop. The text is what comes       |       |      |    |
+|     |     |       | after the previous tab stop up to the active position.             |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: This character has several names. ANSI X3.64 originally      |       |      |    |
+|     |     |       | called it Horizontal Tabulation with Justify. ISO 6429:1992,       |       |      |    |
+|     |     |       | ECMA-48:1986 and ECMA-48:1991 have renamed HTJ as Character        |       |      |    |
+|     |     |       | Tabulation with Justification.                                     |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 138 | $8A | VTS   | Vertical Tabulation Set, Line Tabulation Set                       |   212 | 8/10 | VS |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC J | Sets a vertical tab stop at the active line.                       |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: ISO 6429:1992, ECMA-48:1986 and ECMA-48:1991 have renamed    |       |      |    |
+|     |     |       | VTS as Line Tabulation Set.                                        |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 139 | $8B | PLD   | Partial Line Down, Partial Line Forward                            |   213 | 8/11 | PD |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC K | Moves down so that following characters will appear as             |       |      |    |
+|     |     |       | subscripts. Subscripts end at the next PLU.                        |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: ISO 6429:1992 and ECMA-48:1991 have renamed PLD as Partial   |       |      |    |
+|     |     |       | Line Forward. Sample: text PLD subscript PLU text.                 |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 140 | $8C | PLU   | Partial Line Up, Partial Line Backward                             |   214 | 8/12 | PU |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC L | Moves up so that following characters will appear as               |       |      |    |
+|     |     |       | superscripts. Superscripts end at the next PLD.                    |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: ISO 6429:1992 and ECMA-48:1991 have renamed PLU as Partial   |       |      |    |
+|     |     |       | Line Backward. Sample: text PLU superscript PLD text.              |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 141 | $8D | RI    | Reverse Index, Reverse Line Feed                                   |   215 | 8/13 | RI |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC M | Moves to the previous line keeping the current horizontal          |       |      |    |
+|     |     |       | position.                                                          |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: ISO 6429:1992, ECMA-48:1986 and ECMA-48:1991 renamed RI as   |       |      |    |
+|     |     |       | Reverse Line Feed, apparently related to the removal of IND.       |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | See also:IND                                                       |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 142 | $8E | SS2   | Single Shift Two                                                   |   216 | 8/14 | S2 |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC N | Used to extend the character set. The next character will be from  |       |      |    |
+|     |     |       | the currently chosen G2 set.                                       |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: For more information see ISO 2022 or ECMA-35. The next       |       |      |    |
+|     |     |       | character should be in the decimal range 33-126 or 32-127.         |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 143 | $8F | SS3   | Single Shift Three                                                 |   217 | 8/15 | S3 |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC O | Used to extend the character set. The next character will be from  |       |      |    |
+|     |     |       | the currently chosen G3 set.                                       |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: For more information see ISO 2022 or ECMA-35. The next       |       |      |    |
+|     |     |       | character should be in the decimal range 33-126 or 32-127.         |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 144 | $90 | DCS   | Device Control String                                              |   220 | 9/0  | DC |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC P | Starts a device control string. ST ends the string. The control    |       |      |    |
+|     |     |       | string may include commands to the receiving device, or a status   |       |      |    |
+|     |     |       | report from the sending device.                                    |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 145 | $91 | PU1   | Private Use One                                                    |   221 | 9/1  | P1 |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC Q | Reserved for private use, no standardized meaning.                 |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 146 | $92 | PU2   | Private Use Two                                                    |   222 | 9/2  | P2 |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC R | Reserved for private use, no standardized meaning.                 |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 147 | $93 | STS   | Set Transmit State                                                 |   223 | 9/3  | TS |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC S | Notifies that data is ready for transfer from a device (ANSI       |       |      |    |
+|     |     |       | X3.64), or establishes the transmit state in the receiving device  |       |      |    |
+|     |     |       | (ISO 6429, ECMA-48). Doesn't initiate the actual transmission.     |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 148 | $94 | CCH   | Cancel Character                                                   |   224 | 9/4  | CC |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC T | Ignore the preceding graphic character (and CCH itself too). If    |       |      |    |
+|     |     |       | the previous character is a control character or sequence, ANSI    |       |      |    |
+|     |     |       | X3.64 says it should be ignored, while ISO 6429 and ECMA-48 leave  |       |      |    |
+|     |     |       | the action undefined.                                              |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: Destructive backspace. Intended to eliminate ambiguity       |       |      |    |
+|     |     |       | about the meaning of BS.                                           |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | See also:BS                                                        |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 149 | $95 | MW    | Message Waiting                                                    |   225 | 9/5  | MW |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC U | Sets a message waiting indicator in the receiving device.          |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 150 | $96 | SPA   | Start of Guarded Protected Area, Start of Protected Area, Start    |   226 | 9/6  | SG |
+|     |     |       | of Guarded Area                                                    |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC V | Starts a string of character positions that can't be altered       |       |      |    |
+|     |     |       | manually or transmitted. Optionally protects against erasure       |       |      |    |
+|     |     |       | too. EPA will end the string.                                      |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: SPA is known as Start of Protected Area (ANSI X3.64,         |       |      |    |
+|     |     |       | ECMA-48:1979), Start of Guarded Protected Area (ISO 6429:1983,     |       |      |    |
+|     |     |       | ECMA-48:1984) and Start of Guarded Area (ISO 6429:1992,            |       |      |    |
+|     |     |       | ECMA-48:1986 and ECMA-48:1991).                                    |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 151 | $97 | EPA   | End of Guarded Protected Area, End of Protected Area, End of       |   227 | 9/7  | EG |
+|     |     |       | Guarded Area                                                       |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC W | Ends the area started by SPA.                                      |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: EPA is known as End of Protected Area (ANSI X3.64,           |       |      |    |
+|     |     |       | ECMA-48:1979), End of Guarded Protected Area (ISO 6429:1983,       |       |      |    |
+|     |     |       | ECMA-48:1984) and End of Guarded Area (ISO 6429:1992, ECMA-48:1986 |       |      |    |
+|     |     |       | and ECMA-48:1991).                                                 |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 152 | $98 | SOS   | Start of String                                                    |   230 | 9/8  | SS |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC X | Starts a control string. The string ends at ST. It cannot contain  |       |      |    |
+|     |     |       | a SOS. The interpretation of the string depends on the             |       |      |    |
+|     |     |       | application.                                                       |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 153 | $99 | SGCI  | unassigned, "Single Graphic Character Introducer"                  |   231 | 9/9  | GC |
+|     |     |       |                                                                    |       |      |    |
+|   X |     | ESC Y | A reserved control code. Intended for use as SGCI Single Graphic   |       |      |    |
+|     |     |       | Character Introducer in draft DIS 10646, rejected, never           |       |      |    |
+|     |     |       | standardized (not accepted to ISO 10646).                          |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: Not part of ISO/IEC 6429 or ECMA-48. Listed as XXX in        |       |      |    |
+|     |     |       | Unicode.                                                           |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Unicode lists this character as XXX and provides SGC as an alias.  |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 154 | $9A | SCI   | Single Character Introducer                                        |   232 | 9/10 | SC |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC Z | A reserved control code. The name was standardized as SCI Single   |       |      |    |
+|     |     |       | Character Introducer, but the actual functionality was not         |       |      |    |
+|     |     |       | implemented in the standards.                                      |       |      |    |
+|     |     |       |                                                                    |       |      |    |
+|     |     |       | Note: SCI was to be followed by a single byte, which would         |       |      |    |
+|     |     |       | represent a control function or a graphic character. The functions |       |      |    |
+|     |     |       | or characters were not defined in the standards.                   |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 155 | $9B | CSI   | Control Sequence Introducer                                        |   233 | 9/11 | CI |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC [ | Starts a control sequence.                                         |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 156 | $9C | ST    | String Terminator                                                  |   234 | 9/12 | ST |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC \ | Closes a string opened by APC, DCS, OSC, PM or SOS.                |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 157 | $9D | OSC   | Operating System Command                                           |   235 | 9/13 | OC |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC ] | Starts an operating system control string. The string ends at ST   |       |      |    |
+|     |     |       | and is interpreted subject to the operating system.                |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 158 | $9E | PM    | Privacy Message                                                    |   236 | 9/14 | PM |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC ^ | Starts a privacy message. ST will end the message.                 |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+| 159 | $9F | APC   | Application Program Command                                        |   237 | 9/15 | AC |
+|     |     |       |                                                                    |       |      |    |
+|     |     | ESC _ | Starts an application program command string. ST will end the      |       |      |    |
+|     |     |       | command. The interpretation of the command is subject to the       |       |      |    |
+|     |     |       | program in question.                                               |       |      |    |
+|-----+-----+-------+--------------------------------------------------------------------+-------+------+----|
+
+** COMMENT ASCII Control Codes (C0)
+
+#+BEGIN_CODE lisp
+;; <p class="note">*) The 2-character mnemonics for the ASCII set are from ANSI X3.32, ISO 2047 and ECMA-17. So are also the graphic symbols. The symbols are outdated and rarely used. A couple of the symbols also have alternative forms.</p>
+
+(defparameter *data*
+
+   (with-input-from-string (in "
+<tr>
+<th scope=\"col\" abbr=\"Decimal\">Dec</th>
+<th scope=\"col\">Hex</th>
+<th scope=\"col\" abbr=\"Character\">Char</th>
+<th scope=\"col\" class=\"descr\">Description</th>
+<th scope=\"col\">Octal</th>
+<th scope=\"col\" abbr=\"Position\">Pos</th>
+<th scope=\"col\" abbr=\"Symbol\">*) </th>
+</tr>
+<tr class=\"hdr\" id=\"NUL\">
+<th>0</th>
+<th>$00</th>
+<th>NUL</th>
+<th>Null</th>
+<td>000</td>
+<td>0/0</td>
+<td>NU</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\0</kbd></td>
+<td><kbd>^@</kbd></td>
+<td colspan=\"3\">NUL is defined in the standards as a filler character. It can be used as media-fill or time-fill. NUL doesn't affect the information content of a data stream. It may affect the information layout and the control of equipment, though.</td>
+<td class=\"symbol\"><img src=\"control-characters/null.gif\" class=\"symbol\" alt=\"NUL\" title=\"NUL Null\" /></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        NUL was originally intended as an ignorable filler character with no meaning. Especially convenient on paper tape, where a NUL equals no holes punched, it could be used to reserve space for new information or correcting errors.
+        ASCII-1986 even suggests NUL as a \"time-waster\" character to be added after a newline to accommodate mechanical devices where a carriage return works slowly.
+        Despite this, NUL has been used contrary to the standards in null-terminated strings as an End-Of-String marker. Several programming languages use this convention.
+        </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Constant in Visual Basic and VB.NET: <code>vbNullChar, NullChar</code></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"SOH\">
+<th>1</th>
+<th>$01</th>
+<th>SOH</th>
+<th>Start of Heading — TC<sub>1</sub> Transmission control character 1</th>
+<td>001</td>
+<td>0/1</td>
+<td>SH</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^A</kbd></td>
+<td colspan=\"3\">Indicates the beginning of a heading in a transmission. The heading can be terminated by STX. As per ASCII-1968, a heading constitutes a machine-sensible address or routing information. Later standards have dropped the explanation.</td>
+<td class=\"symbol\"><img src=\"control-characters/soh.gif\" class=\"symbol\" alt=\"SOH\" title=\"SOH Start of Heading\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: SOH, along with STX and ETX, was intended for data transmission. It is not intended for marking a heading in a document.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"STX\">
+<th>2</th>
+<th>$02</th>
+<th>STX</th>
+<th>Start of Text — TC<sub>2</sub> Transmission control character 2</th>
+<td>002</td>
+<td>0/2</td>
+<td>SX</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^B</kbd></td>
+<td colspan=\"3\">STX has two functions in a transmission: it 1) indicates the beginning of a text and 2) may terminate a heading (see SOH). As per ASCII-1968, text is what should be transmitted to a destination. Later standards have dropped the explanation.</td>
+<td class=\"symbol\"><img src=\"control-characters/stx.gif\" class=\"symbol\" alt=\"STX\" title=\"STX Start of Text\"></td>
+</tr>
+<tr class=\"hdr\" id=\"ETX\">
+<th>3</th>
+<th>$03</th>
+<th>ETX</th>
+<th>End of Text — TC<sub>3</sub> Transmission control character 3</th>
+<td>003</td>
+<td>0/3</td>
+<td>EX</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^C</kbd></td>
+<td colspan=\"3\">Terminates a text in a transmission. As per ASCII-1968, a text starts with STX and ends with ETX. Later standards don't necessarily require the pairing of STX with ETX.</td>
+<td class=\"symbol\"><img src=\"control-characters/etx.gif\" class=\"symbol\" alt=\"ETX\" title=\"ETX End of Text\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: ETX may be used to call for reply from a slave station after a message has been sent. ETX is also commonly used to terminate an interactive process (keyboard: <kbd><kbd>Ctrl</kbd>+<kbd>C</kbd></kbd>).</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>Ctrl</kbd>+<kbd>Break</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"EOT\">
+<th>4</th>
+<th>$04</th>
+<th>EOT</th>
+<th>End of Transmission — TC<sub>4</sub> Transmission control character 4</th>
+<td>004</td>
+<td>0/4</td>
+<td>ET</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^D</kbd></td>
+<td colspan=\"3\">Indicates the conclusion of a transmission. The transmission may have contained one or more texts and associated heading(s).</td>
+<td class=\"symbol\"><img src=\"control-characters/eot.gif\" class=\"symbol\" alt=\"EOT\" title=\"EOT End of Transmission\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        EOT can be used to end or abort a transmission. It can also be a reply to indicate inability to receive further messages.
+        EOT (keyboard: <kbd><kbd>Ctrl</kbd>+<kbd>D</kbd></kbd>) is even used as an End-Of-File control in a Unix shell session.
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"ENQ\">
+<th>5</th>
+<th>$05</th>
+<th>ENQ</th>
+<th>Enquiry — TC<sub>5</sub> Transmission control character 5</th>
+<td>005</td>
+<td>0/5</td>
+<td>EQ</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^E</kbd></td>
+<td colspan=\"3\">Requests a response from a remote station. The response may include station identification or status. ENQ can be used as a \"Who Are You\" (WRU) to identify a remote station, especially after a new connection has been established.</td>
+<td class=\"symbol\"><img src=\"control-characters/enq.gif\" class=\"symbol\" alt=\"ENQ\" title=\"ENQ Enquiry\"></td>
+</tr>
+<tr class=\"hdr\" id=\"ACK\">
+<th>6</th>
+<th>$06</th>
+<th>ACK</th>
+<th>Acknowledge — TC<sub>6</sub> Transmission control character 6</th>
+<td>006</td>
+<td>0/6</td>
+<td>AK</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^F</kbd></td>
+<td colspan=\"3\">An affirmative response. Transmitted from a receiver as a response to the sender.</td>
+<td class=\"symbol\"><img src=\"control-characters/ack.gif\" class=\"symbol\" alt=\"ACK\" title=\"ACK Acknowledge\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: ACK can indicate that a slave station has received a message correctly and is ready to receive more.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"BEL\">
+<th>7</th>
+<th>$07</th>
+<th>BEL</th>
+<th>Bell</th>
+<td>007</td>
+<td>0/7</td>
+<td>BL</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\a</kbd></td>
+<td><kbd>^G</kbd></td>
+<td colspan=\"3\">Calls for human attention. BEL may control alarm or attention devices.</td>
+<td class=\"symbol\"><img src=\"control-characters/bel.gif\" class=\"symbol\" alt=\"BEL\" title=\"BEL Bell\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: BEL is the only control character with an audible effect. It has been used to ring a bell (indeed) or produce a beep sound. A visual alarm is also possible.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">In Unicode, this control character is abbreviated BEL but named ALERT, while the name BELL is confusingly used for a graphic character (<span class=\"symbol\">🔔</span>).</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"BS\">
+<th>8</th>
+<th>$08</th>
+<th>BS</th>
+<th>Backspace — FE<sub>0</sub> Format effector 0</th>
+<td>008</td>
+<td>0/8</td>
+<td>BS</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\b</kbd></td>
+<td><kbd>^H</kbd></td>
+<td colspan=\"3\">Moves one character position backwards (keeping the previous character).</td>
+<td class=\"symbol\"><img src=\"control-characters/bs.gif\" class=\"symbol\" alt=\"BS\" title=\"BS Backspace\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        Contrary to the standards, BS has been used as a combined \"move back and delete\" operation to remove the previous character.
+        This is not the standard meaning of BS, however.
+        BS is defined as a non-destructive \"move back\" or \"move left\" operation, similar to a backspace in mechanical typewriters.
+        To delete the previous character, BS should be followed by DEL. On paper tape the result would be the previous character being completely punched out (erased).
+        BS followed by another character would strike two characters in the same position. Overstriking was a way to produce combined characters.
+        This option was intended to internationalize ASCII. A letter followed by BS followed by a diacritic symbol would produce an accented letter.
+        As an example, u BS ^ would produce û. Several ASCII characters (\" ' ` ^ ~ ,) were indeed defined to be used as diacritic symbols.
+        Overstriking could also be suitable with other characters, such as for underlining with the \"_\" character or printing a slash \"/\" over \"=\" to produce \"not equal\". It could even be used to achieve a strike-through effect (perhaps with -, / or X) to indicate removed text. A boldface effect could be achieved by striking the same character several times at the same position.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        Overstriking was a useful option with printing devices, but displays hardly support it.
+        With the advent of more capable character sets and formatting techniques overstriking can be considered outdated.
+        ASCII-1986 does not require overstriking capabilities and suggests that overstriking may be proscribed in the future.
+        ISO 8859 explicitly forbids overstriking.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>←Backspace</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Constant in Visual Basic and VB.NET: <code>vbBack, Back</code></td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">See also: <a href=\"#CCH\">CCH</a></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"HT\">
+<th>9</th>
+<th>$09</th>
+<th>HT</th>
+<th>Horizontal Tabulation — FE<sub>1</sub> Format effector 1 (Character Tabulation)</th>
+<td>011</td>
+<td>0/9</td>
+<td>HT</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\t</kbd></td>
+<td><kbd>^I</kbd></td>
+<td colspan=\"3\">Advances to the next pre-determined character position (horizontal tab stop). HT could also be used as a skip function on punched cards.</td>
+<td class=\"symbol\"><img src=\"control-characters/ht.gif\" class=\"symbol\" alt=\"HT\" title=\"HT Horizontal Tabulation\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: HT is commonly also abbreviated TAB.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        Even though the standards don't set a universal tab width, a typical fixed tab width is 8 columns.
+        Other tab widths, as well as custom tab positions, are used as well.
+        HT is a simple method of data compression: a single character can represent several spaces in formatted text.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        The <kbd><kbd>↹ Tab</kbd></kbd> key on the keyboard is consistent with HT in that it usually produces the code HT. How the HT is treated in each application is another story.
+        In windowing environments, there are three common alternative uses. 
+        Pressing <kbd><kbd>↹ Tab</kbd></kbd> can either add an HT character into text, indent text (possibly by adding an appropriate number of spaces or shifting the marginal), or something completely different: jump to the next field or control in a graphical user interface. This way the key has been extended to cover more uses than what HT was originally intended for.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        The original name of HT is Horizontal Tabulation. It was later renamed as HT Character Tabulation, first in ECMA-48:1986.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>↹ Tab</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Constant in Visual Basic and VB.NET: <code>vbTab, Tab</code></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"LF\">
+<th>10</th>
+<th>$0A</th>
+<th>LF</th>
+<th>Line Feed — FE<sub>2</sub> Format effector 2</th>
+<td>012</td>
+<td>0/10</td>
+<td>LF</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^J</kbd></td>
+<td colspan=\"3\">LF has two alternative functions. It advances to the same character position on the next line (move down), or optionally to the first position on the next line (move to start of next line, i.e. newline). Originally LF was a move-down. A newline option (NL) was added soon. The option allowed LF to be used as a newline, which works like a combined CR LF. Use of LF as a newline requires agreement between sender and recipient of data. Universal agreement has not been reached.</td>
+<td class=\"symbol\"><img src=\"control-characters/lf.gif\" class=\"symbol\" alt=\"LF\" title=\"LF Line Feed\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        LF, having two alternative functions, has been a major source of confusion. While LF was initially defined as a \"move down\" operator, standards began to allow LF as a newline too.
+        As a result, operating systems differ in their definition of a newline. A newline is LF on Unix.
+        Operating systems using CR LF include CP/M, DOS, OS/2 and Windows. Naturally, this caused an incompatibility.
+        To solve the problem, control characters IND and NEL were added to the C1 area. This did not solve the issue, resulting in IND being removed later.
+        ECMA-6:1985 and ASCII-1986 attempted to clarify the situation by declaring LF deprecated for a newline and recommending CR LF instead. ECMA-48:1991 no longer allows LF to function as a newline.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        The escape sequence for newline and LF is another source of confusion. \\n is the common sequence for a newline, whereas there is no such a sequence for a line feed. The actual control character(s) represented by \\n depend on the system. In some cases, \\n indeed represents LF, but it can also represent another newline sequence.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>Ctrl</kbd>+<kbd>Enter</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Constant in Visual Basic and VB.NET: <code>vbLf, Lf</code></td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">See also: <a href=\"#CR\">CR</a> <a href=\"#IND\">IND</a> <a href=\"#NEL\">NEL</a></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"VT\">
+<th>11</th>
+<th>$0B</th>
+<th>VT</th>
+<th>Vertical Tabulation — FE<sub>3</sub> Format effector 3 (Line Tabulation)</th>
+<td>013</td>
+<td>0/11</td>
+<td>VT</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\v</kbd></td>
+<td><kbd>^K</kbd></td>
+<td colspan=\"3\">Advances to the same character position on the next pre-determined line. ASCII-1977 and ASCII-1986 optionally allow VT to advance to the first position on the next pre-determined line, if agreed on.</td>
+<td class=\"symbol\"><img src=\"control-characters/vt.gif\" class=\"symbol\" alt=\"VT\" title=\"VT Vertical Tabulation\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        The original name of VT is Vertical Tabulation. It was later renamed as VT Line Tabulation, first in ECMA-48:1986.
+        VT has been used to jump down to the next pre-defined line when printing on a paper form. According to some sources, vertical tab stops were typically spaced 6 lines apart.
+        VT is a simple data compression method where a single VT represents several LF characters (and optionally a CR too).
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        In modern use VT must be quite a rare character. 
+        As Bob Bemer, one of the original designers of ASCII, put it: \"This is a very dangerous character to use. It cannot be used directly on any terminal that I know of. Even if it could, the implementation rules are not supplied unambiguously in the ASCII standard.\"
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Constant in Visual Basic and VB.NET: <code>vbVerticalTab, VerticalTab</code></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"FF\">
+<th>12</th>
+<th>$0C</th>
+<th>FF</th>
+<th>Form Feed — FE<sub>4</sub> Format effector 4</th>
+<td>014</td>
+<td>0/12</td>
+<td>FF</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\f</kbd></td>
+<td><kbd>^L</kbd></td>
+<td colspan=\"3\">Advances to the next form or page. Standards differ in what column the subsequent character position will be in. Originally, ASCII-1968 did not define the column at all. ISO and ECMA standards declare that FF does not change the column. ASCII-1977 and ASCII-1986 optionally allow, by agreement, moving to the first column, as if FF was actually CF FF.</td>
+<td class=\"symbol\"><img src=\"control-characters/ff.gif\" class=\"symbol\" alt=\"FF\" title=\"FF Form Feed\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        FF has been used as \"page break\" in text files, \"new page\" on printers and \"clear the screen\" on displays.
+        The situation was originally unclear whether FF was just a \"new page\" operator or \"new page, move to column 1\".
+        ASCII-1977 and ECMA-6:1985 attempted to clarify the situation by recommending the use of CR FF.
+        ASCII-1986 even implied that the \"new page, move to column 1\" option might be deleted in a future edition of ASCII.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Constant in Visual Basic and VB.NET: <code>vbFormFeed, FormFeed</code></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"CR\">
+<th>13</th>
+<th>$0D</th>
+<th>CR</th>
+<th>Carriage Return — FE<sub>5</sub> Format effector 5</th>
+<td>015</td>
+<td>0/13</td>
+<td>CR</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\r</kbd></td>
+<td><kbd>^M</kbd></td>
+<td colspan=\"3\">Traditional definition: Moves to the first position on the same line (ASCII, ISO 646, ECMA-6). Newer definition: Moves to the line home position or line limit position of the same line (ISO 6429, ECMA-48).</td>
+<td class=\"symbol\"><img src=\"control-characters/cr.gif\" class=\"symbol\" alt=\"CR\" title=\"CR Carriage Return\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        The standard meaning of CR is \"move to beginning of current line\". This allows overprinting the line with new characters, which could be used to achieve underlining, for example. For advancing to the next line CR would be followed by LF.
+        On CP/M, DOS, OS/2 and Windows the newline marker is CR LF, which is according to the definition.
+        CR alone has been used as the newline character on some systems, such as Commodore and Apple, which use does not conform to the standards in question.
+        The order CR LF (instead of LF CR) may have been important on mechanical devices where a carriage return took relatively long to execute. 
+        A non-printing LF was more suitable output while the printing head was returning, rather than striking a graphic symbol in the middle of the line.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>Enter</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Constant in Visual Basic and VB.NET: <code>vbCr, Cr</code></td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">See also: <a href=\"#LF\">LF</a></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"SO\">
+<th>14</th>
+<th>$0E</th>
+<th>SO</th>
+<th>Shift Out — LS<sub>1</sub> Locking-Shift One</th>
+<td>016</td>
+<td>0/14</td>
+<td>SO</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^N</kbd></td>
+<td colspan=\"3\">Used to extend the character set. SO may alter the meaning of the following bit combinations until an SI is reached. Between SI and SO, character positions 33-126 (decimal) may represent additional characters that would not otherwise fit in the regular character set.</td>
+<td class=\"symbol\"><img src=\"control-characters/so.gif\" class=\"symbol\" alt=\"SO\" title=\"SO Shift Out\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        SO (Shift Out) is normal name of this control. LS1 (Locking-Shift One) is used by ECMA-35 and ECMA-48. In those standards, SO is used in 7-bit environments and LS1 in 8-bit environments.
+        The mechanism to select the alternative character set(s) was defined in ANSI X3.41, ISO 2022 and ECMA-35. It includes the use of escape sequences starting with ESC.
+        SO has also been used on printers to select enlarged characters or another color.
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"SI\">
+<th>15</th>
+<th>$0F</th>
+<th>SI</th>
+<th>Shift In — LS<sub>0</sub> Locking-Shift Zero</th>
+<td>017</td>
+<td>0/15</td>
+<td>SI</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^O</kbd></td>
+<td colspan=\"3\">Used in conjunction with SO. It may reinstate the standard meanings of the characters following it.</td>
+<td class=\"symbol\"><img src=\"control-characters/si.gif\" class=\"symbol\" alt=\"SI\" title=\"SI Shift In\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        SI (Shift In) is normal name of this control. LS0 (Locking-Shift Zero) is used by ECMA-35 and ECMA-48. In those standards, SI is used in 7-bit environments and LS0 in 8-bit environments.
+        SI has also been used on printers to select condensed characters or to reset color.
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"DLE\">
+<th>16</th>
+<th>$10</th>
+<th>DLE</th>
+<th>Data Link Escape — TC<sub>7</sub> Transmission control character 7</th>
+<td>020</td>
+<td>1/0</td>
+<td>DL</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^P</kbd></td>
+<td colspan=\"3\">Used to provide supplementary data transmission control functions. DLE changes the meaning of a limited number of following characters.</td>
+<td class=\"symbol\"><img src=\"control-characters/dle.gif\" class=\"symbol\" alt=\"DLE\" title=\"DLE Data Link Escape\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        DLE is the \"escape\" character for transmission control. DLE can potentially be put in the front of a transmission control character (TC1-TC10) to pass it through \"as is\" instead of controlling the current transmission. This is not always the case, though. It is possible to create new transmission control sequences with DLE in a similar way ESC is used to create escape sequences for other purposes.
+        Contrary to the standards, ^P has been used as a keyboard shortcut to echo console activity at the printer.
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"DC1\">
+<th>17</th>
+<th>$11</th>
+<th>DC<sub>1</sub></th>
+<th>Device Control 1 — XON</th>
+<td>021</td>
+<td>1/1</td>
+<td>D1</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^Q</kbd></td>
+<td colspan=\"3\">Intended to turn on or start an ancillary device, to restore it to the basic operation mode (see DC2 and DC3), or for any other device control function.</td>
+<td class=\"symbol\"><img src=\"control-characters/dc1.gif\" class=\"symbol\" alt=\"DC1\" title=\"DC1 Device Control 1\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        DC1 is conventionally called XON when used in communication for software flow control. The meaning of XON is to continue data transmission after an XOFF (DC3) has been received. The name XON (\"transmit on\") does not come from a standard, but it is commonly used.
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"DC2\">
+<th>18</th>
+<th>$12</th>
+<th>DC<sub>2</sub></th>
+<th>Device Control 2</th>
+<td>022</td>
+<td>1/2</td>
+<td>D2</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^R</kbd></td>
+<td colspan=\"3\">Intended for turning on or starting an ancillary device, set it to a special mode (restored via DC1), or for any other device control function.</td>
+<td class=\"symbol\"><img src=\"control-characters/dc2.gif\" class=\"symbol\" alt=\"DC2\" title=\"DC2 Device Control 2\"></td>
+</tr>
+<tr class=\"hdr\" id=\"DC3\">
+<th>19</th>
+<th>$13</th>
+<th>DC<sub>3</sub></th>
+<th>Device Control 3 — XOFF</th>
+<td>023</td>
+<td>1/3</td>
+<td>D3</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^S</kbd></td>
+<td colspan=\"3\">Intended for turning off or stopping an ancillary device. It may be a secondary level stop such as wait, pause, stand-by or halt (restored via DC1). It can also perform any other device control function.</td>
+<td class=\"symbol\"><img src=\"control-characters/dc3.gif\" class=\"symbol\" alt=\"DC3\" title=\"DC3 Device Control 3\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        DC3 is conventionally called XOFF when used in communication for software flow control. An XOFF is issued to stop transmission when a device cannot accept more data. Transmission can be continued via XON (DC1). The name XOFF (\"transmit off\") does not come from a standard, but it is commonly used. The use of XOFF and XON is in line with the standards, even though not directly defined in them.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">XOFF (^S) is sometimes used as a pause command. Continuing requires pressing XON (^Q). ^S also works as a pause on MS-DOS and in Windows command prompt. Pressing any key continues.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"DC4\">
+<th>20</th>
+<th>$14</th>
+<th>DC<sub>4</sub></th>
+<th>Device Control 4 (Stop)</th>
+<td>024</td>
+<td>1/4</td>
+<td>D4</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^T</kbd></td>
+<td colspan=\"3\">Intended to turn off, stop or interrupt an ancillary device, or for any other device control function.</td>
+<td class=\"symbol\"><img src=\"control-characters/dc4.gif\" class=\"symbol\" alt=\"DC4\" title=\"DC4 Device Control 4 (Stop)\"></td>
+</tr>
+<tr class=\"hdr\" id=\"NAK\">
+<th>21</th>
+<th>$15</th>
+<th>NAK</th>
+<th>Negative Acknowledge — TC<sub>8</sub> Transmission control character 8</th>
+<td>025</td>
+<td>1/5</td>
+<td>NK</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^U</kbd></td>
+<td colspan=\"3\">Negative response. Transmitted from a receiver as a response to the sender.</td>
+<td class=\"symbol\"><img src=\"control-characters/nak.gif\" class=\"symbol\" alt=\"NAK\" title=\"NAK Negative Acknowledge\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: NAK can be sent as a response to indicate inability to receive a message, or to request resending.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"SYN\">
+<th>22</th>
+<th>$16</th>
+<th>SYN</th>
+<th>Synchronous Idle — TC<sub>9</sub> Transmission control character 9</th>
+<td>026</td>
+<td>1/6</td>
+<td>SY</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^V</kbd></td>
+<td colspan=\"3\">Used as \"time-fill\" in synchronous transmission. Sent during an idle condition to retain a signal when there are no other characters to send.</td>
+<td class=\"symbol\"><img src=\"control-characters/syn.gif\" class=\"symbol\" alt=\"SYN\" title=\"SYN Synchronous Idle\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        SYN has been used by synchronous modems, which have to send data constantly. —
+        Beginning each transmission with at least two SYN characters is a way to achieve synchronization. The receiving station will possibly ignore SYN, since it doesn't belong to the actual data content.
+
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"ETB\">
+<th>23</th>
+<th>$17</th>
+<th>ETB</th>
+<th>End of Transmission Block — TC<sub>10</sub> Transmission control character 10</th>
+<td>027</td>
+<td>1/7</td>
+<td>EB</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^W</kbd></td>
+<td colspan=\"3\">Indicates the end of a block of data. Used when data is divided into blocks for transmission.</td>
+<td class=\"symbol\"><img src=\"control-characters/etb.gif\" class=\"symbol\" alt=\"ETB\" title=\"ETB End of Transmission Block\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: ETB, when used to end a block, may call for a reply from a slave station.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"CAN\">
+<th>24</th>
+<th>$18</th>
+<th>CAN</th>
+<th>Cancel</th>
+<td>030</td>
+<td>1/8</td>
+<td>CN</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^X</kbd></td>
+<td colspan=\"3\">Indicates that data is in error or should be disregarded. Affects \"the data with which it is sent\" (ASCII-1968, ASCII-1977) or \"the data preceding it\" (ASCII-1986, ISO 646, ECMA-6, ECMA-48).</td>
+<td class=\"symbol\"><img src=\"control-characters/can.gif\" class=\"symbol\" alt=\"CAN\" title=\"CAN Cancel\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        There are 2 alternative definitions for the data to be disregarded. The actual scope of cancellation is undefined by the standards and should be defined case by case. 
+        ^X has been used as a keyboard shortcut to cancel (delete) the characters on the current line, which use conforms to the standards.
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"EM\">
+<th>25</th>
+<th>$19</th>
+<th>EM</th>
+<th>End of Medium</th>
+<td>031</td>
+<td>1/9</td>
+<td>EM</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^Y</kbd></td>
+<td colspan=\"3\">Identifies 1) the physical end of a medium, 2) the end of the used portion of a medium, or 3) the end of wanted data on a medium.</td>
+<td class=\"symbol\"><img src=\"control-characters/em.gif\" class=\"symbol\" alt=\"EM\" title=\"EM End of Medium\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: EM may have been suitable for paper tape or magnetic tape to say \"no more data\". Disk file systems use more sophisticated ways to keep track of the used and unused areas of the medium.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">This character is commonly abbreviated EM, except for Unicode, which provides it as an alias with abbreviation EOM.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"SUB\">
+<th>26</th>
+<th>$1A</th>
+<th>SUB</th>
+<th>Substitute</th>
+<td>032</td>
+<td>1/10</td>
+<td>SB</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^Z</kbd></td>
+<td colspan=\"3\">Used in place of an invalid or erroneous character. Introduced by automatic means in cases like a transmission error.</td>
+<td class=\"symbol\"><img src=\"control-characters/sub.gif\" class=\"symbol\" alt=\"SUB\" title=\"SUB Substitute\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        When SUB is used as a substitution character, the reverse question mark symbol seems quite good
+        as its visual representation.
+        Compare SUB to Unicode U+FFFD REPLACEMENT CHARACTER.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        SUB has often been used contrary to the standards.
+        On CP/M and MS-DOS, it appears as an End-Of-File marker for text files (^Z).
+        On Unix, ^Z is a keyboard signal to interrupt a foreground process.
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"ESC\">
+<th>27</th>
+<th>$1B</th>
+<th>ESC</th>
+<th>Escape</th>
+<td>033</td>
+<td>1/11</td>
+<td>EC</td>
+</tr>
+<tr>
+<td></td>
+<td><kbd>\\e</kbd></td>
+<td><kbd>^[</kbd></td>
+<td colspan=\"3\">The first character of an escape sequence. Provides either supplementary characters or additional control functions. ESC changes the meaning of a limited number of following characters.</td>
+<td class=\"symbol\"><img src=\"control-characters/esc.gif\" class=\"symbol\" alt=\"ESC\" title=\"ESC Escape\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        ESC is used to form escape sequences, which perform various control functions or apply additional character sets. ESC can also be used to invoke the C1 control characters on a 7-bit system that only support character positions 0–127. 
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">
+        On the keyboard, sometimes the <kbd><kbd>Esc</kbd></kbd> key indeed produces the ESC control character. In windowing environments, the key typically cancels a dialog or an operation, rather than producing a control character or starting an escape sequence. This kind of an \"escape\" is not based on the character standards, however. The closest ASCII equivalent for canceling a dialog would be CAN, but since there is no <kbd><kbd>Can</kbd></kbd> key on the common keyboards, it can't be used.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>Esc</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"FS\">
+<th>28</th>
+<th>$1C</th>
+<th>FS</th>
+<th>File Separator — IS<sub>4</sub> Information separator 4</th>
+<td>034</td>
+<td>1/12</td>
+<td>FS</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^\\</kbd></td>
+<td colspan=\"3\">The four information separators (FS, GS, RS and US) are used to separate and qualify data. Each separator has two alternative names: Information Separator Four equals File Separator, Information Separator Three equals Group Separator, Information Separator Two equals Record Separator and Information Separator One equals Unit Separator. The separators can be used either hierarchically or in a non-hierarchical manner. When used hierarchically, the order is US (least inclusive), RS, GS and FS (most inclusive). The content and length of a file, group, record or unit are not specified by the standards.</td>
+<td class=\"symbol\"><img src=\"control-characters/fs.gif\" class=\"symbol\" alt=\"FS\" title=\"FS File Separator\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">FS, when used in a hierarchical order, delimits a data item called a file. It can also delimit anything else.</td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"GS\">
+<th>29</th>
+<th>$1D</th>
+<th>GS</th>
+<th>Group Separator — IS<sub>3</sub> Information separator 3</th>
+<td>035</td>
+<td>1/13</td>
+<td>GS</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^]</kbd></td>
+<td colspan=\"3\">GS, when used in a hierarchical order, delimits a data item called a group. It can also delimit anything else.</td>
+<td class=\"symbol\"><img src=\"control-characters/gs.gif\" class=\"symbol\" alt=\"GS\" title=\"GS Group Separator\"></td>
+</tr>
+<tr class=\"hdr\" id=\"RS\">
+<th>30</th>
+<th>$1E</th>
+<th>RS</th>
+<th>Record Separator — IS<sub>2</sub> Information separator 2</th>
+<td>036</td>
+<td>1/14</td>
+<td>RS</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^^</kbd></td>
+<td colspan=\"3\">RS, when used in a hierarchical order, delimits a data item called a record. It can also delimit anything else.</td>
+<td class=\"symbol\"><img src=\"control-characters/rs.gif\" class=\"symbol\" alt=\"RS\" title=\"RS Record Separator\"></td>
+</tr>
+<tr class=\"hdr\" id=\"US\">
+<th>31</th>
+<th>$1F</th>
+<th>US</th>
+<th>Unit Separator — IS<sub>1</sub> Information separator 1</th>
+<td>037</td>
+<td>1/15</td>
+<td>US</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^_</kbd></td>
+<td colspan=\"3\">US, when used in a hierarchical order, delimits a data item called a unit. It can also delimit anything else.</td>
+<td class=\"symbol\"><img src=\"control-characters/us.gif\" class=\"symbol\" alt=\"US\" title=\"US Unit Separator\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        The information separators were deliberately arranged next to SPACE, which can also be used as an information separator (word separator).
+      </td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"SP\">
+<th>32</th>
+<th>$20</th>
+<th>SP</th>
+<th>Space</th>
+<td>040</td>
+<td>2/0</td>
+<td>SP</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">Moves one character position forwards. Space may also have a function equivalent to that of an information separator.</td>
+<td class=\"symbol\"><img src=\"control-characters/sp.gif\" class=\"symbol\" alt=\"SP\" title=\"SP Space\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: Space has a dual nature. It can be classified as both a control character and a (non-printing) graphic character. SP is similar to a Format Effector. It can also be used as a fifth Information Separator. Space is sometimes represented by the symbol ƀ or ␢ (b with a stroke) or ␣ (open box). SP does not belong to the C0 set.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>Spacebar</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">See also: <a href=\"#NBSP\">NBSP</a></td>
+<td></td>
+</tr>
+<tr class=\"hdr\" id=\"DEL\">
+<th>127</th>
+<th>$7F</th>
+<th>DEL</th>
+<th>Delete</th>
+<td>177</td>
+<td>7/15</td>
+<td>DT</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td><kbd>^?</kbd></td>
+<td colspan=\"3\">Outdated. An ignorable character originally intended for erasing an erroneous or unwanted character in punched tape. In this standard use, DEL wouldn't affect the information content of data, even though it may have affected the information layout and the control of equipment. Standards also allowed DEL to be used as media-fill or time-fill (even though a NUL may be more appropriate).</td>
+<td class=\"symbol\"><img src=\"control-characters/del.gif\" class=\"symbol\" alt=\"DEL\" title=\"DEL Delete\"></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td class=\"note\" colspan=\"3\">Note: 
+        DEL is now outdated. It was removed from the latest standards (ECMA-48 in 1991 and ISO 6429 in 1992).
+        The origin of DEL is with perforated paper. On that, DEL was equal to \"all holes punched\", which is a way to invalidate an erroneous character (rubout).
+        In a sense, DEL is similar to NUL, since both characters mean \"nothing\".
+        ASCII-1977 suggests the use of DEL as a \"time waster\" to accommodate mechanical devices where a carriage return takes time to execute.
+        ASCII-1986 recommends NUL as a time waster instead of DEL.
+        DEL does not belong to the C0 set, but is an individual control code.
+      </td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\"><kbd><kbd>Ctrl</kbd>+<kbd>←Backspace</kbd></kbd> on PC keyboard produces this character code.</td>
+<td></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td colspan=\"3\">See also: <a href=\"#NUL\">NUL</a></td>
+<td></td>
+</tr>")
+
+     (loop for row = (handler-case (xmls:parse-to-list in) (end-of-file () :eof))
+           until (eq row :eof)
+           collect row)))
+
+#+END_CODE
