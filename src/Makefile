@@ -12,7 +12,7 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
             -fsanitize=nonnull-attribute -fsanitize=returns-nonnull-attribute       \
             -fsanitize=bool -fsanitize=enum -fsanitize-address-use-after-scope      \
             -fsanitize-undefined-trap-on-error -fstack-protector-all                \
-            -fstack-check 
+            -fstack-check
 
 LD_SANITIZE_FLAGS = -fsanitize=leak
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
@@ -27,17 +27,17 @@ LIBRARIES = \
 
 %.o:%.c
 	@ printf "# Compiling %s from %s\n" "$@" "$<"
-	$(VERBOSE) $(CC) $(CFLAGS) -c -o $@ $< 
+	$(VERBOSE) $(CC) $(CFLAGS) -c -o $@ $<
 
 bocl:main.o kernel.o bocl.o string_list.o kernel_objects.o memory.o
 	@ printf "# Linking %s from %s\n" "$@" "$^"
-	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $^ 
+	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $^
 
 clean:
-	@ printf "# Removing object files and target\n" 
+	@ printf "# Removing object files and target\n"
 	-$(VERBOSE) rm -f bocl *.o *.[ld]x{32,64}fsl
 
-gdb:bocl 
+gdb:bocl
 	gdb ./bocl
 
 
@@ -62,3 +62,7 @@ kernel_objects.h kernel_objects.c : generate-kernel-objects.lisp
 		$(LISP_QUIT)
 
 kernel.o:kernel.c kernel.h kernel_objects.h
+
+
+check:bocl
+    ./bocl
