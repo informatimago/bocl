@@ -1,10 +1,24 @@
 name: CI
 
+stages:
+  - build
+  - test
+
+build-code-job:
+  stage: build
+  script:
+    - echo "Compile the bocl executable:"
+    - make bocl
+
+test-code-job:
+  stage: test
+  script:
+    - echo "If the files are built successfully, run some tests:"
+    - make check
+
 on:
   pull_request:
   push:
-    paths-ignore:
-    - '**.md'
 
 jobs:
   build:
