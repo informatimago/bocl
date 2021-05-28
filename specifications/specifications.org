@@ -31,7 +31,7 @@
 #+LATEX_HEADER: \cfoot{\tiny{\copyright{} Pascal J. Bourguignon}}
 #+LATEX_HEADER: \rfoot{\small{Page \thepage \hspace{1pt} de \pageref{LastPage}}}
 
-* #. Welcome to Bootstrap Common Lisp, or BOCL for short.
+* Welcome to Bootstrap Common Lisp, or BOCL for short.
 
 From Robert Strandh
 
@@ -122,8 +122,8 @@ BOCL will not happen unless it is contributed to by others, so if you
 have knowledge of how to implement Common Lisp in C or interest in
 learning how to do it, please consider contributing.
 
-* #. BOCL
-** #. Generalities
+* BOCL
+** Generalities
 
 We implement in standard C a minimum subset of CL, which can be used to
 implement a complete CL (modulo implementation defined limitations).
@@ -162,6 +162,28 @@ batch mode, to compile other Common Lisp implementation.
 
 However a standard REPL is provided for tests.
 A debugger may be not provided, or just a minimal debugger.
+
+| Option                       | Description                                                    |
+|------------------------------+----------------------------------------------------------------|
+| -h, --help                   | print this text                                                |
+| -V, --version                | print =(LISP-IMPLEMENTATION-VERSION)= and exit                 |
+| -E encoding                  | set encodings                                                  |
+| -Eterminal encoding          | specify character encoding to use for =*TERMINAL-IO*=          |
+| --terminal-encoding encoding | specify character encoding to use for =*TERMINAL-IO*=          |
+| -n, -norc, --no-init         | suppress loading of default init file =~/.boclrc=              |
+| -x, -e, --eval form          | evaluate form (may need to quote form in shell)                |
+| -l, --load  file             | load file                                                      |
+| -Q, -q, --quiet, --silent    | if --batch, also suppress printing of heralds, prompts.        |
+| --verbose                    | verbosity level: affects banner, =*LOAD-VERBOSE*=,             |
+|                              | =*COMPILE-VERBOSE*=, and =*LOAD-PRINT*=, =*COMPILE-PRINT*=     |
+| -b, --batch                  | exit when EOF on =*STANDARD-INPUT*=                            |
+| --no-sigtrap                 | obscure option for running under GDB                           |
+| -on-error action             | action can be one of debug, exit, abort, appease               |
+| -i file                      | load initfile (can be repeated)                                |
+| -p package                   | start in the package                                           |
+| -repl, --repl                | enter the interactive read-eval-print loop when done (default) |
+| -quit, --quit                | quit when argument processing is done                          |
+| -w, --wait                   | wait for a keypress after program termination                  |
 
 Batch example:
 #+BEGIN_EXAMPLE
@@ -217,8 +239,8 @@ The CL library defines:
 
 - semi-standard additions, such as: Gray Streams, MOP, etc.
 
-** #. Kernel Implemented in C
-*** #. Garbage Collected Heap
+** Kernel Implemented in C
+*** Garbage Collected Heap
 
 We could use the Boehm-Weiser conservative garbage collector, but:
 - this would be an additionnal dependency, and
@@ -232,7 +254,7 @@ complexicities that are not really required for a CL implementation.
 So it might be better for our purpose, to implement a garbage
 collected heap in standard  C.
 
-*** #. Fundamental Lisp Objects
+*** Fundamental Lisp Objects
 
 Goals: simplicity, homogeneity.
 
@@ -260,7 +282,7 @@ character slots, so ascii strings would use 8 times the space…  (and
 even if we used unicode, unicode strings would use 2.67 times more
 space than needed).  It would also be inconvenient, since strings
 (pathnames) would have to be expanded and compressed back each time
-they're or written, or a path is obtained or to be used.
+they're written, or a path is obtained or to be used.
 
 
 
@@ -272,17 +294,20 @@ our string operations.
 
 Notes:
 
-  1- make-array returns objects of class bit-vector or string or
+  1. make-array returns objects of class bit-vector or string or
      vector or array.
-  2- so we can dispatch on bit-vector and string classes, to select
+
+  2. so we can dispatch on bit-vector and string classes, to select
      the optimized representation, but we would also want to
      use it for multidimentional arrays and vectors of octets (I/O):
          - (array (unsigned-byte 8) (*))
          - (array character (*))
          - (array bit (*))
-  3- since there's no classes specific to those optimization cases,
+
+  3. since there's no classes specific to those optimization cases,
      we'd need to keep a tag to select the slot representation.
-  4- also, classes don't hold the specfics of an array instance (rank,
+
+  4. also, classes don't hold the specfics of an array instance (rank,
      dimensions, element-type), so we have to record that anyways.
 
 
@@ -305,110 +330,117 @@ and definitions.
 
 **** Classes
 
-| Class                              | Layer    | Notes                                                                            |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
-| CHARACTER                          | C        | We may restrict ourselves to iso-8859-1 characters, to simplify implementation   |
-|                                    |          | of funcions such as alphanumericp graphic-char-p char-name, etc.                 |
-|                                    |          |                                                                                  |
-| HASH-TABLE                         |          | If we implement in CL, then (setf gethash) is not fundamental                    |
-| PACKAGE                            |          |                                                                                  |
-| READTABLE                          |          |                                                                                  |
-| RANDOM-STATE                       |          |                                                                                  |
-| RESTART                            |          |                                                                                  |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
-| NUMBER                             | Abstract |                                                                                  |
-| REAL                               | Abstract |                                                                                  |
-| FLOAT                              | C        | Not really needed in the kernel?                                                 |
-| RATIONAL                           | Abstract |                                                                                  |
-| RATIO                              |          | (numerator denominator)                                                          |
-| INTEGER                            | C        | Only number needed in the kernel.                                                |
-| COMPLEX                            |          | (realpart imagpart)                                                              |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
-| ARRAY                              | C        |                                                                                  |
-| SEQUENCE                           | Abstract |                                                                                  |
-| VECTOR                             | C        |                                                                                  |
-| BIT-VECTOR                         | C        |                                                                                  |
-| STRING                             | C        |                                                                                  |
-| LIST                               | Abstract |                                                                                  |
-| CONS                               | C        |                                                                                  |
-| SYMBOL                             | C        |                                                                                  |
-| NULL                               | C        |                                                                                  |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
-| PATHNAME                           | Abstract |                                                                                  |
-| LOGICAL-PATHNAME                   |          | Not needed in the kernel.                                                        |
-| PHYSICAL-PATHNAME                  | C        | We need a BOCL:PHYSICAL-PATHNAME class (path string wrapper) in the kernel.      |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
-| STREAM                             | Abstract |                                                                                  |
-| FILE-STREAM                        | C        | Needed to LOAD the CL library.                                                   |
-| STRING-STREAM                      |          |                                                                                  |
-| TWO-WAY-STREAM                     |          |                                                                                  |
-| BROADCAST-STREAM                   |          |                                                                                  |
-| ECHO-STREAM                        |          |                                                                                  |
-| SYNONYM-STREAM                     |          | Might be convenient in the kernel.                                               |
-| CONCATENATED-STREAM                |          |                                                                                  |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
-| CONDITION                          | C        | Depending on the fundamental error handling.                                     |
-| SIMPLE-CONDITION                   |          |                                                                                  |
-| WARNING                            |          |                                                                                  |
-| STYLE-WARNING                      |          |                                                                                  |
-| SIMPLE-WARNING                     |          |                                                                                  |
-| SERIOUS-CONDITION                  |          |                                                                                  |
-| STORAGE-CONDITION                  |          |                                                                                  |
-| ERROR                              |          |                                                                                  |
-| SIMPLE-ERROR                       |          |                                                                                  |
-| TYPE-ERROR                         |          |                                                                                  |
-| SIMPLE-TYPE-ERROR                  |          |                                                                                  |
-| CONTROL-ERROR                      |          |                                                                                  |
-| PROGRAM-ERROR                      |          |                                                                                  |
-| CELL-ERROR                         |          |                                                                                  |
-| UNBOUND-VARIABLE-ERROR             |          |                                                                                  |
-| UNBOUND-SLOT                       |          |                                                                                  |
-| UNDEFINED-FUNCTION                 |          |                                                                                  |
-| PACKAGE-ERROR                      |          |                                                                                  |
-| ARITHMETIC-ERROR                   |          |                                                                                  |
-| FLOATING-POINT-OVERFLOW            |          |                                                                                  |
-| FLOATING-POINT-INEXACT             |          |                                                                                  |
-| FLOATING-POINT-INVALID-OPERATION   |          |                                                                                  |
-| FLOATING-POINT-UNDERFLOW           |          |                                                                                  |
-| DIVISION-BY-ZERO                   |          |                                                                                  |
-| PRINT-NOT-READABLE                 |          |                                                                                  |
-| FILE-ERROR                         |          |                                                                                  |
-| STREAM-ERROR                       |          |                                                                                  |
-| END-OF-FILE                        |          |                                                                                  |
-| PARSE-ERROR                        |          |                                                                                  |
-| READER-ERROR                       |          |                                                                                  |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
-| FUNCTION                           | C        |                                                                                  |
-| COMPILED-FUNCTION                  |          | Definitely not in C.                                                             |
-| STANDARD-OBJECT                    | C        | The class may exist in the kernel, but no instance is implemented in the kernel. |
-| FUNCALLABLE-STANDARD-OBJECT        | MOP      |                                                                                  |
-| METAOBJECT                         | MOP      |                                                                                  |
-| GENERIC-FUNCTION                   | MOP      |                                                                                  |
-| STANDARD-GENERIC-FUNCTION          | MOP      |                                                                                  |
-| METHOD-COMBINATION                 | MOP      |                                                                                  |
-| SLOT-DEFINITION                    | MOP      |                                                                                  |
-| DIRECT-SLOT-DEFINITION             | MOP      |                                                                                  |
-| STANDARD-SLOT-DEFINITION           | MOP      |                                                                                  |
-| EFFECTIVE-SLOT-DEFINITION          | MOP      |                                                                                  |
-| STANDARD-DIRECT-SLOT-DEFINITION    | MOP      |                                                                                  |
-| STANDARD-EFFECTIVE-SLOT-DEFINITION | MOP      |                                                                                  |
-| SPECIALISER                        | MOP      |                                                                                  |
-| EQL-SPECIALISER                    | MOP      |                                                                                  |
-| CLASS                              | MOP      |                                                                                  |
-| FUNCALLABLE-STANDARD-CLASS         | MOP      |                                                                                  |
-| FORWARD-REFERENCED-CLASS           | MOP      |                                                                                  |
-| STANDARD-CLASS                     | C        | The class may exist in the kernel, but no instance is implemented in the kernel. |
-| STRUCTURE-CLASS                    | C        | Created by DEFSTRUCT with a BOCL-specific fundamental operator.                  |
-| STRUCTURE-OBJECT                   | C        | Created by DEFSTRUCT with a BOCL-specific fundamental operator.                  |
-| BUILT-IN-CLASS                     | C        | Created with a BOCL-specific fundamental operator. (probably by a DEFSTRUCT).    |
-| METHOD                             | MOP      |                                                                                  |
-| STANDARD-METHOD                    | C        | The class may exist in the kernel, but no instance is implemented in the kernel. |
-| STANDARD-ACCESSOR-METHOD           | MOP      |                                                                                  |
-| STANDARD-WRITER-METHOD             | MOP      |                                                                                  |
-| STANDARD-READER-METHOD             | MOP      |                                                                                  |
-|------------------------------------+----------+----------------------------------------------------------------------------------|
+| Class               | Layer    | Notes                                                                          |
+|---------------------+----------+--------------------------------------------------------------------------------|
+| CHARACTER           | C        | We may restrict ourselves to iso-8859-1 characters, to simplify implementation |
+|                     |          | of funcions such as alphanumericp graphic-char-p char-name, etc.               |
+|                     |          |                                                                                |
+| HASH-TABLE          |          | If we implement in CL, then (setf gethash) is not fundamental                  |
+| PACKAGE             |          |                                                                                |
+| READTABLE           |          |                                                                                |
+| RANDOM-STATE        |          |                                                                                |
+| RESTART             |          |                                                                                |
+|---------------------+----------+--------------------------------------------------------------------------------|
+| NUMBER              | Abstract |                                                                                |
+| REAL                | Abstract |                                                                                |
+| FLOAT               | C        | Not really needed in the kernel?                                               |
+| RATIONAL            | Abstract |                                                                                |
+| RATIO               |          | (numerator denominator)                                                        |
+| INTEGER             | C        | Only number needed in the kernel.                                              |
+| COMPLEX             |          | (realpart imagpart)                                                            |
+|---------------------+----------+--------------------------------------------------------------------------------|
+| ARRAY               | C        |                                                                                |
+| SEQUENCE            | Abstract |                                                                                |
+| VECTOR              | C        |                                                                                |
+| BIT-VECTOR          | C        |                                                                                |
+| STRING              | C        |                                                                                |
+| LIST                | Abstract |                                                                                |
+| CONS                | C        |                                                                                |
+| SYMBOL              | C        |                                                                                |
+| NULL                | C        |                                                                                |
+|---------------------+----------+--------------------------------------------------------------------------------|
+| PATHNAME            | Abstract |                                                                                |
+| LOGICAL-PATHNAME    |          | Not needed in the kernel.                                                      |
+| PHYSICAL-PATHNAME   | C        | We need a BOCL:PHYSICAL-PATHNAME class (path string wrapper) in the kernel.    |
+|---------------------+----------+--------------------------------------------------------------------------------|
+| STREAM              | Abstract |                                                                                |
+| FILE-STREAM         | C        | Needed to LOAD the CL library.                                                 |
+| STRING-STREAM       |          |                                                                                |
+| TWO-WAY-STREAM      |          |                                                                                |
+| BROADCAST-STREAM    |          |                                                                                |
+| ECHO-STREAM         |          |                                                                                |
+| SYNONYM-STREAM      |          | Might be convenient in the kernel.                                             |
+| CONCATENATED-STREAM |          |                                                                                |
+|---------------------+----------+--------------------------------------------------------------------------------|
 
-*** #. Fundamental Lisp Functions
+
+| Class                            | Layer | Notes                                        |
+|----------------------------------+-------+----------------------------------------------|
+| CONDITION                        | C     | Depending on the fundamental error handling. |
+| SIMPLE-CONDITION                 |       |                                              |
+| WARNING                          |       |                                              |
+| STYLE-WARNING                    |       |                                              |
+| SIMPLE-WARNING                   |       |                                              |
+| SERIOUS-CONDITION                |       |                                              |
+| STORAGE-CONDITION                |       |                                              |
+| ERROR                            |       |                                              |
+| SIMPLE-ERROR                     |       |                                              |
+| TYPE-ERROR                       |       |                                              |
+| SIMPLE-TYPE-ERROR                |       |                                              |
+| CONTROL-ERROR                    |       |                                              |
+| PROGRAM-ERROR                    |       |                                              |
+| CELL-ERROR                       |       |                                              |
+| UNBOUND-VARIABLE-ERROR           |       |                                              |
+| UNBOUND-SLOT                     |       |                                              |
+| UNDEFINED-FUNCTION               |       |                                              |
+| PACKAGE-ERROR                    |       |                                              |
+| ARITHMETIC-ERROR                 |       |                                              |
+| FLOATING-POINT-OVERFLOW          |       |                                              |
+| FLOATING-POINT-INEXACT           |       |                                              |
+| FLOATING-POINT-INVALID-OPERATION |       |                                              |
+| FLOATING-POINT-UNDERFLOW         |       |                                              |
+| DIVISION-BY-ZERO                 |       |                                              |
+| PRINT-NOT-READABLE               |       |                                              |
+| FILE-ERROR                       |       |                                              |
+| STREAM-ERROR                     |       |                                              |
+| END-OF-FILE                      |       |                                              |
+| PARSE-ERROR                      |       |                                              |
+| READER-ERROR                     |       |                                              |
+|----------------------------------+-------+----------------------------------------------|
+
+| Class                              | Layer | Notes                                                                            |
+|------------------------------------+-------+----------------------------------------------------------------------------------|
+| FUNCTION                           | C     |                                                                                  |
+| COMPILED-FUNCTION                  |       | Definitely not in C.                                                             |
+| STANDARD-OBJECT                    | C     | The class may exist in the kernel, but no instance is implemented in the kernel. |
+| FUNCALLABLE-STANDARD-OBJECT        | MOP   |                                                                                  |
+| METAOBJECT                         | MOP   |                                                                                  |
+| GENERIC-FUNCTION                   | MOP   |                                                                                  |
+| STANDARD-GENERIC-FUNCTION          | MOP   |                                                                                  |
+| METHOD-COMBINATION                 | MOP   |                                                                                  |
+| SLOT-DEFINITION                    | MOP   |                                                                                  |
+| DIRECT-SLOT-DEFINITION             | MOP   |                                                                                  |
+| STANDARD-SLOT-DEFINITION           | MOP   |                                                                                  |
+| EFFECTIVE-SLOT-DEFINITION          | MOP   |                                                                                  |
+| STANDARD-DIRECT-SLOT-DEFINITION    | MOP   |                                                                                  |
+| STANDARD-EFFECTIVE-SLOT-DEFINITION | MOP   |                                                                                  |
+| SPECIALISER                        | MOP   |                                                                                  |
+| EQL-SPECIALISER                    | MOP   |                                                                                  |
+| CLASS                              | MOP   |                                                                                  |
+| FUNCALLABLE-STANDARD-CLASS         | MOP   |                                                                                  |
+| FORWARD-REFERENCED-CLASS           | MOP   |                                                                                  |
+| STANDARD-CLASS                     | C     | The class may exist in the kernel, but no instance is implemented in the kernel. |
+| STRUCTURE-CLASS                    | C     | Created by DEFSTRUCT with a BOCL-specific fundamental operator.                  |
+| STRUCTURE-OBJECT                   | C     | Created by DEFSTRUCT with a BOCL-specific fundamental operator.                  |
+| BUILT-IN-CLASS                     | C     | Created with a BOCL-specific fundamental operator. (probably by a DEFSTRUCT).    |
+| METHOD                             | MOP   |                                                                                  |
+| STANDARD-METHOD                    | C     | The class may exist in the kernel, but no instance is implemented in the kernel. |
+| STANDARD-ACCESSOR-METHOD           | MOP   |                                                                                  |
+| STANDARD-WRITER-METHOD             | MOP   |                                                                                  |
+| STANDARD-READER-METHOD             | MOP   |                                                                                  |
+|------------------------------------+-------+----------------------------------------------------------------------------------|
+
+*** Fundamental Lisp Functions
 
 We need to implement in C Fundamental Lisp Function related to the
 Fundamental Lisp Objects, and others functions that serve as interface
@@ -464,6 +496,9 @@ results as specified.  Class (not type) checking is performed.
 |                   |       |                                                                                                                      |
 | NULL              | C     | null                                                                                                                 |
 |-------------------+-------+----------------------------------------------------------------------------------------------------------------------|
+
+| Class             | Layer | Fundamental Functions                                                                                                |
+|-------------------+-------+----------------------------------------------------------------------------------------------------------------------|
 | PHYSICAL-PATHNAME | C     | make-pathname/pp bocl-kernel:physical-pathname-p merge-pathnames/pp                                                  |
 |                   |       | namestring/pp file-namestring/pp directory-namestring/pp host-namestring/pp enough-namestring/pp parse-namestring/pp |
 |                   |       |                                                                                                                      |
@@ -488,10 +523,10 @@ results as specified.  Class (not type) checking is performed.
 | STANDARD-CLASS    | C     | The class may exist in the kernel, but no instance is implemented in the kernel.                                     |
 | STANDARD-OBJECT   | C     | The class may exist in the kernel, but no instance is implemented in the kernel.                                     |
 | STANDARD-METHOD   | C     | The class may exist in the kernel, but no instance is implemented in the kernel.                                     |
+|-------------------+-------+----------------------------------------------------------------------------------------------------------------------|
 
 
-#+BEGIN_CODE lisp
-
+#+BEGIN_EXAMPLE
 (make-class 't)
 (make-class 'structure-object '(t))
 (make-class 'standard-object '(t))
@@ -501,7 +536,9 @@ results as specified.  Class (not type) checking is performed.
 (make-class 'structure-class '(class))
 
 (make-object 'structure-class size)
-#+END_COD
+#+END_EXAMPLE
+
+
 **** 7. Objects
 
 The kernel only provides some infrastructure operators, since we use
@@ -512,7 +549,7 @@ classes as type-tag in the objects.
 - =find-class=
 - =bocl-kernel:set-class-name=
 
-- an operator to declare a class and its superclassess, ot be used by
+- an operator to declare a class and its superclassess, to be used by
   =bocl-kernel:instancep= (aka =typep= but we don't deal with types in
   the kernel).
 
@@ -536,7 +573,7 @@ Note: NEL would be the only character with char-code>127 mapped to a
 **** 18. Hashtables
 
 We may need to provide functions to help computing the sxhash of
-fundamental objects.  For example, we may provide an bocl-kernel:ID
+fundamental objects.  For example, we may provide a =bocl-kernel:ID=
 function.
 
 **** 20. File System Functions
@@ -637,7 +674,7 @@ Functions implemented:
 - =software-version=
 - =user-homedir-pathname=
 
-*** #. Fundamental Error Handling
+*** Fundamental Error Handling
 
 Error Handling is not implemented in the Kernel.
 
@@ -656,7 +693,7 @@ Catching non-local exits is the job of =handler-bind= =handler-case=,
 =restart-case=, =with-simple-restart=, =block=, =catch=, =tagbody=,
 etc.
 
-#+BEGIN_CODE lisp
+#+BEGIN_EXAMPLE
 ;; Note: the following lisp code would be written in C in the Kernel.
 
 (defvar *break-on-signals* nil)
@@ -732,7 +769,7 @@ etc.
     (signal condition)
     (invoke-debugger condition)))
 
-#+END_CODE
+#+END_EXAMPLE
 
 Note: it may be enough to use the non-local exits provided by the
 kernel =EVAL=, and not need setjmp/longjmp.
@@ -746,7 +783,7 @@ kernel =EVAL=, and not need setjmp/longjmp.
 - =error= (simple-error)
 - =unwind-protect= is a special operator.
 
-*** #. EVAL
+*** EVAL
 
 An =EVAL= intepreter must be implemented in C.  We may reduce and
 simplify it a lot, by applying metacircular techniques to implement
@@ -795,7 +832,7 @@ function) and dynamic environment (bindings).
 | apply                |                                             |
 | funcall              | -> apply                                    |
 
-*** #. Tiny Lisp Reader
+*** Tiny Lisp Reader
 
 A minimal lisp reader, with hard-wired readtable must be provided to
 read CL library lisp files.
@@ -807,40 +844,40 @@ read CL library lisp files.
 
 Hard-wired reader macros:
 
-| character | lisp object | example                   |
-|-----------+-------------+---------------------------|
-| ;         | comments    | ; foo                     |
-| '         | quote       | 'foo                      |
-| "         | strings     | "foo"  \\ and \" escapes. |
-| (         | lists       | (f o o) (no dotted list)  |
-| #\        | characters  | #\f                       |
-| #(        | vectors     | #(f o o)                  |
-| #*        | bit-vectors | #*101010                  |
+| character | lisp object | example                         |
+|-----------+-------------+---------------------------------|
+| =;=       | comments    | =; foo=                         |
+| ='=       | quote       | ='foo=                          |
+| ="=       | strings     | ="foo"=  =\\= and =\"= escapes. |
+| =(=       | lists       | =(f o o)= (no dotted list)      |
+| =#\=      | characters  | =#\f=                           |
+| =#(=      | vectors     | =#(f o o)=                      |
+| =#*=      | bit-vectors | =#*101010=                      |
 
 
 Not read by the Tiny Lisp Reader (an error is signaled):
 
-| character | lisp object                    | example                    |
-|-----------+--------------------------------+----------------------------|
-|           | conses and dotted lists        | (a . d)                    |
-| #'        | functions -> (function foo)    | #'foo                      |
-| `         | backquote  unquote             | `(,x ,@xs)                 |
-| #:        | uninterned symbols             | #:foo                      |
-| #.        | read-eval                      | #.(+ 1 2)                  |
-| #B        | binary numbers                 | #B10101                    |
-| #O        | octal numbers                  | #O01234567                 |
-| #X        | hexadecimal numbers            | #X0123456789ABCDEF         |
-| #R        | radix numbres                  | #5R01234                   |
-| #C        | complexes                      | #C(r i)                    |
-| #A        | arrays                         | #A((…))                    |
-| #S        | structures                     | #S(foo :x x :y y)          |
-| #P        | pathnames -> (pathname "/foo") | #P"/foo"                   |
-| #=/##     | references                     | #1=(foo . #1#)             |
-| #+/#-     | features                       | #+foo (foo)                |
-| #¦        | comments                       | #¦ foo ¦#                  |
-| #<        | unreadable                     | #<foo> -> signals an error |
+| character   | lisp object                    | example                      |
+|-------------+--------------------------------+------------------------------|
+|             | conses and dotted lists        | =(a . d)=                    |
+| =#'=        | functions -> (function foo)    | =#'foo=                      |
+| =`=         | backquote  unquote             | =`(,x ,@xs)=                 |
+| =#:=        | uninterned symbols             | =#:foo=                      |
+| =#.=        | read-eval                      | =#.(+ 1 2)=                  |
+| =#B=        | binary numbers                 | =#B10101=                    |
+| =#O=        | octal numbers                  | =#O01234567=                 |
+| =#X=        | hexadecimal numbers            | =#X0123456789ABCDEF=         |
+| =#R=        | radix numbres                  | =#5R01234=                   |
+| =#C=        | complexes                      | =#C(r i)=                    |
+| =#A=        | arrays                         | =#A((…))=                    |
+| =#S=        | structures                     | =#S(foo :x x :y y)=          |
+| =#P=        | pathnames -> (pathname "/foo") | =#P"/foo"=                   |
+| #= / =##=   | references                     | =#1=(foo . #1#)=             |
+| =#+= / =#-= | features                       | =#+foo (foo)=                |
+| =#¦=        | comments                       | =#¦ foo ¦#=                  |
+| =#<=        | unreadable                     | =#<foo>= -> signals an error |
 
-*** #. LOAD
+*** LOAD
 
 In addition to =EVAL=, we still need to provide a few macros to be able
 to load useful lisp code:
@@ -857,7 +894,7 @@ to load useful lisp code:
 - =kernel:in-package= do nothing, but provided so the lisp sources may
   be compiled or reloaded when the package system is defined.
 
-** #. Common Lisp Library Implemented in Common-Lisp
+** Common Lisp Library Implemented in Common-Lisp
 *** 2. Syntax - Lisp Reader
 
 A conforming lisp reader is implemented in Common Lisp
@@ -888,9 +925,9 @@ implementation.
 Operators to implement:
 
 - =COERCE=  since that may change the class
-#+BEGIN_CODE lisp
+#+BEGIN_EXAMPLE
   (coerce #(#\a #\b #\c) 'string) --> "abc"
-#+END_CODE
+#+END_EXAMPLE
 
 - =SUBTYPEP= since that tests the class hierarchy too (parallelism
   between classes and types).
@@ -903,21 +940,21 @@ and =DEFTYPE= and a descriptive type system, but that is not used in
 the kernel.
 
 
-| Type           | COMPILED-FUNCTION                                   |
-| Type           | SIMPLE-ARRAY                                        |
-| Type           | SIMPLE-BIT-VECTOR                                   |
-| Type           | SIMPLE-VECTOR                                       |
-|----------------+-----------------------------------------------------|
-| Type Specifier | AND                                                 |
-| Type Specifier | EQL                                                 |
-| Type Specifier | MEMBER                                              |
-| Type Specifier | MOD                                                 |
-| Type Specifier | NOT                                                 |
-| Type Specifier | OR                                                  |
-| Type Specifier | SATISFIES                                           |
-| Type Specifier | VALUES                                              |
+| Type           | COMPILED-FUNCTION |
+| Type           | SIMPLE-ARRAY      |
+| Type           | SIMPLE-BIT-VECTOR |
+| Type           | SIMPLE-VECTOR     |
+|----------------+-------------------|
+| Type Specifier | AND               |
+| Type Specifier | EQL               |
+| Type Specifier | MEMBER            |
+| Type Specifier | MOD               |
+| Type Specifier | NOT               |
+| Type Specifier | OR                |
+| Type Specifier | SATISFIES         |
+| Type Specifier | VALUES            |
 
-#+BEGIN_CODE lisp
+#+BEGIN_EXAMPLE
 
 (deftype atom () '(not cons))
 (deftype boolean () '(member nil t))
@@ -978,7 +1015,7 @@ the kernel.
           `(single-float ,lower))
       'single-float))
 
-#+END_CODE
+#+END_EXAMPLE
 
 *** 5. Data and Control Flow
 *** 6. Iteration
@@ -1149,13 +1186,13 @@ used in batch in general.
 - =inspect=
 - =dribble=
 
-** #. Implementation Extensions
+** Implementation Extensions
 
 As any other implementation the =bocl= implementation will provide a
 few extensions to the CL standard.
 
-*** #. The Garbage Collector
-**** #. Function ID
+*** The Garbage Collector
+**** Function ID
 
 Syntax:
 
@@ -1179,7 +1216,7 @@ Result:
 
     Returns a unique ID of the object.
 
-**** #. Function GC
+**** Function GC
 
 Syntax:
 
@@ -1204,9 +1241,9 @@ Results:
     If `command` is :ON or :OFF, then the previous state of the
     garbage collector.
 
-*** #. Float
+*** Float
 
-#+BEGIN_CODE lisp
+#+BEGIN_EXAMPLE
 (declaim
 
  (ftype (function (float) bool)
@@ -1247,11 +1284,11 @@ Results:
         float-precision)
  (ftype (function (float) (values float integer integer))
         integer-decode-float))
-#+END_CODE
+#+END_EXAMPLE
 
-*** #. Integer
+*** Integer
 
-#+BEGIN_CODE lisp
+#+BEGIN_EXAMPLE
 (declaim
  (ftype (function (integer integer) byte-specifier)
         byte)
@@ -1291,10 +1328,10 @@ Results:
 
  (ftype (function (string integer integer integer bool) (values integer integer))
         parse-integer/i))
-#+END_CODE
+#+END_EXAMPLE
 
-***
-*** #. The REPL
+
+*** The REPL
 
 The REPL is a standard REPL.
 
@@ -1313,7 +1350,7 @@ Description:
 
     Exits the =bocl= process, with the given STATUS.
 
-*** #. External-format
+*** External-format
 
 External-formats can be:
 
