@@ -3,8 +3,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "memory.h"
+#include "macros.h"
 
-Object* rootset();
+Object* kernel_rootset();
 void kernel_initialize(void);
 
 Object* Object_new(Object* class,Slots* slots);
@@ -68,13 +69,17 @@ void boot_class_add_superclass(Object* class, Object* superclass);
 
 /* Cons */
 
-#define do_list(elementvar,listexpr,body)                                       \
-    do{                                                                         \
-        Object* do_list_current ##  __LINE__ =(listexpr);                       \
-        while(cons_p(do_list_current ## __LINE__)){                             \
-            Object* elementvar=cons_car(do_list_current ## __LINE__);           \
-            do_list_current ## __LINE__=cons_cdr(do_list_current ## __LINE__);  \
-            { body }}}while(0)
+#define do_list(elementvar,listexpr)                                                     \
+    Object* C(do_list_current,__LINE__); Object* elementvar;                             \
+    for((C(do_list_current,__LINE__) = (listexpr),                                       \
+         elementvar = ((cons_p(C(do_list_current,__LINE__)))                             \
+                       ?cons_car(C(do_list_current,__LINE__))                            \
+                       :NULL)) ;                                                         \
+        cons_p(C(do_list_current,__LINE__)) ;                                            \
+        (C(do_list_current,__LINE__) = cons_cdr(C(do_list_current,__LINE__)),            \
+         elementvar = ((cons_p(C(do_list_current,__LINE__)))                             \
+                       ?cons_car(C(do_list_current,__LINE__))                            \
+                       :NULL)))
 
 
 Object* cons(Object* car,Object* cdr);

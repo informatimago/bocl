@@ -1,6 +1,7 @@
 /* Do not edit -- generated from generate-kernel.lisp */
 #include "kernel_objects.h"
 #include "kernel_types.h"
+#include "memory.h"
 
 Object* kernel_classes   = 0;  /* list of class objects */
 Object* NIL_Symbol       = 0;
@@ -108,6 +109,8 @@ Object* UNDEFINED_FUNCTION_Class                 = 0;
 Object* CELL_ERROR_Class                         = 0;
 
 void kernel_initialize(void){
+
+    memory_initialize();
 
     CHARACTER_Class                          = make_boot_Object((Slots*)make_boot_BuiltInClass());
     ARRAY_Class                              = make_boot_Object((Slots*)make_boot_BuiltInClass());
@@ -299,6 +302,7 @@ void kernel_initialize(void){
     UNDEFINED_FUNCTION_Class                -> class = STANDARD_CLASS_Class;
     CELL_ERROR_Class                        -> class = STANDARD_CLASS_Class;
 
+    UNBOUND_Object   = make_symbol_cstring("UNBOUND");
     NIL_Symbol       = make_symbol_cstring("NIL");
     KERNEL_Symbol    = make_symbol_cstring("KERNEL");
     CHARACTER_Symbol = make_symbol_cstring("CHARACTER");
@@ -310,6 +314,7 @@ void kernel_initialize(void){
     KEYWORD_Symbol   ->slots->symbol.package = KERNEL_obarray;
     KEYWORD_obarray  = cons(KEYWORD_Symbol,NIL_Symbol);
     kernel_classes   = NIL_Symbol;
+    set_rootset((Block*)kernel_rootset());
 
     kernel_classes = cons(CHARACTER_Class                         ,kernel_classes);
     kernel_classes = cons(ARRAY_Class                             ,kernel_classes);

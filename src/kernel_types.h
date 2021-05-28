@@ -2,6 +2,7 @@
 #define kernel_types_h
 #include <stdio.h>
 #include <stdint.h>
+#include <unistd.h> // import _POSIX_V6_LP64_OFF64
 
 #ifdef _POSIX_V6_LP64_OFF64
 typedef int64_t  word;
@@ -47,7 +48,13 @@ typedef struct FuncallableStandardClass FuncallableStandardClass;
 
 
 
-#define BLOCK_HEADER halfword size;halfword objcount
+#ifdef _POSIX_V6_LP64_OFF64
+#define BLOCK_HEADER   halfword size; halfword objcount
+#define FREE_BLOCK     HALFWORD_MAX
+#else
+#define BLOCK_HEADER   uword size;    uword objcount
+#define FREE_BLOCK     UWORD_MAX
+#endif
 
 typedef struct Block{
     BLOCK_HEADER;

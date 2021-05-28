@@ -60,7 +60,7 @@ static void print_help(void){
 
 static void process_options(int argc,char** argv){
 
-    
+
 }
 
 static void print_banner(void){
@@ -97,7 +97,7 @@ int main(int argc,char** argv){
         bocl_read_eval_cstring("(DEFPARAMETER BOCL:*BATCH*  T)");}
     else{
         bocl_read_eval_cstring("(DEFPARAMETER BOCL:*BATCH*  NIL)");}
-    
+
     if(!do_quiet && !do_batch){
         print_banner();}
 
@@ -110,13 +110,13 @@ int main(int argc,char** argv){
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
 
     initfiles=string_list_cons(initfile,initfiles);
-    do_string_list(initfile,initfiles,
-                   bocl_load_cstring(initfile););
+    {do_string_list(initfile,initfiles){
+            bocl_load_cstring(initfile);}}
     string_list_free(initfiles);
     initfiles=NULL;
 
-    do_string_list(expression,expressions_and_loads,
-                   bocl_read_eval_cstring(expression););
+    {do_string_list(expression,expressions_and_loads){
+            bocl_read_eval_cstring(expression);}}
     string_list_free(expressions_and_loads);
     expressions_and_loads=NULL;
 

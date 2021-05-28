@@ -24,12 +24,13 @@ string_list* string_list_rest(string_list* list){
             :list->next;}
 
 void string_list_free(string_list* list){
-    do_string_list(element,list,free(element););}
+    {do_string_list(element,list){
+            free(element);}}}
 
 string_list* string_list_nreverse(string_list* list){
     string_list* result=NULL;
-    do_string_list(element,list,
-                   free(element););
+    {do_string_list(element,list){
+            free(element);}}
     while(list){
         string_list* current=list;
         list=list->next;

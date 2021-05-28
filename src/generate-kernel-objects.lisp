@@ -134,7 +134,7 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
     (list sequence)
     (cons list)
     (null symbol list)
-    
+
     (number t)
     (complex number)
     (real number)
@@ -269,7 +269,7 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
   (format nil "~{~@(~A~)~}" (split-string (string sym) "-" t)))
 
 (defun generate-c-code ()
-  
+
   (with-open-file (*standard-output*  "kernel_objects.h"
                                       :direction :output
                                       :if-does-not-exist :create
@@ -306,6 +306,7 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
     (write-line "/* Do not edit -- generated from generate-kernel.lisp */")
     (write-line "#include \"kernel_objects.h\"")
     (write-line "#include \"kernel_types.h\"")
+    (write-line "#include \"memory.h\"")
     (terpri)
     (write-line "Object* kernel_classes   = 0;  /* list of class objects */")
     (write-line "Object* NIL_Symbol       = 0;")
@@ -323,6 +324,8 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
     (terpri)
     (write-line "void kernel_initialize(void){")
     (terpri)
+    (write-line "    memory_initialize();")
+    (terpri)
     (dolist (class *classes*)
       (let* ((var-name (c-name class))
              (class-of-class (class-name (class-of (find-class class)))))
@@ -337,6 +340,7 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
         (format t "    ~40A-> class = ~A;~%"
                 (string var-name) (string coc-var-name))))
     (terpri)
+    (write-line "    UNBOUND_Object   = make_symbol_cstring(\"UNBOUND\");")
     (write-line "    NIL_Symbol       = make_symbol_cstring(\"NIL\");")
     (write-line "    KERNEL_Symbol    = make_symbol_cstring(\"KERNEL\");")
     (write-line "    CHARACTER_Symbol = make_symbol_cstring(\"CHARACTER\");")
@@ -348,6 +352,7 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
     (write-line "    KEYWORD_Symbol   ->slots->symbol.package = KERNEL_obarray;")
     (write-line "    KEYWORD_obarray  = cons(KEYWORD_Symbol,NIL_Symbol);")
     (write-line "    kernel_classes   = NIL_Symbol;")
+    (write-line "    set_rootset((Block*)kernel_rootset());")
     (terpri)
     (dolist (class *classes*)
       (let* ((var-name (c-name  class)))
@@ -376,7 +381,7 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
     (write-line "}")
     (terpri)
     (write-line "/*** THE END ***/"))
-  
+
   (values))
 
 
@@ -393,7 +398,7 @@ EXAMPLES:       (split-string \"1 2 0 3 4 5 0 6 7 8\" '(#\space #\0))
 (let (r) (dolist (s   (remove-duplicates (flatten *initial-object-graph*)) r)
    (let ((ss (or (find-symbol (symbol-name s) "CCL")
                  (find-symbol (symbol-name s) "CL"))))
-    
+
      (if ss
          (push ss r)
          (push s r)))))

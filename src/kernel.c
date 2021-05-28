@@ -279,11 +279,11 @@ bool instance_of(Object* object,Object* class){
     Object* object_class=class_of(object);
     if(object_class==class){
         return true;}
-    do_list(superclass,object_class->slots->class.direct_superclasses,
+    {do_list(superclass,object_class->slots->class.direct_superclasses){
             if(instance_of(object,superclass)){
-                return true;});
+                return true;}}}
     return false;}
-   
+
 void check_class(Object* object,Object* class){
     if(class && !instance_of(object,class)){
         type_error(__FUNCTION__,object,class);}}
@@ -339,7 +339,7 @@ Object* find_class(Object* name){
 
 Object* cons(Object* car,Object* cdr){
     return Object_new(CONS_Class,(Slots*)Cons_slots(car,cdr));}
-   
+
 bool cons_p(Object* object){
     return class_p(object,CONS_Class);}
 
@@ -398,7 +398,7 @@ Object* list(Object* first_element,...){
     return list;}
 
 /* Integer */
-    
+
 Object* integer_from_word(word value){
     return Object_new(INTEGER_Class,(Slots*)Integer_slots(value));}
 
@@ -514,7 +514,7 @@ Object* symbol_value(Object* symbol){
 Object* symbol_function(Object* symbol){
     check_class(symbol,SYMBOL_Class);
     return symbol->slots->symbol.function;}
-    
+
 Object* symbol_plist(Object* symbol){
     check_class(symbol,SYMBOL_Class);
     return symbol->slots->symbol.plist;}
@@ -525,10 +525,11 @@ bool null_p(Object* object){
     return object==NIL_Symbol;}
 
 
-Object* rootset(){
-    return list(UNBOUND_Object,
-                KERNEL_obarray,
-                KEYWORD_obarray,
-                kernel_classes,
-                NULL);}
+Object* kernel_rootset(){
+    // Don't use list because it's called before check_class can work.
+    return cons(UNBOUND_Object,
+                cons(KERNEL_obarray,
+                     cons(KEYWORD_obarray,
+                          cons(kernel_classes,
+                               NIL_Symbol))));}
 
