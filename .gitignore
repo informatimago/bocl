@@ -3,4 +3,7 @@
 *.fasl
 *.sse2f
 *.o
+*.d
 *.bak
+*.[ld]x64fsl
+*.[ld]x32fsl

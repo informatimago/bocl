@@ -53,7 +53,7 @@ include $(SRCS:%.c=%.d)
 SRCS=main.c kernel.c bocl.c string_list.c kernel_objects.c memory.c
 
 bocl: $(SRCS:%.c=%.d) $(SRCS:%.c=%.o)
-	@ printf "# Linking %-20s from %s\n" "$@" "$(SRCS:%.c=%.o)"
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(SRCS:%.c=%.o)"
 	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $(SRCS:%.c=%.o)
 
 
