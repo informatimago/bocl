@@ -2,6 +2,7 @@ all:bocl
 
 VERBOSE=@
 #VERBOSE=
+NOSANITIZE=
 
 UNAME=$(shell uname)
 
@@ -20,7 +21,7 @@ LD_SANITIZE_FLAGS = -fsanitize=leak
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
 
-ifeq ($(UNAME),Darwin)
+ifeq ($(UNAME)$(NOSANITIZE),Darwin)
 CFLAGS    = -x c -std=c11  $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS)
 LDFLAGS   = $(LD_SANITIZE_FLAGS) $(DEBUG_FLAGS)
 LIBRARIES = \
