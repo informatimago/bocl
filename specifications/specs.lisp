@@ -93,7 +93,7 @@
 
  (ftype (function (float) bool)
         floatp)
- 
+
  (ftype (function (float) float)
         sin/f cos/f tan/f asin/f acos/f
         sinh/f cosh/f tanh/f asinh/f acosh/f atanh/f
@@ -101,13 +101,13 @@
 
  (ftype (function (float &optional float) float)
         atan/f log/f)
- 
+
  (ftype (function (float float) float)
         +/f -/f */f //f mod/f rem/f sqrt/f
         expt/f)
 
  (ftype (function (float float) bool)
-        =/f /=/f </f >/f <=/ >=/f) 
+        =/f /=/f </f >/f <=/ >=/f)
 
  (ftype (function (float &optional float) (values integer float))
         floor/f  ceiling/f truncate/f round/f)
@@ -140,7 +140,7 @@
 
  (ftype (function (integer) bool)
         integerp)
-   
+
  (ftype (function (integer) integer)
         exp/i integer-length logcount)
 
@@ -148,15 +148,15 @@
         dpb deposit-field)
 
  (ftype (function (byte-specifier integer) integer)
-        ldb mask-field)  
-   
+        ldb mask-field)
+
  (ftype (function (integer integer) integer)
         +/i -/i */i //i mod/i rem/i sqrt/i
         expt/i  gcd/i lcm/i ash)
 
  (ftype (function (integer integer) bool)
         =/i /=/i </i >/i <=/ >=/i
-        logbitp logtest) 
+        logbitp logtest)
 
  (ftype (function (integer) integer)
         isqrt/i)
