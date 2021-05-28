@@ -32,17 +32,34 @@ LDFLAGS   = $(DEBUG_FLAGS)
 LIBRARIES =
 endif
 
-%.o:%.c
-	@ printf "# Compiling %s from %s\n" "$@" "$<"
-	$(VERBOSE) $(CC) $(CFLAGS) -c -o $@ $<
 
-bocl:main.o kernel.o bocl.o string_list.o kernel_objects.o memory.o
-	@ printf "# Linking %s from %s\n" "$@" "$^"
-	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $^
+DEPFLAGS = -MT $@ -MMD -MP -MF $*.d
+COMPILE.c    = $(CC)             $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@
+MAKEDEPEND.c = $(CC) $(DEPFLAGS) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
+
+%.o : %.c %.d
+	@ printf "# Compiling %-20s from %s\n" "$@" "$<"
+	$(VERBOSE) $(COMPILE.c) $<
+
+%.o :
+%.d : %.c
+	@ printf "# Generating dependences          for %s\n" "$<"
+	$(VERBOSE) $(MAKEDEPEND.c) $<
+
+include $(SRCS:%.c=%.d)
+
+
+
+SRCS=main.c kernel.c bocl.c string_list.c kernel_objects.c memory.c
+
+bocl: $(SRCS:%.c=%.d) $(SRCS:%.c=%.o)
+	@ printf "# Linking %-20s from %s\n" "$@" "$(SRCS:%.c=%.o)"
+	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $(SRCS:%.c=%.o)
+
 
 clean:
 	@ printf "# Removing object files and target\n"
-	-$(VERBOSE) rm -f bocl *.o *.[ld]x{32,64}fsl
+	-$(VERBOSE) rm -rf bocl *.o *.d *.[ld]x{32,64}fsl *.dSYM
 
 gdb:bocl
 	gdb ./bocl
