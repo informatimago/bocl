@@ -31,7 +31,7 @@
 #+LATEX_HEADER: \cfoot{\tiny{\copyright{} Pascal J. Bourguignon}}
 #+LATEX_HEADER: \rfoot{\small{Page \thepage \hspace{1pt} de \pageref{LastPage}}}
 
-* Welcome to Bootstrap Common Lisp, or BOCL for short.
+* #. Welcome to Bootstrap Common Lisp, or BOCL for short.
 
 From Robert Strandh
 
@@ -122,8 +122,8 @@ BOCL will not happen unless it is contributed to by others, so if you
 have knowledge of how to implement Common Lisp in C or interest in
 learning how to do it, please consider contributing.
 
-* BOCL
-** Generalities
+* #. BOCL
+** #. Generalities
 
 We implement in standard C a minimum subset of CL, which can be used to
 implement a complete CL (modulo implementation defined limitations).
@@ -217,8 +217,8 @@ The CL library defines:
 
 - semi-standard additions, such as: Gray Streams, MOP, etc.
 
-** Kernel Implemented in C
-*** Garbage Collected Heap
+** #. Kernel Implemented in C
+*** #. Garbage Collected Heap
 
 We could use the Boehm-Weiser conservative garbage collector, but:
 - this would be an additionnal dependency, and
@@ -232,7 +232,7 @@ complexicities that are not really required for a CL implementation.
 So it might be better for our purpose, to implement a garbage
 collected heap in standard  C.
 
-*** Fundamental Lisp Objects
+*** #. Fundamental Lisp Objects
 
 Goals: simplicity, homogeneity.
 
@@ -408,7 +408,7 @@ and definitions.
 | STANDARD-READER-METHOD             | MOP      |                                                                                  |
 |------------------------------------+----------+----------------------------------------------------------------------------------|
 
-*** Fundamental Lisp Functions
+*** #. Fundamental Lisp Functions
 
 We need to implement in C Fundamental Lisp Function related to the
 Fundamental Lisp Objects, and others functions that serve as interface
@@ -515,7 +515,7 @@ classes as type-tag in the objects.
 - an operator to declare a class and its superclassess, ot be used by
   =bocl-kernel:instancep= (aka =typep= but we don't deal with types in
   the kernel).
-  
+
 **** 9. Conditions - Fundamental Error Handling
 
 We don't want to implement a full CL condition system in CL.  Instead
@@ -557,7 +557,7 @@ function.
 
 - =open=
 - =close=
-  
+
 - =read-byte=
 - =write-byte=
 - =read-sequence=
@@ -581,7 +581,7 @@ function.
 - =finish-output=
 - =force-output=
 - =clear-output=
-  
+
 **** 22. Tiny Lisp Printer
 
 We need a kernel implementation of the lisp printer for verbose,
@@ -591,11 +591,11 @@ Possibly with hardwired settings of the =*PRINT-…*= variables.
 (since the *readtable* is also hardwired).
 
 - =PRINT=
-- =PRIN1=  
+- =PRIN1=
 - =PRINC=
 - =TERPRI=
 - simplified =FORMATTER=
-- =FORMAT=  
+- =FORMAT=
 
 No pretty printed.
 Basically, we'd want to be able to have a minimal REPL for testing,
@@ -637,7 +637,7 @@ Functions implemented:
 - =software-version=
 - =user-homedir-pathname=
 
-*** Fundamental Error Handling
+*** #. Fundamental Error Handling
 
 Error Handling is not implemented in the Kernel.
 
@@ -694,7 +694,7 @@ etc.
         (format *error-output* "~%FATAL ERROR: no debugger in ~A~%"
                 (lisp-implementation-type))
         (fatal condition))))
-  
+
 (defun signal (datum &rest arguments)
   (let ((condition
           (cond
@@ -737,16 +737,16 @@ etc.
 Note: it may be enough to use the non-local exits provided by the
 kernel =EVAL=, and not need setjmp/longjmp.
 
-- =setjmp= / =longjmp= from C?  
+- =setjmp= / =longjmp= from C?
 
-- =backtrace= 
+- =backtrace=
 
 - =signal=
 - =warn= (simple-warning)
 - =error= (simple-error)
 - =unwind-protect= is a special operator.
 
-*** EVAL
+*** #. EVAL
 
 An =EVAL= intepreter must be implemented in C.  We may reduce and
 simplify it a lot, by applying metacircular techniques to implement
@@ -795,7 +795,7 @@ function) and dynamic environment (bindings).
 | apply                |                                             |
 | funcall              | -> apply                                    |
 
-*** Tiny Lisp Reader
+*** #. Tiny Lisp Reader
 
 A minimal lisp reader, with hard-wired readtable must be provided to
 read CL library lisp files.
@@ -840,7 +840,7 @@ Not read by the Tiny Lisp Reader (an error is signaled):
 | #¦        | comments                       | #¦ foo ¦#                  |
 | #<        | unreadable                     | #<foo> -> signals an error |
 
-*** LOAD
+*** #. LOAD
 
 In addition to =EVAL=, we still need to provide a few macros to be able
 to load useful lisp code:
@@ -852,12 +852,12 @@ to load useful lisp code:
 - =defun=
 - =defstruct=
 - =define-condition=
-- =define-symbol-macro=    
+- =define-symbol-macro=
 
 - =kernel:in-package= do nothing, but provided so the lisp sources may
   be compiled or reloaded when the package system is defined.
 
-** Common Lisp Library Implemented in Common-Lisp
+** #. Common Lisp Library Implemented in Common-Lisp
 *** 2. Syntax - Lisp Reader
 
 A conforming lisp reader is implemented in Common Lisp
@@ -888,7 +888,7 @@ implementation.
 Operators to implement:
 
 - =COERCE=  since that may change the class
-#+BEGIN_CODE lisp                         
+#+BEGIN_CODE lisp
   (coerce #(#\a #\b #\c) 'string) --> "abc"
 #+END_CODE
 
@@ -897,12 +897,12 @@ Operators to implement:
 
 - =TYPE-OF= = =class-of=
 
-- =TYPEP=   
+- =TYPEP=
 
 and =DEFTYPE= and a descriptive type system, but that is not used in
 the kernel.
 
-  
+
 | Type           | COMPILED-FUNCTION                                   |
 | Type           | SIMPLE-ARRAY                                        |
 | Type           | SIMPLE-BIT-VECTOR                                   |
@@ -938,7 +938,7 @@ the kernel.
 
 
 (deftype bit () '(integer 0 1))
-  
+
 (deftype signed-byte (&optional size)
   (if (eql '* size)
       'integer
@@ -1103,7 +1103,7 @@ Implement query functions such as =Y-OR-N-P=, etc
 
 - pretty-printer from some library or implementation.
 
-- formatter from some library or implementation.  
+- formatter from some library or implementation.
 
 *** 23. Reader
 
@@ -1149,13 +1149,13 @@ used in batch in general.
 - =inspect=
 - =dribble=
 
-** Implementation Extensions
+** #. Implementation Extensions
 
 As any other implementation the =bocl= implementation will provide a
 few extensions to the CL standard.
 
-*** The Garbage Collector
-**** Function ID
+*** #. The Garbage Collector
+**** #. Function ID
 
 Syntax:
 
@@ -1166,7 +1166,7 @@ Arguments and Values:
     object -- a lisp object
 
     id -- an integer
-    
+
 Description:
 
     The unique ID of the object could be its address converted to
@@ -1174,12 +1174,12 @@ Description:
     cached unique integer if the garbage collector may move the
     object.  The ID of an object won't change while the object is
     alive.
-    
+
 Result:
 
-    Returns a unique ID of the object.  
+    Returns a unique ID of the object.
 
-**** Function GC
+**** #. Function GC
 
 Syntax:
 
@@ -1203,15 +1203,15 @@ Results:
     If `command` is NIL, then the number of bytes collected.
     If `command` is :ON or :OFF, then the previous state of the
     garbage collector.
-    
-*** Float
+
+*** #. Float
 
 #+BEGIN_CODE lisp
 (declaim
 
  (ftype (function (float) bool)
         floatp)
- 
+
  (ftype (function (float) float)
         sin/f cos/f tan/f asin/f acos/f
         sinh/f cosh/f tanh/f asinh/f acosh/f atanh/f
@@ -1219,13 +1219,13 @@ Results:
 
  (ftype (function (float &optional float) float)
         atan/f log/f)
- 
+
  (ftype (function (float float) float)
         +/f -/f */f //f mod/f rem/f sqrt/f
         expt/f)
 
  (ftype (function (float float) bool)
-        =/f /=/f </f >/f <=/ >=/f) 
+        =/f /=/f </f >/f <=/ >=/f)
 
  (ftype (function (float &optional float) (values integer float))
         floor/f  ceiling/f truncate/f round/f)
@@ -1249,7 +1249,7 @@ Results:
         integer-decode-float))
 #+END_CODE
 
-*** Integer
+*** #. Integer
 
 #+BEGIN_CODE lisp
 (declaim
@@ -1262,7 +1262,7 @@ Results:
 
  (ftype (function (integer) bool)
         integerp)
-   
+
  (ftype (function (integer) integer)
         exp/i integer-length logcount)
 
@@ -1270,15 +1270,15 @@ Results:
         dpb deposit-field)
 
  (ftype (function (byte-specifier integer) integer)
-        ldb mask-field)  
-   
+        ldb mask-field)
+
  (ftype (function (integer integer) integer)
         +/i -/i */i //i mod/i rem/i sqrt/i
         expt/i  gcd/i lcm/i ash)
 
  (ftype (function (integer integer) bool)
         =/i /=/i </i >/i <=/ >=/i
-        logbitp logtest) 
+        logbitp logtest)
 
  (ftype (function (integer) integer)
         isqrt/i)
@@ -1293,8 +1293,8 @@ Results:
         parse-integer/i))
 #+END_CODE
 
-*** 
-*** The REPL
+***
+*** #. The REPL
 
 The REPL is a standard REPL.
 
@@ -1313,14 +1313,14 @@ Description:
 
     Exits the =bocl= process, with the given STATUS.
 
-*** External-format
+*** #. External-format
 
 External-formats can be:
 
 - :DEFAULT in place of (:iso-8859-1 :lf :error)
 
 - a keyword denoting an encoding in (:us-ascii :iso-8859-1);
-  the default line-termination is :lf, and 
+  the default line-termination is :lf, and
   the default encoding error handling is :error (signal an error).
 
 - a list containing:
@@ -1328,7 +1328,7 @@ External-formats can be:
   + a keyword denoting an encoding in (:us-ascii :iso-8859-1),
 
   + a line-termination keyword (:dos :crlf :mac :cr :unix :lf),
-   
+
   + an object specifing the handling of encoding errors:
 
     * a character used as substitution character #\sub is suggested,
@@ -1341,7 +1341,7 @@ External-formats can be:
 
     * the symbol NIL asking to ignore and skip the unencodable
       character.
-      
+
 Encoding or decoding errors can only occur with a code>127 given with
 :us-ascii, since we deal only with :us-ascii (7-bit) and :iso-8859-1
 (8-bit) and internal coding is iso-8859-1.
@@ -1363,4 +1363,3 @@ line-termination; the mapping is done in the CL layer.
 # Local Variables:
 # eval: (auto-fill-mode 1)
 # End:
-
