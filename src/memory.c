@@ -226,7 +226,7 @@ static Block* allocate_in_best_zone(Zone* zone,halfword size){
     Allocates a block from it.
     */
     FreeBlock* free=zone->before_best_candidate;
-    halfword remaining=free->next->size-size;
+    halfword remaining=CHECK_SIZE_TO_HALFWORD(free->next->size-size);
     if(MinimumBlockSize<=remaining){
         /* split */
         Block* block=(void*)((char*)(free->next)+remaining);
