@@ -9,4 +9,8 @@
 #define I(value)   integer_from_word(value)
 #define F(value)   float_from_floating(value)
 
+#ifndef __unused
+#define __unused _attribute__((unused))
+#endif
+
 #endif

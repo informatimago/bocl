@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "macros.h"
 
 #ifdef _POSIX_V6_LP64_OFF64
 typedef int64_t  word;
