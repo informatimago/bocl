@@ -7,6 +7,7 @@
 #include "kernel_objects.h"
 #include "kernel_private.h"
 #include "macros.h"
+#include "memory.h"
 #include "cons.h"
 #include "variable.h"
 #include "printer.h"

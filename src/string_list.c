@@ -31,9 +31,9 @@ void string_list_free(string_list* list){
             free(element);}}}
 
 string_list* string_list_nreverse(string_list* list){
+    if(list==NULL){
+        return NULL;}
     string_list* result=NULL;
-    {do_string_list(element,list){
-            free(element);}}
     while(list){
         string_list* current=list;
         list=list->next;

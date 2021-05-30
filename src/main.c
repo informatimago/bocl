@@ -1,13 +1,16 @@
+#include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
-#include <string.h>
 #include <stdbool.h>
-#include <stdlib.h>
+#include <ctype.h>
+#include <string.h>
+#include <strings.h>
 #include <sysexits.h>
 #include "string_list.h"
 #include "kernel.h"
 #include "bocl.h"
 #include "macros.h"
+#include "memory.h"
 
 static const char* source="http://gitlab.com/informatimago/bocl/";
 static const char* bocl_lisp="(defun repl () (catch 'quit (do () () (print (eval (read))))))";
@@ -73,7 +76,7 @@ static struct {
     /* Note: we've mixed and merged options from ccl and clisp; other variants may be suggested. */
     {{"-h","--help",NULL},                  &do_help,    none, {NULL},                                    "print this text"},
     {{"-V","--version",NULL},               &do_version, none, {NULL},                                    "print (LISP-IMPLEMENTATION-VERSION) and exit"},
-    {{"-E",NULL},                           NULL,        none, {"encoding",{.string=&all_encoding}},      "set encodings"},
+    {{"-E",NULL},                           NULL,        strg, {"encoding",{.string=&all_encoding}},      "set encodings"},
     {{"-Eterminal",NULL},                   NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"--terminal-encoding",NULL},          NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {NULL},                                    "suppress loading of default init file ~/.boclrc"},
@@ -144,24 +147,45 @@ static int find_option(const char* variant){
     return no_such_option;}
 
 static char* generate_load_form(char* path){
-    /* escape \\ and \" in path */
-    char* buffer=malloc(1+strlen(path)*2+strlen("(load \"\")"));
+    /* Wraps the path in a (load "") form, escapeing \\ and \" in path */
+    size_t size=(1+strlen(path)*2+strlen("(load \"\")"));
+    char* buffer=CHECK_POINTER(malloc(size));
     strcpy(buffer,"(load \"");
     size_t p=strlen(buffer);
     while(*path){
         switch(*path){
           case '\\': buffer[p++]='\\'; buffer[p++]='\\'; break;
           case '"':  buffer[p++]='\\'; buffer[p++]='"';  break;
-          default:   buffer[p++]=*path; break; }}
-    strcat(buffer+p,"\")");
+          default:   buffer[p++]=*path; break; }
+        path++;}
+    strcpy(buffer+p,"\")");
     return buffer;}
+
+static char* validate_encoding(const char* name,char* encoding){
+    if((encoding==NULL)
+       ||(0==strcasecmp(encoding,"ISO-8859-1"))
+       ||(0==strcasecmp(encoding,"ISO_8859-1"))
+       ||(0==strcasecmp(encoding,"LATIN1"))
+       ||(0==strcasecmp(encoding,"ISO-LATIN-1"))
+       ||(0==strcasecmp(encoding,"IBM819"))
+       ||(0==strcasecmp(encoding,"CP819"))
+       ||(0==strcasecmp(encoding,"CSISOLATIN1"))){
+        return strdup("ISO-8859-1");}
+    if((0==strcasecmp(encoding,"US-ASCII"))
+       ||(0==strcasecmp(encoding,"ASCII"))){
+        return strdup("US-ASCII");}
+    fprintf(stderr,"ERROR: Invalid encoding name for %s: %s\n",name,encoding);
+    fprintf(stderr,"Valid encoding names are US-ASCII and ISO-8859-1\n");
+    exit(EX_CONFIG);}
+
 
 static void process_options(int argc,char** argv){
     /* defaults: */
-    all_encoding=strdup("iso-8859-1");
-    terminal_encoding=all_encoding;
+    all_encoding=NULL;
+    terminal_encoding=NULL;
     initfile=strdup("~/.boclrc");
     on_error_action=strdup("exit");
+    package=strdup("COMMON-LISP-USER");
     pname=argv[0];
     int i=1;
     while(i<argc){
@@ -188,6 +212,8 @@ static void process_options(int argc,char** argv){
                               argv[i-1],
                               (*options[k].argument.variable.string),
                               argv[i]);}
+                  else{
+                      (*options[k].argument.variable.string)=argv[i];}
                   break;
               case elst:
                   string_list_push(argv[i],options[k].argument.variable.list);
@@ -208,7 +234,11 @@ static void process_options(int argc,char** argv){
         on_error=on_error_abort;}
     else if(0==strcmp(on_error_action,"appease")){
         on_error=on_error_appease;}
-    if(do_verbose){
+    all_encoding=validate_encoding("all",all_encoding);
+    terminal_encoding=validate_encoding("terminal",terminal_encoding);
+    initfiles=string_list_nreverse(initfiles);
+    expressions_and_loads=string_list_nreverse(expressions_and_loads);
+    if(do_verbose && do_print){
         print_options();}}
 
 
