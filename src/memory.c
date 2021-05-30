@@ -53,6 +53,18 @@ void* check_pointer(const char* fname,void* pointer){
         return pointer;}
     fatal(fname,"OUT OF MEMORY");}
 
+uword check_size_to_uword(const char* fname,size_t size){
+    if((0<=size) && (size<UWORD_MAX)){
+        return (uword)size;}
+    error(fname,"Size %z too big for an uword (max = "UWORD_FORMAT")",
+          size,UWORD_MAX);}
+
+halfword check_size_to_halfword(const char* fname,size_t size){
+    if((0<=size) && (size<HALFWORD_MAX)){
+        return (halfword)size;}
+    error(fname,"Size %z too big for a halfword (max = "HALFWORD_FORMAT")",
+          size,HALFWORD_MAX);}
+
 
 
 /*
@@ -142,17 +154,15 @@ static void clear_block(Block* block){
     block->objcount&=(FREE_BLOCK>>1);}
 
 
-
 static Zone* zone_allocate(size_t size){
     /* Allocate and initialize a new zone of the given total size. */
     Zone* zone=CHECK_POINTER(malloc(size));
-    zone->size=size;
+    zone->size=CHECK_SIZE_TO_UWORD(size);
     zone->offset_to_contents=sizeof(Zone);
     zone->free_list.size=sizeof(zone->free_list);
     zone->free_list.objcount=FREE_BLOCK;
     zone->free_list.next=(FreeBlock*)first_block(zone);
-    /* TODO: check maximum size */
-    zone->free_list.next->size=(halfword)(size-sizeof(Zone));
+    zone->free_list.next->size=CHECK_SIZE_TO_HALFWORD(size-sizeof(Zone));
     zone->free_list.next->objcount=FREE_BLOCK;
     zone->free_list.next->next=NULL;
     zone->before_best_candidate=NULL;
@@ -270,8 +280,7 @@ void* allocate(size_t size){
     Allocates a block of given size (including block header).
     If no free block is available, the garbage collector is invoked (unless disabled).
     */
-    /* TODO: check maximum size */
-    halfword hsize=(halfword)((size+sizeof(word)-1)/sizeof(word))*sizeof(word);
+    halfword hsize=CHECK_SIZE_TO_HALFWORD(((size+sizeof(word)-1)/sizeof(word))*sizeof(word));
     Block* block=NULL;
     if(DefaultZoneSize<hsize+sizeof(Zone)){
         Zone* new_zone=zone_allocate(hsize+sizeof(Zone));

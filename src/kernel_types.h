@@ -17,7 +17,7 @@ typedef uint32_t halfword;
 #define HALFWORD_MAX UINT32_MAX
 #define WORD_FORMAT "%lld"
 #define UWORD_FORMAT "%llu"
-#define HALFWORD_FORMAT "%d"
+#define HALFWORD_FORMAT "%u"
 #else
 typedef int32_t  word;
 typedef uint32_t uword;
@@ -28,7 +28,7 @@ typedef uint16_t halfword;
 #define HALFWORD_MAX UINT16_MAX
 #define WORD_FORMAT "%d"
 #define UWORD_FORMAT "%u"
-#define HALFWORD_FORMAT "%d"
+#define HALFWORD_FORMAT "%hu"
 #endif
 typedef uint8_t  octet;
 typedef double   floating;
