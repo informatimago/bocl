@@ -128,9 +128,7 @@ test:bocl
 	@printf "# Testing\n"
 	$(VERBOSE) output=$$($(RUN_ENV)  ./bocl --quiet 2>&1) || ( status=$$? ;\
 	expected=$$'\n'"ERROR: in bocl_read_eval_cstring:  NOT IMPLEMENTED YET" ;\
-	true printf "x%sx\n" "$$output" ;\
-	true printf "x%sx\n" "$$expected" ;\
-	[ "$$output" = "$$expected" ] && [ $$status -eq 65 ] )
+	[ "$$output" = "$$expected" ] && [ $$status -eq 65 ] || ( printf "output = x%sx\n" "$$output" ; printf "expected = x%sx\n" "$$expected" ; exit 1 ; ) ; )
 	@printf "# Success\n"
 
 run:bocl
