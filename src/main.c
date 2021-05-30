@@ -86,7 +86,7 @@ static struct {
     {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {NULL},                                    "if --batch, also suppress printing of heralds, prompts."},
     {{"--verbose",NULL},                    &do_verbose, none, {NULL},                                    "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
     {{"--print",NULL},                      &do_print,   none, {NULL},                                    "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
-    {{"-b, --batch",NULL},                  &do_batch,   none, {NULL},                                    "exit when EOF on *STANDARD-INPUT*"},
+    {{"-b","--batch",NULL},                 &do_batch,   none, {NULL},                                    "exit when EOF on *STANDARD-INPUT*"},
     {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {NULL},                                    "obscure option for running under GDB"},
     {{"-on-error",NULL},                    NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
     {{"-i","--init",NULL},                  NULL,        elst, {"file",{.list=&initfiles}},               "load initfile (can be repeated)"},
