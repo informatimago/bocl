@@ -43,6 +43,8 @@ NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 WARN_FLAGS        = -Wall -Werror -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
 					-Wwrite-strings -Wconversion  -Wstrict-prototypes -Wmissing-prototypes \
 					-Wmissing-declarations -Wredundant-decls -Wnested-externs -Winline \
+					\
+					-Wno-unused-parameter
 
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
 
