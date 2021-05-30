@@ -76,7 +76,7 @@ VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
 /* Used both for ARRAY and VECTOR classes, */
 /* as long as element-type is not octet, bit or character. */
 
-Array* Array_slots(Object* element_type,halfword rank,uword* dimensions){
+Array* Array_slots(Object* element_type,halfword rank,halfword* dimensions){
     halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
         total_array_size*=dimensions[i];}
@@ -94,7 +94,7 @@ Array* Array_slots(Object* element_type,halfword rank,uword* dimensions){
 /* Used both for ARRAY and VECTOR classes when */
 /* element-type is octet, bit or character. */
 
-OctetArray* OctetArray_slots(Object* element_type,halfword rank,uword* dimensions){
+OctetArray* OctetArray_slots(Object* element_type,halfword rank,halfword* dimensions){
     halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
         total_array_size*=dimensions[i];}
@@ -209,7 +209,7 @@ Object* cons_rplacd(Object* cell,Object* newcdr){
 
 /* STRING */
 
-Object* string_new(uword length){
+Object* string_new(halfword length){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots(CHARACTER_Symbol,1,&length));}
 

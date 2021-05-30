@@ -16,7 +16,7 @@ void kernel_initialize(void);
 
 Object*                   Object_new                     (Object*  class,        Slots*   slots);
 
-Array*                    Array_slots                    (Object*  element_type, halfword rank, uword* dimensions);
+Array*                    Array_slots                    (Object*  element_type, halfword rank, halfword* dimensions);
 BuiltInClass*             BuiltInClass_slots             (Object*  name,         Object*  superclasses);
 Character*                Character_slots                (Object*  name,         Object*  code);
 Class*                    Class_slots                    (Object*  name,         Object*  superclasses);
@@ -24,7 +24,7 @@ Cons*                     Cons_slots                     (Object*  car,         
 Float*                    Float_slots                    (floating value);
 FuncallableStandardClass* FuncallableStandardClass_slots (Object*  name,         Object*  superclasses);
 Integer*                  Integer_slots                  (word     value);
-OctetArray*               OctetArray_slots               (Object*  element_type, halfword rank, uword* dimensions);
+OctetArray*               OctetArray_slots               (Object*  element_type, halfword rank, halfword* dimensions);
 OctetArray*               OctetArray_slots_cstring       (Object*  element_type, const char* initial_value);
 StandardClass*            StandardClass_slots            (Object*  name,         Object*  superclasses);
 StructureClass*           StructureClass_slots           (Object*  name,         Object*  superclasses);
@@ -50,7 +50,6 @@ bool class_p(Object* object);
 Object* class_name(Object* class);
 Object* class_direct_superclasses(Object* class);
 void class_add_superclass(Object* class, Object* superclass);
-void boot_class_add_superclass(Object* class, Object* superclass);
 
 Object* class_of(Object* object);
 Object* find_class(Object* name);
@@ -93,7 +92,7 @@ Object* character_name(Object* object);
 
 /* STRING */
 
-Object* string_new(uword length);
+Object* string_new(halfword length);
 Object* string_new_cstring(const char* string);
 char* string_cstring(Object* string);
 uword string_length(Object* string);
