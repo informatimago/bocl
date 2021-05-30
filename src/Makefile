@@ -60,7 +60,7 @@ LIBRARIES = \
 # 	/usr/lib/libgmalloc.dylib
 
 else
-CFLAGS    = -x c -std=c11 $(DEBUG_FLAGS)
+CFLAGS    = $(WARN_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c11
 LDFLAGS   = $(DEBUG_FLAGS)
 RUN_ENV   =
 LIBRARIES =
