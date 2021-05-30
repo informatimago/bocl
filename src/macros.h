@@ -10,7 +10,7 @@
 #define F(value)   float_from_floating(value)
 
 #ifndef __unused
-#define __unused _attribute__((unused))
+#define __unused __attribute__((unused))
 #endif
 
 #endif
