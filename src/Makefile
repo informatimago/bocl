@@ -122,9 +122,11 @@ kernel.o:kernel.c kernel.h kernel_objects.h
 
 test:bocl
 	@printf "# Testing\n"
-	$(VERBOSE) output=$$($(RUN_ENV)  ./bocl 2>&1) || ( status=$$? ;\
-	[ "$$output" = $$'\n'"ERROR: in bocl_read_eval_loop_cstring:  NOT IMPLEMENTED YET" ] \
-	&& [ $$status -eq 2 ] )
+	$(VERBOSE) output=$$($(RUN_ENV)  ./bocl --quiet 2>&1) || ( status=$$? ;\
+	expected=$$'\n'"ERROR: in bocl_read_eval_cstring:  NOT IMPLEMENTED YET" ;\
+	true printf "x%sx\n" "$$output" ;\
+	true printf "x%sx\n" "$$expected" ;\
+	[ "$$output" = "$$expected" ] && [ $$status -eq 65 ] )
 	@printf "# Success\n"
 
 run:bocl
