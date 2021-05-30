@@ -5,20 +5,17 @@
 
 /* The recursive_p parameters are ignored, since we don't deal with #=/## references */
 
-Object* kernel_read(Object* input_stream,Object* eof_error_p,Object* eof_value,Object* recursive_p){
-    ignore(recursive_p);
+Object* kernel_read(Object* input_stream,Object* eof_error_p,Object* eof_value,__unused Object* recursive_p){
     NOT_IMPLEMENTED_YET();
     return S(NIL);
 }
 
-Object* kernel_read_preserving_whitespace(Object* input_stream,Object* eof_error_p,Object* eof_value,Object* recursive_p){
-    ignore(recursive_p);
+Object* kernel_read_preserving_whitespace(Object* input_stream,Object* eof_error_p,Object* eof_value,__unused Object* recursive_p){
     NOT_IMPLEMENTED_YET();
     return S(NIL);
 }
 
-Object* kernel_read_delimited_list(Object* character,Object* input_stream,Object* recursive_p){
-    ignore(recursive_p);
+Object* kernel_read_delimited_list(Object* character,Object* input_stream,__unused Object* recursive_p){
     NOT_IMPLEMENTED_YET();
     return S(NIL);
 }

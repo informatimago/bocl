@@ -1,5 +1,7 @@
 #ifndef kernel_h
 #define kernel_h
+#define _POSIX_SOURCE
+#include <unistd.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "memory.h"

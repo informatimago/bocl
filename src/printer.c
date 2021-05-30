@@ -45,7 +45,7 @@ Object* prin1(Object* object,Object* stream){
         return object;}
     
     if(integer_p(object)){
-        fprintf(out,"%lld",integer_value(object));
+        fprintf(out,WORD_FORMAT,integer_value(object));
         return object;}
 
     if(null_p(object)){
@@ -107,7 +107,7 @@ Object* princ(Object* object,Object* stream){
         return object;}
     
     if(integer_p(object)){
-        fprintf(out,"%lld",integer_value(object));
+        fprintf(out,WORD_FORMAT,integer_value(object));
         return object;}
 
     if(null_p(object)){

@@ -135,3 +135,7 @@ test:bocl
 
 run:bocl
 	$(VERBOSE) $(RUN_ENV) ./bocl
+
+predefines:
+	$(VERBOSE) printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
+	$(VERBOSE) cpp -dM  test.c | sort

@@ -10,8 +10,7 @@
 
 /* Error Handling */
 
-void report_error(Object* error){
-    ignore(error);
+void report_error(__unused Object* error){
     fprintf(stderr,"\nERROR: ");
     Object* err=variable_value(S(*ERROR-OUTPUT*));
     prin1(error,err);

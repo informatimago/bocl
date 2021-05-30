@@ -1,9 +1,10 @@
 #ifndef kernel_types_h
 #define kernel_types_h
+#define _POSIX_SOURCE
+#include <unistd.h> // import _POSIX_V6_LP64_OFF64
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <unistd.h> // import _POSIX_V6_LP64_OFF64
 
 #ifdef _POSIX_V6_LP64_OFF64
 typedef int64_t  word;
@@ -13,6 +14,9 @@ typedef uint32_t halfword;
 #define WORD_MAX INT64_MAX
 #define UWORD_MAX UINT64_MAX
 #define HALFWORD_MAX UINT32_MAX
+#define WORD_FORMAT "%lld"
+#define UWORD_FORMAT "%llu"
+#define HALFWORD_FORMAT "%d"
 #else
 typedef int32_t  word;
 typedef uint32_t uword;
@@ -21,6 +25,9 @@ typedef uint16_t halfword;
 #define WORD_MAX INT32_MAX
 #define UWORD_MAX UINT32_MAX
 #define HALFWORD_MAX UINT16_MAX
+#define WORD_FORMAT "%d"
+#define UWORD_FORMAT "%u"
+#define HALFWORD_FORMAT "%d"
 #endif
 typedef uint8_t  octet;
 typedef double   floating;

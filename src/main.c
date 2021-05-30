@@ -261,8 +261,7 @@ static void wait_for_termination(int status){
 
 _Noreturn void invoke_debugger(Object* error);
 bool error_handler(Object* error);
-_Noreturn void invoke_debugger(Object* error){
-    ignore(error);
+_Noreturn void invoke_debugger(__unused Object* error){
     abort();}
 
 bool error_handler(Object* error){
