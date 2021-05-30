@@ -22,7 +22,7 @@ Object* stream_open(Object* filespec,
     else if(typep(filespec,FILE_STREAM_Class)) {
         path=stream_pathname(filespec);}
     else {
-        type_error(__FUNCTION__,filespec,PHYSICAL_PATHNAME_Class);}
+        TYPE_ERROR(filespec,PHYSICAL_PATHNAME_Class);}
     char* cpath=string_cstring(namestring(path));
     direction_t dir=convert_direction(direction);
     if(direction_probe==dir){
@@ -31,7 +31,7 @@ Object* stream_open(Object* filespec,
         int file_error=ferror(file);
         if(file==NULL){
             if(if_does_not_exist==K(ERROR)){
-                error(__FUNCTION__,"System error on fopen(%s): %d",
+                ERROR("System error on fopen(%s): %d",
                       cpath,file_error);}
             else if(if_does_not_exist==NIL_Symbol){
                 return NIL_Symbol;}
@@ -39,10 +39,10 @@ Object* stream_open(Object* filespec,
                 /* 2- create if does not exist: */
                 file=fopen(cpath,"w");
                 if(file==NULL){
-                    error(__FUNCTION__,"System error on fopen(%s): %d",
+                    ERROR("System error on fopen(%s): %d",
                           cpath,file_error);}}
             else{
-                error(__FUNCTION__,"Invalid IF-DOES-NOT-EXIST argument: %s",
+                ERROR("Invalid IF-DOES-NOT-EXIST argument: %s",
                       string_cstring(prin1_to_string(if_does_not_exist)));}}
         fclose(file);
         /* 3- if existed or created, return the closed stream */
@@ -77,7 +77,7 @@ Object* stream_open(Object* filespec,
           mode="wx";
    
           else{
-              error(__FUNCTION__,"Invalid IF-ERROR argument: %s",
+              ERROR("Invalid IF-ERROR argument: %s",
                     string_cstring(prin1_to_string(if_exists)));}
           break;}
     
@@ -85,7 +85,7 @@ Object* stream_open(Object* filespec,
     int file_error=ferror(file);
     if(file==NULL){
         if(if_does_not_exist==K(ERROR)){
-            error(__FUNCTION__,"System error on fopen(%s): %d",
+            ERROR("System error on fopen(%s): %d",
                   cpath,file_error);}
         else if(if_does_not_exist==NIL_Symbol){
             return NIL_Symbol;}
@@ -93,10 +93,10 @@ Object* stream_open(Object* filespec,
             /* 2- create if does not exist: */
             file=fopen(cpath,"w");
             if(file==NULL){
-                error(__FUNCTION__,"System error on fopen(%s): %d",
+                ERROR("System error on fopen(%s): %d",
                       cpath,file_error);}}
         else{
-            error(__FUNCTION__,"Invalid IF-DOES-NOT-EXIST argument: %s",
+            ERROR("Invalid IF-DOES-NOT-EXIST argument: %s",
                   string_cstring(prin1_to_string(if_does_not_exist)));}}
 
 #endif

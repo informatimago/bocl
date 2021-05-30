@@ -4,13 +4,27 @@
 #include <stdbool.h>
 #include "kernel_types.h"
 
-#define NOT_IMPLEMENTED_YET() error(__FUNCTION__,"NOT IMPLEMENTED YET")
+#ifdef strict_iso_c
+/* TODO: we could also remove the fname parameter altogether */
+#define NOT_IMPLEMENTED_YET()           error("some function","NOT IMPLEMENTED YET")
+#define FATAL(message_format,...)       fatal("some function",message_format,__VA_ARGS__)
+#define ERROR(message_format,...)       error("some function",message_format,__VA_ARGS__)
+#define TYPE_ERROR(message_format,...)  type_error("some function",message_format,__VA_ARGS__)
+#define CHECK_POINTER(pointer)          check_pointer("some function",pointer)
+#else
+#define NOT_IMPLEMENTED_YET()           error(__FUNCTION__,"NOT IMPLEMENTED YET")
+#define FATAL(message_format,...)       fatal(__FUNCTION__,message_format,__VA_ARGS__)
+#define ERROR(message_format,...)       error(__FUNCTION__,message_format,__VA_ARGS__)
+#define TYPE_ERROR(message_format,...)  type_error(__FUNCTION__,message_format,__VA_ARGS__)
+#define CHECK_POINTER(pointer)          check_pointer(__FUNCTION__,pointer)
+#endif
 
-void report_error(Object* error);
 _Noreturn void fatal(const char* fname,const char* message_format,...);
 _Noreturn void error(const char* fname,const char* message_format,...);
 _Noreturn void type_error(const char* fname,Object* object,Object* class);
 void* check_pointer(const char* fname,void* pointer);
+
+void report_error(Object* error);
 
 void* allocate(size_t size);
 

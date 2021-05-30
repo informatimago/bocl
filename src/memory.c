@@ -146,7 +146,7 @@ static void clear_block(Block* block){
 
 static Zone* zone_allocate(size_t size){
     /* Allocate and initialize a new zone of the given total size. */
-    Zone* zone=check_pointer(__FUNCTION__,malloc(size));
+    Zone* zone=CHECK_POINTER(malloc(size));
     zone->size=size;
     zone->offset_to_contents=sizeof(Zone);
     zone->free_list.size=sizeof(zone->free_list);
@@ -314,7 +314,7 @@ static Block* free_block(Zone* zone,Block* block){
     if(free_block_p(next)){
         FreeBlock* previous=find_before_free_block(zone,(FreeBlock*)next);
         if(previous==NULL){
-            fatal(__FUNCTION__,"Cannot find the free block in the free block list (should not occur)!");}
+            FATAL("Cannot find the free block in the free block list %s!","(should not occur)");}
         FreeBlock* joined=previous->next;
         /* remove the joined free block */
         previous->next=joined->next;

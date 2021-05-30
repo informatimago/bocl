@@ -75,7 +75,7 @@ Object* last(Object* list){
     else if(null_p(list)){
         return list;}
     else{
-        type_error(__FUNCTION__,list,LIST_Class);}}
+        TYPE_ERROR(list,LIST_Class);}}
 
 Object* nconc(Object* list,Object* tail){
     if(list){

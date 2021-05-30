@@ -7,7 +7,7 @@
 
 void make_constant_variable(Object* symbol){
     if(special_variable_p(symbol)){
-        error(__FUNCTION__,"Cannot make constant a special variable %s",
+        ERROR("Cannot make constant a special variable %s",
               string_cstring(symbol_name(symbol)));}
     Object* plist=symbol_plist(symbol);
     plist=putf(plist,S($CONSTANT),S(T));
@@ -18,7 +18,7 @@ bool constant_variable_p(Object* symbol){
 
 void make_special_variable(Object* symbol){
     if(special_variable_p(symbol)){
-        error(__FUNCTION__,"Cannot make special a constant variable %s",
+        ERROR("Cannot make special a constant variable %s",
               string_cstring(symbol_name(symbol)));}
     Object* plist=symbol_plist(symbol);
     plist=putf(plist,S($SPECIAL),S(T));
@@ -46,7 +46,7 @@ Object* define_parameter(Object* symbol,Object* value){
 Object* variable_value(Object* symbol){
     if(symbol_boundp(symbol)){
         return symbol_value(symbol);}
-    error(__FUNCTION__,"Variable %s is not bound",
+    ERROR("Variable %s is not bound",
           string_cstring(symbol_name(symbol)));}          
 
 /**** THE END ****/

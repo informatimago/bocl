@@ -64,7 +64,7 @@ VectorOfOctet* VectorOfOctet_slots(halfword length){
 VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
     size_t len=strlen(value);
     if(HALFWORD_MAX<len){
-        error(__FUNCTION__,"string too long");}
+        ERROR("string too long %ld",len);}
     halfword length=(halfword)len;
     VectorOfOctet* that=allocate(sizeof(*that)+sizeof(that->elements[0])*length);
     that->length=length;
@@ -227,7 +227,7 @@ uword string_length(Object* string){
 char* string_cstring(Object* string){
     check_class(string,STRING_Class);
     size_t length=string->slots->octet_array.dimensions[0];
-    char* result=check_pointer(__FUNCTION__,malloc(1+length));
+    char* result=CHECK_POINTER(malloc(1+length));
     strncpy(result,(const char*)string->slots->octet_array.elements->elements,length);
     result[length]='\0';
     return result;}
@@ -356,7 +356,7 @@ Object* symbol_set_plist(Object* symbol,Object* new_plist){
     if(cons_p(new_plist)||null_p(new_plist)){
         return symbol->slots->symbol.plist=new_plist;}
     else{
-        type_error(__FUNCTION__,new_plist,LIST_Class);}}
+        TYPE_ERROR(new_plist,LIST_Class);}}
 
 
 /* KEYWORD */
@@ -482,13 +482,13 @@ bool typep(Object* object,Object* class){
 void check_type(Object* object,Object* class){
     /* checks that the object is an instance of the class, direct or indirect */
     if(!typep(object,class)){
-        type_error(__FUNCTION__,object,class);}}
+        TYPE_ERROR(object,class);}}
 
 
 void check_class(Object* object,Object* class){
     /* checks that the object is a direct instance of the class */
     if(class_of(object)!=class){
-        type_error(__FUNCTION__,object,class);}}
+        TYPE_ERROR(object,class);}}
 
 
 
@@ -504,7 +504,7 @@ Object* boot_last(Object* list){
     else if(null_p(list)){
         return list;}
     else{
-        type_error(__FUNCTION__,list,LIST_Class);}}
+        TYPE_ERROR(list,LIST_Class);}}
 
 Object* boot_nconc(Object* list,Object* tail){
     if(null_p(list)){
@@ -514,7 +514,7 @@ Object* boot_nconc(Object* list,Object* tail){
         last_cell->slots->cons.cdr=tail;
         return list;}
     else{
-        type_error(__FUNCTION__,list,LIST_Class);}}
+        TYPE_ERROR(list,LIST_Class);}}
 
 void boot_class_add_superclass(Object* class, Object* superclass){
     if(class->slots->class.direct_superclasses){
@@ -724,7 +724,7 @@ direction_t convert_direction(Object* direction){
     else if(direction==K(PROBE)){
         return direction_probe;}
     else {
-        error(__FUNCTION__,"Invalid direction %s",
+        ERROR("Invalid direction %s",
               string_cstring(prin1_to_string(direction)));}}
 
 Object* convert_from_direction(direction_t direction){
@@ -734,7 +734,7 @@ Object* convert_from_direction(direction_t direction){
       case direction_io:      return K(IO);
       case direction_probe:   return K(PROBE);
       default:
-          fatal(__FUNCTION__,"Invalid direction value %d",direction);}}
+          FATAL("Invalid direction value %d",direction);}}
 
 type_t convert_element_type(Object* element_type){
     /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
@@ -749,7 +749,7 @@ type_t convert_element_type(Object* element_type){
         &&(integer_value(cadr(element_type))==8)
         &&(null_p(cddr(element_type))))){
         return type_octet;}
-    error(__FUNCTION__,"Invalid element-type %s",
+    ERROR("Invalid element-type %s",
           string_cstring(prin1_to_string(element_type)));}
 
 
