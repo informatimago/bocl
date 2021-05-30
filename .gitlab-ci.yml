@@ -9,7 +9,7 @@ build-code-job:
     - echo "Compile the bocl executable:"
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
-    - make bocl
+    - make -k bocl
   artifacts:
     paths:
       - src/bocl
@@ -19,4 +19,4 @@ test-code-job:
   stage: test
   script:
     - echo "If the files are built successfully, run some tests:"
-    - make test VERBOSE=
+    - make -k test VERBOSE=
