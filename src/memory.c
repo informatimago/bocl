@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include "memory.h"
 #include "kernel.h"
 #include "macros.h"
@@ -6,30 +7,41 @@
 /* Error Handling */
 
 
-_Noreturn void fatal(const char* fname,char* message){
-    fprintf(stderr,"\nFATAL ERROR: in %s:  %s\n\n",fname,message);
+_Noreturn void fatal(const char* fname,char* message_format,...){
+    va_list ap;
+    fprintf(stderr,"\nFATAL ERROR: in %s:  ",fname);
+    va_start(ap,message_format);
+    vfprintf(stderr,message_format,ap);
+    va_end(ap);
+    fprintf(stderr,"\n\n");
     exit(1);}
 
-_Noreturn void error(const char* fname,char* message){
+_Noreturn void error(const char* fname,char* message_format,...){
     // TODO: Implement error() with the error handling system.
-    fprintf(stderr,"\nERROR: in %s: %s\n\n",fname,message);
+    va_list ap;
+    fprintf(stderr,"\nERROR: in %s:  ",fname);
+    va_start(ap,message_format);
+    vfprintf(stderr,message_format,ap);
+    va_end(ap);
+    fprintf(stderr,"\n\n");
     exit(2);}
+
 
 _Noreturn void type_error(const char* fname,Object* object,Object* class){
     // TODO: Implement type_error() with the error handling system.
-    char* got=string_cstring(class_name(class_of(object)));
-    char* exp=string_cstring(class_name(class));
-    fprintf(stderr,"\nTYPE ERROR: function %s got an object of class %s, expected an object of class %s\n\n",
+    char* got=string_cstring(object->class->slots->class.name->slots->symbol.name);
+    char* exp=string_cstring( class->class->slots->class.name->slots->symbol.name);
+    fprintf(stderr,"\nTYPE ERROR: in %s:  got an object of class %s, expected an object of class %s\n\n",
             fname,got,exp);
     free(exp);
     free(got);
-    exit(2);}
+    exit(3);}
 
 
 void* check_pointer(const char* fname,void* pointer){
     if(pointer){
         return pointer;}
-    fatal(fname,"Got a NULL pointer");}
+    fatal(fname,"OUT OF MEMORY");}
 
 
 

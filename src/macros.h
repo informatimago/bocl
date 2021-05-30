@@ -4,4 +4,10 @@
 #define CX(a,b) a ## _ ## b
 #define C(a,b) CX(a,b)
 
+#define K(keyword) keyword_intern_cstring(#keyword)
+#define S(symbol)  symbol_intern_cstring(#symbol)
+#define I(value)   integer_from_word(value)
+#define F(value)   float_from_floating(value)
+
+#define ignore(var) (void*)var
 #endif

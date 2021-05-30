@@ -3,6 +3,8 @@
 #define kernel_objects_h
 #include "kernel.h"
 
+Object  uninitialized_object;
+
 Object* kernel_classes;  /* list of class objects */
 Object* NIL_Symbol;
 Object* T_Symbol;
@@ -13,6 +15,7 @@ Object* KERNEL_obarray;  /* list of interned symbols */
 Object* KEYWORD_obarray; /* list of interned keywords */
 Object* UNBOUND_Object;
 
+Object* T_Class;
 Object* CHARACTER_Class;
 Object* ARRAY_Class;
 Object* STRING_Class;
@@ -76,7 +79,6 @@ Object* STANDARD_METHOD_Class;
 Object* STANDARD_WRITER_METHOD_Class;
 Object* STANDARD_READER_METHOD_Class;
 Object* STANDARD_ACCESSOR_METHOD_Class;
-Object* T_Class;
 Object* STYLE_WARNING_Class;
 Object* SIMPLE_WARNING_Class;
 Object* WARNING_Class;
@@ -108,6 +110,6 @@ Object* UNBOUND_SLOT_Class;
 Object* UNDEFINED_FUNCTION_Class;
 Object* CELL_ERROR_Class;
 
-void kernel_initialize(void);
+void kernel_objects_initialize(void);
 
 #endif

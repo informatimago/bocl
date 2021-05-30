@@ -1,8 +1,26 @@
-all:bocl
+all:deps bocl
+
 
 VERBOSE=@
 #VERBOSE=
-NOSANITIZE=
+SANITIZE=
+
+ifdef DEBUG
+DEFINES=-DDEBUG=yes
+else
+DEFINES=
+endif
+
+SRCS = main.c bocl.c string_list.c \
+	kernel.c kernel_objects.c memory.c \
+	variable.c cons.c data.c \
+	stream.c reader.c printer.c filename.c \
+	\
+	debug.c
+
+
+
+
 
 UNAME=$(shell uname)
 
@@ -21,22 +39,30 @@ LD_SANITIZE_FLAGS = -fsanitize=leak
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
 
-ifeq ($(UNAME)$(NOSANITIZE),Darwin)
-CFLAGS    = -x c -std=c11  $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS)
+ifeq ($(UNAME)$(SANITIZE),Darwin)
+CFLAGS    = -x c -std=c11  $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES)
 LDFLAGS   = $(LD_SANITIZE_FLAGS) $(DEBUG_FLAGS)
+ASAN_LIB_DIR = /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin
+RUN_ENV = DYLD_LIBRARY_PATH=$(ASAN_LIB_DIR)
 LIBRARIES = \
-	-L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin \
-	-lclang_rt.asan_osx_dynamic
+	-L$(ASAN_LIB_DIR) \
+	-lclang_rt.asan_osx_dynamic \
+	-lgmalloc
+
+# LIBRARIES=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin/libclang_rt.asan_osx_dynamic.dylib \
+# 	/usr/lib/libgmalloc.dylib
+
 else
 CFLAGS    = -x c -std=c11 $(DEBUG_FLAGS)
 LDFLAGS   = $(DEBUG_FLAGS)
+RUN_ENV   =
 LIBRARIES =
 endif
 
 
-DEPFLAGS = -MT $@ -MMD -MP -MF $*.d
-COMPILE.c    = $(CC)             $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@
-MAKEDEPEND.c = $(CC) $(DEPFLAGS) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
+DEPFLAGS = -E -MT $@ -MM -MP -MF $*.d
+COMPILE.c    = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@
+MAKEDEPEND.c = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) $(DEPFLAGS)
 
 %.o : %.c %.d
 	@ printf "# Compiling %-20s from %s\n" "$@" "$<"
@@ -44,14 +70,14 @@ MAKEDEPEND.c = $(CC) $(DEPFLAGS) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c
 
 %.o :
 %.d : %.c
-	@ printf "# Generating dependences          for %s\n" "$<"
+	@ printf "# Generating dependencies         for %s\n" "$<"
 	$(VERBOSE) $(MAKEDEPEND.c) $<
 
+deps:   $(SRCS:%.c=%.d)
 include $(SRCS:%.c=%.d)
 
 
 
-SRCS=main.c kernel.c bocl.c string_list.c kernel_objects.c memory.c
 
 bocl: $(SRCS:%.c=%.d) $(SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(SRCS:%.c=%.o)"
@@ -91,7 +117,10 @@ kernel.o:kernel.c kernel.h kernel_objects.h
 
 test:bocl
 	@printf "# Testing\n"
-	$(VERBOSE) output=$$(./bocl 2>&1) || ( status=$$? ;\
+	$(VERBOSE) output=$$($(RUN_ENV)  ./bocl 2>&1) || ( status=$$? ;\
 	[ "$$output" = $$'\n'"ERROR: in bocl_read_eval_loop_cstring: NOT IMPLEMENTED YET" ] \
 	&& [ $$status -eq 2 ] )
 	@printf "# Success\n"
+
+run:bocl
+	$(VERBOSE) $(RUN_ENV) ./bocl

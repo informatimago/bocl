@@ -2,6 +2,7 @@
 #define kernel_types_h
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <unistd.h> // import _POSIX_V6_LP64_OFF64
 
 #ifdef _POSIX_V6_LP64_OFF64
@@ -128,23 +129,29 @@ typedef struct Symbol {
     Object* plist;
 } Symbol;
 
+typedef enum { direction_input, direction_output, direction_io, direction_probe } direction_t;
+typedef enum { type_character, type_octet, type_bit } type_t;
+typedef enum { encoding_us_ascii, encoding_iso_8859_1 } encoding_t;
+typedef enum { new_line_crlf, new_line_cr, new_line_lf } new_line_t;
+typedef enum { on_error_error=0xf001, on_error_ignore=0xf002 } on_error_t;
+
 typedef struct FileStream {
     BLOCK_HEADER;
-    Object* pathname;     // a PHYSICAL-PATHNAME
-    Object* element_type; // CHARACTER or (UNSIGNED-BYTE 8) or BIT
-    Object* external_format; // :DEFAULT or encoding or (encoding . line-termination)
-    // with encoding in (:US-ASCII :ISO-8859-1)
-    // with line-termination in (:CR :LF :CRLF)
+    Object* pathname;          // a PHYSICAL-PATHNAME
+    Object* element_type;      // CHARACTER or (UNSIGNED-BYTE 8) or BIT
+    Object* external_format;   // Normalized external-format: (list (member :US-ASCII :ISO-8859-1) (member :crlf :cr :lf) (or character (member :error nil)))
     halfword is_open;
     halfword direction;
-    halfword encoding; // derived from external_format
-    halfword line_termination; // derived from external_format
+    halfword type;             // derived from element_type
+    halfword encoding;         // derived from external_format
+    halfword new_line;          // derived from external_format
+    halfword on_error;         // derived from external_format
     FILE* stream;
     // Note: whatever the element-type, we always write the same octets.
     // the above layer will convert possible character or integer into octets,
     // but the usual buffer types will already use VectorOfOctet storage.
     // Encoding is only used to signal an error upon 128<=octet
-    // and line_termination is only used for character streams.
+    // and new_line is only used for character streams.
 } FileStream;
 
 
@@ -179,7 +186,7 @@ typedef union Slots {
     VectorOfOctet  vector_of_octet;
     Character      character;
     Integer        integer;
-    Float          floate;
+    Float          floater;
     Array          array;
     OctetArray     octet_array;
     Cons           cons;

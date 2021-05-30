@@ -1365,6 +1365,7 @@ External-formats can be:
   + a keyword denoting an encoding in (:us-ascii :iso-8859-1),
 
   + a line-termination keyword (:dos :crlf :mac :cr :unix :lf),
+    the default if NIL or absent is :LF.
 
   + an object specifing the handling of encoding errors:
 
@@ -1374,7 +1375,7 @@ External-formats can be:
       (char-code char) is used on output decoding error.
 
     * the keyword :error asking for a continuable encoding-error to be
-      signaled, with a substitute-code restart.
+      signaled, with a substitute-code restart. This is the default if absent.
 
     * the symbol NIL asking to ignore and skip the unencodable
       character.

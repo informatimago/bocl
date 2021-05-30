@@ -4,11 +4,10 @@
 #include <stdbool.h>
 #include "kernel_types.h"
 
-#define OUT_OF_MEMORY       "OUT OF MEMORY"
-#define NOT_IMPLEMENTED_YET "NOT IMPLEMENTED YET"
+#define NOT_IMPLEMENTED_YET() error(__FUNCTION__,"NOT IMPLEMENTED YET")
 
-_Noreturn void fatal(const char* fname,char* message);
-_Noreturn void error(const char* fname,char* message);
+_Noreturn void fatal(const char* fname,char* message_format,...);
+_Noreturn void error(const char* fname,char* message_format,...);
 _Noreturn void type_error(const char* fname,Object* object,Object* class);
 void* check_pointer(const char* fname,void* pointer);
 
