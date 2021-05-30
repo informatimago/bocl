@@ -6,9 +6,11 @@ VERBOSE=@
 SANITIZE=
 
 ifdef DEBUG
-DEFINES=-DDEBUG=yes
+DEFINES    = -DDEBUG=yes
+DEBUG_SRCS = debug.c
 else
-DEFINES=
+DEFINES    =
+DEBUG_SRCS =
 endif
 
 SRCS = main.c bocl.c string_list.c \
@@ -16,9 +18,9 @@ SRCS = main.c bocl.c string_list.c \
 	variable.c cons.c data.c \
 	stream.c reader.c printer.c filename.c \
 	\
-	debug.c
-
-
+	strdup.c \
+	\
+	$(DEBUG_SRCS)
 
 
 
