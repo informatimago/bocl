@@ -11,6 +11,7 @@
 #include "bocl.h"
 #include "macros.h"
 #include "memory.h"
+#include "strdup.h"
 
 static const char* source="http://gitlab.com/informatimago/bocl/";
 static const char* bocl_lisp="(defun repl () (catch 'quit (do () () (print (eval (read))))))";
