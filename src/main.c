@@ -214,7 +214,8 @@ static void process_options(int argc,char** argv){
 
 static void print_banner(void){
     printf("\nWelcome to ");
-    bocl_read_eval_cstring("(WRITE-LINE (LISP-IMPLEMENTATION-TYPE))");
+    printf("BOCL Version 0.0\n");
+    /* bocl_read_eval_cstring("(WRITE-LINE (LISP-IMPLEMENTATION-TYPE))"); */
     printf("Copyright 2021 Pascal J. Bourguignon\n");
     printf("Licensed under AGPL; source codes available at:\n");
     printf("%s\n\n",source);}
@@ -240,10 +241,11 @@ bool error_handler(Object* error){
           invoke_debugger(error);
       case on_error_exit:
           exit(EX_DATAERR);
-      case on_error_abort:
-          abort();
       case on_error_appease:
-          return true;}}
+          return true;
+      case on_error_abort: /* fall thru */
+      default:
+          abort();}}
 
 int main(int argc,char** argv){
     pname=argv[0];
@@ -259,13 +261,13 @@ int main(int argc,char** argv){
         print_help();
         exit(0);}
 
+    if(!do_quiet && !do_batch){
+        print_banner();}
+
     if(do_batch){
         bocl_read_eval_cstring("(DEFPARAMETER BOCL:*BATCH*  T)");}
     else{
         bocl_read_eval_cstring("(DEFPARAMETER BOCL:*BATCH*  NIL)");}
-
-    if(!do_quiet && !do_batch){
-        print_banner();}
 
     if(do_verbose){
         bocl_read_eval_cstring("(SETQ *LOAD-VERBOSE*    T)");
