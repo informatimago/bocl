@@ -397,6 +397,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (write-line "/* Do not edit -- generated from generate-kernel.lisp */")
     (write-line "#include \"kernel_objects.h\"")
     (write-line "#include \"kernel_types.h\"")
+    (write-line "#include \"kernel_private.h\"")
     (write-line "#include \"memory.h\"")
     (write-line "#include \"reader.h\"")
     (write-line "#include \"stream.h\"")

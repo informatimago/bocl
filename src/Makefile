@@ -37,10 +37,15 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
 
 LD_SANITIZE_FLAGS = -fsanitize=leak
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
+
+WARN_FLAGS        = -Wall -Werror -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
+					-Wwrite-strings -Wconversion  -Wstrict-prototypes -Wmissing-prototypes \
+					-Wmissing-declarations -Wredundant-decls -Wnested-externs -Winline \
+
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
 
 ifeq ($(UNAME)$(SANITIZE),Darwin)
-CFLAGS    = -x c -std=c11  $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES)
+CFLAGS    = $(WARN_FLAGS) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c11
 LDFLAGS   = $(LD_SANITIZE_FLAGS) $(DEBUG_FLAGS)
 ASAN_LIB_DIR = /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin
 RUN_ENV = DYLD_LIBRARY_PATH=$(ASAN_LIB_DIR)

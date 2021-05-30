@@ -18,6 +18,6 @@ Object* kernel_read_delimited_list(Object* character,Object* input_stream,Object
 Object* kernel_read_from_string(Object* input_string,Object* eof_error_p,Object* eof_value,Object* start,Object* end,Object* preserve_whitespace);
 
 
-void reader_initialize();
+void reader_initialize(void);
 
 #endif

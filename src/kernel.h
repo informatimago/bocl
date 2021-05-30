@@ -8,7 +8,7 @@
 #include "cons.h"
 
 
-Object* kernel_rootset();
+Object* kernel_rootset(void);
 void kernel_initialize(void);
 
 
@@ -25,13 +25,13 @@ Float*                    Float_slots                    (floating value);
 FuncallableStandardClass* FuncallableStandardClass_slots (Object*  name,         Object*  superclasses);
 Integer*                  Integer_slots                  (word     value);
 OctetArray*               OctetArray_slots               (Object*  element_type, halfword rank, uword* dimensions);
-OctetArray*               OctetArray_slots_cstring       (Object*  element_type, char*    initial_value);
+OctetArray*               OctetArray_slots_cstring       (Object*  element_type, const char* initial_value);
 StandardClass*            StandardClass_slots            (Object*  name,         Object*  superclasses);
 StructureClass*           StructureClass_slots           (Object*  name,         Object*  superclasses);
 Symbol*                   Symbol_slots                   (Object*  name,         Object*  package);
 VectorOfObject*           VectorOfObject_slots           (halfword size);
 VectorOfOctet*            VectorOfOctet_slots            (halfword length);
-VectorOfOctet*            VectorOfOctet_slots_cstring    (char*    value);
+VectorOfOctet*            VectorOfOctet_slots_cstring    (const char* value);
 VectorOfUWord*            VectorOfUWord_slots            (halfword size);
 
 
@@ -54,7 +54,7 @@ void boot_class_add_superclass(Object* class, Object* superclass);
 
 Object* class_of(Object* object);
 Object* find_class(Object* name);
-
+bool subclassp(Object* class,Object* superclass);
 bool typep(Object* object,Object* class);
 void check_type(Object* object,Object* class);
 void check_class(Object* object,Object* class);
@@ -94,8 +94,9 @@ Object* character_name(Object* object);
 /* STRING */
 
 Object* string_new(uword length);
-Object* string_new_cstring(char* string);
+Object* string_new_cstring(const char* string);
 char* string_cstring(Object* string);
+uword string_length(Object* string);
 bool string_eq(Object* a,Object* b);
 bool string_p(Object* object);
 
@@ -104,9 +105,9 @@ bool string_p(Object* object);
 Object* find_symbol(Object* name,Object* obarray);
 
 Object* symbol_new(Object* name);
-Object* symbol_new_cstring(char* name);
+Object* symbol_new_cstring(const char* name);
 Object* symbol_intern(Object* name);
-Object* symbol_intern_cstring(char* name);
+Object* symbol_intern_cstring(const char* name);
 
 Object* symbol_name(Object* symbol);
 Object* symbol_package(Object* symbol);
@@ -126,7 +127,7 @@ bool symbol_fboundp(Object* symbol);
 /* Keyword */
 
 Object* keyword_intern(Object* name);
-Object* keyword_intern_cstring(char* name);
+Object* keyword_intern_cstring(const char* name);
 bool keyword_p(Object* object);
 
 /* Null */
@@ -149,7 +150,7 @@ type_t convert_element_type(Object* element_type);
 /* PHYSICAL-PATHNAME */
 
 Object* physical_pathname_new(VectorOfOctet* path);
-Object* physical_pathname_new_cstring(char* path);
+Object* physical_pathname_new_cstring(const char* path);
 
 
 /* FILESTREAM */
@@ -161,6 +162,7 @@ Object* FileStream_new(Object* pathname,     /* a PHYSICAL-PATHNAME */
 Object* stream_pathname(Object* stream);
 Object* stream_element_type(Object* stream);
 Object* stream_external_format(Object* stream);
+Object* stream_direction(Object* stream);
 bool stream_open_p(Object* stream);
 FILE* stream_cstream(Object* stream);
 

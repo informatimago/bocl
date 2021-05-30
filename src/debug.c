@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include "debug.h"
 #include "kernel.h"
 #include "kernel_types.h"
 #include "kernel_objects.h"
@@ -10,8 +11,7 @@
 
 
 
-void dump_obarray(Object* obarray)
-{
+void dump_obarray(Object* obarray){
     if(!cons_p(obarray)){
         fprintf(stderr,"dump obarray: NOT A CONS CELL, but %s\n",
                 string_cstring(symbol_name(obarray->class->slots->class.name)));
@@ -68,13 +68,13 @@ void dump_kernel_classes(){
                 string_cstring(symbol_name(class_name_class)),
                 string_cstring(symbol_name(class_name_metaclass)));
 
-        Object* current=class->slots->class.direct_superclasses;
-        if(!current){
+        Object* ccurrent=class->slots->class.direct_superclasses;
+        if(!ccurrent){
             fprintf(stderr,"C NULL direct-superclasses!\n");
             continue;}
-        while(cons_p(current)){
-            Object* super=cons_car(current);
-            current=cons_cdr(current);
+        while(cons_p(ccurrent)){
+            Object* super=cons_car(ccurrent);
+            current=cons_cdr(ccurrent);
             Object* class_name_super=super->slots->class.name;
             fprintf(stderr," %s",string_cstring(symbol_name(class_name_super)));}
         fprintf(stderr,"\n");}}

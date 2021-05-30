@@ -4,6 +4,8 @@
 #include "macros.h"
 #include "data.h"
 #include "variable.h"
+#include "stream.h"
+#include "printer.h"
 
 /* Printer */
 

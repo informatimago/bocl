@@ -10,4 +10,5 @@
 #define F(value)   float_from_floating(value)
 
 #define ignore(var) (void*)var
+
 #endif

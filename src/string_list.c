@@ -13,6 +13,9 @@ string_list* string_list_cons(char* element,string_list* next){
     that->next=next;
     return that;}
 
+void string_list_push(char* element,string_list** list){
+    (*list)=string_list_cons(element,*list);}
+
 char* string_list_first(string_list* list){
     return (list==NULL)
             ?NULL

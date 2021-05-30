@@ -4,6 +4,7 @@
 
 typedef struct string_list_node  string_list;
 
+void string_list_push(char* element,string_list** list);
 string_list* string_list_cons(char* element,string_list* next);
 char* string_list_first(string_list* list);
 string_list* string_list_rest(string_list* list);

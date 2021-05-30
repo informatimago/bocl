@@ -1,6 +1,7 @@
 /* Do not edit -- generated from generate-kernel.lisp */
 #include "kernel_objects.h"
 #include "kernel_types.h"
+#include "kernel_private.h"
 #include "memory.h"
 #include "reader.h"
 #include "stream.h"

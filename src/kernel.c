@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "kernel_types.h"
 #include "kernel_objects.h"
+#include "kernel_private.h"
 #include "macros.h"
 #include "cons.h"
 #include "variable.h"
@@ -59,7 +60,7 @@ VectorOfOctet* VectorOfOctet_slots(halfword length){
         that->elements[i]=0;}
     return that;}
 
-VectorOfOctet* VectorOfOctet_slots_cstring(char* value){
+VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
     size_t len=strlen(value);
     if(HALFWORD_MAX<len){
         error(__FUNCTION__,"string too long");}
@@ -67,7 +68,7 @@ VectorOfOctet* VectorOfOctet_slots_cstring(char* value){
     VectorOfOctet* that=allocate(sizeof(*that)+sizeof(that->elements[0])*length);
     that->length=length;
     for(halfword i=0;i<length;i++){
-        that->elements[i]=value[i];}
+        that->elements[i]=(octet)value[i];}
     return that;}
 
 /* ARRAY */
@@ -75,7 +76,7 @@ VectorOfOctet* VectorOfOctet_slots_cstring(char* value){
 /* as long as element-type is not octet, bit or character. */
 
 Array* Array_slots(Object* element_type,halfword rank,uword* dimensions){
-    uword total_array_size=1;
+    halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
         total_array_size*=dimensions[i];}
     VectorOfObject* elements=VectorOfObject_slots(total_array_size);
@@ -93,7 +94,7 @@ Array* Array_slots(Object* element_type,halfword rank,uword* dimensions){
 /* element-type is octet, bit or character. */
 
 OctetArray* OctetArray_slots(Object* element_type,halfword rank,uword* dimensions){
-    uword total_array_size=1;
+    halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
         total_array_size*=dimensions[i];}
     VectorOfOctet* elements=VectorOfOctet_slots(total_array_size);
@@ -105,7 +106,7 @@ OctetArray* OctetArray_slots(Object* element_type,halfword rank,uword* dimension
         that->dimensions[i]=dimensions[i];}
     return that;}
 
-OctetArray* OctetArray_slots_cstring(Object* element_type,char* initial_value){
+OctetArray* OctetArray_slots_cstring(Object* element_type,const char* initial_value){
     VectorOfOctet* elements=VectorOfOctet_slots_cstring(initial_value);
     halfword rank=1;
     OctetArray* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
@@ -211,7 +212,7 @@ Object* string_new(uword length){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots(CHARACTER_Symbol,1,&length));}
 
-Object* string_new_cstring(char* string){
+Object* string_new_cstring(const char* string){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots_cstring(CHARACTER_Symbol,string));}
 
@@ -287,11 +288,11 @@ Object* symbol_new(Object* name){
     /* make an uninterned symbol */
     return Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,NIL_Symbol));}
 
-Object* symbol_new_cstring(char* name){
+Object* symbol_new_cstring(const char* name){
     /* make an uninterned symbol */
     return symbol_new(string_new_cstring(name));}
 
-Object* symbol_intern_obarray(Object* name,Object* obarray){
+static Object* symbol_intern_obarray(Object* name,Object* obarray){
     Object* symbol=find_symbol(name,obarray);
     if(symbol){
         return symbol;}
@@ -302,7 +303,7 @@ Object* symbol_intern_obarray(Object* name,Object* obarray){
 Object* symbol_intern(Object* name){
     return symbol_intern_obarray(name,KERNEL_obarray);}
 
-Object* symbol_intern_cstring(char* name){
+Object* symbol_intern_cstring(const char* name){
     return symbol_intern(string_new_cstring(name));}
 
 bool symbol_p(Object* object){
@@ -365,7 +366,7 @@ Object* keyword_intern(Object* name){
     define_constant(keyword,keyword);
     return keyword;}
 
-Object* keyword_intern_cstring(char* name){
+Object* keyword_intern_cstring(const char* name){
     return keyword_intern(string_new_cstring(name));}
 
 bool keyword_p(Object* object){
@@ -595,7 +596,7 @@ Object* physical_pathname_new(VectorOfOctet* path){
     return Object_new(find_class(symbol_intern_cstring("PHYSICAL-PATHNAME")),
                       (Slots*)path);}
 
-Object* physical_pathname_new_cstring(char* path){
+Object* physical_pathname_new_cstring(const char* path){
     return physical_pathname_new(VectorOfOctet_slots_cstring(path));}
 
 
@@ -678,7 +679,7 @@ Object* normalize_new_line(Object* new_line_o,new_line_t* new_line){
 
 Object* normalize_on_error(Object* on_error_o,on_error_t* on_error){
     if(character_p(on_error_o)){
-        (*on_error)=integer_value(character_code(on_error_o));
+        (*on_error)=(on_error_t)integer_value(character_code(on_error_o));
         return on_error_o;}
     else if(on_error_o==K(ERROR)){
         (*on_error)=on_error_error;
@@ -770,6 +771,7 @@ Object* FileStream_new(Object* pathname,     /* a PHYSICAL-PATHNAME */
     slots->external_format=external_format;
     slots->is_open=0;
     slots->direction=direction_input;
+    slots->type=type;
     slots->encoding=encoding;
     slots->new_line=new_line;
     slots->on_error=on_error;
@@ -846,7 +848,7 @@ Object* kernel_rootset(void){
                 kernel_classes,
                 NULL);}
 
-void kernel_initialize_features(void){
+static void kernel_initialize_features(void){
     Object* features=S("*FEATURES*");
     Object* list=NIL_Symbol;
 

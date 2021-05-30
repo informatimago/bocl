@@ -1,22 +1,33 @@
 #include <stdio.h>
 #include <stdarg.h>
+#include <sysexits.h>
 #include "memory.h"
 #include "kernel.h"
 #include "macros.h"
-             
+#include "variable.h"
+#include "stream.h"
+#include "printer.h"
+
 /* Error Handling */
 
+void report_error(Object* error){
+    ignore(error);
+    fprintf(stderr,"\nERROR: ");
+    Object* err=variable_value(S(*ERROR-OUTPUT*));
+    prin1(error,err);
+    terpri(err);}
 
-_Noreturn void fatal(const char* fname,char* message_format,...){
+
+_Noreturn void fatal(const char* fname,const char* message_format,...){
     va_list ap;
     fprintf(stderr,"\nFATAL ERROR: in %s:  ",fname);
     va_start(ap,message_format);
     vfprintf(stderr,message_format,ap);
     va_end(ap);
     fprintf(stderr,"\n\n");
-    exit(1);}
+    exit(EX_SOFTWARE);}
 
-_Noreturn void error(const char* fname,char* message_format,...){
+_Noreturn void error(const char* fname,const char* message_format,...){
     // TODO: Implement error() with the error handling system.
     va_list ap;
     fprintf(stderr,"\nERROR: in %s:  ",fname);
@@ -24,7 +35,7 @@ _Noreturn void error(const char* fname,char* message_format,...){
     vfprintf(stderr,message_format,ap);
     va_end(ap);
     fprintf(stderr,"\n\n");
-    exit(2);}
+    exit(EX_DATAERR);}
 
 
 _Noreturn void type_error(const char* fname,Object* object,Object* class){
@@ -35,7 +46,7 @@ _Noreturn void type_error(const char* fname,Object* object,Object* class){
             fname,got,exp);
     free(exp);
     free(got);
-    exit(3);}
+    exit(EX_DATAERR);}
 
 
 void* check_pointer(const char* fname,void* pointer){
@@ -110,30 +121,30 @@ typedef struct Zone {
 Zone* Zones=NULL;
 
 
-Block* first_block(Zone* zone){
-    return (Block*)(((char*)zone)+zone->offset_to_contents);}
+static Block* first_block(Zone* zone){
+    return (void*)(((char*)zone)+zone->offset_to_contents);}
 
-Block* end_block(Zone* zone){
-    return (Block*)(((char*)zone)+zone->size);}
+static Block* end_block(Zone* zone){
+    return (void*)(((char*)zone)+zone->size);}
 
-Block* next_block(Block* block){
-    return (Block*)(((char*)block)+block->size);}
+static Block* next_block(Block* block){
+    return (void*)(((char*)block)+block->size);}
 
-bool free_block_p(Block* block){
+static bool free_block_p(Block* block){
     return block->objcount==FREE_BLOCK;}
 
-bool marked_block_p(Block* block){
+static bool marked_block_p(Block* block){
     return 0!=(block->objcount&(~(FREE_BLOCK>>1)));}
 
-void mark_block(Block* block){
+static void mark_block(Block* block){
     block->objcount|=(~(FREE_BLOCK>>1));}
 
-void clear_block(Block* block){
+static void clear_block(Block* block){
     block->objcount&=(FREE_BLOCK>>1);}
 
 
 
-Zone* zone_allocate(size_t size){
+static Zone* zone_allocate(size_t size){
     /* Allocate and initialize a new zone of the given total size. */
     Zone* zone=check_pointer(__FUNCTION__,malloc(size));
     zone->size=size;
@@ -141,7 +152,8 @@ Zone* zone_allocate(size_t size){
     zone->free_list.size=sizeof(zone->free_list);
     zone->free_list.objcount=FREE_BLOCK;
     zone->free_list.next=(FreeBlock*)first_block(zone);
-    zone->free_list.next->size=size-sizeof(Zone);
+    /* TODO: check maximum size */
+    zone->free_list.next->size=(halfword)(size-sizeof(Zone));
     zone->free_list.next->objcount=FREE_BLOCK;
     zone->free_list.next->next=NULL;
     zone->before_best_candidate=NULL;
@@ -156,7 +168,7 @@ Zone* zone_allocate(size_t size){
          (C(current_zone,__LINE__) = C(current_zone,__LINE__)->next_zone,   \
           zonevar = C(current_zone,__LINE__)))
 
-FreeBlock* find_before_free_block(Zone* zone,FreeBlock* free_block){
+static FreeBlock* find_before_free_block(Zone* zone,FreeBlock* free_block){
     FreeBlock* current=&zone->free_list;
     while((current->next!=NULL)&&(current->next!=free_block)){
         current=current->next;}
@@ -164,7 +176,7 @@ FreeBlock* find_before_free_block(Zone* zone,FreeBlock* free_block){
             ?NULL
             :current;}
 
-void insert_free_block(Zone* zone,FreeBlock* new){
+static void insert_free_block(Zone* zone,FreeBlock* new){
     FreeBlock* previous=&zone->free_list;
     if(previous->next==NULL){
         previous->next=new;}
@@ -179,7 +191,7 @@ void insert_free_block(Zone* zone,FreeBlock* new){
             /* insert farther */
             previous=previous->next;}}}
 
-FreeBlock* before_best_free_block(FreeBlock* free_list,halfword size){
+static FreeBlock* before_best_free_block(FreeBlock* free_list,halfword size){
     /* 
     The first free block is free_list->next.
     If the best free block is the first one, then return free_list,
@@ -198,7 +210,7 @@ FreeBlock* before_best_free_block(FreeBlock* free_list,halfword size){
         free_list=free_list->next;}
     return NULL;}
 
-Block* allocate_in_best_zone(Zone* zone,halfword size){
+static Block* allocate_in_best_zone(Zone* zone,halfword size){
     /*
     Assume zone is the best zone, and zone->before_best_candidate
     points to the best candidate free block.
@@ -208,7 +220,7 @@ Block* allocate_in_best_zone(Zone* zone,halfword size){
     halfword remaining=free->next->size-size;
     if(MinimumBlockSize<=remaining){
         /* split */
-        Block* block=(Block*)((char*)(free->next)+remaining);
+        Block* block=(void*)((char*)(free->next)+remaining);
         free->next->size=remaining;
         block->size=size;
         block->objcount=0;
@@ -219,7 +231,7 @@ Block* allocate_in_best_zone(Zone* zone,halfword size){
         block->objcount=0;
         return block;}}
 
-Block* allocate_in_zone(Zone* zone,halfword size){
+static Block* allocate_in_zone(Zone* zone,halfword size){
     /*
     Finds the best candidate free block in the zone, and allocates a
     block from it.  If no suitable free block exit in the zone, then
@@ -230,7 +242,7 @@ Block* allocate_in_zone(Zone* zone,halfword size){
             ?NULL
             :allocate_in_best_zone(zone,size);}
 
-Block* allocate_in_zones(halfword size){
+static Block* allocate_in_zones(halfword size){
     /*
     Search the best suitable free zone in all the zones, 
     and allocate from it, unless non exist then NULL is returned.
@@ -259,7 +271,8 @@ void* allocate(size_t size){
     Allocates a block of given size (including block header).
     If no free block is available, the garbage collector is invoked (unless disabled).
     */
-    halfword hsize=((size+sizeof(word)-1)/sizeof(word))*sizeof(word);
+    /* TODO: check maximum size */
+    halfword hsize=(halfword)((size+sizeof(word)-1)/sizeof(word))*sizeof(word);
     Block* block=NULL;
     if(DefaultZoneSize<hsize+sizeof(Zone)){
         Zone* new_zone=zone_allocate(hsize+sizeof(Zone));
@@ -286,14 +299,14 @@ bool set_garbage_collection_enabled(bool on){
     garbage_collection_enabled=on;
     return result;}
 
-void mark(Block* rootset){
+static void mark(Block* rootset){
     if(rootset && !marked_block_p(rootset)){
         mark_block(rootset);
         for(uword i=0;i<rootset->objcount;i++){
             mark(rootset->blocks[i]);}}}
 
 
-Block* free_block(Zone* zone,Block* block){
+static Block* free_block(Zone* zone,Block* block){
     /* if it's contiguous to free blocks, then join them */
     /* Damned, to test if the previous block is free, we'd have to
     walk the whole freelist! for each garbage block!  */
@@ -320,7 +333,7 @@ Block* free_block(Zone* zone,Block* block){
         insert_free_block(zone,new);
         return (Block*)new;}}
 
-uword sweep_zone(Zone* zone){
+static uword sweep_zone(Zone* zone){
     uword total=0;
     Block* end=end_block(zone);
     Block* current=first_block(zone);
@@ -338,7 +351,7 @@ uword sweep_zone(Zone* zone){
     }while(current<end);
     return total;}
 
-uword sweep(void){
+static uword sweep(void){
     uword total=0;
     {do_zones(zone){
             total+=sweep_zone(zone);}}

@@ -6,8 +6,9 @@
 
 #define NOT_IMPLEMENTED_YET() error(__FUNCTION__,"NOT IMPLEMENTED YET")
 
-_Noreturn void fatal(const char* fname,char* message_format,...);
-_Noreturn void error(const char* fname,char* message_format,...);
+void report_error(Object* error);
+_Noreturn void fatal(const char* fname,const char* message_format,...);
+_Noreturn void error(const char* fname,const char* message_format,...);
 _Noreturn void type_error(const char* fname,Object* object,Object* class);
 void* check_pointer(const char* fname,void* pointer);
 
