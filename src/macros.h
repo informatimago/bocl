@@ -9,6 +9,6 @@
 #define I(value)   integer_from_word(value)
 #define F(value)   float_from_floating(value)
 
-#define ignore(var) (void*)var
+#define ignore(var) /* instead, add the -Wno-unused-parameter option. */
 
 #endif
