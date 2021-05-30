@@ -128,3 +128,28 @@ BOCL will not happen unless it is contributed to by others, so if you
 have knowledge of how to implement Common Lisp in C or interest in
 learning how to do it, please consider contributing.
 
+* BUILDING BOCL the Bootstrap Common Lisp
+
+By default, on macOS, the compilation is performed with clang
+(=$(CC)=) and with the SANITIZER on.  On other systems, the sanitizer
+is disabled.
+
+=-Wall= =-Werror= are used, with a bunch of other options.
+
+#+BEGIN_EXAMPLE
+make clean
+make all
+make test
+make run
+#+END_EXAMPLE
+
+The compilation can be performed in verbose mode (printing all the
+build commands) by defining the =VERBOSE== variable, and the sanitizer
+can be disabled on *Darwin* (aka *macOS*) with the =SANITIZE=no=
+option.
+
+#+BEGIN_EXAMPLE
+make clean all VERBOSE=
+make clean all SANITIZE=no
+#+END_EXAMPLE
+
