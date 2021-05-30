@@ -17,4 +17,4 @@ test-code-job:
   stage: test
   script:
     - echo "If the files are built successfully, run some tests:"
-    - make test
+    - make test VERBOSE=1
