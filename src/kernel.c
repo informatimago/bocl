@@ -79,7 +79,7 @@ VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
 Array* Array_slots(Object* element_type,halfword rank,halfword* dimensions){
     halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
-        total_array_size*=dimensions[i];}
+        total_array_size=(halfword)(total_array_size*dimensions[i]);}
     VectorOfObject* elements=VectorOfObject_slots(total_array_size);
     Array* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
     that->objcount=2;
@@ -97,7 +97,7 @@ Array* Array_slots(Object* element_type,halfword rank,halfword* dimensions){
 OctetArray* OctetArray_slots(Object* element_type,halfword rank,halfword* dimensions){
     halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
-        total_array_size*=dimensions[i];}
+        total_array_size=(halfword)(total_array_size*dimensions[i]);}
     VectorOfOctet* elements=VectorOfOctet_slots(total_array_size);
     OctetArray* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
     that->objcount=2;
