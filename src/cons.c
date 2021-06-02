@@ -111,6 +111,18 @@ Object* list(Object* first_element,...){
     va_end(ap);
     return list;}
 
+Object* copy_list(Object* list){
+    if(null_p(list)){
+        return list;}
+    Object* result=cons(car(list),NIL_Symbol);
+    Object* tail=result;
+    list=cdr(list);
+    while(cons_p(list)){
+        rplacd(tail,cons(car(list),NIL_Symbol));
+        list=cdr(list);}
+    rplacd(tail,cdr(list));
+    return result;}
+
 Object* memq(Object* item,Object* list){
     while(cons_p(list) && !eql(item,car(list))){
         list=cdr(list);}

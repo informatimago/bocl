@@ -26,6 +26,7 @@ void kernel_INTEGERP(Object* function,Object* arguments,MultipleValues* results)
 void kernel_FLOATP(Object* function,Object* arguments,MultipleValues* results);
 void kernel_CHARACTERP(Object* function,Object* arguments,MultipleValues* results);
 void kernel_CHAR_CODE(Object* function,Object* arguments,MultipleValues* results);
+void kernel_CHAR_INT(Object* function,Object* arguments,MultipleValues* results);
 void kernel_CHAR_NAME(Object* function,Object* arguments,MultipleValues* results);
 void kernel_CODE_CHAR(Object* function,Object* arguments,MultipleValues* results);
 void kernel_NAME_CHAR(Object* function,Object* arguments,MultipleValues* results);
@@ -50,6 +51,7 @@ void kernel_BOUNDP(Object* function,Object* arguments,MultipleValues* results);
 void kernel_FBOUNDP(Object* function,Object* arguments,MultipleValues* results);
 void kernel_INTERN_KEYWORD(Object* function,Object* arguments,MultipleValues* results);
 void kernel_KEYWORDP(Object* function,Object* arguments,MultipleValues* results);
+void kernel_OBARRAY_ALL_SYMBOLS(Object* function,Object* arguments,MultipleValues* results);
 void kernel_NULL(Object* function,Object* arguments,MultipleValues* results);
 void kernel_NORMALIZE_EXTERNAL_FORMAT(Object* function,Object* arguments,MultipleValues* results);
 void kernel_PHYSICAL_PATHNAME(Object* function,Object* arguments,MultipleValues* results);
@@ -62,6 +64,8 @@ void kernel_OPEN_STREAM_P(Object* function,Object* arguments,MultipleValues* res
 void kernel_STANDARD_INPUT_STREAM(Object* function,Object* arguments,MultipleValues* results);
 void kernel_STANDARD_OUTPUT_STREAM(Object* function,Object* arguments,MultipleValues* results);
 void kernel_STANDARD_ERROR_STREAM(Object* function,Object* arguments,MultipleValues* results);
+void kernel_CLOSUREP(Object* function,Object* arguments,MultipleValues* results);
+void kernel_FUNCTION_NAME(Object* function,Object* arguments,MultipleValues* results);
 void kernel_RPLACA(Object* function,Object* arguments,MultipleValues* results);
 void kernel_RPLACD(Object* function,Object* arguments,MultipleValues* results);
 void kernel_CAR(Object* function,Object* arguments,MultipleValues* results);
@@ -82,6 +86,8 @@ void kernel_LIST_LENGTH(Object* function,Object* arguments,MultipleValues* resul
 void kernel_NCONC(Object* function,Object* arguments,MultipleValues* results);
 void kernel_LAST(Object* function,Object* arguments,MultipleValues* results);
 void kernel_MEMQ(Object* function,Object* arguments,MultipleValues* results);
+void kernel_COPY_LIST(Object* function,Object* arguments,MultipleValues* results);
+void kernel_DELETE(Object* function,Object* arguments,MultipleValues* results);
 void kernel_GETF(Object* function,Object* arguments,MultipleValues* results);
 void kernel_PUTF(Object* function,Object* arguments,MultipleValues* results);
 void kernel_REMF(Object* function,Object* arguments,MultipleValues* results);

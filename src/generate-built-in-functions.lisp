@@ -233,8 +233,12 @@
          (write-line "}")
          (terpri))))))
 
-
-
+;;;
+;;; Note: generate-built-in-functions may generate duplicate declarations in kernel_functions.h
+;;;       THIS IS ON PURPOSE!  This let's the compiler check the consistency of the various uses
+;;;       of the same kernel function by different lisp functions.
+;;;       (eg. char-code & char-int).
+;;;
 
 (defun generate-built-in-functions ()
   (flet ((generate (header)
@@ -278,6 +282,8 @@
              ;; CHARACTER
              (generate-kernel-function 'characterp '(object) :values '(boolean) :cfun 'character-p)
              (generate-kernel-function 'char-code '(character) :cfun 'character-code)
+             ;; TODO: let's have fun with char-int and return some strange offset
+             (generate-kernel-function 'char-int  '(character) :cfun 'character-code)
              (generate-kernel-function 'char-name '(character) :cfun 'character-name)
              (generate-kernel-function 'code-char '(code)      :cfun 'code-character)
              (generate-kernel-function 'name-char '(name)      :cfun 'name-character)
@@ -314,6 +320,8 @@
              (generate-kernel-function 'intern-keyword  '(name) :cfun 'keyword-intern)
              (generate-kernel-function 'keywordp        '(object) :values '(boolean) :cfun 'keyword-p)
 
+             (generate-kernel-function 'obarray-all-symbols '(obarray))
+             
              ;; NULL
              (generate-kernel-function 'null        '(object) :values '(boolean) :cfun 'null-p)
 
@@ -336,6 +344,11 @@
              (generate-kernel-function 'standard-output-stream  '())
              (generate-kernel-function 'standard-error-stream   '())
 
+             ;; FUNCTIONS
+
+             (generate-kernel-function 'closurep '(object) :values '(boolean) :cfun 'closure-p)
+             (generate-kernel-function 'function-name '(function))
+             
              ;; CONS ====================
 
              (generate-kernel-function 'rplaca  '(cell new-car))
@@ -352,6 +365,8 @@
              (generate-kernel-function 'nconc  '(list tail))
              (generate-kernel-function 'last  '(list))
              (generate-kernel-function 'memq  '(item list))
+             (generate-kernel-function 'copy-list '(list))
+             (generate-kernel-function 'delete  '(object list))
 
              ;; Plist
 

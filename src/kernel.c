@@ -700,6 +700,8 @@ Object* symbol_set_plist(Object* symbol,Object* new_plist){
     else{
         TYPE_ERROR(new_plist,LIST_Class);}}
 
+Object* obarray_all_symbols(Object* obarray){
+    return copy_list(cdr(obarray));}
 
 /* KEYWORD */
 /* Note: KEYWORD is not a class, but a subtype of SYMBOL */

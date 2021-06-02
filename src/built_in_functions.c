@@ -290,6 +290,18 @@ void kernel_CHAR_CODE(Object* function,Object* arguments,MultipleValues* results
     delete_from_rootset(function);
 }
 
+void kernel_CHAR_INT(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_character = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = character_code(par_character);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 void kernel_CHAR_NAME(Object* function,Object* arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -585,6 +597,18 @@ void kernel_KEYWORDP(Object* function,Object* arguments,MultipleValues* results)
     delete_from_rootset(function);
 }
 
+void kernel_OBARRAY_ALL_SYMBOLS(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_obarray = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = obarray_all_symbols(par_obarray);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 void kernel_NULL(Object* function,Object* arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -724,6 +748,30 @@ void kernel_STANDARD_ERROR_STREAM(Object* function,Object* arguments,MultipleVal
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = standard_error_stream();
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_CLOSUREP(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(closure_p(par_object));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_FUNCTION_NAME(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_function = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = function_name(par_function);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -968,6 +1016,31 @@ void kernel_MEMQ(Object* function,Object* arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = memq(par_item, par_list);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_COPY_LIST(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_list = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = copy_list(par_list);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_DELETE(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_object = pop_mandatory_argument(function,&current);
+    Object* par_list = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = delete(par_object, par_list);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }

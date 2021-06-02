@@ -1,8 +1,7 @@
 #ifndef filename_h
 #define filename_h
 #include "kernel_types.h"
-
-Object* pathname(Object* pathname_designator);
-Object* namestring(Object* pathname);
+#include "kernel_functions.h"
+/* The built-in-functions are declared in kernel_functions.h */
 
 #endif

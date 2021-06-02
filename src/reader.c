@@ -3,7 +3,7 @@
 #include "kernel.h"
 #include "variable.h"
 
-/* The recursive_p parameters are ignored, since we don't deal with #=/## references */
+/* The recursive_p parameters are unused, since we don't deal with #=/## references */
 
 Object* kernel_read(Object* input_stream,Object* eof_error_p,Object* eof_value,unused Object* recursive_p){
     NOT_IMPLEMENTED_YET();
