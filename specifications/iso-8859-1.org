@@ -288,7 +288,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         NUL was originally intended as an ignorable filler character with no meaning. Especially convenient on paper tape, where a NUL equals no holes punched, it could be used to reserve space for new information or correcting errors.
         ASCII-1986 even suggests NUL as a \"time-waster\" character to be added after a newline to accommodate mechanical devices where a carriage return works slowly.
         Despite this, NUL has been used contrary to the standards in null-terminated strings as an End-Of-String marker. Several programming languages use this convention.
@@ -391,7 +391,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         EOT can be used to end or abort a transmission. It can also be a reply to indicate inability to receive further messages.
         EOT (keyboard: <kbd><kbd>Ctrl</kbd>+<kbd>D</kbd></kbd>) is even used as an End-Of-File control in a Unix shell session.
       </td>
@@ -486,7 +486,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         Contrary to the standards, BS has been used as a combined \"move back and delete\" operation to remove the previous character.
         This is not the standard meaning of BS, however.
         BS is defined as a non-destructive \"move back\" or \"move left\" operation, similar to a backspace in mechanical typewriters.
@@ -571,7 +571,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td class=\"note\" colspan=\"3\">
         The <kbd><kbd>↹ Tab</kbd></kbd> key on the keyboard is consistent with HT in that it usually produces the code HT. How the HT is treated in each application is another story.
-        In windowing environments, there are three common alternative uses. 
+        In windowing environments, there are three common alternative uses.
         Pressing <kbd><kbd>↹ Tab</kbd></kbd> can either add an HT character into text, indent text (possibly by adding an appropriate number of spaces or shifting the marginal), or something completely different: jump to the next field or control in a graphical user interface. This way the key has been extended to cover more uses than what HT was originally intended for.
       </td>
 <td></td>
@@ -619,7 +619,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         LF, having two alternative functions, has been a major source of confusion. While LF was initially defined as a \"move down\" operator, standards began to allow LF as a newline too.
         As a result, operating systems differ in their definition of a newline. A newline is LF on Unix.
         Operating systems using CR LF include CP/M, DOS, OS/2 and Windows. Naturally, this caused an incompatibility.
@@ -678,7 +678,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         The original name of VT is Vertical Tabulation. It was later renamed as VT Line Tabulation, first in ECMA-48:1986.
         VT has been used to jump down to the next pre-defined line when printing on a paper form. According to some sources, vertical tab stops were typically spaced 6 lines apart.
         VT is a simple data compression method where a single VT represents several LF characters (and optionally a CR too).
@@ -690,7 +690,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td class=\"note\" colspan=\"3\">
-        In modern use VT must be quite a rare character. 
+        In modern use VT must be quite a rare character.
         As Bob Bemer, one of the original designers of ASCII, put it: \"This is a very dangerous character to use. It cannot be used directly on any terminal that I know of. Even if it could, the implementation rules are not supplied unambiguously in the ASCII standard.\"
       </td>
 <td></td>
@@ -722,7 +722,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         FF has been used as \"page break\" in text files, \"new page\" on printers and \"clear the screen\" on displays.
         The situation was originally unclear whether FF was just a \"new page\" operator or \"new page, move to column 1\".
         ASCII-1977 and ECMA-6:1985 attempted to clarify the situation by recommending the use of CR FF.
@@ -757,11 +757,11 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         The standard meaning of CR is \"move to beginning of current line\". This allows overprinting the line with new characters, which could be used to achieve underlining, for example. For advancing to the next line CR would be followed by LF.
         On CP/M, DOS, OS/2 and Windows the newline marker is CR LF, which is according to the definition.
         CR alone has been used as the newline character on some systems, such as Commodore and Apple, which use does not conform to the standards in question.
-        The order CR LF (instead of LF CR) may have been important on mechanical devices where a carriage return took relatively long to execute. 
+        The order CR LF (instead of LF CR) may have been important on mechanical devices where a carriage return took relatively long to execute.
         A non-printing LF was more suitable output while the printing head was returning, rather than striking a graphic symbol in the middle of the line.
       </td>
 <td></td>
@@ -807,7 +807,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         SO (Shift Out) is normal name of this control. LS1 (Locking-Shift One) is used by ECMA-35 and ECMA-48. In those standards, SO is used in 7-bit environments and LS1 in 8-bit environments.
         The mechanism to select the alternative character set(s) was defined in ANSI X3.41, ISO 2022 and ECMA-35. It includes the use of escape sequences starting with ESC.
         SO has also been used on printers to select enlarged characters or another color.
@@ -834,7 +834,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         SI (Shift In) is normal name of this control. LS0 (Locking-Shift Zero) is used by ECMA-35 and ECMA-48. In those standards, SI is used in 7-bit environments and LS0 in 8-bit environments.
         SI has also been used on printers to select condensed characters or to reset color.
       </td>
@@ -860,7 +860,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         DLE is the \"escape\" character for transmission control. DLE can potentially be put in the front of a transmission control character (TC1-TC10) to pass it through \"as is\" instead of controlling the current transmission. This is not always the case, though. It is possible to create new transmission control sequences with DLE in a similar way ESC is used to create escape sequences for other purposes.
         Contrary to the standards, ^P has been used as a keyboard shortcut to echo console activity at the printer.
       </td>
@@ -886,7 +886,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         DC1 is conventionally called XON when used in communication for software flow control. The meaning of XON is to continue data transmission after an XOFF (DC3) has been received. The name XON (\"transmit on\") does not come from a standard, but it is commonly used.
       </td>
 <td></td>
@@ -927,7 +927,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         DC3 is conventionally called XOFF when used in communication for software flow control. An XOFF is issued to stop transmission when a device cannot accept more data. Transmission can be continued via XON (DC1). The name XOFF (\"transmit off\") does not come from a standard, but it is commonly used. The use of XOFF and XON is in line with the standards, even though not directly defined in them.</td>
 <td></td>
 </tr>
@@ -997,7 +997,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         SYN has been used by synchronous modems, which have to send data constantly. —
         Beginning each transmission with at least two SYN characters is a way to achieve synchronization. The receiving station will possibly ignore SYN, since it doesn't belong to the actual data content.
 
@@ -1047,8 +1047,8 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
-        There are 2 alternative definitions for the data to be disregarded. The actual scope of cancellation is undefined by the standards and should be defined case by case. 
+<td class=\"note\" colspan=\"3\">Note:
+        There are 2 alternative definitions for the data to be disregarded. The actual scope of cancellation is undefined by the standards and should be defined case by case.
         ^X has been used as a keyboard shortcut to cancel (delete) the characters on the current line, which use conforms to the standards.
       </td>
 <td></td>
@@ -1103,7 +1103,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         When SUB is used as a substitution character, the reverse question mark symbol seems quite good
         as its visual representation.
         Compare SUB to Unicode U+FFFD REPLACEMENT CHARACTER.
@@ -1141,8 +1141,8 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
-        ESC is used to form escape sequences, which perform various control functions or apply additional character sets. ESC can also be used to invoke the C1 control characters on a 7-bit system that only support character positions 0–127. 
+<td class=\"note\" colspan=\"3\">Note:
+        ESC is used to form escape sequences, which perform various control functions or apply additional character sets. ESC can also be used to invoke the C1 control characters on a 7-bit system that only support character positions 0–127.
       </td>
 <td></td>
 </tr>
@@ -1237,7 +1237,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         The information separators were deliberately arranged next to SPACE, which can also be used as an information separator (word separator).
       </td>
 <td></td>
@@ -1299,7 +1299,7 @@ https://www.aivosto.com/articles/control-characters.html#iso8859
 <td></td>
 <td></td>
 <td></td>
-<td class=\"note\" colspan=\"3\">Note: 
+<td class=\"note\" colspan=\"3\">Note:
         DEL is now outdated. It was removed from the latest standards (ECMA-48 in 1991 and ISO 6429 in 1992).
         The origin of DEL is with perforated paper. On that, DEL was equal to \"all holes punched\", which is a way to invalidate an erroneous character (rubout).
         In a sense, DEL is similar to NUL, since both characters mean \"nothing\".

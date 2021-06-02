@@ -77,13 +77,25 @@ Object* last(Object* list){
     else{
         TYPE_ERROR(list,LIST_Class);}}
 
+Object* delete(Object* object,Object* list){
+    if(null_p(list)){
+        return list;}
+    if(eql(object,car(list))){
+        return cdr(list);}
+    Object* previous=list;
+    while(cons_p(cdr(previous)) && !eql(object,cadr(previous))){
+        previous=cdr(previous);}
+    if(cons_p(cdr(previous))){
+        rplacd(cdr(previous),cddr(previous));}
+    return list;}
+
 Object* nconc(Object* list,Object* tail){
-    if(list){
+    if(null_p(list)){
+        return tail;}
+    else{
         Object* last_cell=last(list);
-        cons_rplacd(last_cell,tail);
-        return list;
-    }else{
-        return tail;}}
+        rplacd(last_cell,tail);
+        return list;}}
 
 Object* list(Object* first_element,...){
     Object* list=cons(first_element,NIL_Symbol);

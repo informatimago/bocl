@@ -10,7 +10,7 @@
 
 /* Error Handling */
 
-void report_error(__unused Object* error){
+void report_error(unused Object* error){
     fprintf(stderr,"\nERROR: ");
     Object* err=variable_value(S(*ERROR-OUTPUT*));
     prin1(error,err);
@@ -65,7 +65,11 @@ halfword check_size_to_halfword(const char* fname,size_t size){
     error(fname,"Size %z too big for a halfword (max = "HALFWORD_FORMAT")",
           size,HALFWORD_MAX);}
 
-
+word check_uword_to_word(const char* fname,uword value){
+   if((value<WORD_MAX)){
+        return (word)value;}
+    error(fname,"Unsigned word "UWORD_FORMAT" too big for a word (max = "WORD_FORMAT")",
+          value,WORD_MAX);}
 
 /*
 

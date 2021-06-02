@@ -508,11 +508,11 @@ results as specified.  Class (not type) checking is performed.
 | SIMPLE-ERROR      |       | Cf. § Condtions - Fundamental Error Handling below.                                                                  |
 | SIMPLE-WARNING    |       |                                                                                                                      |
 |-------------------+-------+----------------------------------------------------------------------------------------------------------------------|
-| FUNCTION          | C     | There are three types of functions:                                                                                  |
-|                   |       | - kernel built-in-functions implemented in C,                                                                        |
-|                   |       | - lisp functions (closures), interpreted, without minimal compilation, (with macros).                                |
-| COMPILED-FUNCTION |       | - lisp functions (closures), interpreted, with minimal compilation (macroexpanded).                                  |
-|                   |       | A Kernel C function produces built-in-function wrappers.                                                             |
+| CLOSURE           | C     | There are three types of functions:                                                                                  |
+| COMPILED-CLOSURE  | C     | - kernel built-in-functions implemented in C,                                                                        |
+| FUNCTION          | C     | - lisp functions (closures), interpreted, without minimal compilation, (with macros).                                |
+| COMPILED-FUNCTION | C     | - lisp functions (closures), interpreted, with minimal compilation (macroexpanded).                                  |
+| BUILT-IN-FUNCTION | C     | A Kernel C function produces built-in-function wrappers.                                                             |
 |                   |       | (FUNCTION (LAMBDA …)) produces interpreted lisp closures.                                                            |
 |                   |       |                                                                                                                      |
 | BUILT-IN-CLASS    | C     | Created with a BOCL-specific fundamental operator. (probably by a DEFSTRUCT).                                        |
@@ -1030,7 +1030,7 @@ the kernel.
 
 *** 7. Objects
 
-CLOS and MOP can be taken from PCL and/or other implementations.
+CLOS and MOP can be taken from PCL or Closette and/or other implementations.
 
 *** 8. Structures
 

@@ -367,3 +367,10 @@
 (kernel-initialize-objects)
 ;; (k::symbol-intern (k::make-string "T") *kernel-obarray*)
 
+(defun subclassp (class superclass)
+  (when (eql class superclass)
+    (return t))
+  (dolist (direct-superclass  (class-direct-superclasses class))
+    (when (subclassp direct-superclass superclass)
+      (return t)))
+  nil)

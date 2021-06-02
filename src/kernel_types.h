@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "macros.h"
+#include "limits.h"
 
 #ifdef _POSIX_V6_LP64_OFF64
 typedef int64_t  word;
@@ -54,6 +55,11 @@ typedef struct StandardClass            StandardClass;
 typedef struct BuiltInClass             BuiltInClass;
 typedef struct StructureClass           StructureClass;
 typedef struct FuncallableStandardClass FuncallableStandardClass;
+
+typedef struct FunctionClass            FunctionClass;
+typedef struct CompiledFunctionClass    CompiledFunctionClass;
+typedef struct BuiltInFunctionClass     BuiltInFunctionClass;
+typedef struct FuncallableFunctionClass FuncallableFunctionClass;
 
 
 
@@ -137,6 +143,7 @@ typedef struct Symbol {
     Object* plist;
 } Symbol;
 
+
 typedef enum { direction_input, direction_output, direction_io, direction_probe } direction_t;
 typedef enum { type_character, type_octet, type_bit } type_t;
 typedef enum { encoding_us_ascii, encoding_iso_8859_1 } encoding_t;
@@ -160,6 +167,7 @@ typedef struct FileStream {
     // but the usual buffer types will already use VectorOfOctet storage.
     // Encoding is only used to signal an error upon 128<=octet
     // and new_line is only used for character streams.
+    /* TODO: add a file-stream lock? Or rely on the FILE lock? */
 } FileStream;
 
 
@@ -188,23 +196,70 @@ typedef struct FuncallableStandardClass {
     CLASS_HEADER;
 } FuncallableStandardClass;
 
+
+/* Function Objects */
+
+typedef struct MultipleValues {
+    uword count;
+    Object* values[MULTIPLE_VALUES_LIMIT];
+} MultipleValues;
+
+typedef void (*KernelFunctionPtr)(Object* function,Object* arguments,MultipleValues* results);
+
+typedef struct Closure            {
+    BLOCK_HEADER;
+    Object* function;
+    Object* environment;
+} Closure;
+
+typedef struct Function            { /* both FunctionClass and CompiledFunctionClass objets */
+    BLOCK_HEADER;
+    Object* lisp_name;
+    Object* lambda_list;
+    Object* body;
+} Function;
+
+typedef struct BuiltInFunction     {
+    BLOCK_HEADER;
+    Object*           lisp_name;       /* the Lisp Symbol naming the kernel function. */
+    Object*           lambda_list;     /* the lambda list of the kernel function. */
+    KernelFunctionPtr kernel_function; /* the entry point of to the kernel function. */
+} BuiltInFunction;
+
+typedef struct FuncallableStandardObject {
+    BLOCK_HEADER;
+    /* TODO: FuncallableStandardObject */
+    Object*           object; /* The object data */
+    KernelFunctionPtr apply;  /* The entry point of to the Funcallable Standard Object. */
+} FuncallableStandardObject;
+
+
+/* Slots */
+
 typedef union Slots {
-    VectorOfObject vector_of_object;
-    VectorOfUWord  vector_of_uword;
-    VectorOfOctet  vector_of_octet;
-    Character      character;
-    Integer        integer;
-    Float          floater;
-    Array          array;
-    OctetArray     octet_array;
-    Cons           cons;
-    Symbol         symbol;
-    FileStream     file_stream;
-    Class          class;
-    StandardClass  standard_class;
-    StructureClass structure_class;
-    BuiltInClass   built_in_class;
-    FuncallableStandardClass funcallable_standard_class;
+    /* Internal Object structures: */
+    VectorOfObject              vector_of_object;
+    VectorOfUWord               vector_of_uword;
+    VectorOfOctet               vector_of_octet;
+    /* Objects: */
+    Character                   character;
+    Integer                     integer;
+    Float                       floater;
+    Array                       array;
+    OctetArray                  octet_array;
+    Cons                        cons;
+    Symbol                      symbol;
+    FileStream                  file_stream;
+    Closure                     closure;
+    Function                    function;
+    BuiltInFunction             built_in_function;
+    FuncallableStandardObject	funcallable_function;
+    /*                          Classes: */
+    Class                       class;
+    StandardClass               standard_class;
+    StructureClass              structure_class;
+    BuiltInClass                built_in_class;
+    FuncallableStandardClass    funcallable_standard_class;
 } Slots;
 
 

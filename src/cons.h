@@ -44,6 +44,7 @@ word list_length(Object* list);
 Object* push(Object* element,Object** list);
 Object* pop(Object** list);
 
+Object* delete(Object* object,Object* list);
 Object* nconc(Object* list,Object* tail);
 Object* last(Object* list);
 Object* list(Object* first_element,...);

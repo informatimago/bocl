@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <ctype.h>
 #include "kernel.h"
 #include "kernel_types.h"
 #include "kernel_objects.h"
@@ -14,6 +15,31 @@
 #include "reader.h"
 #include "stream.h"
 #include "data.h"
+
+/* Internal Object Structure */
+
+static Object*                   Object_new                     (Object*  class,        Slots*   slots);
+
+static Array*                    Array_slots                    (Object*  element_type, halfword rank, halfword* dimensions) unused;
+static BuiltInClass*             BuiltInClass_slots             (Object*  name,         Object*  superclasses);
+static Character*                Character_slots                (Object*  name,         Object*  code);
+static Class*                    Class_slots                    (Object*  name,         Object*  superclasses);
+static Cons*                     Cons_slots                     (Object*  car,          Object*  cdr);
+static Float*                    Float_slots                    (floating value);
+static FuncallableStandardClass* FuncallableStandardClass_slots (Object*  name,         Object*  superclasses) unused;
+static Integer*                  Integer_slots                  (word     value);
+static OctetArray*               OctetArray_slots               (Object*  element_type, halfword rank, halfword* dimensions);
+static OctetArray*               OctetArray_slots_cstring       (Object*  element_type, const char* initial_value);
+static StandardClass*            StandardClass_slots            (Object*  name,         Object*  superclasses) unused;
+static StructureClass*           StructureClass_slots           (Object*  name,         Object*  superclasses) unused;
+static Symbol*                   Symbol_slots                   (Object*  name,         Object*  package);
+static VectorOfObject*           VectorOfObject_slots           (halfword size);
+static VectorOfOctet*            VectorOfOctet_slots            (halfword length);
+static VectorOfOctet*            VectorOfOctet_slots_cstring    (const char* value);
+static VectorOfUWord*            VectorOfUWord_slots            (halfword size) unused;
+
+
+
 
 /****************************************/
 /*** Object and Slots *******************/
@@ -52,6 +78,7 @@ VectorOfUWord* VectorOfUWord_slots(halfword size){
         that->elements[i]=0;}
     return that;}
 
+
 /* VectorOfOctet */
 
 VectorOfOctet* VectorOfOctet_slots(halfword length){
@@ -75,8 +102,7 @@ VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
 /* ARRAY */
 /* Used both for ARRAY and VECTOR classes, */
 /* as long as element-type is not octet, bit or character. */
-
-Array* Array_slots(Object* element_type,halfword rank,halfword* dimensions){
+Array* Array_slots(Object* element_type,halfword rank,halfword* dimensions)  {
     halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
         total_array_size=(halfword)(total_array_size*dimensions[i]);}
@@ -120,12 +146,17 @@ OctetArray* OctetArray_slots_cstring(Object* element_type,const char* initial_va
 
 /* CHARACTER */
 
-Character* Character_slots(Object* name,Object* code){
+static Character* Character_slots(Object* name,Object* code){
     Character* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=name;
     that->code=code;
     return that;}
+
+static Object* Character_new(word code,const char* name){
+    return Object_new(CHARACTER_Class,
+                      (Slots*)Character_slots(string_new_cstring(name),
+                                              integer_from_word(code)));}
 
 bool character_p(Object* object){
     return class_of(object)==CHARACTER_Class;}
@@ -139,6 +170,296 @@ Object* character_name(Object* object){
     return object->slots->character.name;}
 
 
+static Object* character_table[CHAR_CODE_LIMIT];
+static Object* characterset;
+
+Object* code_character(Object* code){
+    check_class(code,INTEGER_Class);
+    word icode=integer_value(code);
+    if((icode<0)||(CHAR_CODE_LIMIT<=icode)){
+        return NIL_Symbol;}
+    else{
+        return character_table[icode];}}
+
+Object* name_character(Object* name){
+    if(character_p(name)){
+        return name;}
+    else if(symbol_p(name)){
+        return name_character(symbol_name(name));}
+    else if(string_p(name)){
+        for(int i=0;i<CHAR_CODE_LIMIT;i++){
+            if(string_equal(name,character_name(character_table[i]))){
+                return character_table[i];}}
+        return NIL_Symbol;}
+    else{
+        /* TODO: STRING-DESIGNATOR type! */
+        TYPE_ERROR(name,STRING_Class);}}
+
+static void kernel_initialize_characters(void){
+
+    character_table[  0] = Character_new(0x00, "NULL");
+    character_table[  1] = Character_new(0x01, "SOH");
+    character_table[  2] = Character_new(0x02, "STX");
+    character_table[  3] = Character_new(0x03, "ETX");
+    character_table[  4] = Character_new(0x04, "EOT");
+    character_table[  5] = Character_new(0x05, "ENQ");
+    character_table[  6] = Character_new(0x06, "ACK");
+    character_table[  7] = Character_new(0x07, "BELL");
+    character_table[  8] = Character_new(0x08, "Backspace");
+    character_table[  9] = Character_new(0x09, "Tab");
+    character_table[ 10] = Character_new(0x0A, "Linefeed");
+    character_table[ 11] = Character_new(0x0B, "VT");
+    character_table[ 12] = Character_new(0x0C, "Page");
+    character_table[ 13] = Character_new(0x0D, "Return");
+    character_table[ 14] = Character_new(0x0E, "SO");
+    character_table[ 15] = Character_new(0x0F, "SI");
+    character_table[ 16] = Character_new(0x10, "DLE");
+    character_table[ 17] = Character_new(0x11, "DC1");
+    character_table[ 18] = Character_new(0x12, "DC2");
+    character_table[ 19] = Character_new(0x13, "DC3");
+    character_table[ 20] = Character_new(0x14, "DC4");
+    character_table[ 21] = Character_new(0x15, "NAK");
+    character_table[ 22] = Character_new(0x16, "SYN");
+    character_table[ 23] = Character_new(0x17, "ETB");
+    character_table[ 24] = Character_new(0x18, "CAN");
+    character_table[ 25] = Character_new(0x19, "EM");
+    character_table[ 26] = Character_new(0x1A, "SUB");
+    character_table[ 27] = Character_new(0x1B, "ESCAPE");
+    character_table[ 28] = Character_new(0x1C, "FS");
+    character_table[ 29] = Character_new(0x1D, "GS");
+    character_table[ 30] = Character_new(0x1E, "RS");
+    character_table[ 31] = Character_new(0x1F, "US");
+    character_table[ 32] = Character_new(0x20, "Space");
+    character_table[ 33] = Character_new(0x21, "EXCLAMATION_MARK");
+    character_table[ 34] = Character_new(0x22, "QUOTATION_MARK");
+    character_table[ 35] = Character_new(0x23, "NUMBER_SIGN");
+    character_table[ 36] = Character_new(0x24, "DOLLAR_SIGN");
+    character_table[ 37] = Character_new(0x25, "PERCENT_SIGN");
+    character_table[ 38] = Character_new(0x26, "AMPERSAND");
+    character_table[ 39] = Character_new(0x27, "APOSTROPHE");
+    character_table[ 40] = Character_new(0x28, "LEFT_PARENTHESIS");
+    character_table[ 41] = Character_new(0x29, "RIGHT_PARENTHESIS");
+    character_table[ 42] = Character_new(0x2A, "ASTERISK");
+    character_table[ 43] = Character_new(0x2B, "PLUS_SIGN");
+    character_table[ 44] = Character_new(0x2C, "COMMA");
+    character_table[ 45] = Character_new(0x2D, "HYPHEN-MINUS");
+    character_table[ 46] = Character_new(0x2E, "FULL_STOP");
+    character_table[ 47] = Character_new(0x2F, "SOLIDUS");
+    character_table[ 48] = Character_new(0x30, "DIGIT_ZERO");
+    character_table[ 49] = Character_new(0x31, "DIGIT_ONE");
+    character_table[ 50] = Character_new(0x32, "DIGIT_TWO");
+    character_table[ 51] = Character_new(0x33, "DIGIT_THREE");
+    character_table[ 52] = Character_new(0x34, "DIGIT_FOUR");
+    character_table[ 53] = Character_new(0x35, "DIGIT_FIVE");
+    character_table[ 54] = Character_new(0x36, "DIGIT_SIX");
+    character_table[ 55] = Character_new(0x37, "DIGIT_SEVEN");
+    character_table[ 56] = Character_new(0x38, "DIGIT_EIGHT");
+    character_table[ 57] = Character_new(0x39, "DIGIT_NINE");
+    character_table[ 58] = Character_new(0x3A, "COLON");
+    character_table[ 59] = Character_new(0x3B, "SEMICOLON");
+    character_table[ 60] = Character_new(0x3C, "LESS-THAN_SIGN");
+    character_table[ 61] = Character_new(0x3D, "EQUALS_SIGN");
+    character_table[ 62] = Character_new(0x3E, "GREATER-THAN_SIGN");
+    character_table[ 63] = Character_new(0x3F, "QUESTION_MARK");
+    character_table[ 64] = Character_new(0x40, "COMMERCIAL_AT");
+    character_table[ 65] = Character_new(0x41, "LATIN_CAPITAL_LETTER_A");
+    character_table[ 66] = Character_new(0x42, "LATIN_CAPITAL_LETTER_B");
+    character_table[ 67] = Character_new(0x43, "LATIN_CAPITAL_LETTER_C");
+    character_table[ 68] = Character_new(0x44, "LATIN_CAPITAL_LETTER_D");
+    character_table[ 69] = Character_new(0x45, "LATIN_CAPITAL_LETTER_E");
+    character_table[ 70] = Character_new(0x46, "LATIN_CAPITAL_LETTER_F");
+    character_table[ 71] = Character_new(0x47, "LATIN_CAPITAL_LETTER_G");
+    character_table[ 72] = Character_new(0x48, "LATIN_CAPITAL_LETTER_H");
+    character_table[ 73] = Character_new(0x49, "LATIN_CAPITAL_LETTER_I");
+    character_table[ 74] = Character_new(0x4A, "LATIN_CAPITAL_LETTER_J");
+    character_table[ 75] = Character_new(0x4B, "LATIN_CAPITAL_LETTER_K");
+    character_table[ 76] = Character_new(0x4C, "LATIN_CAPITAL_LETTER_L");
+    character_table[ 77] = Character_new(0x4D, "LATIN_CAPITAL_LETTER_M");
+    character_table[ 78] = Character_new(0x4E, "LATIN_CAPITAL_LETTER_N");
+    character_table[ 79] = Character_new(0x4F, "LATIN_CAPITAL_LETTER_O");
+    character_table[ 80] = Character_new(0x50, "LATIN_CAPITAL_LETTER_P");
+    character_table[ 81] = Character_new(0x51, "LATIN_CAPITAL_LETTER_Q");
+    character_table[ 82] = Character_new(0x52, "LATIN_CAPITAL_LETTER_R");
+    character_table[ 83] = Character_new(0x53, "LATIN_CAPITAL_LETTER_S");
+    character_table[ 84] = Character_new(0x54, "LATIN_CAPITAL_LETTER_T");
+    character_table[ 85] = Character_new(0x55, "LATIN_CAPITAL_LETTER_U");
+    character_table[ 86] = Character_new(0x56, "LATIN_CAPITAL_LETTER_V");
+    character_table[ 87] = Character_new(0x57, "LATIN_CAPITAL_LETTER_W");
+    character_table[ 88] = Character_new(0x58, "LATIN_CAPITAL_LETTER_X");
+    character_table[ 89] = Character_new(0x59, "LATIN_CAPITAL_LETTER_Y");
+    character_table[ 90] = Character_new(0x5A, "LATIN_CAPITAL_LETTER_Z");
+    character_table[ 91] = Character_new(0x5B, "LEFT_SQUARE_BRACKET");
+    character_table[ 92] = Character_new(0x5C, "REVERSE_SOLIDUS");
+    character_table[ 93] = Character_new(0x5D, "RIGHT_SQUARE_BRACKET");
+    character_table[ 94] = Character_new(0x5E, "CIRCUMFLEX_ACCENT");
+    character_table[ 95] = Character_new(0x5F, "LOW_LINE");
+    character_table[ 96] = Character_new(0x60, "GRAVE_ACCENT");
+    character_table[ 97] = Character_new(0x61, "LATIN_SMALL_LETTER_A");
+    character_table[ 98] = Character_new(0x62, "LATIN_SMALL_LETTER_B");
+    character_table[ 99] = Character_new(0x63, "LATIN_SMALL_LETTER_C");
+    character_table[100] = Character_new(0x64, "LATIN_SMALL_LETTER_D");
+    character_table[101] = Character_new(0x65, "LATIN_SMALL_LETTER_E");
+    character_table[102] = Character_new(0x66, "LATIN_SMALL_LETTER_F");
+    character_table[103] = Character_new(0x67, "LATIN_SMALL_LETTER_G");
+    character_table[104] = Character_new(0x68, "LATIN_SMALL_LETTER_H");
+    character_table[105] = Character_new(0x69, "LATIN_SMALL_LETTER_I");
+    character_table[106] = Character_new(0x6A, "LATIN_SMALL_LETTER_J");
+    character_table[107] = Character_new(0x6B, "LATIN_SMALL_LETTER_K");
+    character_table[108] = Character_new(0x6C, "LATIN_SMALL_LETTER_L");
+    character_table[109] = Character_new(0x6D, "LATIN_SMALL_LETTER_M");
+    character_table[110] = Character_new(0x6E, "LATIN_SMALL_LETTER_N");
+    character_table[111] = Character_new(0x6F, "LATIN_SMALL_LETTER_O");
+    character_table[112] = Character_new(0x70, "LATIN_SMALL_LETTER_P");
+    character_table[113] = Character_new(0x71, "LATIN_SMALL_LETTER_Q");
+    character_table[114] = Character_new(0x72, "LATIN_SMALL_LETTER_R");
+    character_table[115] = Character_new(0x73, "LATIN_SMALL_LETTER_S");
+    character_table[116] = Character_new(0x74, "LATIN_SMALL_LETTER_T");
+    character_table[117] = Character_new(0x75, "LATIN_SMALL_LETTER_U");
+    character_table[118] = Character_new(0x76, "LATIN_SMALL_LETTER_V");
+    character_table[119] = Character_new(0x77, "LATIN_SMALL_LETTER_W");
+    character_table[120] = Character_new(0x78, "LATIN_SMALL_LETTER_X");
+    character_table[121] = Character_new(0x79, "LATIN_SMALL_LETTER_Y");
+    character_table[122] = Character_new(0x7A, "LATIN_SMALL_LETTER_Z");
+    character_table[123] = Character_new(0x7B, "LEFT_CURLY_BRACKET");
+    character_table[124] = Character_new(0x7C, "VERTICAL_LINE");
+    character_table[125] = Character_new(0x7D, "RIGHT_CURLY_BRACKET");
+    character_table[126] = Character_new(0x7E, "TILDE");
+    character_table[127] = Character_new(0x7F, "Rubout");
+    character_table[128] = Character_new(0x80, "PAD");
+    character_table[129] = Character_new(0x81, "HOP");
+    character_table[130] = Character_new(0x82, "BPH");
+    character_table[131] = Character_new(0x83, "NBH");
+    character_table[132] = Character_new(0x84, "IND");
+    character_table[133] = Character_new(0x85, "Newline");
+    character_table[134] = Character_new(0x86, "SSA");
+    character_table[135] = Character_new(0x87, "ESA");
+    character_table[136] = Character_new(0x88, "HTS");
+    character_table[137] = Character_new(0x89, "HTJ");
+    character_table[138] = Character_new(0x8A, "VTS");
+    character_table[139] = Character_new(0x8B, "PLD");
+    character_table[140] = Character_new(0x8C, "PLU");
+    character_table[141] = Character_new(0x8D, "RI");
+    character_table[142] = Character_new(0x8E, "SS2");
+    character_table[143] = Character_new(0x8F, "SS3");
+    character_table[144] = Character_new(0x90, "DCS");
+    character_table[145] = Character_new(0x91, "PU1");
+    character_table[146] = Character_new(0x92, "PU2");
+    character_table[147] = Character_new(0x93, "STS");
+    character_table[148] = Character_new(0x94, "CCH");
+    character_table[149] = Character_new(0x95, "MW");
+    character_table[150] = Character_new(0x96, "SPA");
+    character_table[151] = Character_new(0x97, "EPA");
+    character_table[152] = Character_new(0x98, "SOS");
+    character_table[153] = Character_new(0x99, "SGCI");
+    character_table[154] = Character_new(0x9A, "SCI");
+    character_table[155] = Character_new(0x9B, "CSI");
+    character_table[156] = Character_new(0x9C, "ST");
+    character_table[157] = Character_new(0x9D, "OSC");
+    character_table[158] = Character_new(0x9E, "PM");
+    character_table[159] = Character_new(0x9F, "APC");
+    character_table[160] = Character_new(0xA0, "NO-BREAK_SPACE");
+    character_table[161] = Character_new(0xA1, "INVERTED_EXCLAMATION_MARK");
+    character_table[162] = Character_new(0xA2, "CENT_SIGN");
+    character_table[163] = Character_new(0xA3, "POUND_SIGN");
+    character_table[164] = Character_new(0xA4, "CURRENCY_SIGN");
+    character_table[165] = Character_new(0xA5, "YEN_SIGN");
+    character_table[166] = Character_new(0xA6, "BROKEN_BAR");
+    character_table[167] = Character_new(0xA7, "SECTION_SIGN");
+    character_table[168] = Character_new(0xA8, "DIAERESIS");
+    character_table[169] = Character_new(0xA9, "COPYRIGHT_SIGN");
+    character_table[170] = Character_new(0xAA, "FEMININE_ORDINAL_INDICATOR");
+    character_table[171] = Character_new(0xAB, "LEFT-POINTING_DOUBLE_ANGLE_QUOTATION_MARK");
+    character_table[172] = Character_new(0xAC, "NOT_SIGN");
+    character_table[173] = Character_new(0xAD, "SOFT_HYPHEN");
+    character_table[174] = Character_new(0xAE, "REGISTERED_SIGN");
+    character_table[175] = Character_new(0xAF, "MACRON");
+    character_table[176] = Character_new(0xB0, "DEGREE_SIGN");
+    character_table[177] = Character_new(0xB1, "PLUS-MINUS_SIGN");
+    character_table[178] = Character_new(0xB2, "SUPERSCRIPT_TWO");
+    character_table[179] = Character_new(0xB3, "SUPERSCRIPT_THREE");
+    character_table[180] = Character_new(0xB4, "ACUTE_ACCENT");
+    character_table[181] = Character_new(0xB5, "MICRO_SIGN");
+    character_table[182] = Character_new(0xB6, "PILCROW_SIGN");
+    character_table[183] = Character_new(0xB7, "MIDDLE_DOT");
+    character_table[184] = Character_new(0xB8, "CEDILLA");
+    character_table[185] = Character_new(0xB9, "SUPERSCRIPT_ONE");
+    character_table[186] = Character_new(0xBA, "MASCULINE_ORDINAL_INDICATOR");
+    character_table[187] = Character_new(0xBB, "RIGHT-POINTING_DOUBLE_ANGLE_QUOTATION_MARK");
+    character_table[188] = Character_new(0xBC, "VULGAR_FRACTION_ONE_QUARTER");
+    character_table[189] = Character_new(0xBD, "VULGAR_FRACTION_ONE_HALF");
+    character_table[190] = Character_new(0xBE, "VULGAR_FRACTION_THREE_QUARTERS");
+    character_table[191] = Character_new(0xBF, "INVERTED_QUESTION_MARK");
+    character_table[192] = Character_new(0xC0, "LATIN_CAPITAL_LETTER_A_WITH_GRAVE");
+    character_table[193] = Character_new(0xC1, "LATIN_CAPITAL_LETTER_A_WITH_ACUTE");
+    character_table[194] = Character_new(0xC2, "LATIN_CAPITAL_LETTER_A_WITH_CIRCUMFLEX");
+    character_table[195] = Character_new(0xC3, "LATIN_CAPITAL_LETTER_A_WITH_TILDE");
+    character_table[196] = Character_new(0xC4, "LATIN_CAPITAL_LETTER_A_WITH_DIAERESIS");
+    character_table[197] = Character_new(0xC5, "LATIN_CAPITAL_LETTER_A_WITH_RING_ABOVE");
+    character_table[198] = Character_new(0xC6, "LATIN_CAPITAL_LETTER_AE");
+    character_table[199] = Character_new(0xC7, "LATIN_CAPITAL_LETTER_C_WITH_CEDILLA");
+    character_table[200] = Character_new(0xC8, "LATIN_CAPITAL_LETTER_E_WITH_GRAVE");
+    character_table[201] = Character_new(0xC9, "LATIN_CAPITAL_LETTER_E_WITH_ACUTE");
+    character_table[202] = Character_new(0xCA, "LATIN_CAPITAL_LETTER_E_WITH_CIRCUMFLEX");
+    character_table[203] = Character_new(0xCB, "LATIN_CAPITAL_LETTER_E_WITH_DIAERESIS");
+    character_table[204] = Character_new(0xCC, "LATIN_CAPITAL_LETTER_I_WITH_GRAVE");
+    character_table[205] = Character_new(0xCD, "LATIN_CAPITAL_LETTER_I_WITH_ACUTE");
+    character_table[206] = Character_new(0xCE, "LATIN_CAPITAL_LETTER_I_WITH_CIRCUMFLEX");
+    character_table[207] = Character_new(0xCF, "LATIN_CAPITAL_LETTER_I_WITH_DIAERESIS");
+    character_table[208] = Character_new(0xD0, "LATIN_CAPITAL_LETTER_ETH");
+    character_table[209] = Character_new(0xD1, "LATIN_CAPITAL_LETTER_N_WITH_TILDE");
+    character_table[210] = Character_new(0xD2, "LATIN_CAPITAL_LETTER_O_WITH_GRAVE");
+    character_table[211] = Character_new(0xD3, "LATIN_CAPITAL_LETTER_O_WITH_ACUTE");
+    character_table[212] = Character_new(0xD4, "LATIN_CAPITAL_LETTER_O_WITH_CIRCUMFLEX");
+    character_table[213] = Character_new(0xD5, "LATIN_CAPITAL_LETTER_O_WITH_TILDE");
+    character_table[214] = Character_new(0xD6, "LATIN_CAPITAL_LETTER_O_WITH_DIAERESIS");
+    character_table[215] = Character_new(0xD7, "MULTIPLICATION_SIGN");
+    character_table[216] = Character_new(0xD8, "LATIN_CAPITAL_LETTER_O_WITH_STROKE");
+    character_table[217] = Character_new(0xD9, "LATIN_CAPITAL_LETTER_U_WITH_GRAVE");
+    character_table[218] = Character_new(0xDA, "LATIN_CAPITAL_LETTER_U_WITH_ACUTE");
+    character_table[219] = Character_new(0xDB, "LATIN_CAPITAL_LETTER_U_WITH_CIRCUMFLEX");
+    character_table[220] = Character_new(0xDC, "LATIN_CAPITAL_LETTER_U_WITH_DIAERESIS");
+    character_table[221] = Character_new(0xDD, "LATIN_CAPITAL_LETTER_Y_WITH_ACUTE");
+    character_table[222] = Character_new(0xDE, "LATIN_CAPITAL_LETTER_THORN");
+    character_table[223] = Character_new(0xDF, "LATIN_SMALL_LETTER_SHARP_S");
+    character_table[224] = Character_new(0xE0, "LATIN_SMALL_LETTER_A_WITH_GRAVE");
+    character_table[225] = Character_new(0xE1, "LATIN_SMALL_LETTER_A_WITH_ACUTE");
+    character_table[226] = Character_new(0xE2, "LATIN_SMALL_LETTER_A_WITH_CIRCUMFLEX");
+    character_table[227] = Character_new(0xE3, "LATIN_SMALL_LETTER_A_WITH_TILDE");
+    character_table[228] = Character_new(0xE4, "LATIN_SMALL_LETTER_A_WITH_DIAERESIS");
+    character_table[229] = Character_new(0xE5, "LATIN_SMALL_LETTER_A_WITH_RING_ABOVE");
+    character_table[230] = Character_new(0xE6, "LATIN_SMALL_LETTER_AE");
+    character_table[231] = Character_new(0xE7, "LATIN_SMALL_LETTER_C_WITH_CEDILLA");
+    character_table[232] = Character_new(0xE8, "LATIN_SMALL_LETTER_E_WITH_GRAVE");
+    character_table[233] = Character_new(0xE9, "LATIN_SMALL_LETTER_E_WITH_ACUTE");
+    character_table[234] = Character_new(0xEA, "LATIN_SMALL_LETTER_E_WITH_CIRCUMFLEX");
+    character_table[235] = Character_new(0xEB, "LATIN_SMALL_LETTER_E_WITH_DIAERESIS");
+    character_table[236] = Character_new(0xEC, "LATIN_SMALL_LETTER_I_WITH_GRAVE");
+    character_table[237] = Character_new(0xED, "LATIN_SMALL_LETTER_I_WITH_ACUTE");
+    character_table[238] = Character_new(0xEE, "LATIN_SMALL_LETTER_I_WITH_CIRCUMFLEX");
+    character_table[239] = Character_new(0xEF, "LATIN_SMALL_LETTER_I_WITH_DIAERESIS");
+    character_table[240] = Character_new(0xF0, "LATIN_SMALL_LETTER_ETH");
+    character_table[241] = Character_new(0xF1, "LATIN_SMALL_LETTER_N_WITH_TILDE");
+    character_table[242] = Character_new(0xF2, "LATIN_SMALL_LETTER_O_WITH_GRAVE");
+    character_table[243] = Character_new(0xF3, "LATIN_SMALL_LETTER_O_WITH_ACUTE");
+    character_table[244] = Character_new(0xF4, "LATIN_SMALL_LETTER_O_WITH_CIRCUMFLEX");
+    character_table[245] = Character_new(0xF5, "LATIN_SMALL_LETTER_O_WITH_TILDE");
+    character_table[246] = Character_new(0xF6, "LATIN_SMALL_LETTER_O_WITH_DIAERESIS");
+    character_table[247] = Character_new(0xF7, "DIVISION_SIGN");
+    character_table[248] = Character_new(0xF8, "LATIN_SMALL_LETTER_O_WITH_STROKE");
+    character_table[249] = Character_new(0xF9, "LATIN_SMALL_LETTER_U_WITH_GRAVE");
+    character_table[250] = Character_new(0xFA, "LATIN_SMALL_LETTER_U_WITH_ACUTE");
+    character_table[251] = Character_new(0xFB, "LATIN_SMALL_LETTER_U_WITH_CIRCUMFLEX");
+    character_table[252] = Character_new(0xFC, "LATIN_SMALL_LETTER_U_WITH_DIAERESIS");
+    character_table[253] = Character_new(0xFD, "LATIN_SMALL_LETTER_Y_WITH_ACUTE");
+    character_table[254] = Character_new(0xFE, "LATIN_SMALL_LETTER_THORN");
+    character_table[255] = Character_new(0xFF, "LATIN_SMALL_LETTER_Y_WITH_DIAERESIS");
+
+    characterset=NIL_Symbol;
+    for(int i=0;i<CHAR_CODE_LIMIT;i++){
+        push(character_table[i],&characterset);}}
+
+
+
 /* INTEGER */
 /* Before we use a bigint library, let's just use 64-bit integers: */
 
@@ -149,6 +470,9 @@ Integer* Integer_slots(word value){
 
 Object* integer_from_word(word value){
     return Object_new(INTEGER_Class,(Slots*)Integer_slots(value));}
+
+Object* integer_from_uword(uword value){
+    return Object_new(INTEGER_Class,(Slots*)Integer_slots(CHECK_UWORD_TO_WORD(value)));}
 
 bool integer_p(Object* object){
     return class_of(object)==INTEGER_Class;}
@@ -242,6 +566,24 @@ bool string_eq(Object* a,Object* b){
     OctetArray* bb=&(b->slots->octet_array);
     for(uword i=0;i<length;i++){
         if(aa->elements->elements[i]!=bb->elements->elements[i]){
+            return false;}}
+    return true;}
+
+
+bool string_equal(Object* a,Object* b){
+    if(a==b){
+        return true;}
+    uword length=string_length(a);
+    if(length!=string_length(b)){
+        return false;}
+    OctetArray* aa=&(a->slots->octet_array);
+    OctetArray* bb=&(b->slots->octet_array);
+    octet* ap=aa->elements->elements;
+    octet* bp=bb->elements->elements;
+    for(uword i=0;i<length;i++){
+        int al=islower(ap[i])?toupper(ap[i]):ap[i];
+        int bl=islower(bp[i])?toupper(bp[i]):bp[i];
+        if(al!=bl){
             return false;}}
     return true;}
 
@@ -571,7 +913,6 @@ StructureClass* StructureClass_slots(Object* name,Object* superclasses){
     that->direct_superclasses=superclasses;
     return that;}
 
-
 /* FUNCALLABLE-STANDARD-CLASS */
 
 FuncallableStandardClass* FuncallableStandardClass_slots(Object* name,Object* superclasses){
@@ -600,7 +941,9 @@ Object* physical_pathname_new(VectorOfOctet* path){
 Object* physical_pathname_new_cstring(const char* path){
     return physical_pathname_new(VectorOfOctet_slots_cstring(path));}
 
-
+Object* physical_pathname(Object* namestring){
+    check_class(namestring,STRING_Class);
+    return physical_pathname_new(&namestring->slots->vector_of_octet);}
 
 /* EXTERNAL-FORMAT */
 
@@ -692,7 +1035,7 @@ Object* normalize_on_error(Object* on_error_o,on_error_t* on_error){
         error("Invalid on-error format %s",
               string_cstring(prin1_to_string(on_error_o)));}}
 
-Object* normalize_external_format(Object* external_format,
+Object* normalize_external_format_internal(Object* external_format,
                                   encoding_t* encoding,
                                   new_line_t* new_line,
                                   on_error_t* on_error){
@@ -713,6 +1056,13 @@ Object* normalize_external_format(Object* external_format,
         error("Invalid external-format %s",
               string_cstring(prin1_to_string(external_format)));}
     return cons(encoding_o,cons(new_line_o,cons(on_error_o,NIL_Symbol)));}
+
+Object* normalize_external_format(Object* external_format){
+    encoding_t encoding;
+    new_line_t new_line;
+    on_error_t on_error;
+    return normalize_external_format_internal(external_format, &encoding,&new_line,&on_error);}
+
 
 direction_t convert_direction(Object* direction){
     if(direction==K(INPUT)){
@@ -756,7 +1106,7 @@ type_t convert_element_type(Object* element_type){
 
 /* FILE-STREAM */
 
-Object* FileStream_new(Object* pathname,     /* a PHYSICAL-PATHNAME */
+Object* file_stream_new(Object* pathname,     /* a PHYSICAL-PATHNAME */
                        Object* element_type, /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
                        Object* external_format){
     check_class(pathname,PHYSICAL_PATHNAME_Class);
@@ -764,7 +1114,7 @@ Object* FileStream_new(Object* pathname,     /* a PHYSICAL-PATHNAME */
     encoding_t encoding=encoding_iso_8859_1;
     new_line_t new_line=new_line_lf;
     on_error_t on_error=on_error_error;
-    external_format=normalize_external_format(external_format,&encoding,&new_line,&on_error);
+    external_format=normalize_external_format_internal(external_format,&encoding,&new_line,&on_error);
     FileStream* slots=(FileStream*)allocate(sizeof(*slots));
     slots->objcount=3;
     slots->pathname=pathname;
@@ -806,7 +1156,7 @@ FILE* stream_cstream(Object* stream){
 
 
 Object* standard_input_stream(void){
-    Object* stream=FileStream_new(physical_pathname_new_cstring("/dev/stdin"),
+    Object* stream=file_stream_new(physical_pathname_new_cstring("/dev/stdin"),
                                   S(CHARACTER),
                                   K(DEFAULT));
     stream->slots->file_stream.is_open=true;
@@ -815,7 +1165,7 @@ Object* standard_input_stream(void){
     return stream;}
 
 Object* standard_output_stream(void){
-    Object* stream=FileStream_new(physical_pathname_new_cstring("/dev/stdout"),
+    Object* stream=file_stream_new(physical_pathname_new_cstring("/dev/stdout"),
                                   S(CHARACTER),
                                   K(DEFAULT));
     stream->slots->file_stream.is_open=true;
@@ -824,7 +1174,7 @@ Object* standard_output_stream(void){
     return stream;}
 
 Object* standard_error_stream(void){
-    Object* stream=FileStream_new(physical_pathname_new_cstring("/dev/stderr"),
+    Object* stream=file_stream_new(physical_pathname_new_cstring("/dev/stderr"),
                                   S(CHARACTER),
                                   K(DEFAULT));
     stream->slots->file_stream.is_open=true;
@@ -833,21 +1183,115 @@ Object* standard_error_stream(void){
     return stream;}
 
 
-/* CONDITION */
+
 /* FUNCTION */
+
+
+// typedef struct Closure            {
+//     BLOCK_HEADER;
+//     Object* function;
+//     Object* environment;
+// } Closure;
+//
+// typedef struct Function            { /* both FunctionClass and CompiledFunctionClass objets */
+//     BLOCK_HEADER;
+//     Object* lisp_name;
+//     Object* lambda_list;
+//     Object* body;
+// } Function;
+//
+// typedef struct BuiltInFunction     {
+//     BLOCK_HEADER;
+//     Object*           lisp_name;       /* the Lisp Symbol naming the kernel function. */
+//     Object*           lambda_list;     /* the lambda list of the kernel function. */
+//     KernelFunctionPtr kernel_function; /* the entry point of to the kernel function. */
+// } BuiltInFunction;
+//
+// typedef struct FuncallableStandardObject {
+//     BLOCK_HEADER;
+//     /* TODO: FuncallableStandardObject */
+//     Object*           object; /* The object data */
+//     KernelFunctionPtr apply;  /* The entry point of to the Funcallable Standard Object. */
+// } FuncallableStandardObject;
+
+bool closure_p(Object* object){
+    return class_of(object)==CLOSURE_Class;}
+
+Object* function_name(Object* funclo){
+    if(closure_p(funclo)){
+        return function_name(funclo->slots->closure.function);}
+    check_type(funclo,FUNCTION_Class);
+    return funclo->slots->function.lisp_name;}
+
+void kernel_apply(Object* function_or_closure,Object* arguments,MultipleValues* results){}
+void kernel_apply_closure(Closure* closure,Object* arguments,MultipleValues* results){}
+void kernel_apply_function(Function* function,Object* arguments,MultipleValues* results){}
+void kernel_apply_built_in(BuiltInFunction* function,Object* arguments,MultipleValues* results){}
+
+
+/* CONDITION */
 /* STANDARD-OBJECT */
 
 
+void check_no_more_arguments(Object* function,Object* arguments){
+    if(null_p(arguments)){
+        return;}
+    char* fname=string_cstring(function_name(function));
+    char* args=string_cstring(prin1_to_string(arguments));
+    error(fname,"Too many arguments, unused: %s",args);
+    /* TODO: clear up this mess, error doesn't return! */
+    free(fname);free(args);}
+
+Object* pop_mandatory_argument(Object* function,Object** arguments){
+    if(null_p(*arguments)){
+        char* fname=string_cstring(function_name(function));
+        error(fname,"Missing mantadory argument");
+        /* TODO: clear up this mess, error doesn't return! */
+        free(fname);}
+    return pop(arguments);}
+
+Object* pop_optional_argument(Object* function,Object** arguments,Object* default_value){
+    return null_p(*arguments)
+            ? default_value
+            : pop(arguments);}
+
+Object* pop_key_argument(Object* function,Object** arguments,Object* keyword,Object* default_value){
+    Object* current=(*arguments);
+    while(cons_p(current) && !eql(keyword,car(current))){
+        if(cons_p(cdr(current))){
+            current=cddr(current);}
+        else{
+            char* fname=string_cstring(function_name(function));
+            char* args=string_cstring(prin1_to_string(*arguments));
+            char* mkey=string_cstring(prin1_to_string(keyword));
+            error(fname,"Odd number of &key arguments %s, missing value for %s",
+                  args,mkey);
+            /* TODO: clear up this mess, error doesn't return! */
+            free(fname);free(args);free(mkey);}}
+    return cons_p(current)
+            ? cadr(current)
+            : default_value;}
 
 
-
+static Object* rootset;
+static Object* kernel_initialize_rootset(void){
+    rootset=NIL_Symbol;
+    push(UNBOUND_Object,&rootset);
+    push(KERNEL_obarray,&rootset);
+    push(KEYWORD_obarray,&rootset);
+    push(kernel_classes,&rootset);
+    push(characterset,&rootset);
+    return rootset;}
 
 Object* kernel_rootset(void){
-    return list(UNBOUND_Object,
-                KERNEL_obarray,
-                KEYWORD_obarray,
-                kernel_classes,
-                NULL);}
+    return rootset;}
+
+void push_to_rootset(Object* object){
+    rootset=cons(object,rootset);}
+
+void delete_from_rootset(Object* object){
+    rootset=delete(object,rootset);}
+
 
 static void kernel_initialize_features(void){
     Object* features=S("*FEATURES*");
@@ -867,13 +1311,13 @@ static void kernel_initialize_features(void){
 
     define_parameter(features,list);
 
-    define_constant(S(ARRAY-TOTAL-SIZE-LIMIT),  I(4096));
-    define_constant(S(ARRAY-DIMENSION-LIMIT),   I(4096));
-    define_constant(S(ARRAY-RANK-LIMIT),        I(   8));
-    define_constant(S(CALL-ARGUMENTS-LIMIT),    I(  50));
-    define_constant(S(CHAR-CODE-LIMIT),         I( 256));
-    define_constant(S(LAMBDA-PARAMETERS-LIMIT), I(  50));
-    define_constant(S(MULTIPLE-VALUES-LIMIT),   I(  20));
+    define_constant(S(ARRAY-TOTAL-SIZE-LIMIT),  I(ARRAY_TOTAL_SIZE_LIMIT));
+    define_constant(S(ARRAY-DIMENSION-LIMIT),   I(ARRAY_DIMENSION_LIMIT));
+    define_constant(S(ARRAY-RANK-LIMIT),        I(ARRAY_RANK_LIMIT));
+    define_constant(S(CALL-ARGUMENTS-LIMIT),    I(CALL_ARGUMENTS_LIMIT));
+    define_constant(S(CHAR-CODE-LIMIT),         I(CHAR_CODE_LIMIT));
+    define_constant(S(LAMBDA-PARAMETERS-LIMIT), I(LAMBDA_PARAMETERS_LIMIT));
+    define_constant(S(MULTIPLE-VALUES-LIMIT),   I(MULTIPLE_VALUES_LIMIT));
 }
 
 void kernel_initialize(void){
@@ -881,10 +1325,12 @@ void kernel_initialize(void){
     set_garbage_collection_enabled(false);
 
     kernel_objects_initialize();
+    kernel_initialize_characters();
     kernel_initialize_features();
     reader_initialize();
     stream_initialize();
 
+    kernel_initialize_rootset();
     set_rootset((Block*)kernel_rootset());
     set_garbage_collection_enabled(true);
 }

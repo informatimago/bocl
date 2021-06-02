@@ -15,6 +15,7 @@ endif
 
 SRCS = main.c bocl.c string_list.c \
 	kernel.c kernel_objects.c memory.c \
+	built_in_functions.c \
 	variable.c cons.c data.c \
 	stream.c reader.c printer.c filename.c \
 	\
@@ -40,7 +41,8 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
 LD_SANITIZE_FLAGS = -fsanitize=leak
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
-WARN_FLAGS        = -Wall -Werror -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
+# -Werror
+WARN_FLAGS        = -Wall  -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
 					-Wwrite-strings -Wconversion  -Wstrict-prototypes -Wmissing-prototypes \
 					-Wmissing-declarations -Wredundant-decls -Wnested-externs -Winline \
 					\
@@ -119,6 +121,13 @@ kernel_objects.h kernel_objects.c : generate-kernel-objects.lisp
 	$(VERBOSE) $(LISP) $(LISP_NORC) \
 		$(LISP_LOAD) generate-kernel-objects.lisp \
 		$(LISP_EVAL) '(com.informatimago.bocl.kernel.generate:generate-c-code)' \
+		$(LISP_QUIT)
+
+kernel_functions.h built_in_functions.h built_in_functions.c : generate-built-in-functions.lisp
+	@printf "# Generating %s from %s\n" "$@" "$^"
+	$(VERBOSE) $(LISP) $(LISP_NORC) \
+		$(LISP_LOAD) generate-built-in-functions.lisp \
+		$(LISP_EVAL) '(com.informatimago.bocl.kernel.generate.kernel-functions:generate-built-in-functions)' \
 		$(LISP_QUIT)
 
 kernel.o:kernel.c kernel.h kernel_objects.h
