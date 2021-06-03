@@ -19,21 +19,21 @@
 
 /* Internal Object Structure */
 
-static Object*                   Object_new                     (Object*  class,        Slots*   slots);
+static Ref                   Object_new                     (Ref  class,        Slots*   slots);
 
-static Array*                    Array_slots                    (Object*  element_type, halfword rank, halfword* dimensions);
-static BuiltInClass*             BuiltInClass_slots             (Object*  name,         Object*  superclasses);
-static Character*                Character_slots                (Object*  name,         Object*  code);
-static Class*                    Class_slots                    (Object*  name,         Object*  superclasses);
-static Cons*                     Cons_slots                     (Object*  car,          Object*  cdr);
+static Array*                    Array_slots                    (Ref  element_type, halfword rank, halfword* dimensions);
+static BuiltInClass*             BuiltInClass_slots             (Ref  name,         Ref  superclasses);
+static Character*                Character_slots                (Ref  name,         Ref  code);
+static Class*                    Class_slots                    (Ref  name,         Ref  superclasses);
+static Cons*                     Cons_slots                     (Ref  car,          Ref  cdr);
 static Float*                    Float_slots                    (floating value);
-static FuncallableStandardClass* FuncallableStandardClass_slots (Object*  name,         Object*  superclasses) unused;
+static FuncallableStandardClass* FuncallableStandardClass_slots (Ref  name,         Ref  superclasses) unused;
 static Integer*                  Integer_slots                  (word     value);
-static OctetArray*               OctetArray_slots               (Object*  element_type, halfword rank, halfword* dimensions);
-static OctetArray*               OctetArray_slots_cstring       (Object*  element_type, const char* initial_value);
-static StandardClass*            StandardClass_slots            (Object*  name,         Object*  superclasses) unused;
-static StructureClass*           StructureClass_slots           (Object*  name,         Object*  superclasses) unused;
-static Symbol*                   Symbol_slots                   (Object*  name,         Object*  package);
+static OctetArray*               OctetArray_slots               (Ref  element_type, halfword rank, halfword* dimensions);
+static OctetArray*               OctetArray_slots_cstring       (Ref  element_type, const char* initial_value);
+static StandardClass*            StandardClass_slots            (Ref  name,         Ref  superclasses) unused;
+static StructureClass*           StructureClass_slots           (Ref  name,         Ref  superclasses) unused;
+static Symbol*                   Symbol_slots                   (Ref  name,         Ref  package);
 static VectorOfObject*           VectorOfObject_slots           (halfword size);
 static VectorOfOctet*            VectorOfOctet_slots            (halfword length);
 static VectorOfOctet*            VectorOfOctet_slots_cstring    (const char* value);
@@ -48,15 +48,15 @@ static VectorOfUWord*            VectorOfUWord_slots            (halfword size) 
 
 /* Object */
 
-Object* Object_new(Object* class,Slots* slots){
-    Object* that=allocate(sizeof(*that));
+Ref Object_new(Ref class,Slots* slots){
+    Ref that=allocate(sizeof(*that));
     that->objcount=2;
     that->class=class;
     that->slots=slots;
     return that;}
 
-Object* make_boot_Object(Slots* slots){
-    Object* that=allocate(sizeof(*that));
+Ref make_boot_Object(Slots* slots){
+    Ref that=allocate(sizeof(*that));
     that->objcount=2;
     that->class=&uninitialized_object;
     that->slots=slots;
@@ -103,7 +103,7 @@ VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
 /* ARRAY */
 /* Used both for ARRAY and VECTOR classes, */
 /* as long as element-type is not octet, bit or character. */
-Array* Array_slots(Object* element_type,halfword rank,halfword* dimensions)  {
+Array* Array_slots(Ref element_type,halfword rank,halfword* dimensions)  {
     halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
         total_array_size=(halfword)(total_array_size*dimensions[i]);}
@@ -121,7 +121,7 @@ Array* Array_slots(Object* element_type,halfword rank,halfword* dimensions)  {
 /* Used both for ARRAY and VECTOR classes when */
 /* element-type is octet, bit or character. */
 
-OctetArray* OctetArray_slots(Object* element_type,halfword rank,halfword* dimensions){
+OctetArray* OctetArray_slots(Ref element_type,halfword rank,halfword* dimensions){
     halfword total_array_size=1;
     for(halfword i=0;i<rank;i++){
         total_array_size=(halfword)(total_array_size*dimensions[i]);}
@@ -134,7 +134,7 @@ OctetArray* OctetArray_slots(Object* element_type,halfword rank,halfword* dimens
         that->dimensions[i]=dimensions[i];}
     return that;}
 
-OctetArray* OctetArray_slots_cstring(Object* element_type,const char* initial_value){
+OctetArray* OctetArray_slots_cstring(Ref element_type,const char* initial_value){
     VectorOfOctet* elements=VectorOfOctet_slots_cstring(initial_value);
     halfword rank=1;
     OctetArray* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
@@ -147,34 +147,34 @@ OctetArray* OctetArray_slots_cstring(Object* element_type,const char* initial_va
 
 /* CHARACTER */
 
-static Character* Character_slots(Object* name,Object* code){
+static Character* Character_slots(Ref name,Ref code){
     Character* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=name;
     that->code=code;
     return that;}
 
-static Object* Character_new(word code,const char* name){
+static Ref Character_new(word code,const char* name){
     return Object_new(CHARACTER_Class,
                       (Slots*)Character_slots(string_new_cstring(name),
                                               integer_from_word(code)));}
 
-bool character_p(Object* object){
+bool character_p(Ref object){
     return class_of(object)==CHARACTER_Class;}
 
-Object* character_code(Object* object){
+Ref character_code(Ref object){
     check_class(object,CHARACTER_Class);
     return object->slots->character.code;}
 
-Object* character_name(Object* object){
+Ref character_name(Ref object){
     check_class(object,CHARACTER_Class);
     return object->slots->character.name;}
 
 
-static Object* character_table[CHAR_CODE_LIMIT];
-static Object* characterset;
+static Ref character_table[CHAR_CODE_LIMIT];
+static Ref characterset;
 
-Object* code_character(Object* code){
+Ref code_character(Ref code){
     check_class(code,INTEGER_Class);
     word icode=integer_value(code);
     if((icode<0)||(CHAR_CODE_LIMIT<=icode)){
@@ -182,10 +182,10 @@ Object* code_character(Object* code){
     else{
         return character_table[icode];}}
 
-Object* octet_character(octet code){
+Ref octet_character(octet code){
     return character_table[code];}
 
-Object* name_character(Object* name){
+Ref name_character(Ref name){
     if(character_p(name)){
         return name;}
     else if(symbol_p(name)){
@@ -472,16 +472,16 @@ Integer* Integer_slots(word value){
     that->value=value;
     return that;}
 
-Object* integer_from_word(word value){
+Ref integer_from_word(word value){
     return Object_new(INTEGER_Class,(Slots*)Integer_slots(value));}
 
-Object* integer_from_uword(uword value){
+Ref integer_from_uword(uword value){
     return Object_new(INTEGER_Class,(Slots*)Integer_slots(CHECK_UWORD_TO_WORD(value)));}
 
-bool integer_p(Object* object){
+bool integer_p(Ref object){
     return class_of(object)==INTEGER_Class;}
 
-word integer_value(Object* object){
+word integer_value(Ref object){
     check_class(object,INTEGER_Class);
     return object->slots->integer.value;}
 
@@ -493,43 +493,43 @@ Float* Float_slots(floating value){
     that->value=value;
     return that;}
 
-Object* float_from_floating(floating value){
+Ref float_from_floating(floating value){
     return Object_new(FLOAT_Class,(Slots*)Float_slots(value));}
 
-bool float_p(Object* object){
+bool float_p(Ref object){
     return class_of(object)==FLOAT_Class;}
 
-floating float_value(Object* object){
+floating float_value(Ref object){
     check_class(object,FLOAT_Class);
     return object->slots->floater.value;}
 
 
 /* CONS */
 
-Cons* Cons_slots(Object* car,Object* cdr){
+Cons* Cons_slots(Ref car,Ref cdr){
     Cons* that=allocate(sizeof(*that));
     that->objcount=2;
     that->car=car;
     that->cdr=cdr;
     return that;}
 
-Object* cons(Object* car,Object* cdr){
+Ref cons(Ref car,Ref cdr){
     return Object_new(CONS_Class,(Slots*)Cons_slots(car,cdr));}
 
-bool cons_p(Object* object){
+bool cons_p(Ref object){
     return class_of(object)==CONS_Class;}
 
-Object* cons_car(Object* cell){
+Ref cons_car(Ref cell){
     return cell->slots->cons.car;}
 
-Object* cons_cdr(Object* cell){
+Ref cons_cdr(Ref cell){
     return cell->slots->cons.cdr;}
 
-Object* cons_rplaca(Object* cell,Object* newcar){
+Ref cons_rplaca(Ref cell,Ref newcar){
     cell->slots->cons.car=newcar;
     return cell;}
 
-Object* cons_rplacd(Object* cell,Object* newcdr){
+Ref cons_rplacd(Ref cell,Ref newcdr){
     cell->slots->cons.cdr=newcdr;
     return cell;}
 
@@ -537,22 +537,22 @@ Object* cons_rplacd(Object* cell,Object* newcdr){
 
 /* STRING */
 
-Object* string_new(halfword length){
+Ref string_new(halfword length){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots(CHARACTER_Symbol,1,&length));}
 
-Object* string_new_cstring(const char* string){
+Ref string_new_cstring(const char* string){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots_cstring(CHARACTER_Symbol,string));}
 
-bool string_p(Object* object){
+bool string_p(Ref object){
     return class_of(object)==STRING_Class;}
 
-uword string_length(Object* string){
+uword string_length(Ref string){
     check_class(string,STRING_Class);
     return string->slots->octet_array.dimensions[0];}
 
-char* string_cstring(Object* string){
+char* string_cstring(Ref string){
     check_class(string,STRING_Class);
     size_t length=string->slots->octet_array.dimensions[0];
     char* result=CHECK_POINTER(malloc(1+length));
@@ -560,7 +560,7 @@ char* string_cstring(Object* string){
     result[length]='\0';
     return result;}
 
-bool string_eq(Object* a,Object* b){
+bool string_eq(Ref a,Ref b){
     if(a==b){
         return true;}
     uword length=string_length(a);
@@ -574,7 +574,7 @@ bool string_eq(Object* a,Object* b){
     return true;}
 
 
-bool string_equal(Object* a,Object* b){
+bool string_equal(Ref a,Ref b){
     if(a==b){
         return true;}
     uword length=string_length(a);
@@ -594,7 +594,7 @@ bool string_equal(Object* a,Object* b){
 
 /* SYMBOL */
 
-Symbol* Symbol_slots(Object* name,Object* package){
+Symbol* Symbol_slots(Ref name,Ref package){
     Symbol* that=allocate(sizeof(*that));
     that->objcount=5;
     that->name=name;
@@ -604,14 +604,14 @@ Symbol* Symbol_slots(Object* name,Object* package){
     that->plist=NIL_Symbol;
     return that;}
 
-Object* find_symbol(Object* name,Object* obarray){
+Ref find_symbol(Ref name,Ref obarray){
 #ifdef DEBUG
     {
         static long c=0;
         fprintf(stderr,"find_symbol %3ld: %-40s in %-16s",
                 c++,string_cstring(name),
                 string_cstring(symbol_name(cons_car(obarray))));
-        Object* syms=cons_cdr(obarray);
+        Ref syms=cons_cdr(obarray);
         long sc=0;
         while(cons_p(syms)){
             sc++;
@@ -624,125 +624,125 @@ Object* find_symbol(Object* name,Object* obarray){
             syms=cons_cdr(syms);}
         fprintf(stderr," %3ld symbols\n",sc);}
 #endif
-    Object* syms=cons_cdr(obarray);
+    Ref syms=cons_cdr(obarray);
     while(cons_p(syms) && !string_eq(cons_car(syms)->slots->symbol.name,name)){
         syms=cons_cdr(syms);}
     return cons_p(syms)
             ? cons_car(syms)
             : NULL;}
 
-Object* symbol_new(Object* name){
+Ref symbol_new(Ref name){
     /* make an uninterned symbol */
     return Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,NIL_Symbol));}
 
-Object* symbol_new_cstring(const char* name){
+Ref symbol_new_cstring(const char* name){
     /* make an uninterned symbol */
     return symbol_new(string_new_cstring(name));}
 
-static Object* symbol_intern_obarray(Object* name,Object* obarray){
-    Object* symbol=find_symbol(name,obarray);
+static Ref symbol_intern_obarray(Ref name,Ref obarray){
+    Ref symbol=find_symbol(name,obarray);
     if(symbol){
         return symbol;}
     symbol=Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,obarray));
     cons_rplacd(obarray,cons(symbol,cons_cdr(obarray)));
     return symbol;}
 
-Object* symbol_intern(Object* name){
+Ref symbol_intern(Ref name){
     return symbol_intern_obarray(name,KERNEL_obarray);}
 
-Object* symbol_intern_cstring(const char* name){
+Ref symbol_intern_cstring(const char* name){
     return symbol_intern(string_new_cstring(name));}
 
-bool symbol_p(Object* object){
+bool symbol_p(Ref object){
     return class_of(object)==SYMBOL_Class;}
 
-Object* symbol_package(Object* symbol){
+Ref symbol_package(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.package;}
 
-Object* symbol_name(Object* symbol){
+Ref symbol_name(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.name;}
 
-bool symbol_boundp(Object* symbol){
+bool symbol_boundp(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return UNBOUND_Object!=symbol->slots->symbol.value;}
 
-bool symbol_fboundp(Object* symbol){
+bool symbol_fboundp(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return UNBOUND_Object!=symbol->slots->symbol.function;}
 
-Object* symbol_value(Object* symbol){
+Ref symbol_value(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.value;}
 
-Object* symbol_function(Object* symbol){
+Ref symbol_function(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.function;}
 
-Object* symbol_plist(Object* symbol){
+Ref symbol_plist(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.plist;}
 
-Object* symbol_set_package(Object* symbol,Object* new_package){
+Ref symbol_set_package(Ref symbol,Ref new_package){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.package=new_package;}
 
-Object* symbol_set_value(Object* symbol,Object* new_value){
+Ref symbol_set_value(Ref symbol,Ref new_value){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.value=new_value;}
 
-Object* symbol_set_function(Object* symbol,Object* new_function){
+Ref symbol_set_function(Ref symbol,Ref new_function){
     check_type(symbol,SYMBOL_Class);
     check_type(new_function,FUNCTION_Class);
     return symbol->slots->symbol.function=new_function;}
 
-Object* symbol_set_plist(Object* symbol,Object* new_plist){
+Ref symbol_set_plist(Ref symbol,Ref new_plist){
     check_type(symbol,SYMBOL_Class);
     if(cons_p(new_plist)||null_p(new_plist)){
         return symbol->slots->symbol.plist=new_plist;}
     else{
         TYPE_ERROR(new_plist,LIST_Class);}}
 
-Object* obarray_all_symbols(Object* obarray){
+Ref obarray_all_symbols(Ref obarray){
     return copy_list(cdr(obarray));}
 
 /* KEYWORD */
 /* Note: KEYWORD is not a class, but a subtype of SYMBOL */
 
-Object* keyword_intern(Object* name){
-    Object* keyword=symbol_intern_obarray(name,KEYWORD_obarray);
+Ref keyword_intern(Ref name){
+    Ref keyword=symbol_intern_obarray(name,KEYWORD_obarray);
     define_constant(keyword,keyword);
     return keyword;}
 
-Object* keyword_intern_cstring(const char* name){
+Ref keyword_intern_cstring(const char* name){
     return keyword_intern(string_new_cstring(name));}
 
-bool keyword_p(Object* object){
+bool keyword_p(Ref object){
     return symbol_p(object)
             && !null_p(memq(object,cdr(KEYWORD_obarray)));}
 
 /* NULL */
 /* NULL class has a SYMBOL superclass and has a NIL_Symbol instance. */
 
-bool null_p(Object* object){
+bool null_p(Ref object){
     return object==NIL_Symbol;}
 
 
 /* BOOLEAN */
 
-Object* as_boolean(bool value){
+Ref as_boolean(bool value){
     return (value
             ?T_Symbol
             :NIL_Symbol);}
 
-bool is_true(Object* object){
+bool is_true(Ref object){
     return object!=NIL_Symbol;}
 
 
 /* VECTOR */
 
-Object* vector_new(Object* elements){
+Ref vector_new(Ref elements){
     uword length=list_length(elements);
     halfword dimensions[1];
     dimensions[0]=CHECK_UWORD_TO_HALFWORD(length);
@@ -753,7 +753,7 @@ Object* vector_new(Object* elements){
 
 /* BIT-VECTOR */
 
-Object* bit_vector_new_octets(uword length,octet* bits){
+Ref bit_vector_new_octets(uword length,octet* bits){
     halfword dimensions[1];
     dimensions[0]=CHECK_UWORD_TO_HALFWORD(length);
     Array* array=Array_slots(BIT_Symbol,1,dimensions);
@@ -763,7 +763,7 @@ Object* bit_vector_new_octets(uword length,octet* bits){
 
 /* CLASS */
 
-Class* Class_slots(Object* name,Object* superclasses){
+Class* Class_slots(Ref name,Ref superclasses){
     Class* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=name;
@@ -777,24 +777,24 @@ Class* make_boot_Class(){
     that->direct_superclasses=&uninitialized_object;
     return that;}
 
-Object* class_new(Object* name){
+Ref class_new(Ref name){
     return Object_new(CLASS_Class,(Slots*)Class_slots(name,NIL_Symbol));}
 
-Object* class_of(Object* object){
+Ref class_of(Ref object){
     return object->class;}
 
-bool class_p(Object* object){
+bool class_p(Ref object){
     return class_of(object)==CLASS_Class;}
 
-Object* class_name(Object* class){
+Ref class_name(Ref class){
     check_type(class,CLASS_Class);
     return class->slots->class.name;}
 
-Object* class_direct_superclasses(Object* class){
+Ref class_direct_superclasses(Ref class){
     check_type(class,CLASS_Class);
     return class->slots->class.direct_superclasses;}
 
-void class_add_superclass(Object* class, Object* superclass){
+void class_add_superclass(Ref class, Ref superclass){
     check_type(class,CLASS_Class);
     check_type(superclass,CLASS_Class);
     if(class->slots->class.direct_superclasses){
@@ -804,25 +804,25 @@ void class_add_superclass(Object* class, Object* superclass){
         class->slots->class.direct_superclasses=cons(superclass,NIL_Symbol);}}
 
 
-Object* find_class(Object* name){
+Ref find_class(Ref name){
     {do_list(class,kernel_classes){
             if(eql(class->slots->class.name,name)){
                 return class;}}}
     return NULL;}
 
-bool subclassp(Object* class,Object* superclass){
+bool subclassp(Ref class,Ref superclass){
     if(class==superclass){
         return true;}
-    Object* direct_superclasses=class->slots->class.direct_superclasses;
+    Ref direct_superclasses=class->slots->class.direct_superclasses;
     while(cons_p(direct_superclasses)){
-        Object* direct_superclass=cons_car(direct_superclasses);
+        Ref direct_superclass=cons_car(direct_superclasses);
         direct_superclasses=cons_cdr(direct_superclasses);
         if(subclassp(direct_superclass,superclass)){
             return true;}}
     return false;}
 
-bool typep(Object* object,Object* class){
-    Object* object_class=class_of(object);
+bool typep(Ref object,Ref class){
+    Ref object_class=class_of(object);
 #ifdef DEBUG
     fprintf(stderr,"Is object %p of type %p\n",
             (void*)object,
@@ -848,13 +848,13 @@ bool typep(Object* object,Object* class){
             :subclassp(object_class,class);}
 
 
-void check_type(Object* object,Object* class){
+void check_type(Ref object,Ref class){
     /* checks that the object is an instance of the class, direct or indirect */
     if(!typep(object,class)){
         TYPE_ERROR(object,class);}}
 
 
-void check_class(Object* object,Object* class){
+void check_class(Ref object,Ref class){
     /* checks that the object is a direct instance of the class */
     if(class_of(object)!=class){
         TYPE_ERROR(object,class);}}
@@ -864,8 +864,8 @@ void check_class(Object* object,Object* class){
 
 
 
-Object* boot_last(Object* list){
-    Object* next;
+Ref boot_last(Ref list){
+    Ref next;
     if(cons_p(list)){
         while(cons_p(next=list->slots->cons.cdr)){
             list=next;}
@@ -875,17 +875,17 @@ Object* boot_last(Object* list){
     else{
         TYPE_ERROR(list,LIST_Class);}}
 
-Object* boot_nconc(Object* list,Object* tail){
+Ref boot_nconc(Ref list,Ref tail){
     if(null_p(list)){
         return tail;}
     else if(cons_p(list)){
-        Object* last_cell=boot_last(list);
+        Ref last_cell=boot_last(list);
         last_cell->slots->cons.cdr=tail;
         return list;}
     else{
         TYPE_ERROR(list,LIST_Class);}}
 
-void boot_class_add_superclass(Object* class, Object* superclass){
+void boot_class_add_superclass(Ref class, Ref superclass){
     if(class->slots->class.direct_superclasses){
         class->slots->class.direct_superclasses=boot_nconc(class->slots->class.direct_superclasses,
                                                            cons(superclass,NIL_Symbol));}
@@ -896,7 +896,7 @@ void boot_class_add_superclass(Object* class, Object* superclass){
 
 /* STANDARD-CLASS */
 
-StandardClass* StandardClass_slots(Object* name,Object* superclasses){
+StandardClass* StandardClass_slots(Ref name,Ref superclasses){
     StandardClass* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=name;
@@ -913,10 +913,10 @@ StandardClass* make_boot_StandardClass(void){
 
 /* BUILT-IN-CLASS */
 
-Object* built_in_class_new(Object* name){
+Ref built_in_class_new(Ref name){
     return Object_new(BUILT_IN_CLASS_Class,(Slots*)BuiltInClass_slots(name,NIL_Symbol));}
 
-BuiltInClass* BuiltInClass_slots(Object* name,Object* superclasses){
+BuiltInClass* BuiltInClass_slots(Ref name,Ref superclasses){
     BuiltInClass* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=name;
@@ -933,7 +933,7 @@ BuiltInClass* make_boot_BuiltInClass(void){
 
 /* STRUCTURE-CLASS */
 
-StructureClass* StructureClass_slots(Object* name,Object* superclasses){
+StructureClass* StructureClass_slots(Ref name,Ref superclasses){
     StructureClass* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=name;
@@ -942,7 +942,7 @@ StructureClass* StructureClass_slots(Object* name,Object* superclasses){
 
 /* FUNCALLABLE-STANDARD-CLASS */
 
-FuncallableStandardClass* FuncallableStandardClass_slots(Object* name,Object* superclasses){
+FuncallableStandardClass* FuncallableStandardClass_slots(Ref name,Ref superclasses){
     FuncallableStandardClass* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=name;
@@ -961,14 +961,14 @@ FuncallableStandardClass* make_boot_FuncallableStandardClass(void){
 
 /* PHYSICAL-PATHNAME */
 
-Object* physical_pathname_new(VectorOfOctet* path){
+Ref physical_pathname_new(VectorOfOctet* path){
     return Object_new(find_class(symbol_intern_cstring("PHYSICAL-PATHNAME")),
                       (Slots*)path);}
 
-Object* physical_pathname_new_cstring(const char* path){
+Ref physical_pathname_new_cstring(const char* path){
     return physical_pathname_new(VectorOfOctet_slots_cstring(path));}
 
-Object* physical_pathname(Object* namestring){
+Ref physical_pathname(Ref namestring){
     check_class(namestring,STRING_Class);
     return physical_pathname_new(&namestring->slots->vector_of_octet);}
 
@@ -1019,7 +1019,7 @@ line-termination; the mapping is done in the CL layer.
 #define DEFAULT_ENCODING      K(ISO-8859-1)
 #define DEFAULT_ENCODING_ENUM encoding_iso_8859_1
 
-Object* normalize_encoding(Object* encoding_o,encoding_t* encoding){
+Ref normalize_encoding(Ref encoding_o,encoding_t* encoding){
     if(encoding_o==K(DEFAULT)){
         (*encoding)=DEFAULT_ENCODING_ENUM;
         return DEFAULT_ENCODING;}
@@ -1033,7 +1033,7 @@ Object* normalize_encoding(Object* encoding_o,encoding_t* encoding){
         error("Invalid encoding %s",
               string_cstring(prin1_to_string(encoding_o)));}}
 
-Object* normalize_new_line(Object* new_line_o,new_line_t* new_line){
+Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
     if((new_line_o==K(LF))||(new_line_o==K(UNIX))
        ||(new_line_o==K(DEFAULT))||(new_line_o==NIL_Symbol)){
         (*new_line)=new_line_lf;
@@ -1048,7 +1048,7 @@ Object* normalize_new_line(Object* new_line_o,new_line_t* new_line){
         error("Invalid new-line format %s",
               string_cstring(prin1_to_string(new_line_o)));}}
 
-Object* normalize_on_error(Object* on_error_o,on_error_t* on_error){
+Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
     if(character_p(on_error_o)){
         (*on_error)=(on_error_t)integer_value(character_code(on_error_o));
         return on_error_o;}
@@ -1062,13 +1062,13 @@ Object* normalize_on_error(Object* on_error_o,on_error_t* on_error){
         error("Invalid on-error format %s",
               string_cstring(prin1_to_string(on_error_o)));}}
 
-Object* normalize_external_format_internal(Object* external_format,
+Ref normalize_external_format_internal(Ref external_format,
                                   encoding_t* encoding,
                                   new_line_t* new_line,
                                   on_error_t* on_error){
-    Object* encoding_o=DEFAULT_ENCODING;
-    Object* new_line_o=K(LF);
-    Object* on_error_o=K(ERROR);
+    Ref encoding_o=DEFAULT_ENCODING;
+    Ref new_line_o=K(LF);
+    Ref on_error_o=K(ERROR);
     if(symbol_p(external_format)){
         encoding_o=normalize_encoding(external_format,encoding);}
     else if(cons_p(external_format)){
@@ -1084,14 +1084,14 @@ Object* normalize_external_format_internal(Object* external_format,
               string_cstring(prin1_to_string(external_format)));}
     return cons(encoding_o,cons(new_line_o,cons(on_error_o,NIL_Symbol)));}
 
-Object* normalize_external_format(Object* external_format){
+Ref normalize_external_format(Ref external_format){
     encoding_t encoding;
     new_line_t new_line;
     on_error_t on_error;
     return normalize_external_format_internal(external_format, &encoding,&new_line,&on_error);}
 
 
-direction_t convert_direction(Object* direction){
+direction_t convert_direction(Ref direction){
     if(direction==K(INPUT)){
         return direction_input;}
     else if(direction==K(OUTPUT)){
@@ -1104,7 +1104,7 @@ direction_t convert_direction(Object* direction){
         ERROR("Invalid direction %s",
               string_cstring(prin1_to_string(direction)));}}
 
-Object* convert_from_direction(direction_t direction){
+Ref convert_from_direction(direction_t direction){
     switch(direction){
       case direction_input:   return K(INPUT);
       case direction_output:  return K(OUTPUT);
@@ -1113,7 +1113,7 @@ Object* convert_from_direction(direction_t direction){
       default:
           FATAL("Invalid direction value %d",direction);}}
 
-type_t convert_element_type(Object* element_type){
+type_t convert_element_type(Ref element_type){
     /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
     if(element_type==S(CHARACTER)){
         return type_character;}
@@ -1133,9 +1133,9 @@ type_t convert_element_type(Object* element_type){
 
 /* FILE-STREAM */
 
-Object* file_stream_new(Object* pathname,     /* a PHYSICAL-PATHNAME */
-                       Object* element_type, /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
-                       Object* external_format){
+Ref file_stream_new(Ref pathname,     /* a PHYSICAL-PATHNAME */
+                       Ref element_type, /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
+                       Ref external_format){
     check_class(pathname,PHYSICAL_PATHNAME_Class);
     type_t type=convert_element_type(element_type);
     encoding_t encoding=encoding_iso_8859_1;
@@ -1157,37 +1157,37 @@ Object* file_stream_new(Object* pathname,     /* a PHYSICAL-PATHNAME */
     return Object_new(find_class(symbol_intern_cstring("FILE-STREAM")),
                       (Slots*)slots);}
 
-Object* stream_pathname(Object* stream){
+Ref stream_pathname(Ref stream){
     check_class(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.pathname;}
 
-Object* stream_element_type(Object* stream){
+Ref stream_element_type(Ref stream){
     check_class(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.element_type;}
 
-Object* stream_external_format(Object* stream){
+Ref stream_external_format(Ref stream){
     check_class(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.external_format;}
 
-Object* stream_direction(Object* stream){
+Ref stream_direction(Ref stream){
     check_class(stream,FILE_STREAM_Class);
     return convert_from_direction(stream->slots->file_stream.direction);}
 
-bool stream_open_p(Object* stream){
+bool stream_open_p(Ref stream){
     check_class(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.is_open;}
 
-FILE* stream_cstream(Object* stream){
+FILE* stream_cstream(Ref stream){
     check_class(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.stream;}
 
-type_t stream_type(Object* stream){
+type_t stream_type(Ref stream){
     check_class(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.type;}
 
 
-Object* standard_input_stream(void){
-    Object* stream=file_stream_new(physical_pathname_new_cstring("/dev/stdin"),
+Ref standard_input_stream(void){
+    Ref stream=file_stream_new(physical_pathname_new_cstring("/dev/stdin"),
                                   S(CHARACTER),
                                   K(DEFAULT));
     stream->slots->file_stream.is_open=true;
@@ -1195,8 +1195,8 @@ Object* standard_input_stream(void){
     stream->slots->file_stream.stream=stdin;
     return stream;}
 
-Object* standard_output_stream(void){
-    Object* stream=file_stream_new(physical_pathname_new_cstring("/dev/stdout"),
+Ref standard_output_stream(void){
+    Ref stream=file_stream_new(physical_pathname_new_cstring("/dev/stdout"),
                                   S(CHARACTER),
                                   K(DEFAULT));
     stream->slots->file_stream.is_open=true;
@@ -1204,8 +1204,8 @@ Object* standard_output_stream(void){
     stream->slots->file_stream.stream=stdout;
     return stream;}
 
-Object* standard_error_stream(void){
-    Object* stream=file_stream_new(physical_pathname_new_cstring("/dev/stderr"),
+Ref standard_error_stream(void){
+    Ref stream=file_stream_new(physical_pathname_new_cstring("/dev/stderr"),
                                   S(CHARACTER),
                                   K(DEFAULT));
     stream->slots->file_stream.is_open=true;
@@ -1220,51 +1220,51 @@ Object* standard_error_stream(void){
 
 // typedef struct Closure            {
 //     BLOCK_HEADER;
-//     Object* function;
-//     Object* environment;
+//     Ref function;
+//     Ref environment;
 // } Closure;
 //
 // typedef struct Function            { /* both FunctionClass and CompiledFunctionClass objets */
 //     BLOCK_HEADER;
-//     Object* lisp_name;
-//     Object* lambda_list;
-//     Object* body;
+//     Ref lisp_name;
+//     Ref lambda_list;
+//     Ref body;
 // } Function;
 //
 // typedef struct BuiltInFunction     {
 //     BLOCK_HEADER;
-//     Object*           lisp_name;       /* the Lisp Symbol naming the kernel function. */
-//     Object*           lambda_list;     /* the lambda list of the kernel function. */
+//     Ref           lisp_name;       /* the Lisp Symbol naming the kernel function. */
+//     Ref           lambda_list;     /* the lambda list of the kernel function. */
 //     KernelFunctionPtr kernel_function; /* the entry point of to the kernel function. */
 // } BuiltInFunction;
 //
 // typedef struct FuncallableStandardObject {
 //     BLOCK_HEADER;
 //     /* TODO: FuncallableStandardObject */
-//     Object*           object; /* The object data */
+//     Ref           object; /* The object data */
 //     KernelFunctionPtr apply;  /* The entry point of to the Funcallable Standard Object. */
 // } FuncallableStandardObject;
 
-bool closure_p(Object* object){
+bool closure_p(Ref object){
     return class_of(object)==CLOSURE_Class;}
 
-Object* function_name(Object* funclo){
+Ref function_name(Ref funclo){
     if(closure_p(funclo)){
         return function_name(funclo->slots->closure.function);}
     check_type(funclo,FUNCTION_Class);
     return funclo->slots->function.lisp_name;}
 
-void kernel_apply(Object* function_or_closure,Object* arguments,MultipleValues* results){}
-void kernel_apply_closure(Closure* closure,Object* arguments,MultipleValues* results){}
-void kernel_apply_function(Function* function,Object* arguments,MultipleValues* results){}
-void kernel_apply_built_in(BuiltInFunction* function,Object* arguments,MultipleValues* results){}
+void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){}
+void kernel_apply_closure(Closure* closure,Ref arguments,MultipleValues* results){}
+void kernel_apply_function(Function* function,Ref arguments,MultipleValues* results){}
+void kernel_apply_built_in(BuiltInFunction* function,Ref arguments,MultipleValues* results){}
 
 
 /* CONDITION */
 /* STANDARD-OBJECT */
 
 
-void check_no_more_arguments(Object* function,Object* arguments){
+void check_no_more_arguments(Ref function,Ref arguments){
     if(null_p(arguments)){
         return;}
     char* fname=string_cstring(function_name(function));
@@ -1273,7 +1273,7 @@ void check_no_more_arguments(Object* function,Object* arguments){
     /* TODO: clear up this mess, error doesn't return! */
     free(fname);free(args);}
 
-Object* pop_mandatory_argument(Object* function,Object** arguments){
+Ref pop_mandatory_argument(Ref function,Ref* arguments){
     if(null_p(*arguments)){
         char* fname=string_cstring(function_name(function));
         error(fname,"Missing mantadory argument");
@@ -1281,13 +1281,13 @@ Object* pop_mandatory_argument(Object* function,Object** arguments){
         free(fname);}
     return pop(arguments);}
 
-Object* pop_optional_argument(Object* function,Object** arguments,Object* default_value){
+Ref pop_optional_argument(Ref function,Ref* arguments,Ref default_value){
     return null_p(*arguments)
             ? default_value
             : pop(arguments);}
 
-Object* pop_key_argument(Object* function,Object** arguments,Object* keyword,Object* default_value){
-    Object* current=(*arguments);
+Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
+    Ref current=(*arguments);
     while(cons_p(current) && !eql(keyword,car(current))){
         if(cons_p(cdr(current))){
             current=cddr(current);}
@@ -1304,8 +1304,8 @@ Object* pop_key_argument(Object* function,Object** arguments,Object* keyword,Obj
             : default_value;}
 
 
-static Object* rootset;
-static Object* kernel_initialize_rootset(void){
+static Ref rootset;
+static Ref kernel_initialize_rootset(void){
     rootset=NIL_Symbol;
     push(UNBOUND_Object,&rootset);
     push(KERNEL_obarray,&rootset);
@@ -1314,19 +1314,19 @@ static Object* kernel_initialize_rootset(void){
     push(characterset,&rootset);
     return rootset;}
 
-Object* kernel_rootset(void){
+Ref kernel_rootset(void){
     return rootset;}
 
-void push_to_rootset(Object* object){
+void push_to_rootset(Ref object){
     rootset=cons(object,rootset);}
 
-void delete_from_rootset(Object* object){
+void delete_from_rootset(Ref object){
     rootset=delete(object,rootset);}
 
 
 static void kernel_initialize_features(void){
-    Object* features=S("*FEATURES*");
-    Object* list=NIL_Symbol;
+    Ref features=S("*FEATURES*");
+    Ref list=NIL_Symbol;
 
     push(K(COMMON-LISP),&list);
     push(K(BOCL),&list);

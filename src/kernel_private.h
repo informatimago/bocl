@@ -7,8 +7,8 @@
 #include "cons.h"
 
 
-Object* boot_last(Object* list);
-Object* boot_nconc(Object* list,Object* tail);
-void boot_class_add_superclass(Object* class, Object* superclass);
+Ref boot_last(Ref list);
+Ref boot_nconc(Ref list,Ref tail);
+void boot_class_add_superclass(Ref class, Ref superclass);
 
 #endif

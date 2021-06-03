@@ -9,19 +9,19 @@
 
 /* Printer */
 
-Object* prin1_to_string(Object* object){
+Ref prin1_to_string(Ref object){
     // TODO: implement prin1_to_string
     // TODO: implement string-stream
     NOT_IMPLEMENTED_YET();}
 
-Object* print(Object* object,Object* stream){
+Ref print(Ref object,Ref stream){
     terpri(stream);
     prin1(object,stream);
     return object;}
 
-static FILE* output_cstream(Object* stream){
+static FILE* output_cstream(Ref stream){
     if(eql(stream,T_Symbol)){
-        Object* so=S(*STANDARD-OUTPUT*);
+        Ref so=S(*STANDARD-OUTPUT*);
         if(symbol_boundp(so)){
             return stream_cstream(variable_value(so));}
         else{
@@ -29,7 +29,7 @@ static FILE* output_cstream(Object* stream){
     else{
         return stream_cstream(stream);}}
 
-Object* prin1(Object* object,Object* stream){
+Ref prin1(Ref object,Ref stream){
     FILE* out=output_cstream(stream);
 
     if(character_p(object)){
@@ -94,7 +94,7 @@ Object* prin1(Object* object,Object* stream){
     return object;}
 
 
-Object* princ(Object* object,Object* stream){
+Ref princ(Ref object,Ref stream){
     FILE* out=output_cstream(stream);
 
     if(character_p(object)){
@@ -149,7 +149,7 @@ Object* princ(Object* object,Object* stream){
     return object;}
 
 
-Object* terpri(Object* stream){
+Ref terpri(Ref stream){
     FILE* out=output_cstream(stream);
     fprintf(out,"\n");
     return NIL_Symbol;}

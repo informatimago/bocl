@@ -263,12 +263,12 @@ static void wait_for_termination(int status){
     char buffer[80];
     fgets(buffer,sizeof(buffer)-1,stdin);}
 
-_Noreturn void invoke_debugger(Object* error);
-bool error_handler(Object* error);
-_Noreturn void invoke_debugger(unused Object* error){
+_Noreturn void invoke_debugger(Ref error);
+bool error_handler(Ref error);
+_Noreturn void invoke_debugger(unused Ref error){
     abort();}
 
-bool error_handler(Object* error){
+bool error_handler(Ref error){
     report_error(error);
     switch(on_error){
       case on_error_debug:
@@ -329,7 +329,7 @@ int main(int argc,char** argv){
         bocl_in_package(bocl_read_cstring(package));}
 
     if(do_repl){
-        Object* result=bocl_read_eval_cstring("(BOCL:REPL)");
+        Ref result=bocl_read_eval_cstring("(BOCL:REPL)");
         if(integer_p(result)){
             status=(int)integer_value(result);}}
 

@@ -9,13 +9,13 @@
 #include "variable.h"
 
 
-Object* stream_open(Object* filespec,
-                    Object* direction,
-                    Object* element_type,
-                    Object* if_exists,
-                    Object* if_does_not_exist,
-                    Object* external_format){    
-    Object* path;
+Ref stream_open(Ref filespec,
+                    Ref direction,
+                    Ref element_type,
+                    Ref if_exists,
+                    Ref if_does_not_exist,
+                    Ref external_format){    
+    Ref path;
     if(typep(filespec,PHYSICAL_PATHNAME_Class)) {
         path=filespec;}
     else if(typep(filespec,STRING_Class)) {
@@ -47,7 +47,7 @@ Object* stream_open(Object* filespec,
                       string_cstring(prin1_to_string(if_does_not_exist)));}}
         fclose(file);
         /* 3- if existed or created, return the closed stream */
-        Object* stream=file_stream_new(path,element_type,external_format);
+        Ref stream=file_stream_new(path,element_type,external_format);
         stream->slots->file_stream.direction=dir;
         return stream;}
 

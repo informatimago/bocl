@@ -79,8 +79,8 @@ float
 */
 
 typedef struct parser_state {
-    Object* input_stream;
-    Object* list;
+    Ref input_stream;
+    Ref list;
     size_t length;
     octet ch;
     octet filler;
@@ -94,7 +94,7 @@ typedef struct parser_state {
 #define LF  10    /* #\Linefeed */
 #define NEL 0x85  /* #\Newline */
 
-static octet read_octet(Object* input_stream,bool* eof,bool* error){
+static octet read_octet(Ref input_stream,bool* eof,bool* error){
     FILE* cstream=stream_cstream(input_stream);
     clearerr(cstream);
     int c=getc(cstream);
@@ -117,7 +117,7 @@ static octet read_octet(Object* input_stream,bool* eof,bool* error){
         (*eof)=false;}
     return (octet)c;}
 
-static octet peek_octet(Object* input_stream,bool* eof,bool* error){
+static octet peek_octet(Ref input_stream,bool* eof,bool* error){
     FILE* cstream=stream_cstream(input_stream);
     clearerr(cstream);
     int c=getc(cstream);
@@ -198,7 +198,7 @@ static void skip_spaces(parser_state* parser){
             advance_character(parser);}}
     check_parser_error(parser);}
 
-static Object* parse_object(parser_state* parser);
+static Ref parse_object(parser_state* parser);
 
 static void parse_character_name(parser_state* parser){
     parser->length=0;
@@ -210,7 +210,7 @@ static void parse_character_name(parser_state* parser){
         if(parser->error){
             check_parser_error(parser);}}}
 
-static Object* parse_character(parser_state* parser){
+static Ref parse_character(parser_state* parser){
     advance_character(parser);
     check_parser_error(parser);
     if(isalpha(parser->ch)){
@@ -218,7 +218,7 @@ static Object* parse_character(parser_state* parser){
         parser->token[0]=parser->ch;
         parse_character_name(parser);
         parser->token[parser->length]='\0';
-        Object* character=name_character(string_new_cstring((char*)parser->token));
+        Ref character=name_character(string_new_cstring((char*)parser->token));
         if(null_p(character)){
             READER_ERROR(parser->input_stream,"Invalid character name %s",parser->token);}
         else{
@@ -227,7 +227,7 @@ static Object* parse_character(parser_state* parser){
         return octet_character(parser->ch);}}
 
 
-static Object* parse_string(parser_state* parser){
+static Ref parse_string(parser_state* parser){
     parser->length=0;
     parser->escape=false;
     while(true){
@@ -248,19 +248,19 @@ static Object* parse_string(parser_state* parser){
                       READER_ERROR(parser->input_stream,"String too long (more than %lu)",ARRAY_TOTAL_SIZE_LIMIT);}
                   parser->token[parser->length++]=parser->ch;}}}}
 
-static Object* parse_list(parser_state* parser){
+static Ref parse_list(parser_state* parser){
     parser->list=NIL_Symbol;
     skip_spaces(parser);
     while(parser->ch!=')'){
-        Object* element=parse_object(parser);
+        Ref element=parse_object(parser);
         push(element,&parser->list);
         skip_spaces(parser);}
     return nreverse(parser->list);}
 
-static Object* parse_vector(parser_state* parser){
+static Ref parse_vector(parser_state* parser){
     return vector_new(parse_list(parser));}
 
-static Object* parse_bit_vector(parser_state* parser){
+static Ref parse_bit_vector(parser_state* parser){
     parser->length=0;
     while(true){
         advance_character(parser);
@@ -276,9 +276,9 @@ static Object* parse_bit_vector(parser_state* parser){
               ungetc(parser->ch,stream_cstream(parser->input_stream));
               return bit_vector_new_octets(parser->length,parser->token);}}}
 
-static Object* parse_token(parser_state* parser);
+static Ref parse_token(parser_state* parser);
 
-static Object* parse_object(parser_state* parser){
+static Ref parse_object(parser_state* parser){
     switch(parser->ch){
         /* We cannot have a ';' since skip_space(parser); eats the comments too. */
       case '\'':  skip_spaces(parser); return cons(S(QUOTE),parse_object(parser));
@@ -303,11 +303,11 @@ static Object* parse_object(parser_state* parser){
               READER_ERROR(parser->input_stream,"Invalid character #\\%s",
                            string_cstring(character_name(octet_character(parser->ch))));}}}
 
-static Object* scan_integer(parser_state* parser);
-static Object* scan_float(parser_state* parser);
-static Object* scan_symbol(parser_state* parser);
+static Ref scan_integer(parser_state* parser);
+static Ref scan_float(parser_state* parser);
+static Ref scan_symbol(parser_state* parser);
 
-static Object* parse_token(parser_state* parser){
+static Ref parse_token(parser_state* parser){
     parser->length=0;
     parser->token[parser->length++]=parser->ch;
     advance_character(parser);
@@ -320,7 +320,7 @@ static Object* parse_token(parser_state* parser){
         STREAM_ERROR(parser->input_stream);}
     else{
         parser->token[parser->length]='\0';
-        Object* result=scan_integer(parser);
+        Ref result=scan_integer(parser);
         if(result==NIL_Symbol){
             result=scan_float(parser);}
         if(result==NIL_Symbol){
@@ -330,7 +330,7 @@ static Object* parse_token(parser_state* parser){
         return result;}}
 
 
-static Object* scan_integer(parser_state* parser){
+static Ref scan_integer(parser_state* parser){
     /* [-+]?[0-9]+\.? */
     const char* token=(char*)parser->token;
     word sign=1;
@@ -365,7 +365,7 @@ static Object* scan_integer(parser_state* parser){
               return NIL_Symbol;}}
     return integer_from_word(sign*value);}
 
-static Object* scan_float(parser_state* parser){
+static Ref scan_float(parser_state* parser){
     /* [-+]?[0-9]*(\.[0-9]+)?([DdEeFfLlSs][-+]?[0-9]+)? */
     /* [-+]?[0-9]+(\.[0-9]*)?[DdEeFfLlSs][-+]?[0-9]+ */
     const char* token=(char*)parser->token;
@@ -408,7 +408,7 @@ static Object* scan_float(parser_state* parser){
         return NIL_Symbol;}
     return float_from_floating(value);}
     
-static Object* scan_symbol(parser_state* parser){
+static Ref scan_symbol(parser_state* parser){
     const char* token=(char*)parser->token;
     const char* colon=strchr(token,':');
     if(!colon){
@@ -422,7 +422,7 @@ static Object* scan_symbol(parser_state* parser){
     return NIL_Symbol;}
     
 
-Object* kernel_read_char(Object* input_stream,Object* eof_error_p,Object* eof_value,unused Object* recursive_p){
+Ref kernel_read_char(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
     bool eof;
     bool err;
     octet ch=read_octet(input_stream,&eof,&err);
@@ -434,7 +434,7 @@ Object* kernel_read_char(Object* input_stream,Object* eof_error_p,Object* eof_va
         STREAM_ERROR(input_stream);}
     return octet_character(ch);}
 
-Object* kernel_peek_char(Object* peek_type,Object* input_stream,Object* eof_error_p,Object* eof_value,unused Object* recursive_p){
+Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
     bool eof;
     bool err;
     octet ch;
@@ -477,7 +477,7 @@ Object* kernel_peek_char(Object* peek_type,Object* input_stream,Object* eof_erro
         TYPE_ERROR(peek_type,CHARACTER_Class);}}
 
 
-Object* kernel_read(Object* input_stream,Object* eof_error_p,Object* eof_value,unused Object* recursive_p){
+Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
     parser_state parser;
     parser.input_stream=input_stream;
     parser.list=NIL_Symbol;
@@ -486,7 +486,7 @@ Object* kernel_read(Object* input_stream,Object* eof_error_p,Object* eof_value,u
     parser.eof=false;
     parser.error=false;
     parser.escape=false;
-    Object* object=parse_object(&parser);
+    Ref object=parse_object(&parser);
     if(parser.eof){
         if(null_p(eof_error_p)){
             return eof_value;}
@@ -495,15 +495,15 @@ Object* kernel_read(Object* input_stream,Object* eof_error_p,Object* eof_value,u
         STREAM_ERROR(input_stream);}
     return object;}
 
-Object* kernel_read_preserving_whitespace(Object* input_stream,Object* eof_error_p,Object* eof_value,unused Object* recursive_p){
+Ref kernel_read_preserving_whitespace(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
     return kernel_read(input_stream,eof_error_p,eof_value,recursive_p);}
 
-Object* kernel_read_delimited_list(Object* character,Object* input_stream,unused Object* recursive_p){
+Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursive_p){
     NOT_IMPLEMENTED_YET();
     return S(NIL);
 }
 
-Object* kernel_read_from_string(Object* input_string,Object* eof_error_p,Object* eof_value,Object* start,Object* end,Object* preserve_whitespace){
+Ref kernel_read_from_string(Ref input_string,Ref eof_error_p,Ref eof_value,Ref start,Ref end,Ref preserve_whitespace){
     NOT_IMPLEMENTED_YET();
     return S(NIL);
 }

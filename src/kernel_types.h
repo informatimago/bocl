@@ -86,15 +86,16 @@ typedef struct Block{
     struct Block* blocks[0];
 } Block;
 
+typedef struct Object* Ref;
 typedef struct Object {
     BLOCK_HEADER;
-    Object* class;
+    Ref class;
     Slots* slots;
 } Object;
 
 typedef struct VectorOfObject {
     BLOCK_HEADER;
-    Object* elements[0]; /* length is objcount in the block_header */
+    Ref elements[0]; /* length is objcount in the block_header */
 } VectorOfObject;
 
 typedef struct VectorOfUWord {
@@ -110,8 +111,8 @@ typedef struct VectorOfOctet {
 
 typedef struct Character {
     BLOCK_HEADER;
-    Object* name;
-    Object* code;
+    Ref name;
+    Ref code;
 } Character;
 
 typedef struct Integer {
@@ -126,31 +127,31 @@ typedef struct Float {
 
 typedef struct Array {
     BLOCK_HEADER;
-    Object* element_type;
+    Ref element_type;
     VectorOfObject* elements;
     uword dimensions[0];
 } Array;
 
 typedef struct OctetArray {
     BLOCK_HEADER;
-    Object* element_type;
+    Ref element_type;
     VectorOfOctet* elements;
     uword dimensions[0];
 } OctetArray;
 
 typedef struct Cons {
     BLOCK_HEADER;
-    Object* car;
-    Object* cdr;
+    Ref car;
+    Ref cdr;
 } Cons;
 
 typedef struct Symbol {
     BLOCK_HEADER;
-    Object* name;
-    Object* package;
-    Object* value;
-    Object* function;
-    Object* plist;
+    Ref name;
+    Ref package;
+    Ref value;
+    Ref function;
+    Ref plist;
 } Symbol;
 
 
@@ -162,9 +163,9 @@ typedef enum { on_error_error=0xf001, on_error_ignore=0xf002 } on_error_t;
 
 typedef struct FileStream {
     BLOCK_HEADER;
-    Object* pathname;          // a PHYSICAL-PATHNAME
-    Object* element_type;      // CHARACTER or (UNSIGNED-BYTE 8) or BIT
-    Object* external_format;   // Normalized external-format: (list (member :US-ASCII :ISO-8859-1) (member :crlf :cr :lf) (or character (member :error nil)))
+    Ref pathname;          // a PHYSICAL-PATHNAME
+    Ref element_type;      // CHARACTER or (UNSIGNED-BYTE 8) or BIT
+    Ref external_format;   // Normalized external-format: (list (member :US-ASCII :ISO-8859-1) (member :crlf :cr :lf) (or character (member :error nil)))
     halfword is_open;
     halfword direction;
     halfword type;             // derived from element_type
@@ -183,8 +184,8 @@ typedef struct FileStream {
 
 #define CLASS_HEADER \
     BLOCK_HEADER; \
-    Object* name; \
-    Object* direct_superclasses
+    Ref name; \
+    Ref direct_superclasses
 
 typedef struct Class {
     CLASS_HEADER;
@@ -211,35 +212,35 @@ typedef struct FuncallableStandardClass {
 
 typedef struct MultipleValues {
     uword count;
-    Object* values[MULTIPLE_VALUES_LIMIT];
+    Ref values[MULTIPLE_VALUES_LIMIT];
 } MultipleValues;
 
-typedef void (*KernelFunctionPtr)(Object* function,Object* arguments,MultipleValues* results);
+typedef void (*KernelFunctionPtr)(Ref function,Ref arguments,MultipleValues* results);
 
 typedef struct Closure            {
     BLOCK_HEADER;
-    Object* function;
-    Object* environment;
+    Ref function;
+    Ref environment;
 } Closure;
 
 typedef struct Function            { /* both FunctionClass and CompiledFunctionClass objets */
     BLOCK_HEADER;
-    Object* lisp_name;
-    Object* lambda_list;
-    Object* body;
+    Ref lisp_name;
+    Ref lambda_list;
+    Ref body;
 } Function;
 
 typedef struct BuiltInFunction     {
     BLOCK_HEADER;
-    Object*           lisp_name;       /* the Lisp Symbol naming the kernel function. */
-    Object*           lambda_list;     /* the lambda list of the kernel function. */
+    Ref           lisp_name;       /* the Lisp Symbol naming the kernel function. */
+    Ref           lambda_list;     /* the lambda list of the kernel function. */
     KernelFunctionPtr kernel_function; /* the entry point of to the kernel function. */
 } BuiltInFunction;
 
 typedef struct FuncallableStandardObject {
     BLOCK_HEADER;
     /* TODO: FuncallableStandardObject */
-    Object*           object; /* The object data */
+    Ref           object; /* The object data */
     KernelFunctionPtr apply;  /* The entry point of to the Funcallable Standard Object. */
 } FuncallableStandardObject;
 
@@ -273,7 +274,7 @@ typedef union Slots {
 } Slots;
 
 
-Object* make_boot_Object(Slots* slots);
+Ref make_boot_Object(Slots* slots);
 Class* make_boot_Class(void);
 StandardClass* make_boot_StandardClass(void);
 BuiltInClass* make_boot_BuiltInClass(void);

@@ -21,18 +21,18 @@ generate-built-in-functions.lisp into kernel_functions.h */
 
 void kernel_initialize(void);
 
-void push_to_rootset(Object* object);
-void delete_from_rootset(Object* object);
+void push_to_rootset(Ref object);
+void delete_from_rootset(Ref object);
 
-void check_no_more_arguments(Object* function,Object* arguments);
-Object* pop_mandatory_argument(Object* function,Object** arguments);
-Object* pop_optional_argument(Object* function,Object** arguments,Object* default_value);
-Object* pop_key_argument(Object* function,Object** arguments,Object* keyword,Object* default_value);
+void check_no_more_arguments(Ref function,Ref arguments);
+Ref pop_mandatory_argument(Ref function,Ref* arguments);
+Ref pop_optional_argument(Ref function,Ref* arguments,Ref default_value);
+Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value);
 
 /* Lisp Objects */
 
-Object* as_boolean(bool value);
-bool is_true(Object* object);
+Ref as_boolean(bool value);
+bool is_true(Ref object);
 
 /* CLASS */
 
@@ -42,69 +42,69 @@ bool is_true(Object* object);
 
 /* INTEGER */
 
-Object* integer_from_word(word value);
-Object* integer_from_uword(uword value);
-word integer_value(Object* object);
+Ref integer_from_word(word value);
+Ref integer_from_uword(uword value);
+word integer_value(Ref object);
 
 /* FLOAT */
 
-Object* float_from_floating(floating value);
-floating float_value(Object* object);
+Ref float_from_floating(floating value);
+floating float_value(Ref object);
 
 /* CHARACTER */
 
-Object* octet_character(octet code);
+Ref octet_character(octet code);
 
 /* STRING */
 
-Object* string_new(halfword length);
-Object* string_new_cstring(const char* string);
-char* string_cstring(Object* string);
+Ref string_new(halfword length);
+Ref string_new_cstring(const char* string);
+char* string_cstring(Ref string);
 
 /* SYMBOL */
 
-Object* symbol_new_cstring(const char* name);
-Object* symbol_intern_cstring(const char* name);
+Ref symbol_new_cstring(const char* name);
+Ref symbol_intern_cstring(const char* name);
 
 /* Keyword */
 
-Object* keyword_intern_cstring(const char* name);
+Ref keyword_intern_cstring(const char* name);
 
 /* Null */
 
 /* BIT-VECTOR */
 
-Object* bit_vector_new_octets(uword length,octet* bits);
+Ref bit_vector_new_octets(uword length,octet* bits);
 
 /* External-Format */
 
-Object* normalize_encoding(Object* encoding_o,encoding_t* encoding);
-Object* normalize_new_line(Object* new_line_o,new_line_t* new_line);
-Object* normalize_on_error(Object* on_error_o,on_error_t* on_error);
-Object* normalize_external_format_internal(Object* external_format,
+Ref normalize_encoding(Ref encoding_o,encoding_t* encoding);
+Ref normalize_new_line(Ref new_line_o,new_line_t* new_line);
+Ref normalize_on_error(Ref on_error_o,on_error_t* on_error);
+Ref normalize_external_format_internal(Ref external_format,
                                            encoding_t* encoding,
                                            new_line_t* new_line,
                                            on_error_t* on_error);
-Object* convert_from_direction(direction_t direction);
-direction_t convert_direction(Object* direction);
-type_t convert_element_type(Object* element_type);
+Ref convert_from_direction(direction_t direction);
+direction_t convert_direction(Ref direction);
+type_t convert_element_type(Ref element_type);
 
 
 /* PHYSICAL-PATHNAME */
 
-Object* physical_pathname_new(VectorOfOctet* path);
-Object* physical_pathname_new_cstring(const char* path);
+Ref physical_pathname_new(VectorOfOctet* path);
+Ref physical_pathname_new_cstring(const char* path);
 
 /* FILESTREAM */
 
-FILE* stream_cstream(Object* stream);
-type_t stream_type(Object* stream);
+FILE* stream_cstream(Ref stream);
+type_t stream_type(Ref stream);
 
 /* FUNCTIONS */
 
-void kernel_apply(Object* function_or_closure,Object* arguments,MultipleValues* results);
-void kernel_apply_closure(Closure* closure,Object* arguments,MultipleValues* results);
-void kernel_apply_function(Function* function,Object* arguments,MultipleValues* results);
-void kernel_apply_built_in(BuiltInFunction* function,Object* arguments,MultipleValues* results);
+void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results);
+void kernel_apply_closure(Closure* closure,Ref arguments,MultipleValues* results);
+void kernel_apply_function(Function* function,Ref arguments,MultipleValues* results);
+void kernel_apply_built_in(BuiltInFunction* function,Ref arguments,MultipleValues* results);
 
 #endif

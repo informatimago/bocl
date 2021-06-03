@@ -33,7 +33,7 @@
 
 _Noreturn void fatal(const char* fname,const char* message_format,...);
 _Noreturn void error(const char* fname,const char* message_format,...);
-_Noreturn void type_error(const char* fname,Object* object,Object* class);
+_Noreturn void type_error(const char* fname,Ref object,Ref class);
 
 void* check_pointer(const char* fname,void* pointer);
 uword check_size_to_uword(const char* fname,size_t size);
@@ -41,7 +41,7 @@ halfword check_size_to_halfword(const char* fname,size_t size);
 word check_uword_to_word(const char* fname,uword value);
 halfword check_uword_to_halfword(const char* fname,uword value);
 
-void report_error(Object* error);
+void report_error(Ref error);
 
 void error_initialize(void);
 

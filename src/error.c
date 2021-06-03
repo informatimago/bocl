@@ -11,9 +11,9 @@
 
 /* Error Handling */
 
-void report_error(unused Object* error){
+void report_error(unused Ref error){
     fprintf(stderr,"\nERROR: ");
-    Object* err=variable_value(S(*ERROR-OUTPUT*));
+    Ref err=variable_value(S(*ERROR-OUTPUT*));
     prin1(error,err);
     terpri(err);}
 
@@ -38,7 +38,7 @@ _Noreturn void error(const char* fname,const char* message_format,...){
     exit(EX_DATAERR);}
 
 
-_Noreturn void type_error(const char* fname,Object* object,Object* class){
+_Noreturn void type_error(const char* fname,Ref object,Ref class){
     // TODO: Implement type_error() with the error handling system.
     char* got=string_cstring(object->class->slots->class.name->slots->symbol.name);
     char* exp=string_cstring( class->class->slots->class.name->slots->symbol.name);

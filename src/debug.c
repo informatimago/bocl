@@ -11,14 +11,14 @@
 
 
 
-void dump_obarray(Object* obarray){
+void dump_obarray(Ref obarray){
     if(!cons_p(obarray)){
         fprintf(stderr,"dump obarray: NOT A CONS CELL, but %s\n",
                 string_cstring(symbol_name(obarray->class->slots->class.name)));
         abort();}
     fprintf(stderr,"dump obarray: %-16s\n",
             string_cstring(symbol_name(cons_car(obarray))));
-    Object* syms=cons_cdr(obarray);
+    Ref syms=cons_cdr(obarray);
     long sc=0;
     while(cons_p(syms)){
         sc++;
@@ -40,15 +40,15 @@ void dump_kernel_classes(){
     fprintf(stderr,"kernel_classes length is %lld\n",
             list_length(kernel_classes));
     int i=0;
-    Object* current=kernel_classes;
+    Ref current=kernel_classes;
     while(cons_p(current)){
-        Object* class=cons_car(current);
+        Ref class=cons_car(current);
         current=cons_cdr(current);
         i++;
         if(!class){
             fprintf(stderr,"%3d: NULL!\n",i);
             continue;}
-        Object* class_name_class=class->slots->class.name;
+        Ref class_name_class=class->slots->class.name;
         if(!class_name_class){
             fprintf(stderr,"%3d: %p NULL name!\n",i,(void*)class);
             continue;}
@@ -57,7 +57,7 @@ void dump_kernel_classes(){
                     i,
                     string_cstring(symbol_name(class_name_class)));
             continue;}
-        Object* class_name_metaclass=class_of(class)->slots->class.name;
+        Ref class_name_metaclass=class_of(class)->slots->class.name;
         if(!class_name_metaclass){
             fprintf(stderr,"%3d: %-34s %p NULL name of metaclass!\n",
                     i,
@@ -68,20 +68,20 @@ void dump_kernel_classes(){
                 string_cstring(symbol_name(class_name_class)),
                 string_cstring(symbol_name(class_name_metaclass)));
 
-        Object* ccurrent=class->slots->class.direct_superclasses;
+        Ref ccurrent=class->slots->class.direct_superclasses;
         if(!ccurrent){
             fprintf(stderr,"C NULL direct-superclasses!\n");
             continue;}
         while(cons_p(ccurrent)){
-            Object* super=cons_car(ccurrent);
+            Ref super=cons_car(ccurrent);
             current=cons_cdr(ccurrent);
-            Object* class_name_super=super->slots->class.name;
+            Ref class_name_super=super->slots->class.name;
             fprintf(stderr," %s",string_cstring(symbol_name(class_name_super)));}
         fprintf(stderr,"\n");}}
 
 
-void debug_typep(Object* object,Object* class){
-    Object* object_class=class_of(object);
+void debug_typep(Ref object,Ref class){
+    Ref object_class=class_of(object);
     fprintf(stderr,"Is object %p of type %p\n",
             (void*)object,
             (void*)class);

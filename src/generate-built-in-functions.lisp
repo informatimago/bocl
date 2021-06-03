@@ -100,42 +100,42 @@
            ((equal values '(boolean))  (write-string "bool "))
            ((equal values '(uword))    (write-string "uword "))
            ((equal values '(word))     (write-string "word "))
-           ((equal values '(t))        (write-string "Object* "))
+           ((equal values '(t))        (write-string "Ref "))
            (t (error "Multiple-values not supported yet. ~S" values)))
          (format t "~A(" (if cfun (c-fun-name cfun) (c-fun-name fname)))
          (let ((sep ""))
            (dolist (man mandatories)
-             (format t "~AObject* ~A" sep (c-par-name man))
+             (format t "~ARef ~A" sep (c-par-name man))
              (setf sep ", "))
            (dolist (opt optionals)
              (let ((opt-name  (if (listp opt)
                                   (first opt)
                                   opt)))
-               (format t "~AObject* ~A" sep (c-par-name opt-name))
+               (format t "~ARef ~A" sep (c-par-name opt-name))
                (setf sep ", ")))
            (when rest
-             (format t "~AObject* ~A" sep (c-par-name rest))
+             (format t "~ARef ~A" sep (c-par-name rest))
              (setf sep ", "))
            (dolist (key keywords)
              (let ((key-name (first key)))
-               (format t "~AObject* ~A" sep (c-par-name key-name))
+               (format t "~ARef ~A" sep (c-par-name key-name))
                (setf sep ", ")))
            (when (string= sep "")
              (write-string "void")))
          (write-line ");"))
 
         (:header
-         (format t "void ~A(Object* function,Object* arguments,MultipleValues* results);~%"
+         (format t "void ~A(Ref function,Ref arguments,MultipleValues* results);~%"
                  (k-fun-name fname)))
         
         (otherwise
-         (format t "void ~A(Object* function,Object* arguments,MultipleValues* results){~%"
+         (format t "void ~A(Ref function,Ref arguments,MultipleValues* results){~%"
                  (k-fun-name fname))
          (write-line "    push_to_rootset(function);")
          (write-line "    push_to_rootset(arguments);")
-         (write-line "    Object* current=arguments;")
+         (write-line "    Ref current=arguments;")
          (dolist (man mandatories)
-           (format t "    Object* ~A = pop_mandatory_argument(function,&current);~%"
+           (format t "    Ref ~A = pop_mandatory_argument(function,&current);~%"
                    (c-par-name man)))
          (dolist (opt optionals)
            (let ((opt-name (if (listp opt)
@@ -146,47 +146,47 @@
                                   nil)))
              (cond
                ((keywordp opt-default)
-                (format t "    Object* ~A = K(~A);~%"
+                (format t "    Ref ~A = K(~A);~%"
                         (c-default opt-name) (string opt-default)))
                ((symbolp opt-default)
-                (format t "    Object* ~A = variable_value(S(~A));~%"
+                (format t "    Ref ~A = variable_value(S(~A));~%"
                         (c-default opt-name)  (string opt-default)))
                ((integerp opt-default)
-                (format t "    Object* ~A = I(~A);~%"
+                (format t "    Ref ~A = I(~A);~%"
                         (c-default opt-name)  opt-default))
                ((and (listp opt-default)
                      (eq 'quote (first opt-default))
                      (symbolp (second opt-default)))
-                (format t "    Object* ~A = S(~A);~%"
+                (format t "    Ref ~A = S(~A);~%"
                         (c-default opt-name)  (string (second opt-default))))
                (t
                 (error "Not Implemented Yet: non-nil optional default ~S" opt-default)))
-             (format t "    Object* ~A = pop_optional_argument(function,&current,~A);~%"
+             (format t "    Ref ~A = pop_optional_argument(function,&current,~A);~%"
                      (c-par-name opt-name) (c-default opt-name))))
          (when rest
-           (format t "    Object* ~A = current;~%"
+           (format t "    Ref ~A = current;~%"
                    (c-par-name rest)))
          (dolist (key keywords)
            (let ((key-name (first key))
                  (key-default (second key)))
              (cond
                ((keywordp key-default)
-                (format t "    Object* ~A = K(~A);~%"
+                (format t "    Ref ~A = K(~A);~%"
                         (c-default key-name) (string key-default)))
                ((symbolp key-default)
-                (format t "    Object* ~A = variable_value(S(~A));~%"
+                (format t "    Ref ~A = variable_value(S(~A));~%"
                         (c-default key-name)  (string key-default)))
                ((integerp key-default)
-                (format t "    Object* ~A = I(~A);~%"
+                (format t "    Ref ~A = I(~A);~%"
                         (c-default key-name)  key-default))
                ((and (listp key-default)
                      (eq 'quote (first key-default))
                      (symbolp (second key-default)))
-                (format t "    Object* ~A = S(~A);~%"
+                (format t "    Ref ~A = S(~A);~%"
                         (c-default key-name)  (string (second key-default))))
                (t
                 (error "Not Implemented Yet: non-nil optional default ~S" key-default)))
-             (format t "    Object* ~A = pop_key_argument(function,&current,K(~A),~A);~%"
+             (format t "    Ref ~A = pop_key_argument(function,&current,K(~A),~A);~%"
                      (c-par-name key-name) (string key-name) (c-default key-name))))
          (unless (or rest keywords)
            (write-line  "    check_no_more_arguments(function,current);"))

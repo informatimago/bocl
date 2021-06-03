@@ -1,7 +1,7 @@
 #include "data.h"
 #include "kernel.h"
 
-bool eql(Object* a,Object* b){
+bool eql(Ref a,Ref b){
     return a==b;}
 
 /**** THE END ****/

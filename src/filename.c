@@ -1,11 +1,11 @@
 #include "filename.h"
 #include "kernel.h"
 
-Object* pathname(Object* pathname_designator){
+Ref pathname(Ref pathname_designator){
     NOT_IMPLEMENTED_YET();
 }
 
-Object* namestring(Object* pathname){
+Ref namestring(Ref pathname){
     NOT_IMPLEMENTED_YET();
 }
 
