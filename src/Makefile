@@ -14,7 +14,7 @@ DEBUG_SRCS =
 endif
 
 SRCS = main.c bocl.c string_list.c \
-	kernel.c kernel_objects.c memory.c \
+	kernel.c kernel_objects.c memory.c error.c \
 	built_in_functions.c \
 	variable.c cons.c data.c \
 	stream.c reader.c printer.c filename.c \

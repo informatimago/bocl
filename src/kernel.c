@@ -9,6 +9,7 @@
 #include "kernel_private.h"
 #include "macros.h"
 #include "memory.h"
+#include "error.h"
 #include "cons.h"
 #include "variable.h"
 #include "printer.h"
@@ -20,7 +21,7 @@
 
 static Object*                   Object_new                     (Object*  class,        Slots*   slots);
 
-static Array*                    Array_slots                    (Object*  element_type, halfword rank, halfword* dimensions) unused;
+static Array*                    Array_slots                    (Object*  element_type, halfword rank, halfword* dimensions);
 static BuiltInClass*             BuiltInClass_slots             (Object*  name,         Object*  superclasses);
 static Character*                Character_slots                (Object*  name,         Object*  code);
 static Class*                    Class_slots                    (Object*  name,         Object*  superclasses);
@@ -180,6 +181,9 @@ Object* code_character(Object* code){
         return NIL_Symbol;}
     else{
         return character_table[icode];}}
+
+Object* octet_character(octet code){
+    return character_table[code];}
 
 Object* name_character(Object* name){
     if(character_p(name)){
@@ -736,6 +740,27 @@ bool is_true(Object* object){
     return object!=NIL_Symbol;}
 
 
+/* VECTOR */
+
+Object* vector_new(Object* elements){
+    uword length=list_length(elements);
+    halfword dimensions[1];
+    dimensions[0]=CHECK_UWORD_TO_HALFWORD(length);
+    Array* array=Array_slots(T_Symbol,1,dimensions);
+    for(int i=0;cons_p(elements);i++,elements=cdr(elements)){
+        array->elements->elements[i]=car(elements);}
+    return Object_new(VECTOR_Class,(Slots*)array);}
+
+/* BIT-VECTOR */
+
+Object* bit_vector_new_octets(uword length,octet* bits){
+    halfword dimensions[1];
+    dimensions[0]=CHECK_UWORD_TO_HALFWORD(length);
+    Array* array=Array_slots(BIT_Symbol,1,dimensions);
+    memcpy(array->elements->elements,bits,length);
+    return Object_new(BIT_VECTOR_Class,(Slots*)array);}
+
+
 /* CLASS */
 
 Class* Class_slots(Object* name,Object* superclasses){
@@ -1155,6 +1180,10 @@ bool stream_open_p(Object* stream){
 FILE* stream_cstream(Object* stream){
     check_class(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.stream;}
+
+type_t stream_type(Object* stream){
+    check_class(stream,FILE_STREAM_Class);
+    return stream->slots->file_stream.type;}
 
 
 Object* standard_input_stream(void){

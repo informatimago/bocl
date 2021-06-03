@@ -8,6 +8,7 @@
 #include "printer.h"
 #include "variable.h"
 
+
 Object* stream_open(Object* filespec,
                     Object* direction,
                     Object* element_type,

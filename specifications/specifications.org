@@ -845,15 +845,15 @@ read CL library lisp files.
 
 Hard-wired reader macros:
 
-| character | lisp object | example                         |
-|-----------+-------------+---------------------------------|
-| =;=       | comments    | =; foo=                         |
-| ='=       | quote       | ='foo=                          |
-| ="=       | strings     | ="foo"=  =\\= and =\"= escapes. |
-| =(=       | lists       | =(f o o)= (no dotted list)      |
-| =#\=      | characters  | =#\f=                           |
-| =#(=      | vectors     | =#(f o o)=                      |
-| =#*=      | bit-vectors | =#*101010=                      |
+| character | lisp object         | example                         |
+|-----------+---------------------+---------------------------------|
+| =;=       | comments            | =; foo=                         |
+| ='=       | quote               | ='foo=                          |
+| ="=       | strings             | ="foo"=  =\\= and =\"= escapes. |
+| =(=       | lists               | =(f o o)= (no dotted list)      |
+| =#\=      | characters          | =#\f=                           |
+| =#(=      | vectors             | =#(f o o)=                      |
+| =#*=      | bit-vectors         | =#*101010=                      |
 
 
 Not read by the Tiny Lisp Reader (an error is signaled):

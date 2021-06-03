@@ -977,7 +977,7 @@ void kernel_LIST_LENGTH(Object* function,Object* arguments,MultipleValues* resul
     Object* par_list = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = integer_from_word(list_length(par_list));
+    results->values[0] = integer_from_uword(list_length(par_list));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1032,6 +1032,17 @@ void kernel_COPY_LIST(Object* function,Object* arguments,MultipleValues* results
     delete_from_rootset(function);
 }
 
+void kernel_LIST(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_elements = current;
+    results->count=1;
+    results->values[0] = copy_list(par_elements);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 void kernel_DELETE(Object* function,Object* arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -1041,6 +1052,30 @@ void kernel_DELETE(Object* function,Object* arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = delete(par_object, par_list);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_NREVERSE(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_list = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = nreverse(par_list);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_REVERSE(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_list = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = reverse(par_list);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1083,6 +1118,17 @@ void kernel_REMF(Object* function,Object* arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = as_boolean(remf(par_plist, par_indicator));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_VECTOR(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_elements = current;
+    results->count=1;
+    results->values[0] = vector_new(par_elements);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1187,6 +1233,45 @@ void kernel_TERPRI(Object* function,Object* arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = terpri(par_stream);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_KERNEL_READ_CHAR(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* def_input_stream = variable_value(S(*STANDARD-INPUT*));
+    Object* par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+    Object* def_eof_error_p = variable_value(S(T));
+    Object* par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
+    Object* def_eof_value = variable_value(S(NIL));
+    Object* par_eof_value = pop_optional_argument(function,&current,def_eof_value);
+    Object* def_recursive_p = variable_value(S(NIL));
+    Object* par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = kernel_read_char(par_input_stream, par_eof_error_p, par_eof_value, par_recursive_p);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_KERNEL_PEEK_CHAR(Object* function,Object* arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Object* current=arguments;
+    Object* par_peek_type = pop_mandatory_argument(function,&current);
+    Object* def_input_stream = variable_value(S(*STANDARD-INPUT*));
+    Object* par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+    Object* def_eof_error_p = variable_value(S(T));
+    Object* par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
+    Object* def_eof_value = variable_value(S(NIL));
+    Object* par_eof_value = pop_optional_argument(function,&current,def_eof_value);
+    Object* def_recursive_p = variable_value(S(NIL));
+    Object* par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = kernel_peek_char(par_peek_type, par_input_stream, par_eof_error_p, par_eof_value, par_recursive_p);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }

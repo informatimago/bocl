@@ -219,6 +219,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (array                              (built-in-class)             (t))
     (string                             (built-in-class)             (vector))
     (vector                             (built-in-class)             (array                       sequence))
+    (bit-vector                         (built-in-class)             (vector))
     (sequence                           (built-in-class)             (t))
     (cons                               (built-in-class)             (list))
     (null                               (built-in-class)             (symbol                      list))
@@ -319,10 +320,6 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
   (find class-name *initial-object-graph* :key (function first)))
 
 
-(defun find-metaclass-cycles (graph)
-
-  )
-
 
 (defparameter *classes*
   (remove-duplicates (append (mapcar (function cinfo-class-name) *initial-object-graph*)
@@ -376,6 +373,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (write-line "Object* kernel_classes;  /* list of class objects */")
     (write-line "Object* NIL_Symbol;")
     (write-line "Object* T_Symbol;")
+    (write-line "Object* BIT_Symbol;")
     (write-line "Object* KERNEL_Symbol;")
     (write-line "Object* KEYWORD_Symbol;")
     (write-line "Object* CHARACTER_Symbol;")
@@ -414,6 +412,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (write-line "Object* KERNEL_Symbol    = &uninitialized_object;")
     (write-line "Object* KEYWORD_Symbol   = &uninitialized_object;")
     (write-line "Object* CHARACTER_Symbol = &uninitialized_object;")
+    (write-line "Object* BIT_Symbol       = &uninitialized_object;")
     (write-line "Object* KERNEL_obarray   = &uninitialized_object;  /* list of interned symbols */")
     (write-line "Object* KEYWORD_obarray  = &uninitialized_object;  /* list of interned keywords */")
     (write-line "Object* UNBOUND_Object   = &uninitialized_object;")
@@ -496,15 +495,13 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (terpri)
     (write-line "    NIL_Symbol->class = NULL_Class;")
     (write-line "    T_Symbol = symbol_intern_cstring(\"T\");")
+    (write-line "    BIT_Symbol = symbol_intern_cstring(\"BIT\");")
     (terpri)
     (write-line "}")
     (terpri)
     (write-line "/*** THE END ***/"))
 
   (values))
-
-
-
 
 #-(and)
 (progn
@@ -526,3 +523,4 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
 
 
 #-(and) (pprint generate-lisp-prototype)
+

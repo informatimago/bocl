@@ -11,6 +11,7 @@
 #include "bocl.h"
 #include "macros.h"
 #include "memory.h"
+#include "error.h"
 #include "strdup.h"
 
 static const char* source="http://gitlab.com/informatimago/bocl/";
@@ -28,8 +29,9 @@ static char* terminal_encoding;
 static bool do_norc=false;
 static bool do_quiet=false;
 static bool do_verbose=false;
-static bool do_print=false;
 static bool do_batch=false;
+static bool do_print=false;
+static bool do_dump=false;
 static bool do_sigtrap=true;
 static char* on_error_action=NULL;
 typedef enum { on_error_debug, on_error_exit, on_error_abort, on_error_appease } on_error_action_t;
@@ -59,8 +61,9 @@ static void print_options(void){
     PBOP(do_norc);
     PBOP(do_quiet);
     PBOP(do_verbose);
-    PBOP(do_print);
     PBOP(do_batch);
+    PBOP(do_print);
+    PBOP(do_dump);
     PBOP(do_sigtrap);
     PSOP(on_error_action);
     PLOP(initfiles);
@@ -81,15 +84,16 @@ static struct {
     {{"-Eterminal",NULL},                   NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"--terminal-encoding",NULL},          NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {NULL},                                    "suppress loading of default init file ~/.boclrc"},
-    {{"-x","-e","--eval",NULL},             NULL,        elst, {"form",{.list=&expressions_and_loads}},   "evaluate form (may need to quote form in shell)"},
-    {{"-l","--load",NULL},                  NULL,        load, {"file",{.list=&expressions_and_loads}},   "load file"},
     {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {NULL},                                    "if --batch, also suppress printing of heralds, prompts."},
+    {{"-b","--batch",NULL},                 &do_batch,   none, {NULL},                                    "exit when EOF on *STANDARD-INPUT*"},
     {{"--verbose",NULL},                    &do_verbose, none, {NULL},                                    "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
     {{"--print",NULL},                      &do_print,   none, {NULL},                                    "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
-    {{"-b","--batch",NULL},                 &do_batch,   none, {NULL},                                    "exit when EOF on *STANDARD-INPUT*"},
+    {{"--dump",NULL},                       &do_dump,    none, {NULL},                                    "dumps the heap"},/* TODO: put that in expressions_and_loads */
     {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {NULL},                                    "obscure option for running under GDB"},
     {{"-on-error",NULL},                    NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
     {{"-i","--init",NULL},                  NULL,        elst, {"file",{.list=&initfiles}},               "load initfile (can be repeated)"},
+    {{"-x","-e","--eval",NULL},             NULL,        elst, {"form",{.list=&expressions_and_loads}},   "evaluate form (may need to quote form in shell)"},
+    {{"-l","--load",NULL},                  NULL,        load, {"file",{.list=&expressions_and_loads}},   "load file"},
     {{"-p","--package",NULL},               NULL,        strg, {"package",{.string=&package}},            "start in the package"},
     {{"-repl","--repl",NULL},               &do_repl,    none, {NULL},                                    "enter the interactive read-eval-print loop when done (default)"},
     {{"-quit","--quit",NULL},               &do_quit,    none, {NULL},                                    "quit when argument processing is done"},
@@ -293,6 +297,9 @@ int main(int argc,char** argv){
 
     if(!do_quiet && !do_batch){
         print_banner();}
+
+    if(do_dump){
+        memory_dump(stdout);}
 
     if(do_batch){
         bocl_read_eval_cstring("(DEFPARAMETER BOCL:*BATCH*  T)");}

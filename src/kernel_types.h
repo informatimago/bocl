@@ -16,9 +16,12 @@ typedef uint32_t halfword;
 #define WORD_MAX INT64_MAX
 #define UWORD_MAX UINT64_MAX
 #define HALFWORD_MAX UINT32_MAX
-#define WORD_FORMAT "%lld"
-#define UWORD_FORMAT "%llu"
-#define HALFWORD_FORMAT "%u"
+#define WORD_FORMAT "lld"
+#define UWORD_FORMAT "llu"
+#define HALFWORD_FORMAT "u"
+#define WORD_X_FORMAT "llx"
+#define UWORD_X_FORMAT "llx"
+#define HALFWORD_X_FORMAT "x"
 #else
 typedef int32_t  word;
 typedef uint32_t uword;
@@ -27,9 +30,12 @@ typedef uint32_t halfword;
 #define WORD_MAX INT32_MAX
 #define UWORD_MAX UINT32_MAX
 #define HALFWORD_MAX UINT32_MAX
-#define WORD_FORMAT "%d"
-#define UWORD_FORMAT "%u"
-#define HALFWORD_FORMAT "%u"
+#define WORD_FORMAT "d"
+#define UWORD_FORMAT "u"
+#define HALFWORD_FORMAT "u"
+#define WORD_X_FORMAT "x"
+#define UWORD_X_FORMAT "x"
+#define HALFWORD_X_FORMAT "x"
 #endif
 typedef uint8_t  octet;
 typedef double   floating;
@@ -65,9 +71,13 @@ typedef struct FuncallableFunctionClass FuncallableFunctionClass;
 
 #ifdef _POSIX_V6_LP64_OFF64
 #define BLOCK_HEADER   halfword size; halfword objcount
+#define BH_FORMAT      HALFWORD_FORMAT
+#define BH_X_FORMAT    HALFWORD_X_FORMAT
 #define FREE_BLOCK     HALFWORD_MAX
 #else
 #define BLOCK_HEADER   uword size;    uword objcount
+#define BH_FORMAT      UWORD_FORMAT
+#define BH_X_FORMAT    UWORD_X_FORMAT
 #define FREE_BLOCK     UWORD_MAX
 #endif
 
@@ -84,18 +94,18 @@ typedef struct Object {
 
 typedef struct VectorOfObject {
     BLOCK_HEADER;
-    Object* elements[0];
+    Object* elements[0]; /* length is objcount in the block_header */
 } VectorOfObject;
 
 typedef struct VectorOfUWord {
     BLOCK_HEADER;
-    uword elements[0];
+    uword elements[0];  /* length is (size/8-1) the block_header */
 } VectorOfUWord;
 
 typedef struct VectorOfOctet {
     BLOCK_HEADER;
-    uword length;
-    octet elements[0];
+    uword length;       /* used length<=(size/8-2) */
+    octet elements[0];  /* allocated length is (size/8-2) the block_header */
 } VectorOfOctet;
 
 typedef struct Character {

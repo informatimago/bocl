@@ -16,6 +16,7 @@ Object* T_Symbol         = &uninitialized_object;
 Object* KERNEL_Symbol    = &uninitialized_object;
 Object* KEYWORD_Symbol   = &uninitialized_object;
 Object* CHARACTER_Symbol = &uninitialized_object;
+Object* BIT_Symbol       = &uninitialized_object;
 Object* KERNEL_obarray   = &uninitialized_object;  /* list of interned symbols */
 Object* KEYWORD_obarray  = &uninitialized_object;  /* list of interned keywords */
 Object* UNBOUND_Object   = &uninitialized_object;
@@ -25,6 +26,7 @@ Object* CHARACTER_Class                          = &uninitialized_object;
 Object* ARRAY_Class                              = &uninitialized_object;
 Object* STRING_Class                             = &uninitialized_object;
 Object* VECTOR_Class                             = &uninitialized_object;
+Object* BIT_VECTOR_Class                         = &uninitialized_object;
 Object* SEQUENCE_Class                           = &uninitialized_object;
 Object* CONS_Class                               = &uninitialized_object;
 Object* NULL_Class                               = &uninitialized_object;
@@ -124,6 +126,7 @@ void kernel_objects_initialize(void){
     ARRAY_Class                              = make_boot_Object((Slots*)make_boot_BuiltInClass());
     STRING_Class                             = make_boot_Object((Slots*)make_boot_BuiltInClass());
     VECTOR_Class                             = make_boot_Object((Slots*)make_boot_BuiltInClass());
+    BIT_VECTOR_Class                         = make_boot_Object((Slots*)make_boot_BuiltInClass());
     SEQUENCE_Class                           = make_boot_Object((Slots*)make_boot_BuiltInClass());
     CONS_Class                               = make_boot_Object((Slots*)make_boot_BuiltInClass());
     NULL_Class                               = make_boot_Object((Slots*)make_boot_BuiltInClass());
@@ -221,6 +224,7 @@ void kernel_objects_initialize(void){
     ARRAY_Class                             -> class = BUILT_IN_CLASS_Class;
     STRING_Class                            -> class = BUILT_IN_CLASS_Class;
     VECTOR_Class                            -> class = BUILT_IN_CLASS_Class;
+    BIT_VECTOR_Class                        -> class = BUILT_IN_CLASS_Class;
     SEQUENCE_Class                          -> class = BUILT_IN_CLASS_Class;
     CONS_Class                              -> class = BUILT_IN_CLASS_Class;
     NULL_Class                              -> class = BUILT_IN_CLASS_Class;
@@ -349,6 +353,7 @@ void kernel_objects_initialize(void){
     push(ARRAY_Class                             ,&kernel_classes);
     push(STRING_Class                            ,&kernel_classes);
     push(VECTOR_Class                            ,&kernel_classes);
+    push(BIT_VECTOR_Class                        ,&kernel_classes);
     push(SEQUENCE_Class                          ,&kernel_classes);
     push(CONS_Class                              ,&kernel_classes);
     push(NULL_Class                              ,&kernel_classes);
@@ -446,6 +451,7 @@ void kernel_objects_initialize(void){
     ARRAY_Class                              -> slots->class.direct_superclasses = NIL_Symbol;
     STRING_Class                             -> slots->class.direct_superclasses = NIL_Symbol;
     VECTOR_Class                             -> slots->class.direct_superclasses = NIL_Symbol;
+    BIT_VECTOR_Class                         -> slots->class.direct_superclasses = NIL_Symbol;
     SEQUENCE_Class                           -> slots->class.direct_superclasses = NIL_Symbol;
     CONS_Class                               -> slots->class.direct_superclasses = NIL_Symbol;
     NULL_Class                               -> slots->class.direct_superclasses = NIL_Symbol;
@@ -543,6 +549,7 @@ void kernel_objects_initialize(void){
     boot_class_add_superclass(STRING_Class                            ,VECTOR_Class                            );
     boot_class_add_superclass(VECTOR_Class                            ,ARRAY_Class                             );
     boot_class_add_superclass(VECTOR_Class                            ,SEQUENCE_Class                          );
+    boot_class_add_superclass(BIT_VECTOR_Class                        ,VECTOR_Class                            );
     boot_class_add_superclass(SEQUENCE_Class                          ,T_Class                                 );
     boot_class_add_superclass(CONS_Class                              ,LIST_Class                              );
     boot_class_add_superclass(NULL_Class                              ,SYMBOL_Class                            );
@@ -648,6 +655,7 @@ void kernel_objects_initialize(void){
     ARRAY_Class                              -> slots->class.name = symbol_intern_cstring("ARRAY");
     STRING_Class                             -> slots->class.name = symbol_intern_cstring("STRING");
     VECTOR_Class                             -> slots->class.name = symbol_intern_cstring("VECTOR");
+    BIT_VECTOR_Class                         -> slots->class.name = symbol_intern_cstring("BIT-VECTOR");
     SEQUENCE_Class                           -> slots->class.name = symbol_intern_cstring("SEQUENCE");
     CONS_Class                               -> slots->class.name = symbol_intern_cstring("CONS");
     NULL_Class                               -> slots->class.name = symbol_intern_cstring("NULL");
@@ -742,6 +750,7 @@ void kernel_objects_initialize(void){
 
     NIL_Symbol->class = NULL_Class;
     T_Symbol = symbol_intern_cstring("T");
+    BIT_Symbol = symbol_intern_cstring("BIT");
 
 }
 

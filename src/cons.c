@@ -47,10 +47,10 @@ Object* cdddr(Object* cell){ return cdr(cdr(cdr(cell))); }
 /* List */
 
 
-word list_length(Object* list){
+uword list_length(Object* list){
     if(null_p(list)){
         return 0;}
-    word i=0;
+    uword i=0;
     while(cons_p(list)){
         i++;
         list=cons_cdr(list);}
@@ -128,6 +128,25 @@ Object* memq(Object* item,Object* list){
         list=cdr(list);}
     return list;}
 
+Object* nreverse(Object* list){
+    if(list==NIL_Symbol){
+        return NIL_Symbol;}
+    Object* result=NIL_Symbol;
+    while(cons_p(list)){
+        Object* current=list;
+        list=cdr(list);
+        rplacd(current,result);
+        result=current;}
+    return result;}
+
+Object* reverse(Object* list){
+    if(list==NIL_Symbol){
+        return NIL_Symbol;}
+    Object* result=NIL_Symbol;
+    while(cons_p(list)){
+        result=cons(car(list),result);
+        list=cdr(list);}
+    return result;}
 
 /* Plist */
 

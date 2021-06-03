@@ -5,9 +5,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "memory.h"
+#include "error.h"
 #include "macros.h"
 #include "limits.h"
 #include "cons.h"
+#include "kernel_types.h"
+#include "kernel_objects.h"
 #include "kernel_functions.h"
 #include "built_in_functions.h"
 
@@ -50,6 +53,8 @@ floating float_value(Object* object);
 
 /* CHARACTER */
 
+Object* octet_character(octet code);
+
 /* STRING */
 
 Object* string_new(halfword length);
@@ -67,6 +72,9 @@ Object* keyword_intern_cstring(const char* name);
 
 /* Null */
 
+/* BIT-VECTOR */
+
+Object* bit_vector_new_octets(uword length,octet* bits);
 
 /* External-Format */
 
@@ -90,6 +98,7 @@ Object* physical_pathname_new_cstring(const char* path);
 /* FILESTREAM */
 
 FILE* stream_cstream(Object* stream);
+type_t stream_type(Object* stream);
 
 /* FUNCTIONS */
 

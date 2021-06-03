@@ -1,5 +1,6 @@
 #include "bocl.h"
 #include "memory.h"
+#include "error.h"
 #include "kernel.h"
 
 Object* bocl_read_eval_loop_cstring(const char* text){

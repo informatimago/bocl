@@ -2,74 +2,13 @@
 #include <stdarg.h>
 #include <sysexits.h>
 #include "memory.h"
+#include "error.h"
 #include "kernel.h"
 #include "macros.h"
 #include "variable.h"
 #include "stream.h"
 #include "printer.h"
 
-/* Error Handling */
-
-void report_error(unused Object* error){
-    fprintf(stderr,"\nERROR: ");
-    Object* err=variable_value(S(*ERROR-OUTPUT*));
-    prin1(error,err);
-    terpri(err);}
-
-
-_Noreturn void fatal(const char* fname,const char* message_format,...){
-    va_list ap;
-    fprintf(stderr,"\nFATAL ERROR: in %s:  ",fname);
-    va_start(ap,message_format);
-    vfprintf(stderr,message_format,ap);
-    va_end(ap);
-    fprintf(stderr,"\n\n");
-    exit(EX_SOFTWARE);}
-
-_Noreturn void error(const char* fname,const char* message_format,...){
-    // TODO: Implement error() with the error handling system.
-    va_list ap;
-    fprintf(stderr,"\nERROR: in %s:  ",fname);
-    va_start(ap,message_format);
-    vfprintf(stderr,message_format,ap);
-    va_end(ap);
-    fprintf(stderr,"\n\n");
-    exit(EX_DATAERR);}
-
-
-_Noreturn void type_error(const char* fname,Object* object,Object* class){
-    // TODO: Implement type_error() with the error handling system.
-    char* got=string_cstring(object->class->slots->class.name->slots->symbol.name);
-    char* exp=string_cstring( class->class->slots->class.name->slots->symbol.name);
-    fprintf(stderr,"\nTYPE ERROR: in %s:  got an object of class %s, expected an object of class %s\n\n",
-            fname,got,exp);
-    free(exp);
-    free(got);
-    exit(EX_DATAERR);}
-
-
-void* check_pointer(const char* fname,void* pointer){
-    if(pointer){
-        return pointer;}
-    fatal(fname,"OUT OF MEMORY");}
-
-uword check_size_to_uword(const char* fname,size_t size){
-    if((0<=size) && (size<UWORD_MAX)){
-        return (uword)size;}
-    error(fname,"Size %z too big for an uword (max = "UWORD_FORMAT")",
-          size,UWORD_MAX);}
-
-halfword check_size_to_halfword(const char* fname,size_t size){
-    if((0<=size) && (size<HALFWORD_MAX)){
-        return (halfword)size;}
-    error(fname,"Size %z too big for a halfword (max = "HALFWORD_FORMAT")",
-          size,HALFWORD_MAX);}
-
-word check_uword_to_word(const char* fname,uword value){
-   if((value<WORD_MAX)){
-        return (word)value;}
-    error(fname,"Unsigned word "UWORD_FORMAT" too big for a word (max = "WORD_FORMAT")",
-          value,WORD_MAX);}
 
 /*
 
@@ -156,6 +95,9 @@ static void mark_block(Block* block){
 
 static void clear_block(Block* block){
     block->objcount&=(FREE_BLOCK>>1);}
+
+static halfword block_objcount(Block* block){
+    return block->objcount&(FREE_BLOCK>>1);}
 
 
 static Zone* zone_allocate(size_t size){
@@ -314,7 +256,7 @@ bool set_garbage_collection_enabled(bool on){
 static void mark(Block* rootset){
     if(rootset && !marked_block_p(rootset)){
         mark_block(rootset);
-        for(uword i=0;i<rootset->objcount;i++){
+        for(uword i=0;i<block_objcount(rootset);i++){
             mark(rootset->blocks[i]);}}}
 
 
@@ -383,4 +325,57 @@ void memory_initialize(void){
     zone_allocate(DefaultZoneSize);
 }
 
+
+static bool in_root_set_p(Block* block){
+    /* We assume the root set is a lisp list */
+    Block* current=rootset;
+    if(current==NULL){
+        return false;}
+    while(block_objcount(current)==2){
+        if(current->blocks[0]==block){
+            return true;}
+        current=current->blocks[1];}
+    return false;}
+
+static bool in_free_list(FreeBlock* list,Block* block){
+    while(list && ((void*)list!=(void*)block)){
+        list=list->next;}
+    return ((void*)list==(void*)block);}
+
+void memory_dump(FILE* out){
+    fprintf(out,"Zones:\n\n");
+    {do_zones(zone){
+            fprintf(out,"  zone %16p\n",(void*)zone);
+            fprintf(out,"      size                         0x%08"UWORD_X_FORMAT" %12"UWORD_FORMAT"\n",zone->size,zone->size);
+            fprintf(out,"      offset_to_contents           0x%08"UWORD_X_FORMAT" %12"UWORD_FORMAT"\n",zone->offset_to_contents,zone->offset_to_contents);
+            fprintf(out,"      /contents              %16p\n",(void*)first_block(zone));
+            fprintf(out,"      free_list              %16p\n",(void*)zone->free_list.next);
+            fprintf(out,"      before_best_candidate  %16p\n",(void*)zone->before_best_candidate);
+            fprintf(out,"      next_zone              %16p\n",(void*)zone->next_zone);
+            fprintf(out,"      /end                   %16p\n",(void*)end_block(zone));
+            fprintf(out,"\n");}}
+     {do_zones(zone){
+             fprintf(out,"    Blocks in zone %16p:\n\n",(void*)zone);
+             Block* block=first_block(zone);
+             Block* end=end_block(zone);
+             while(block<end){
+                 fprintf(out,"      block %16p",(void*)block);
+                 if(in_root_set_p(block)){
+                     fprintf(out," in-root-set");}                     
+                 if(free_block_p(block)){
+                     fprintf(out," free-block");}
+                 if(in_free_list(&(zone->free_list),block)){
+                     fprintf(out," in-free-list");}
+                 if(!marked_block_p(block) && marked_block_p(block)){
+                     fprintf(out," marked");}
+                 fprintf(out,"\n");
+                 fprintf(out,"          size                  0x%08"BH_X_FORMAT" %12"BH_FORMAT"\n",block->size,block->size);
+                 if(!free_block_p(block)){
+                     fprintf(out,"          objcount            %12"BH_FORMAT"\n",block_objcount(block));
+                     for(uword i=0;i<block_objcount(block);i++){
+                         fprintf(out,"          object[%2"UWORD_FORMAT"]      %16p\n",i,block->blocks[i]);}}
+                 fprintf(out,"          /end            %16p\n\n",(void*)next_block(block));
+                 block=next_block(block);}}}}
+
 /**** THE END ****/
+

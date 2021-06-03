@@ -360,13 +360,16 @@
              
              ;; List 
 
-             (generate-kernel-function 'list-length  '(list) :values '(word))
+             (generate-kernel-function 'list-length  '(list) :values '(uword))
 
              (generate-kernel-function 'nconc  '(list tail))
              (generate-kernel-function 'last  '(list))
              (generate-kernel-function 'memq  '(item list))
              (generate-kernel-function 'copy-list '(list))
-             (generate-kernel-function 'delete  '(object list))
+             (generate-kernel-function 'list      '(&rest elements) :cfun 'copy-list)
+             (generate-kernel-function 'delete    '(object list))
+             (generate-kernel-function 'nreverse  '(list))
+             (generate-kernel-function 'reverse   '(list))
 
              ;; Plist
 
@@ -374,6 +377,10 @@
              (generate-kernel-function 'putf  '(plist indicator new-value))
              (generate-kernel-function 'remf  '(plist indicator) :values '(boolean))
 
+             ;; VECTOR ====================
+
+             (generate-kernel-function 'vector  '(&rest elements) :cfun 'vector-new)
+             
              ;; DATA ====================
 
              (generate-kernel-function 'eql '(a b) :values '(boolean))
@@ -394,6 +401,8 @@
 
              ;; READER ====================
 
+             (generate-kernel-function 'kernel-read-char '(&optional (input-stream *standard-input*) (eof-error-p t) eof-value recursive-p))
+             (generate-kernel-function 'kernel-peek-char '(peek-type &optional (input-stream *standard-input*) (eof-error-p t) eof-value recursive-p))
              (generate-kernel-function 'kernel-read '(&optional (input-stream *standard-input*) (eof-error-p t) eof-value recursive-p))
              (generate-kernel-function 'kernel-read-preserving-whitespace '(&optional (input-stream *standard-input*) (eof-error-p t) eof-value recursive-p))
              (generate-kernel-function 'kernel-read-delimited-list '(character &optional (input-stream *standard-input*) recursive-p))

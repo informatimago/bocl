@@ -8,6 +8,7 @@ Object  uninitialized_object;
 Object* kernel_classes;  /* list of class objects */
 Object* NIL_Symbol;
 Object* T_Symbol;
+Object* BIT_Symbol;
 Object* KERNEL_Symbol;
 Object* KEYWORD_Symbol;
 Object* CHARACTER_Symbol;
@@ -20,6 +21,7 @@ Object* CHARACTER_Class;
 Object* ARRAY_Class;
 Object* STRING_Class;
 Object* VECTOR_Class;
+Object* BIT_VECTOR_Class;
 Object* SEQUENCE_Class;
 Object* CONS_Class;
 Object* NULL_Class;
