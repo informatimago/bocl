@@ -14,7 +14,7 @@ void make_constant_variable(Ref symbol){
     symbol_set_plist(symbol,plist);}
 
 bool constant_variable_p(Ref symbol){
-   return !null_p(getf(symbol_plist(symbol),S($CONSTANT),S(NIL)));}
+   return !nullp(getf(symbol_plist(symbol),S($CONSTANT),S(NIL)));}
 
 void make_special_variable(Ref symbol){
     if(special_variable_p(symbol)){
@@ -25,7 +25,7 @@ void make_special_variable(Ref symbol){
     symbol_set_plist(symbol,plist);}
 
 bool special_variable_p(Ref symbol){
-    return !null_p(getf(symbol_plist(symbol),S($SPECIAL),S(NIL)));}
+    return !nullp(getf(symbol_plist(symbol),S($SPECIAL),S(NIL)));}
 
 Ref define_constant(Ref symbol,Ref value){
     symbol_set_value(symbol,value);
@@ -47,6 +47,6 @@ Ref variable_value(Ref symbol){
     if(symbol_boundp(symbol)){
         return symbol_value(symbol);}
     ERROR("Variable %s is not bound",
-          string_cstring(symbol_name(symbol)));}          
+          string_cstring(symbol_name(symbol)));}
 
 /**** THE END ****/

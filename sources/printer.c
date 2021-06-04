@@ -23,7 +23,7 @@ Ref print(Ref object,Ref stream){
 Ref prin1(Ref object,Ref stream){
     FILE* out=stream_output_cstream(stream);
 
-    if(character_p(object)){
+    if(characterp(object)){
         octet code=(octet)integer_value(character_code(object));
         if(printablep(code)){
             fprintf(out,"#\\%c",(char)code);}
@@ -31,38 +31,38 @@ Ref prin1(Ref object,Ref stream){
             fprintf(out,"#\\%s",string_cstring(character_name(object)));}
         return object;}
 
-    if(float_p(object)){
+    if(floatp(object)){
         fprintf(out,"%g",float_value(object));
         return object;}
 
-    if(integer_p(object)){
+    if(integerp(object)){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
         return object;}
 
-    /* if(null_p(object)){ */
+    /* if(nullp(object)){ */
     /*     fprintf(out,"NIL"); */
     /*     return object;} */
 
-    if(keyword_p(object) || symbol_p(object)){
+    if(keywordp(object) || symbolp(object)){
         princ(symbol_name(object),stream);
         return object;}
 
-    if(cons_p(object)){
+    if(consp(object)){
         Ref current=object;
         fprintf(out,"(");
         prin1(car(current),stream);
         current=cdr(current);
-        while(cons_p(current)){
+        while(consp(current)){
             fprintf(out," ");
             prin1(car(current),stream);
             current=cdr(current);}
-        if(!null_p(current)){
+        if(!nullp(current)){
             fprintf(out," . ");
             prin1(current, stream);}
         fprintf(out,")");
         return object;}
 
-    if(string_p(object)){
+    if(stringp(object)){
         char* p=string_cstring(object);
         fprintf(out,"\"");
         while(*p){
@@ -74,15 +74,15 @@ Ref prin1(Ref object,Ref stream){
         fprintf(out,"\"");
         return object;}
 
-    if(vector_p(object)){
+    if(vectorp(object)){
         fprintf(out,"(");
         prin1(car(object),stream);
         object=cdr(object);
-        while(cons_p(object)){
+        while(consp(object)){
             fprintf(out," ");
             prin1(car(object),stream);
             object=cdr(object);}
-        if(!null_p(object)){
+        if(!nullp(object)){
             fprintf(out," . ");
             prin1(object, stream);}
         fprintf(out,")");
@@ -90,7 +90,7 @@ Ref prin1(Ref object,Ref stream){
 
     fprintf(out,"#<");
     prin1(class_name(class_of(object)),stream);
-    if(class_p(object)){
+    if(classp(object)){
         fprintf(out," ");
         prin1(class_name(object),stream);}
     fprintf(out," %p>",(void*)object);
@@ -100,42 +100,42 @@ Ref prin1(Ref object,Ref stream){
 Ref princ(Ref object,Ref stream){
     FILE* out=stream_output_cstream(stream);
 
-    if(character_p(object)){
+    if(characterp(object)){
         octet code=(octet)integer_value(character_code(object));
         fprintf(out,"%c",(char)code);
         return object;}
 
-    if(float_p(object)){
+    if(floatp(object)){
         fprintf(out,"%f",float_value(object));
         return object;}
 
-    if(integer_p(object)){
+    if(integerp(object)){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
         return object;}
 
-    /* if(null_p(object)){ */
+    /* if(nullp(object)){ */
     /*     fprintf(out,"NIL"); */
     /*     return object;} */
 
-    if(keyword_p(object)||symbol_p(object)){
+    if(keywordp(object)||symbolp(object)){
         princ(symbol_name(object),stream);
         return object;}
 
-    if(string_p(object)){
+    if(stringp(object)){
         char* p=string_cstring(object);
         fprintf(out,"%s",p);
         return object;}
 
-    if(cons_p(object)){
+    if(consp(object)){
         Ref current=object;
         fprintf(out,"(");
         princ(car(current),stream);
         current=cdr(current);
-        while(cons_p(current)){
+        while(consp(current)){
             fprintf(out," ");
             princ(car(current),stream);
             current=cdr(current);}
-        if(!null_p(current)){
+        if(!nullp(current)){
             fprintf(out," . ");
             princ(current, stream);}
         fprintf(out,")");

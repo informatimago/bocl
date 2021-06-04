@@ -249,7 +249,7 @@
 
              ;; CLASS
              (generate-kernel-function 'class-new '(name))
-             (generate-kernel-function 'class-p '(object) :values '(boolean))
+             (generate-kernel-function 'classp '(object) :values '(boolean))
              (generate-kernel-function 'class-name '(class))
              (generate-kernel-function 'class-direct-superclasses '(class))
              (generate-kernel-function 'class-add-superclass '(class superclass) :values '())
@@ -265,7 +265,7 @@
 
              ;; CONS
              (generate-kernel-function 'cons '(car cdr))
-             (generate-kernel-function 'consp '(object) :values '(boolean) :cfun 'cons-p)
+             (generate-kernel-function 'consp '(object) :values '(boolean))
 
              ;; Those are internal cons functions (less type check) ; we should probably remove them from here.
              (generate-kernel-function 'cons-car '(cell))
@@ -274,13 +274,13 @@
              (generate-kernel-function 'cons-rplacd '(cell newcdr))
 
              ;; INTEGER
-             (generate-kernel-function 'integerp   '(object) :values '(boolean) :cfun 'integer-p)
+             (generate-kernel-function 'integerp   '(object) :values '(boolean))
 
              ;; FLOAT
-             (generate-kernel-function 'floatp     '(object) :values '(boolean) :cfun 'float-p)
+             (generate-kernel-function 'floatp     '(object) :values '(boolean))
 
              ;; CHARACTER
-             (generate-kernel-function 'characterp '(object) :values '(boolean) :cfun 'character-p)
+             (generate-kernel-function 'characterp '(object) :values '(boolean))
              (generate-kernel-function 'char-code '(character) :cfun 'character-code)
              ;; TODO: let's have fun with char-int and return some strange offset
              (generate-kernel-function 'char-int  '(character) :cfun 'character-code)
@@ -306,17 +306,17 @@
              (generate-kernel-function 'symbol-set-function '(symbol new-function))
              (generate-kernel-function 'symbol-set-plist    '(symbol new-plist))
 
-             (generate-kernel-function 'symbolp    '(object) :values '(boolean) :cfun 'symbol-p)
+             (generate-kernel-function 'symbolp    '(object) :values '(boolean))
              (generate-kernel-function 'boundp     '(symbol) :values '(boolean) :cfun 'symbol-boundp)
              (generate-kernel-function 'fboundp    '(symbol) :values '(boolean) :cfun 'symbol-fboundp)
 
              (generate-kernel-function 'intern-keyword  '(name) :cfun 'keyword-intern)
-             (generate-kernel-function 'keywordp        '(object) :values '(boolean) :cfun 'keyword-p)
+             (generate-kernel-function 'keywordp        '(object) :values '(boolean))
 
              (generate-kernel-function 'obarray-all-symbols '(obarray))
 
              ;; NULL
-             (generate-kernel-function 'null        '(object) :values '(boolean) :cfun 'null-p)
+             (generate-kernel-function 'null        '(object) :values '(boolean) :cfun 'nullp)
 
              ;; EXTERNAL-FORMAT
              (generate-kernel-function 'normalize-external-format  '(external-format))
@@ -324,8 +324,8 @@
              ;; PHYSICAL-PATHNAME
              (generate-kernel-function 'physical-pathname  '(namestring))
              (generate-kernel-function 'physical-pathname-equal  '(a b)     :values '(boolean))
-             (generate-kernel-function 'physical-pathname-p  '(object) :values '(boolean) :cfun 'physical_pathname_p)
-             (generate-kernel-function 'pathnamep  '(object) :values '(boolean) :cfun 'physical_pathname_p)
+             (generate-kernel-function 'physical-pathname-p  '(object) :values '(boolean) :cfun 'physical-pathname-p)
+             (generate-kernel-function 'pathnamep  '(object) :values '(boolean) :cfun 'physical-pathname-p)
 
              ;;  FILESTREAM
 
@@ -342,7 +342,7 @@
 
              ;; FUNCTIONS
 
-             (generate-kernel-function 'closurep '(object) :values '(boolean) :cfun 'closure-p)
+             (generate-kernel-function 'closurep '(object) :values '(boolean))
              (generate-kernel-function 'function-name '(function))
 
              ;; CONS ====================
@@ -376,7 +376,7 @@
              ;; VECTOR ====================
 
              (generate-kernel-function 'vector  '(&rest elements) :cfun 'vector-new)
-             (generate-kernel-function 'vectorp       '(object)  :values '(boolean) :cfun 'vector-p)
+             (generate-kernel-function 'vectorp       '(object)  :values '(boolean))
              (generate-kernel-function 'vector-length '(vector)  :values '(uword))
              (generate-kernel-function 'svref         '(vector index))
              (generate-kernel-function 'svref-set     '(vector index new-object))
@@ -395,7 +395,7 @@
              (generate-kernel-function 'string-length '(string)  :values '(uword))
              (generate-kernel-function 'string=       '(a b)     :values '(boolean) :cfun 'string-eq)
              (generate-kernel-function 'string-equal  '(a b)     :values '(boolean))
-             (generate-kernel-function 'stringp       '(object)  :values '(boolean) :cfun 'string-p)
+             (generate-kernel-function 'stringp       '(object)  :values '(boolean))
              (generate-kernel-function 'char          '(string index) :cfun 'char-ref)
              (generate-kernel-function 'schar         '(string index) :cfun 'char-ref)
              (generate-kernel-function 'set-char      '(string index new-char) :cfun 'char-set)
@@ -433,7 +433,7 @@
 
              (generate-kernel-function 'make-string-input-stream  '(string &optional start end) :cfun 'stream-input-string)
              (generate-kernel-function 'make-string-output-stream '(&key element-type)          :cfun 'stream-output-string)
-             (generate-kernel-function 'get-output-stream-string  '(string-output-stream)       :cfun 'string_output_stream_get_string)
+             (generate-kernel-function 'get-output-stream-string  '(string-output-stream)       :cfun 'string-output-stream-get-string)
 
              (generate-kernel-function 'open '(filespec
                                                &key (direction :input)

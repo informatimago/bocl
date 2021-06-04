@@ -6,13 +6,13 @@ bool eql(Ref a,Ref b){
 
 bool equal(Ref a,Ref b){
 
-    if(cons_p(a)){
-        if(!cons_p(b)){
+    if(consp(a)){
+        if(!consp(b)){
             return false;}
         return eql(a,b) || (equal(car(a),car(b)) && equal(cdr(a),cdr(b)));}
 
-    if(string_p(a)){
-        if(!string_p(b)){
+    if(stringp(a)){
+        if(!stringp(b)){
             return false;}
         return eql(a,b) || string_equal(a,b);}
 

@@ -30,14 +30,14 @@ void kernel_CLASS_NEW(Ref function,Ref arguments,MultipleValues* results){
     delete_from_rootset(function);
 }
 
-void kernel_CLASS_P(Ref function,Ref arguments,MultipleValues* results){
+void kernel_CLASSP(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
     Ref current=arguments;
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(class_p(par_object));
+    results->values[0] = as_boolean(classp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -187,7 +187,7 @@ void kernel_CONSP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(cons_p(par_object));
+    results->values[0] = as_boolean(consp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -249,7 +249,7 @@ void kernel_INTEGERP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(integer_p(par_object));
+    results->values[0] = as_boolean(integerp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -261,7 +261,7 @@ void kernel_FLOATP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(float_p(par_object));
+    results->values[0] = as_boolean(floatp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -273,7 +273,7 @@ void kernel_CHARACTERP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(character_p(par_object));
+    results->values[0] = as_boolean(characterp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -494,7 +494,7 @@ void kernel_SYMBOLP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(symbol_p(par_object));
+    results->values[0] = as_boolean(symbolp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -542,7 +542,7 @@ void kernel_KEYWORDP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(keyword_p(par_object));
+    results->values[0] = as_boolean(keywordp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -566,7 +566,7 @@ void kernel_NULL(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(null_p(par_object));
+    results->values[0] = as_boolean(nullp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -746,7 +746,7 @@ void kernel_CLOSUREP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(closure_p(par_object));
+    results->values[0] = as_boolean(closurep(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1127,7 +1127,7 @@ void kernel_VECTORP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(vector_p(par_object));
+    results->values[0] = as_boolean(vectorp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1307,7 +1307,7 @@ void kernel_STRINGP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(string_p(par_object));
+    results->values[0] = as_boolean(stringp(par_object));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }

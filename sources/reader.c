@@ -197,7 +197,7 @@ static Ref parse_character(parser_state* parser){
             return octet_character(parser->token[0]);}
         else{
             Ref character=name_character(string_new_cstring((char*)parser->token));
-            if(null_p(character)){
+            if(nullp(character)){
                 READER_ERROR(parser->input_stream,"Invalid character name %s",parser->token);}
             else{
                 parser->eof=false;
@@ -438,7 +438,7 @@ Ref kernel_read_char(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref r
     bool err;
     octet ch=read_octet(input_stream,&eof,&err);
     if(eof){
-        if(null_p(eof_error_p)){
+        if(nullp(eof_error_p)){
             return eof_value;}
         END_OF_FILE(input_stream);}
     if(err){
@@ -453,7 +453,7 @@ Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_valu
         do{
             ch=read_octet(input_stream,&eof,&err);
             if(eof){
-                if(null_p(eof_error_p)){
+                if(nullp(eof_error_p)){
                     return eof_value;}
                 END_OF_FILE(input_stream);}
             if(err){
@@ -461,21 +461,21 @@ Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_valu
         }while(whitespacep(ch));
         ungetc(ch,stream_cstream(input_stream));
         return octet_character(ch);}
-    else if(null_p(peek_type)){
+    else if(nullp(peek_type)){
         ch=peek_octet(input_stream,&eof,&err);
         if(eof){
-            if(null_p(eof_error_p)){
+            if(nullp(eof_error_p)){
                 return eof_value;}
             END_OF_FILE(input_stream);}
         if(err){
             STREAM_ERROR(input_stream);}
         return octet_character(ch);}
-    else if(character_p(peek_type)){
+    else if(characterp(peek_type)){
         octet expect=(octet)integer_value(character_code(peek_type));
         do{
             ch=read_octet(input_stream,&eof,&err);
             if(eof){
-                if(null_p(eof_error_p)){
+                if(nullp(eof_error_p)){
                     return eof_value;}
                 END_OF_FILE(input_stream);}
             if(err){
@@ -501,7 +501,7 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
     check_parser_error(&parser);
     Ref object=parse_object(&parser);
     if(parser.eof){
-        if(null_p(eof_error_p)){
+        if(nullp(eof_error_p)){
             return eof_value;}
         END_OF_FILE(input_stream);}
     if(parser.error){ /* Should not occur here */

@@ -12,7 +12,7 @@
 
 
 void dump_obarray(Ref obarray){
-    if(!cons_p(obarray)){
+    if(!consp(obarray)){
         fprintf(stderr,"dump obarray: NOT A CONS CELL, but %s\n",
                 string_cstring(symbol_name(obarray->class->slots->class.name)));
         abort();}
@@ -20,7 +20,7 @@ void dump_obarray(Ref obarray){
             string_cstring(symbol_name(cons_car(obarray))));
     Ref syms=cons_cdr(obarray);
     long sc=0;
-    while(cons_p(syms)){
+    while(consp(syms)){
         sc++;
         fprintf(stderr,"    %s\n",string_cstring(symbol_name(cons_car(syms))));
         if(symbol_package(cons_car(syms))!=obarray){
@@ -41,7 +41,7 @@ void dump_kernel_classes(){
             list_length(kernel_classes));
     int i=0;
     Ref current=kernel_classes;
-    while(cons_p(current)){
+    while(consp(current)){
         Ref class=cons_car(current);
         current=cons_cdr(current);
         i++;
@@ -72,7 +72,7 @@ void dump_kernel_classes(){
         if(!ccurrent){
             fprintf(stderr,"C NULL direct-superclasses!\n");
             continue;}
-        while(cons_p(ccurrent)){
+        while(consp(ccurrent)){
             Ref super=cons_car(ccurrent);
             current=cons_cdr(ccurrent);
             Ref class_name_super=super->slots->class.name;
@@ -100,7 +100,7 @@ void debug_typep(Ref object,Ref class){
 
 
 void debug(void){
-    
+
     printf("N %p\n",(void*)NIL_Symbol);
     printf("E %p\n",(void*)KERNEL_obarray);
     printf("S %p\n",(void*)S(NIL));

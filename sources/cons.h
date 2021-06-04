@@ -7,12 +7,12 @@
 #define do_list(elementvar,listexpr)                                                     \
     Ref C(do_list_current,__LINE__); Ref elementvar;                             \
     for((C(do_list_current,__LINE__) = (listexpr),                                       \
-         elementvar = ((cons_p(C(do_list_current,__LINE__)))                             \
+         elementvar = ((consp(C(do_list_current,__LINE__)))                             \
                        ?cons_car(C(do_list_current,__LINE__))                            \
                        :NULL)) ;                                                         \
-        cons_p(C(do_list_current,__LINE__)) ;                                            \
+        consp(C(do_list_current,__LINE__)) ;                                            \
         (C(do_list_current,__LINE__) = cons_cdr(C(do_list_current,__LINE__)),            \
-         elementvar = ((cons_p(C(do_list_current,__LINE__)))                             \
+         elementvar = ((consp(C(do_list_current,__LINE__)))                             \
                        ?cons_car(C(do_list_current,__LINE__))                            \
                        :NULL)))
 

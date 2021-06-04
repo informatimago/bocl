@@ -352,7 +352,7 @@ int main(int argc,char** argv){
         /* Ref result=bocl_read_eval_cstring("(BOCL:REPL)"); */
         Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
                              variable_value(S(*STANDARD-OUTPUT*)));
-        if(integer_p(result)){
+        if(integerp(result)){
             status=(int)integer_value(result);}}
 
     if(do_wait){

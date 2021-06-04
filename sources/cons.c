@@ -17,14 +17,14 @@ Ref rplacd(Ref cell,Ref newcdr){
 
 Ref car(Ref cell){
     check_type(cell,LIST_Class);
-    if(cons_p(cell)){
+    if(consp(cell)){
         return cons_car(cell);}
     else{
         return NIL_Symbol;}}
 
 Ref cdr(Ref cell){
     check_type(cell,LIST_Class);
-    if(cons_p(cell)){
+    if(consp(cell)){
         return cons_cdr(cell);}
     else{
         return NIL_Symbol;}}
@@ -48,10 +48,10 @@ Ref cdddr(Ref cell){ return cdr(cdr(cdr(cell))); }
 
 
 uword list_length(Ref list){
-    if(null_p(list)){
+    if(nullp(list)){
         return 0;}
     uword i=0;
-    while(cons_p(list)){
+    while(consp(list)){
         i++;
         list=cons_cdr(list);}
     return i;}
@@ -68,29 +68,29 @@ Ref pop(Ref* list){
 Ref last(Ref list){
     // TODO: check_class(list,LIST_Class); // move NIL_Symbol to the NULL_Class !
     Ref next;
-    if(cons_p(list)){
-        while(cons_p(next=cons_cdr(list))){
+    if(consp(list)){
+        while(consp(next=cons_cdr(list))){
             list=next;}
         return list;}
-    else if(null_p(list)){
+    else if(nullp(list)){
         return list;}
     else{
         TYPE_ERROR(list,LIST_Class);}}
 
 Ref delete(Ref object,Ref list){
-    if(null_p(list)){
+    if(nullp(list)){
         return list;}
     if(eql(object,car(list))){
         return cdr(list);}
     Ref previous=list;
-    while(cons_p(cdr(previous)) && !eql(object,cadr(previous))){
+    while(consp(cdr(previous)) && !eql(object,cadr(previous))){
         previous=cdr(previous);}
-    if(cons_p(cdr(previous))){
+    if(consp(cdr(previous))){
         rplacd(cdr(previous),cddr(previous));}
     return list;}
 
 Ref nconc(Ref list,Ref tail){
-    if(null_p(list)){
+    if(nullp(list)){
         return tail;}
     else{
         Ref last_cell=last(list);
@@ -112,19 +112,19 @@ Ref list(Ref first_element,...){
     return list;}
 
 Ref copy_list(Ref list){
-    if(null_p(list)){
+    if(nullp(list)){
         return list;}
     Ref result=cons(car(list),NIL_Symbol);
     Ref tail=result;
     list=cdr(list);
-    while(cons_p(list)){
+    while(consp(list)){
         rplacd(tail,cons(car(list),NIL_Symbol));
         list=cdr(list);}
     rplacd(tail,cdr(list));
     return result;}
 
 Ref memq(Ref item,Ref list){
-    while(cons_p(list) && !eql(item,car(list))){
+    while(consp(list) && !eql(item,car(list))){
         list=cdr(list);}
     return list;}
 
@@ -132,7 +132,7 @@ Ref nreverse(Ref list){
     if(list==NIL_Symbol){
         return NIL_Symbol;}
     Ref result=NIL_Symbol;
-    while(cons_p(list)){
+    while(consp(list)){
         Ref current=list;
         list=cdr(list);
         rplacd(current,result);
@@ -143,7 +143,7 @@ Ref reverse(Ref list){
     if(list==NIL_Symbol){
         return NIL_Symbol;}
     Ref result=NIL_Symbol;
-    while(cons_p(list)){
+    while(consp(list)){
         result=cons(car(list),result);
         list=cdr(list);}
     return result;}
@@ -152,24 +152,24 @@ Ref reverse(Ref list){
 
 Ref getf(Ref plist,Ref indicator,Ref default_value){
     Ref current=plist;
-    while(cons_p(current) && !eql(indicator,car(current))){
+    while(consp(current) && !eql(indicator,car(current))){
         current=cddr(current);}
-    return(cons_p(current))
+    return(consp(current))
             ?cadr(current)
             :default_value;}
 
 Ref putf(Ref plist,Ref indicator,Ref new_value){
     Ref current=plist;
-    while(cons_p(current) && !eql(indicator,car(current))){
+    while(consp(current) && !eql(indicator,car(current))){
         current=cddr(current);}
-    if(cons_p(current)){
+    if(consp(current)){
         rplaca(cdr(current),new_value);
         return plist;}
     else{
         return cons(indicator,cons(new_value,plist));}}
 
 bool remf(Ref plist,Ref indicator){
-    if(cons_p(plist) && eql(indicator,car(plist))){
+    if(consp(plist) && eql(indicator,car(plist))){
         /* first pair: we copy the second pair over the first,
         and skip the second pair */
         Ref removed=cddr(plist);
@@ -179,9 +179,9 @@ bool remf(Ref plist,Ref indicator){
     /* for the other pairs, we keep a reference to the previous cell
     and just skip the indicated pair */
     Ref previous=cdr(plist);
-    while(cons_p(cdr(previous)) && !eql(indicator,cadr(previous))){
+    while(consp(cdr(previous)) && !eql(indicator,cadr(previous))){
         previous=cddr(previous);}
-    if(cons_p(cdr(previous))){
+    if(consp(cdr(previous))){
         rplacd(previous,cdddr(previous));
         return true;}
     else{

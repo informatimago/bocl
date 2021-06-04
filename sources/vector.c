@@ -1,6 +1,6 @@
 #include "vector.h"
 
-bool vector_p(Ref object){
+bool vectorp(Ref object){
     return typep(object,VECTOR_Class);}
 
 uword vector_length(Ref vector){

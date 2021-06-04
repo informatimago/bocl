@@ -5,7 +5,7 @@
 
 void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CLASS_NEW(Ref function,Ref arguments,MultipleValues* results);
-void kernel_CLASS_P(Ref function,Ref arguments,MultipleValues* results);
+void kernel_CLASSP(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CLASS_NAME(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CLASS_DIRECT_SUPERCLASSES(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CLASS_ADD_SUPERCLASS(Ref function,Ref arguments,MultipleValues* results);

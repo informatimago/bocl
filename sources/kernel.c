@@ -167,7 +167,7 @@ static Ref Character_new(word code,const char* name){
                       (Slots*)Character_slots(string_new_cstring(name),
                                               integer_from_word(code)));}
 
-bool character_p(Ref object){
+bool characterp(Ref object){
     return class_of(object)==CHARACTER_Class;}
 
 Ref character_code(Ref object){
@@ -194,11 +194,11 @@ Ref octet_character(octet code){
     return character_table[code];}
 
 Ref name_character(Ref name){
-    if(character_p(name)){
+    if(characterp(name)){
         return name;}
-    else if(symbol_p(name)){
+    else if(symbolp(name)){
         return name_character(symbol_name(name));}
-    else if(string_p(name)){
+    else if(stringp(name)){
         for(int i=0;i<CHAR_CODE_LIMIT;i++){
             if(string_equal(name,character_name(character_table[i]))){
                 return character_table[i];}}
@@ -486,7 +486,7 @@ Ref integer_from_word(word value){
 Ref integer_from_uword(uword value){
     return Object_new(INTEGER_Class,(Slots*)Integer_slots(CHECK_UWORD_TO_WORD(value)));}
 
-bool integer_p(Ref object){
+bool integerp(Ref object){
     return class_of(object)==INTEGER_Class;}
 
 word integer_value(Ref object){
@@ -504,7 +504,7 @@ Float* Float_slots(floating value){
 Ref float_from_floating(floating value){
     return Object_new(FLOAT_Class,(Slots*)Float_slots(value));}
 
-bool float_p(Ref object){
+bool floatp(Ref object){
     return class_of(object)==FLOAT_Class;}
 
 floating float_value(Ref object){
@@ -524,7 +524,7 @@ Cons* Cons_slots(Ref car,Ref cdr){
 Ref cons(Ref car,Ref cdr){
     return Object_new(CONS_Class,(Slots*)Cons_slots(car,cdr));}
 
-bool cons_p(Ref object){
+bool consp(Ref object){
     return class_of(object)==CONS_Class;}
 
 Ref cons_car(Ref cell){
@@ -557,7 +557,7 @@ Ref string_new_cstring(const char* string){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots_cstring(CHARACTER_Symbol,string));}
 
-bool string_p(Ref object){
+bool stringp(Ref object){
     return class_of(object)==STRING_Class;}
 
 uword string_length(Ref string){
@@ -635,7 +635,7 @@ Ref find_symbol(Ref name,Ref obarray){
                 string_cstring(symbol_name(cons_car(obarray))));
         Ref syms=cons_cdr(obarray);
         long sc=0;
-        while(cons_p(syms)){
+        while(consp(syms)){
             sc++;
             if(string_eq(symbol_name(cons_car(syms)),name)){
                 fprintf(stderr,"found %s\n",
@@ -647,9 +647,9 @@ Ref find_symbol(Ref name,Ref obarray){
         fprintf(stderr," %3ld symbols\n",sc);}
 #endif
     Ref syms=cons_cdr(obarray);
-    while(cons_p(syms) && !string_eq(cons_car(syms)->slots->symbol.name,name)){
+    while(consp(syms) && !string_eq(cons_car(syms)->slots->symbol.name,name)){
         syms=cons_cdr(syms);}
-    return cons_p(syms)
+    return consp(syms)
             ? cons_car(syms)
             : NULL;}
 
@@ -675,7 +675,7 @@ Ref symbol_intern(Ref name){
 Ref symbol_intern_cstring(const char* name){
     return symbol_intern(string_new_cstring(name));}
 
-bool symbol_p(Ref object){
+bool symbolp(Ref object){
     return typep(object,SYMBOL_Class);}
     /* return class_of(object)==SYMBOL_Class;} */
 
@@ -722,7 +722,7 @@ Ref symbol_set_function(Ref symbol,Ref new_function){
 
 Ref symbol_set_plist(Ref symbol,Ref new_plist){
     check_type(symbol,SYMBOL_Class);
-    if(cons_p(new_plist)||null_p(new_plist)){
+    if(consp(new_plist)||nullp(new_plist)){
         return symbol->slots->symbol.plist=new_plist;}
     else{
         TYPE_ERROR(new_plist,LIST_Class);}}
@@ -741,14 +741,14 @@ Ref keyword_intern(Ref name){
 Ref keyword_intern_cstring(const char* name){
     return keyword_intern(string_new_cstring(name));}
 
-bool keyword_p(Ref object){
-    return symbol_p(object)
-            && !null_p(memq(object,cdr(KEYWORD_obarray)));}
+bool keywordp(Ref object){
+    return symbolp(object)
+            && !nullp(memq(object,cdr(KEYWORD_obarray)));}
 
 /* NULL */
 /* NULL class has a SYMBOL superclass and has a NIL_Symbol instance. */
 
-bool null_p(Ref object){
+bool nullp(Ref object){
     return object==NIL_Symbol;}
 
 
@@ -770,7 +770,7 @@ Ref vector_new(Ref elements){
     halfword dimensions[1];
     dimensions[0]=CHECK_UWORD_TO_HALFWORD(length);
     Array* array=Array_slots(T_Symbol,1,dimensions);
-    for(int i=0;cons_p(elements);i++,elements=cdr(elements)){
+    for(int i=0;consp(elements);i++,elements=cdr(elements)){
         array->elements->elements[i]=car(elements);}
     return Object_new(VECTOR_Class,(Slots*)array);}
 
@@ -822,7 +822,7 @@ Ref class_new(Ref name){
 Ref class_of(Ref object){
     return object->class;}
 
-bool class_p(Ref object){
+bool classp(Ref object){
     return class_of(object)==CLASS_Class;}
 
 Ref class_name(Ref class){
@@ -853,7 +853,7 @@ bool subclassp(Ref class,Ref superclass){
     if(class==superclass){
         return true;}
     Ref direct_superclasses=class->slots->class.direct_superclasses;
-    while(cons_p(direct_superclasses)){
+    while(consp(direct_superclasses)){
         Ref direct_superclass=cons_car(direct_superclasses);
         direct_superclasses=cons_cdr(direct_superclasses);
         if(subclassp(direct_superclass,superclass)){
@@ -905,19 +905,19 @@ void check_class(Ref object,Ref class){
 
 Ref boot_last(Ref list){
     Ref next;
-    if(cons_p(list)){
-        while(cons_p(next=list->slots->cons.cdr)){
+    if(consp(list)){
+        while(consp(next=list->slots->cons.cdr)){
             list=next;}
         return list;}
-    else if(null_p(list)){
+    else if(nullp(list)){
         return list;}
     else{
         TYPE_ERROR(list,LIST_Class);}}
 
 Ref boot_nconc(Ref list,Ref tail){
-    if(null_p(list)){
+    if(nullp(list)){
         return tail;}
-    else if(cons_p(list)){
+    else if(consp(list)){
         Ref last_cell=boot_last(list);
         last_cell->slots->cons.cdr=tail;
         return list;}
@@ -1106,7 +1106,7 @@ Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
               string_cstring(prin1_to_string(new_line_o)));}}
 
 Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
-    if(character_p(on_error_o)){
+    if(characterp(on_error_o)){
         (*on_error)=(on_error_t)integer_value(character_code(on_error_o));
         return on_error_o;}
     else if(on_error_o==K(ERROR)){
@@ -1126,12 +1126,12 @@ Ref normalize_external_format_internal(Ref external_format,
     Ref encoding_o=DEFAULT_ENCODING;
     Ref new_line_o=K(LF);
     Ref on_error_o=K(ERROR);
-    if(symbol_p(external_format)){
+    if(symbolp(external_format)){
         encoding_o=normalize_encoding(external_format,encoding);}
-    else if(cons_p(external_format)){
+    else if(consp(external_format)){
         encoding_o=normalize_encoding(car(external_format),encoding);
         new_line_o=normalize_new_line(cadr(external_format),new_line);
-        if(null_p(cddr(external_format))){
+        if(nullp(cddr(external_format))){
             on_error_o=K(ERROR);
             (*on_error)=on_error_error;}
         else{
@@ -1176,12 +1176,12 @@ type_t convert_element_type(Ref element_type){
         return type_character;}
     if(element_type==S(BIT)){
         return type_bit;}
-    if((cons_p(element_type)
+    if((consp(element_type)
         &&(car(element_type)==S(UNSIGNED-BYTE))
-        &&(cons_p(cdr(element_type)))
-        &&(integer_p(cadr(element_type)))
+        &&(consp(cdr(element_type)))
+        &&(integerp(cadr(element_type)))
         &&(integer_value(cadr(element_type))==8)
-        &&(null_p(cddr(element_type))))){
+        &&(nullp(cddr(element_type))))){
         return type_octet;}
     ERROR("Invalid element-type %s",
           string_cstring(prin1_to_string(element_type)));}
@@ -1240,8 +1240,8 @@ Ref string_stream_new(FILE* memstream){
 
 Ref stream_input_string(Ref string,Ref start,Ref end){
     uword len   = string_length(string);
-    word istart = (null_p(start)) ?0 : integer_value(start);
-    word iend   = (null_p(end)) ? CHECK_UWORD_TO_WORD(len) : integer_value(end);
+    word istart = (nullp(start)) ?0 : integer_value(start);
+    word iend   = (nullp(end)) ? CHECK_UWORD_TO_WORD(len) : integer_value(end);
     if((istart<0) || (len<istart)){
         ERROR("START = %"WORD_FORMAT" is beyond length of string = %"WORD_FORMAT"",istart,len);}
     if(len<iend){
@@ -1374,11 +1374,11 @@ Ref standard_error_stream(void){
 //     KernelFunctionPtr apply;  /* The entry point of to the Funcallable Standard Object. */
 // } FuncallableStandardObject;
 
-bool closure_p(Ref object){
+bool closurep(Ref object){
     return class_of(object)==CLOSURE_Class;}
 
 Ref function_name(Ref funclo){
-    if(closure_p(funclo)){
+    if(closurep(funclo)){
         return function_name(funclo->slots->closure.function);}
     check_type(funclo,FUNCTION_Class);
     return funclo->slots->function.lisp_name;}
@@ -1394,7 +1394,7 @@ void kernel_apply_built_in(BuiltInFunction* function,Ref arguments,MultipleValue
 
 
 void check_no_more_arguments(Ref function,Ref arguments){
-    if(null_p(arguments)){
+    if(nullp(arguments)){
         return;}
     char* fname=string_cstring(function_name(function));
     char* args=string_cstring(prin1_to_string(arguments));
@@ -1403,7 +1403,7 @@ void check_no_more_arguments(Ref function,Ref arguments){
     free(fname);free(args);}
 
 Ref pop_mandatory_argument(Ref function,Ref* arguments){
-    if(null_p(*arguments)){
+    if(nullp(*arguments)){
         char* fname=string_cstring(function_name(function));
         error(fname,"Missing mantadory argument");
         /* TODO: clear up this mess, error doesn't return! */
@@ -1411,14 +1411,14 @@ Ref pop_mandatory_argument(Ref function,Ref* arguments){
     return pop(arguments);}
 
 Ref pop_optional_argument(Ref function,Ref* arguments,Ref default_value){
-    return null_p(*arguments)
+    return nullp(*arguments)
             ? default_value
             : pop(arguments);}
 
 Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
     Ref current=(*arguments);
-    while(cons_p(current) && !eql(keyword,car(current))){
-        if(cons_p(cdr(current))){
+    while(consp(current) && !eql(keyword,car(current))){
+        if(consp(cdr(current))){
             current=cddr(current);}
         else{
             char* fname=string_cstring(function_name(function));
@@ -1428,7 +1428,7 @@ Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
                   args,mkey);
             /* TODO: clear up this mess, error doesn't return! */
             free(fname);free(args);free(mkey);}}
-    return cons_p(current)
+    return consp(current)
             ? cadr(current)
             : default_value;}
 
