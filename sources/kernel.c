@@ -590,6 +590,18 @@ bool string_eq(Ref a,Ref b){
     return true;}
 
 
+static bool vector_of_octet_equalp(VectorOfOctet* a,VectorOfOctet* b){
+    if(a->length!=b->length){
+        return false;}
+    octet* ap=a->elements;
+    octet* bp=b->elements;
+    for(uword i=0;i<a->length;i++){
+        int al=islower(ap[i])?toupper(ap[i]):ap[i];
+        int bl=islower(bp[i])?toupper(bp[i]):bp[i];
+        if(al!=bl){
+            return false;}}
+    return true;}
+
 bool string_equal(Ref a,Ref b){
     if(a==b){
         return true;}
@@ -598,14 +610,8 @@ bool string_equal(Ref a,Ref b){
         return false;}
     OctetArray* aa=&(a->slots->octet_array);
     OctetArray* bb=&(b->slots->octet_array);
-    octet* ap=aa->elements->elements;
-    octet* bp=bb->elements->elements;
-    for(uword i=0;i<length;i++){
-        int al=islower(ap[i])?toupper(ap[i]):ap[i];
-        int bl=islower(bp[i])?toupper(bp[i]):bp[i];
-        if(al!=bl){
-            return false;}}
-    return true;}
+    return vector_of_octet_equalp(aa->elements,bb->elements);}
+
 
 
 /* SYMBOL */
@@ -777,6 +783,22 @@ Ref bit_vector_new_octets(uword length,octet* bits){
     Array* array=Array_slots(BIT_Symbol,1,dimensions);
     memcpy(array->elements->elements,bits,length);
     return Object_new(BIT_VECTOR_Class,(Slots*)array);}
+
+bool bit_vector_equal(Ref a,Ref b){
+    if(a==b){
+        return true;}
+    uword length=bit_vector_length(a);
+    if(length!=bit_vector_length(b)){
+        return false;}
+    OctetArray* aa=&(a->slots->octet_array);
+    OctetArray* bb=&(b->slots->octet_array);
+    octet* ap=aa->elements->elements;
+    octet* bp=bb->elements->elements;
+    for(uword i=0;i<length;i++){
+        if(ap[i]!=bp[i]){
+            return false;}}
+    return true;}
+
 
 /* CLASS */
 
@@ -988,6 +1010,24 @@ Ref physical_pathname_new_cstring(const char* path){
 Ref physical_pathname(Ref namestring){
     check_class(namestring,STRING_Class);
     return physical_pathname_new(&namestring->slots->vector_of_octet);}
+
+bool physical_pathname_p(Ref object){
+    return typep(object,PATHNAME_Class);}
+
+bool physical_pathname_equal(Ref a,Ref b){
+    if(!typep(a,PHYSICAL_PATHNAME_Class)){
+        return false;}
+    if(!typep(b,PHYSICAL_PATHNAME_Class)){
+        return false;}
+    if(a==b){
+        return true;}
+    if(a->slots->vector_of_octet.length
+       !=b->slots->vector_of_octet.length){
+        return false;}
+    OctetArray* aa=&(a->slots->octet_array);
+    OctetArray* bb=&(b->slots->octet_array);
+    return vector_of_octet_equalp(aa->elements,bb->elements);}
+
 
 /* EXTERNAL-FORMAT */
 

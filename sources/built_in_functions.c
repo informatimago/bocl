@@ -595,6 +595,43 @@ void kernel_PHYSICAL_PATHNAME(Ref function,Ref arguments,MultipleValues* results
     delete_from_rootset(function);
 }
 
+void kernel_PHYSICAL_PATHNAME_EQUAL(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_a = pop_mandatory_argument(function,&current);
+    Ref par_b = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(physical_pathname_equal(par_a, par_b));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_PHYSICAL_PATHNAME_P(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(physical_pathname_p(par_object));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_PATHNAMEP(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(physical_pathname_p(par_object));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 void kernel_MAKE_FILE_STREAM(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -1212,6 +1249,19 @@ void kernel_SBIT_SET(Ref function,Ref arguments,MultipleValues* results){
     delete_from_rootset(function);
 }
 
+void kernel_BIT_VECTOR_EQUAL(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_a = pop_mandatory_argument(function,&current);
+    Ref par_b = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(bit_vector_equal(par_a, par_b));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 void kernel_STRING_LENGTH(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -1325,6 +1375,19 @@ void kernel_EQL(Ref function,Ref arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = as_boolean(eql(par_a, par_b));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_EQUAL(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_a = pop_mandatory_argument(function,&current);
+    Ref par_b = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(equal(par_a, par_b));
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1592,6 +1655,32 @@ void kernel_OPEN(Ref function,Ref arguments,MultipleValues* results){
     Ref par_external_format = pop_key_argument(function,&current,K(EXTERNAL-FORMAT),def_external_format);
     results->count=1;
     results->values[0] = stream_open(par_filespec, par_direction, par_element_type, par_if_exists, par_if_does_not_exist, par_external_format);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_FINISH_OUTPUT(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = stream_finish_output(par_stream);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_FORCE_OUTPUT(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = stream_finish_output(par_stream);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }

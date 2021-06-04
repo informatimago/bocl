@@ -122,3 +122,23 @@ void stream_initialize(void){
     define_variable(S(*DEBUG-IO*),NIL_Symbol);
 
 }
+
+
+FILE* stream_output_cstream(Ref stream){
+    if(eql(stream,T_Symbol)){
+        Ref so=S(*STANDARD-OUTPUT*);
+        if(symbol_boundp(so)){
+            return stream_cstream(variable_value(so));}
+        else{
+            return stdout;}}
+    else{
+        return stream_cstream(stream);}}
+
+
+Ref stream_finish_output(Ref stream){
+    FILE* out=stream_output_cstream(stream);
+    fflush(out);
+    return NIL_Symbol;}
+
+
+/**** THE END ****/

@@ -85,14 +85,13 @@ DEPFLAGS = -E -MT $@ -MM -MP -MF $*.d
 COMPILE.c    = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@
 MAKEDEPEND.c = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) $(DEPFLAGS)
 
-%.o : %.c %.d
-	@ printf "# Compiling %-20s from %s\n" "$@" "$<"
-	$(VERBOSE) $(COMPILE.c) $<
-
-%.o :
 %.d : %.c
 	@ printf "# Generating dependencies         for %s\n" "$<"
 	$(VERBOSE) $(MAKEDEPEND.c) $<
+
+%.o : %.c %.d
+	@ printf "# Compiling %-20s from %s\n" "$@" "$<"
+	$(VERBOSE) $(COMPILE.c) $<
 
 deps:   $(all_SRCS:%.c=%.d)
 include $(all__SRCS:%.c=%.d)
@@ -143,9 +142,6 @@ kernel_functions.h built_in_functions.h built_in_functions.c : generate-built-in
 		$(LISP_LOAD) generate-built-in-functions.lisp \
 		$(LISP_EVAL) '(com.informatimago.bocl.kernel.generate.kernel-functions:generate-built-in-functions)' \
 		$(LISP_QUIT)
-
-kernel.o:kernel.c kernel.h kernel_objects.h
-
 
 test: run_test_bocl run_test_reader
 

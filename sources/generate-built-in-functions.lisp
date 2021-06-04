@@ -323,6 +323,9 @@
 
              ;; PHYSICAL-PATHNAME
              (generate-kernel-function 'physical-pathname  '(namestring))
+             (generate-kernel-function 'physical-pathname-equal  '(a b)     :values '(boolean))
+             (generate-kernel-function 'physical-pathname-p  '(object) :values '(boolean) :cfun 'physical_pathname_p)
+             (generate-kernel-function 'pathnamep  '(object) :values '(boolean) :cfun 'physical_pathname_p)
 
              ;;  FILESTREAM
 
@@ -386,6 +389,7 @@
              (generate-kernel-function 'sbit              '(bit-vector index) :cfun 'bit)
              (generate-kernel-function 'bit-set           '(bit-vector index new-bit))
              (generate-kernel-function 'sbit-set          '(bit-vector index new-bit) :cfun 'bit-set)
+             (generate-kernel-function 'bit-vector-equal  '(a b)     :values '(boolean))
 
              ;; STRING
              (generate-kernel-function 'string-length '(string)  :values '(uword))
@@ -399,7 +403,8 @@
 
              ;; DATA ====================
 
-             (generate-kernel-function 'eql '(a b) :values '(boolean))
+             (generate-kernel-function 'eql    '(a b) :values '(boolean))
+             (generate-kernel-function 'equal  '(a b) :values '(boolean))
 
              ;; FILENAME ====================
 
@@ -438,7 +443,8 @@
                                                (external-format :default))
                                        :cfun 'stream-open)
 
-
+             (generate-kernel-function 'finish-output  '(&optional (stream *standard-output*))       :cfun 'stream-finish-output)
+             (generate-kernel-function 'force-output   '(&optional (stream *standard-output*))       :cfun 'stream-finish-output)
 
              )))
 

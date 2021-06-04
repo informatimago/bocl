@@ -20,18 +20,8 @@ Ref print(Ref object,Ref stream){
     prin1(object,stream);
     return object;}
 
-static FILE* output_cstream(Ref stream){
-    if(eql(stream,T_Symbol)){
-        Ref so=S(*STANDARD-OUTPUT*);
-        if(symbol_boundp(so)){
-            return stream_cstream(variable_value(so));}
-        else{
-            return stdout;}}
-    else{
-        return stream_cstream(stream);}}
-
 Ref prin1(Ref object,Ref stream){
-    FILE* out=output_cstream(stream);
+    FILE* out=stream_output_cstream(stream);
 
     if(character_p(object)){
         octet code=(octet)integer_value(character_code(object));
@@ -108,7 +98,7 @@ Ref prin1(Ref object,Ref stream){
 
 
 Ref princ(Ref object,Ref stream){
-    FILE* out=output_cstream(stream);
+    FILE* out=stream_output_cstream(stream);
 
     if(character_p(object)){
         octet code=(octet)integer_value(character_code(object));
@@ -161,7 +151,7 @@ Ref princ(Ref object,Ref stream){
 
 
 Ref terpri(Ref stream){
-    FILE* out=output_cstream(stream);
+    FILE* out=stream_output_cstream(stream);
     fprintf(out,"\n");
     return NIL_Symbol;}
 

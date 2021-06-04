@@ -7,4 +7,6 @@
 
 void stream_initialize(void);
 
+FILE* stream_output_cstream(Ref stream);
+
 #endif

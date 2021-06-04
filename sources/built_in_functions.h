@@ -51,6 +51,9 @@ void kernel_OBARRAY_ALL_SYMBOLS(Ref function,Ref arguments,MultipleValues* resul
 void kernel_NULL(Ref function,Ref arguments,MultipleValues* results);
 void kernel_NORMALIZE_EXTERNAL_FORMAT(Ref function,Ref arguments,MultipleValues* results);
 void kernel_PHYSICAL_PATHNAME(Ref function,Ref arguments,MultipleValues* results);
+void kernel_PHYSICAL_PATHNAME_EQUAL(Ref function,Ref arguments,MultipleValues* results);
+void kernel_PHYSICAL_PATHNAME_P(Ref function,Ref arguments,MultipleValues* results);
+void kernel_PATHNAMEP(Ref function,Ref arguments,MultipleValues* results);
 void kernel_MAKE_FILE_STREAM(Ref function,Ref arguments,MultipleValues* results);
 void kernel_STREAM_PATHNAME(Ref function,Ref arguments,MultipleValues* results);
 void kernel_STREAM_ELEMENT_TYPE(Ref function,Ref arguments,MultipleValues* results);
@@ -101,6 +104,7 @@ void kernel_BIT(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SBIT(Ref function,Ref arguments,MultipleValues* results);
 void kernel_BIT_SET(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SBIT_SET(Ref function,Ref arguments,MultipleValues* results);
+void kernel_BIT_VECTOR_EQUAL(Ref function,Ref arguments,MultipleValues* results);
 void kernel_STRING_LENGTH(Ref function,Ref arguments,MultipleValues* results);
 void kernel_STRINGEQ(Ref function,Ref arguments,MultipleValues* results);
 void kernel_STRING_EQUAL(Ref function,Ref arguments,MultipleValues* results);
@@ -110,6 +114,7 @@ void kernel_SCHAR(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SET_CHAR(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SET_SCHAR(Ref function,Ref arguments,MultipleValues* results);
 void kernel_EQL(Ref function,Ref arguments,MultipleValues* results);
+void kernel_EQUAL(Ref function,Ref arguments,MultipleValues* results);
 void kernel_PATHNAME(Ref function,Ref arguments,MultipleValues* results);
 void kernel_NAMESTRING(Ref function,Ref arguments,MultipleValues* results);
 void kernel_PRIN1_TO_STRING(Ref function,Ref arguments,MultipleValues* results);
@@ -127,5 +132,7 @@ void kernel_MAKE_STRING_INPUT_STREAM(Ref function,Ref arguments,MultipleValues* 
 void kernel_MAKE_STRING_OUTPUT_STREAM(Ref function,Ref arguments,MultipleValues* results);
 void kernel_GET_OUTPUT_STREAM_STRING(Ref function,Ref arguments,MultipleValues* results);
 void kernel_OPEN(Ref function,Ref arguments,MultipleValues* results);
+void kernel_FINISH_OUTPUT(Ref function,Ref arguments,MultipleValues* results);
+void kernel_FORCE_OUTPUT(Ref function,Ref arguments,MultipleValues* results);
 
 #endif

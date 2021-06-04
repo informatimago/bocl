@@ -306,15 +306,26 @@ int main(int argc,char** argv){
         memory_dump(stdout);}
 
     if(do_batch){
-        bocl_read_eval_cstring("(DEFPARAMETER BOCL:*BATCH*  T)");}
+        /* TODO: update once packages are implemented: */
+        bocl_read_eval_cstring("(DEFPARAMETER BOCL-*BATCH*  T)");}
     else{
-        bocl_read_eval_cstring("(DEFPARAMETER BOCL:*BATCH*  NIL)");}
+        /* TODO: update once packages are implemented: */
+        bocl_read_eval_cstring("(DEFPARAMETER BOCL-*BATCH*  NIL)");}
+
+    define_parameter(S(*LOAD-VERBOSE*),S(NIL));
+    define_parameter(S(*COMPILE-VERBOSE*),S(NIL));
+    define_parameter(S(*LOAD-PRINT*),S(NIL));
+    define_parameter(S(*COMPILE-PRINT*),S(NIL));
 
     if(do_verbose){
+        define_parameter(S(*LOAD-VERBOSE*),S(T));
+        define_parameter(S(*COMPILE-VERBOSE*),S(T));
         bocl_read_eval_cstring("(SETQ *LOAD-VERBOSE*    T)");
         bocl_read_eval_cstring("(SETQ *COMPILE-VERBOSE* T)");}
 
     if(do_print){
+        define_parameter(S(*LOAD-PRINT*),S(T));
+        define_parameter(S(*COMPILE-PRINT*),S(T));
         bocl_read_eval_cstring("(SETQ *LOAD-PRINT*      T)");
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
 
@@ -337,7 +348,10 @@ int main(int argc,char** argv){
         bocl_in_package(bocl_read_cstring(package));}
 
     if(do_repl){
-        Ref result=bocl_read_eval_cstring("(BOCL:REPL)");
+        /* TODO: update once packages are implemented: */
+        /* Ref result=bocl_read_eval_cstring("(BOCL:REPL)"); */
+        Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
+                             variable_value(S(*STANDARD-OUTPUT*)));
         if(integer_p(result)){
             status=(int)integer_value(result);}}
 

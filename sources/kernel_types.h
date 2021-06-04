@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "macros.h"
 #include "limits.h"
 
 #ifdef _POSIX_V6_LP64_OFF64
