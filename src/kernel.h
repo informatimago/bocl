@@ -59,7 +59,9 @@ Ref octet_character(octet code);
 
 Ref string_new(halfword length);
 Ref string_new_cstring(const char* string);
+Ref string_new_vector_of_octets(VectorOfOctet* octets);
 char* string_cstring(Ref string);
+octet* string_octets(Ref string);
 
 /* SYMBOL */
 
@@ -99,6 +101,8 @@ Ref physical_pathname_new_cstring(const char* path);
 
 FILE* stream_cstream(Ref stream);
 type_t stream_type(Ref stream);
+
+Ref string_stream_new(FILE* memstream);
 
 /* FUNCTIONS */
 

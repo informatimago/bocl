@@ -13,11 +13,20 @@ DEFINES    =
 DEBUG_SRCS =
 endif
 
-SRCS = main.c bocl.c string_list.c \
+all_SRCS = $(common_SRCS) \
+	main.c \
+	test_reader.c
+bocl_SRCS = main.c $(untested_SRCS) $(tested_SRCS)
+test_reader_SRCS = test_reader.c $(untested_SRCS)
+tested_SRCS = \
+	reader.c
+untested_SRCS = \
+	bocl.c string_list.c \
 	kernel.c kernel_objects.c memory.c error.c \
 	built_in_functions.c \
 	variable.c cons.c data.c \
-	stream.c reader.c printer.c filename.c \
+	stream.c  printer.c filename.c \
+	character.c string.c bit_vector.c vector.c \
 	\
 	strdup.c \
 	\
@@ -38,7 +47,8 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
             -fsanitize-undefined-trap-on-error -fstack-protector-all                \
             -fstack-check
 
-LD_SANITIZE_FLAGS = -fsanitize=leak
+# LD_SANITIZE_FLAGS = -fsanitize=leak
+LD_SANITIZE_FLAGS =
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
 # -Werror
@@ -84,16 +94,20 @@ MAKEDEPEND.c = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) $(DEPFLAGS)
 	@ printf "# Generating dependencies         for %s\n" "$<"
 	$(VERBOSE) $(MAKEDEPEND.c) $<
 
-deps:   $(SRCS:%.c=%.d)
-include $(SRCS:%.c=%.d)
+deps:   $(all_SRCS:%.c=%.d)
+include $(all__SRCS:%.c=%.d)
 
 
 
 
-bocl: $(SRCS:%.c=%.d) $(SRCS:%.c=%.o)
-	@ printf "# Linking %-20s   from %s\n" "$@" "$(SRCS:%.c=%.o)"
-	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $(SRCS:%.c=%.o)
+bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
+	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $(bocl_SRCS:%.c=%.o)
 
+test_reader.o : test_reader.c reader.c reader.h
+test_reader:test_reader.o $(test_reader_SRCS:%.c=%.d) $(test_reader_SRCS:%.c=%.o)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_reader_SRCS:%.c=%.o)"
+	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $(test_reader_SRCS:%.c=%.o)
 
 clean:
 	@ printf "# Removing object files and target\n"
@@ -133,12 +147,18 @@ kernel_functions.h built_in_functions.h built_in_functions.c : generate-built-in
 kernel.o:kernel.c kernel.h kernel_objects.h
 
 
-test:bocl
-	@printf "# Testing\n"
+test: run_test_bocl run_test_reader
+
+run_test_bocl:bocl
+	@printf "# Testing bocl\n"
 	$(VERBOSE) output=$$($(RUN_ENV)  ./bocl --quiet 2>&1) || ( status=$$? ;\
 	expected="$$(echo '@ERROR: in bocl_read_eval_cstring:  NOT IMPLEMENTED YET' |tr '@' '\012')" ;\
 	[ "$$output" = "$$expected" ] && [ $$status -eq 65 ] || ( printf "output = x%sx\n" "$$output" ; printf "expected = x%sx\n" "$$expected" ; exit 1 ; ) ; )
 	@printf "# Success\n"
+
+run_test_reader:test_reader
+	@printf "# Testing test_reader\n"
+	$(VERBOSE) ./test_reader
 
 run:bocl
 	$(VERBOSE) $(RUN_ENV) ./bocl

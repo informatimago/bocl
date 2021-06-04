@@ -91,7 +91,7 @@
                                  (error "Invalid keyword: ~S" key))))
                             keys)))
 
-      
+
       (case *header*
 
         (:kernel-functions
@@ -127,7 +127,7 @@
         (:header
          (format t "void ~A(Ref function,Ref arguments,MultipleValues* results);~%"
                  (k-fun-name fname)))
-        
+
         (otherwise
          (format t "void ~A(Ref function,Ref arguments,MultipleValues* results){~%"
                  (k-fun-name fname))
@@ -245,7 +245,7 @@
            (let ((*header* header))
 
              (generate-kernel-function 'kernel-rootset '())
-             
+
 
              ;; CLASS
              (generate-kernel-function 'class-new '(name))
@@ -289,13 +289,6 @@
              (generate-kernel-function 'name-char '(name)      :cfun 'name-character)
 
 
-             ;; STRING
-             (generate-kernel-function 'string-length '(string)  :values '(uword))
-             (generate-kernel-function 'string=       '(a b)     :values '(boolean) :cfun 'string-eq)
-             (generate-kernel-function 'string-equal  '(a b)     :values '(boolean))
-             (generate-kernel-function 'stringp       '(object)  :values '(boolean) :cfun 'string-p)
-
-
              ;; SYMBOL
 
              (generate-kernel-function 'find-symbol '(name obarray))
@@ -321,17 +314,17 @@
              (generate-kernel-function 'keywordp        '(object) :values '(boolean) :cfun 'keyword-p)
 
              (generate-kernel-function 'obarray-all-symbols '(obarray))
-             
+
              ;; NULL
              (generate-kernel-function 'null        '(object) :values '(boolean) :cfun 'null-p)
 
              ;; EXTERNAL-FORMAT
              (generate-kernel-function 'normalize-external-format  '(external-format))
 
-             ;; PHYSICAL-PATHNAME 
+             ;; PHYSICAL-PATHNAME
              (generate-kernel-function 'physical-pathname  '(namestring))
 
-             ;;  FILESTREAM 
+             ;;  FILESTREAM
 
              (generate-kernel-function 'make-file-stream '(pathname element-type external-format) :cfun 'file-stream-new)
              (generate-kernel-function 'stream-pathname '(stream))
@@ -348,7 +341,7 @@
 
              (generate-kernel-function 'closurep '(object) :values '(boolean) :cfun 'closure-p)
              (generate-kernel-function 'function-name '(function))
-             
+
              ;; CONS ====================
 
              (generate-kernel-function 'rplaca  '(cell new-car))
@@ -357,8 +350,8 @@
              (dolist (op '(car cdr caar cadr cdar cddr caaar caadr cadar caddr
                            cdaar cdadr cddar cdddr))
                (generate-kernel-function op '(cons)))
-             
-             ;; List 
+
+             ;; List
 
              (generate-kernel-function 'list-length  '(list) :values '(uword))
 
@@ -380,7 +373,30 @@
              ;; VECTOR ====================
 
              (generate-kernel-function 'vector  '(&rest elements) :cfun 'vector-new)
-             
+             (generate-kernel-function 'vectorp       '(object)  :values '(boolean) :cfun 'vector-p)
+             (generate-kernel-function 'vector-length '(vector)  :values '(uword))
+             (generate-kernel-function 'svref         '(vector index))
+             (generate-kernel-function 'svref-set     '(vector index new-object))
+
+             ;; BIT-VECTOR ====================
+
+             (generate-kernel-function 'bit-vector-p   '(object)        :values '(boolean))
+             (generate-kernel-function 'bit-vector-length '(bit-vector) :values '(uword))
+             (generate-kernel-function 'bit               '(bit-vector index))
+             (generate-kernel-function 'sbit              '(bit-vector index) :cfun 'bit)
+             (generate-kernel-function 'bit-set           '(bit-vector index new-bit))
+             (generate-kernel-function 'sbit-set          '(bit-vector index new-bit) :cfun 'bit-set)
+
+             ;; STRING
+             (generate-kernel-function 'string-length '(string)  :values '(uword))
+             (generate-kernel-function 'string=       '(a b)     :values '(boolean) :cfun 'string-eq)
+             (generate-kernel-function 'string-equal  '(a b)     :values '(boolean))
+             (generate-kernel-function 'stringp       '(object)  :values '(boolean) :cfun 'string-p)
+             (generate-kernel-function 'char          '(string index) :cfun 'char-ref)
+             (generate-kernel-function 'schar         '(string index) :cfun 'char-ref)
+             (generate-kernel-function 'set-char      '(string index new-char) :cfun 'char-set)
+             (generate-kernel-function 'set-schar     '(string index new-char) :cfun 'char-set)
+
              ;; DATA ====================
 
              (generate-kernel-function 'eql '(a b) :values '(boolean))
@@ -396,7 +412,7 @@
              (generate-kernel-function 'print '(object &optional (stream *standard-output*)))
              (generate-kernel-function 'prin1 '(object &optional (stream *standard-output*)))
              (generate-kernel-function 'princ '(object &optional (stream *standard-output*)))
-             
+
              (generate-kernel-function 'terpri '(&optional (stream *standard-output*)))
 
              ;; READER ====================
@@ -410,6 +426,9 @@
 
              ;; STREAM ====================
 
+             (generate-kernel-function 'make-string-input-stream  '(string &optional start end) :cfun 'stream-input-string)
+             (generate-kernel-function 'make-string-output-stream '(&key element-type)          :cfun 'stream-output-string)
+             (generate-kernel-function 'get-output-stream-string  '(string-output-stream)       :cfun 'string_output_stream_get_string)
 
              (generate-kernel-function 'open '(filespec
                                                &key (direction :input)
@@ -419,7 +438,7 @@
                                                (external-format :default))
                                        :cfun 'stream-open)
 
-             
+
 
              )))
 
@@ -447,8 +466,8 @@
       (generate :header)
       (terpri)
       (write-line "#endif"))
-    
-    
+
+
     (with-open-file (*standard-output* "built_in_functions.c"
                                        :direction :output
                                        :if-does-not-exist :create
@@ -466,6 +485,3 @@
       (terpri)
       (write-line "/**** THE END ****/"))
     (values)))
-
-
-

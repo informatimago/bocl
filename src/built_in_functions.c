@@ -338,56 +338,6 @@ void kernel_NAME_CHAR(Ref function,Ref arguments,MultipleValues* results){
     delete_from_rootset(function);
 }
 
-void kernel_STRING_LENGTH(Ref function,Ref arguments,MultipleValues* results){
-    push_to_rootset(function);
-    push_to_rootset(arguments);
-    Ref current=arguments;
-    Ref par_string = pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    results->count=1;
-    results->values[0] = integer_from_uword(string_length(par_string));
-    delete_from_rootset(arguments);
-    delete_from_rootset(function);
-}
-
-void kernel_STRINGEQ(Ref function,Ref arguments,MultipleValues* results){
-    push_to_rootset(function);
-    push_to_rootset(arguments);
-    Ref current=arguments;
-    Ref par_a = pop_mandatory_argument(function,&current);
-    Ref par_b = pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    results->count=1;
-    results->values[0] = as_boolean(string_eq(par_a, par_b));
-    delete_from_rootset(arguments);
-    delete_from_rootset(function);
-}
-
-void kernel_STRING_EQUAL(Ref function,Ref arguments,MultipleValues* results){
-    push_to_rootset(function);
-    push_to_rootset(arguments);
-    Ref current=arguments;
-    Ref par_a = pop_mandatory_argument(function,&current);
-    Ref par_b = pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    results->count=1;
-    results->values[0] = as_boolean(string_equal(par_a, par_b));
-    delete_from_rootset(arguments);
-    delete_from_rootset(function);
-}
-
-void kernel_STRINGP(Ref function,Ref arguments,MultipleValues* results){
-    push_to_rootset(function);
-    push_to_rootset(arguments);
-    Ref current=arguments;
-    Ref par_object = pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    results->count=1;
-    results->values[0] = as_boolean(string_p(par_object));
-    delete_from_rootset(arguments);
-    delete_from_rootset(function);
-}
-
 void kernel_FIND_SYMBOL(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -1133,6 +1083,239 @@ void kernel_VECTOR(Ref function,Ref arguments,MultipleValues* results){
     delete_from_rootset(function);
 }
 
+void kernel_VECTORP(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(vector_p(par_object));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_VECTOR_LENGTH(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_vector = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = integer_from_uword(vector_length(par_vector));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_SVREF(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_vector = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = svref(par_vector, par_index);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_SVREF_SET(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_vector = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    Ref par_new_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = svref_set(par_vector, par_index, par_new_object);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_BIT_VECTOR_P(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(bit_vector_p(par_object));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_BIT_VECTOR_LENGTH(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_bit_vector = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = integer_from_uword(bit_vector_length(par_bit_vector));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_BIT(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_bit_vector = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = bit(par_bit_vector, par_index);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_SBIT(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_bit_vector = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = bit(par_bit_vector, par_index);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_BIT_SET(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_bit_vector = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    Ref par_new_bit = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = bit_set(par_bit_vector, par_index, par_new_bit);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_SBIT_SET(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_bit_vector = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    Ref par_new_bit = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = bit_set(par_bit_vector, par_index, par_new_bit);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRING_LENGTH(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_string = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = integer_from_uword(string_length(par_string));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRINGEQ(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_a = pop_mandatory_argument(function,&current);
+    Ref par_b = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(string_eq(par_a, par_b));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRING_EQUAL(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_a = pop_mandatory_argument(function,&current);
+    Ref par_b = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(string_equal(par_a, par_b));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRINGP(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(string_p(par_object));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_CHAR(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_string = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = char_ref(par_string, par_index);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_SCHAR(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_string = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = char_ref(par_string, par_index);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_SET_CHAR(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_string = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    Ref par_new_char = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = char_set(par_string, par_index, par_new_char);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_SET_SCHAR(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_string = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    Ref par_new_char = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = char_set(par_string, par_index, par_new_char);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 void kernel_EQL(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -1348,6 +1531,46 @@ void kernel_KERNEL_READ_FROM_STRING(Ref function,Ref arguments,MultipleValues* r
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = kernel_read_from_string(par_input_string, par_eof_error_p, par_eof_value, par_start, par_end, par_preserve_whitespace);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_MAKE_STRING_INPUT_STREAM(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_string = pop_mandatory_argument(function,&current);
+    Ref def_start = variable_value(S(NIL));
+    Ref par_start = pop_optional_argument(function,&current,def_start);
+    Ref def_end = variable_value(S(NIL));
+    Ref par_end = pop_optional_argument(function,&current,def_end);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = stream_input_string(par_string, par_start, par_end);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_MAKE_STRING_OUTPUT_STREAM(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref def_element_type = variable_value(S(NIL));
+    Ref par_element_type = pop_key_argument(function,&current,K(ELEMENT-TYPE),def_element_type);
+    results->count=1;
+    results->values[0] = stream_output_string(par_element_type);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_GET_OUTPUT_STREAM_STRING(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_string_output_stream = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = string_output_stream_get_string(par_string_output_stream);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }

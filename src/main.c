@@ -13,6 +13,10 @@
 #include "memory.h"
 #include "error.h"
 #include "strdup.h"
+#include "stream.h"
+#include "printer.h"
+#include "reader.h"
+#include "variable.h"
 
 static const char* source="http://gitlab.com/informatimago/bocl/";
 static const char* bocl_lisp="(defun repl () (catch 'quit (do () () (print (eval (read))))))";
@@ -314,7 +318,11 @@ int main(int argc,char** argv){
         bocl_read_eval_cstring("(SETQ *LOAD-PRINT*      T)");
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
 
-    initfiles=string_list_cons(initfile,initfiles);
+    prin1(S(PAPA),variable_value(S(*STANDARD-OUTPUT*)));
+    terpri(variable_value(S(*STANDARD-OUTPUT*)));
+
+    if(!do_norc){
+        initfiles=string_list_cons(initfile,initfiles);}
     {do_string_list(ifile,initfiles){
             bocl_load_cstring(ifile);}}
     string_list_free(initfiles);

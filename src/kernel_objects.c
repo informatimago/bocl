@@ -575,7 +575,7 @@ void kernel_objects_initialize(void){
     boot_class_add_superclass(PHYSICAL_PATHNAME_Class                 ,PATHNAME_Class                          );
     boot_class_add_superclass(PATHNAME_Class                          ,T_Class                                 );
     boot_class_add_superclass(FILE_STREAM_Class                       ,STREAM_Class                            );
-    boot_class_add_superclass(STRING_STREAM_Class                     ,STREAM_Class                            );
+    boot_class_add_superclass(STRING_STREAM_Class                     ,FILE_STREAM_Class                       );
     boot_class_add_superclass(TWO_WAY_STREAM_Class                    ,STREAM_Class                            );
     boot_class_add_superclass(BROADCAST_STREAM_Class                  ,STREAM_Class                            );
     boot_class_add_superclass(ECHO_STREAM_Class                       ,STREAM_Class                            );

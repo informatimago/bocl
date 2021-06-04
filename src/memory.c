@@ -147,10 +147,10 @@ static void insert_free_block(Zone* zone,FreeBlock* new){
             previous=previous->next;}}}
 
 static FreeBlock* before_best_free_block(FreeBlock* free_list,halfword size){
-    /* 
+    /*
     The first free block is free_list->next.
     If the best free block is the first one, then return free_list,
-    else return the block that points to the best one (result->next). 
+    else return the block that points to the best one (result->next).
     If no free block is good, then return NULL.
     */
     while(free_list->next){
@@ -199,7 +199,7 @@ static Block* allocate_in_zone(Zone* zone,halfword size){
 
 static Block* allocate_in_zones(halfword size){
     /*
-    Search the best suitable free zone in all the zones, 
+    Search the best suitable free zone in all the zones,
     and allocate from it, unless non exist then NULL is returned.
     */
     Zone* best_zone=NULL;
@@ -361,7 +361,7 @@ void memory_dump(FILE* out){
              while(block<end){
                  fprintf(out,"      block %16p",(void*)block);
                  if(in_root_set_p(block)){
-                     fprintf(out," in-root-set");}                     
+                     fprintf(out," in-root-set");}
                  if(free_block_p(block)){
                      fprintf(out," free-block");}
                  if(in_free_list(&(zone->free_list),block)){
@@ -378,4 +378,3 @@ void memory_dump(FILE* out){
                  block=next_block(block);}}}}
 
 /**** THE END ****/
-

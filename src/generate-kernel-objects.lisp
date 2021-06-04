@@ -244,7 +244,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (physical-pathname                  (built-in-class)             (pathname))
     (pathname                           (built-in-class)             (t))
     (file-stream                        (built-in-class)             (stream))
-    (string-stream                      (built-in-class)             (stream))
+    (string-stream                      (built-in-class)             (file-stream)) ; not exactly, but that's how it's implemented here! still conforming AFAIK
     (two-way-stream                     (built-in-class)             (stream))
     (broadcast-stream                   (standard-class)             (stream))
     (echo-stream                        (standard-class)             (stream))

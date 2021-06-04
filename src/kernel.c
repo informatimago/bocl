@@ -19,25 +19,26 @@
 
 /* Internal Object Structure */
 
-static Ref                   Object_new                     (Ref  class,        Slots*   slots);
+static Ref                       Object_new                         (Ref  class,        Slots*   slots);
 
-static Array*                    Array_slots                    (Ref  element_type, halfword rank, halfword* dimensions);
-static BuiltInClass*             BuiltInClass_slots             (Ref  name,         Ref  superclasses);
-static Character*                Character_slots                (Ref  name,         Ref  code);
-static Class*                    Class_slots                    (Ref  name,         Ref  superclasses);
-static Cons*                     Cons_slots                     (Ref  car,          Ref  cdr);
-static Float*                    Float_slots                    (floating value);
-static FuncallableStandardClass* FuncallableStandardClass_slots (Ref  name,         Ref  superclasses) unused;
-static Integer*                  Integer_slots                  (word     value);
-static OctetArray*               OctetArray_slots               (Ref  element_type, halfword rank, halfword* dimensions);
-static OctetArray*               OctetArray_slots_cstring       (Ref  element_type, const char* initial_value);
-static StandardClass*            StandardClass_slots            (Ref  name,         Ref  superclasses) unused;
-static StructureClass*           StructureClass_slots           (Ref  name,         Ref  superclasses) unused;
-static Symbol*                   Symbol_slots                   (Ref  name,         Ref  package);
-static VectorOfObject*           VectorOfObject_slots           (halfword size);
-static VectorOfOctet*            VectorOfOctet_slots            (halfword length);
-static VectorOfOctet*            VectorOfOctet_slots_cstring    (const char* value);
-static VectorOfUWord*            VectorOfUWord_slots            (halfword size) unused;
+static Array*                    Array_slots                        (Ref  element_type, halfword rank, halfword* dimensions);
+static BuiltInClass*             BuiltInClass_slots                 (Ref  name,         Ref  superclasses);
+static Character*                Character_slots                    (Ref  name,         Ref  code);
+static Class*                    Class_slots                        (Ref  name,         Ref  superclasses);
+static Cons*                     Cons_slots                         (Ref  car,          Ref  cdr);
+static Float*                    Float_slots                        (floating value);
+static FuncallableStandardClass* FuncallableStandardClass_slots     (Ref  name,         Ref  superclasses) unused;
+static Integer*                  Integer_slots                      (word     value);
+static OctetArray*               OctetArray_slots                   (Ref  element_type, halfword rank, halfword* dimensions);
+static OctetArray*               OctetArray_slots_cstring           (Ref  element_type, const char* initial_value);
+static OctetArray*               OctetArray_slots_vector_of_octets  (Ref  element_type, VectorOfOctet* octets);
+static StandardClass*            StandardClass_slots                (Ref  name,         Ref  superclasses) unused;
+static StructureClass*           StructureClass_slots               (Ref  name,         Ref  superclasses) unused;
+static Symbol*                   Symbol_slots                       (Ref  name,         Ref  package);
+static VectorOfObject*           VectorOfObject_slots               (halfword size);
+static VectorOfOctet*            VectorOfOctet_slots                (halfword length);
+static VectorOfOctet*            VectorOfOctet_slots_cstring        (const char* value);
+static VectorOfUWord*            VectorOfUWord_slots                (halfword size) unused;
 
 
 
@@ -75,8 +76,7 @@ VectorOfObject* VectorOfObject_slots(halfword size){
 
 VectorOfUWord* VectorOfUWord_slots(halfword size){
     VectorOfUWord* that=allocate(sizeof(*that)+sizeof(that->elements[0])*size);
-    for(halfword i=0;i<size;i++){
-        that->elements[i]=0;}
+    memset(that->elements,CHECK_HALFWORD_TO_INT(size),sizeof(that->elements[0]));
     return that;}
 
 
@@ -85,8 +85,7 @@ VectorOfUWord* VectorOfUWord_slots(halfword size){
 VectorOfOctet* VectorOfOctet_slots(halfword length){
     VectorOfOctet* that=allocate(sizeof(*that)+sizeof(that->elements[0])*length);
     that->length=length;
-    for(halfword i=0;i<length;i++){
-        that->elements[i]=0;}
+    memset(that->elements,CHECK_HALFWORD_TO_INT(length),sizeof(that->elements[0]));
     return that;}
 
 VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
@@ -142,6 +141,15 @@ OctetArray* OctetArray_slots_cstring(Ref element_type,const char* initial_value)
     that->element_type=element_type;
     that->elements=elements;
     that->dimensions[0]=elements->length;
+    return that;}
+
+static OctetArray* OctetArray_slots_vector_of_octets(Ref element_type, VectorOfOctet* octets){
+    halfword rank=1;
+    OctetArray* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
+    that->objcount=2;
+    that->element_type=element_type;
+    that->elements=octets;
+    that->dimensions[0]=octets->length;
     return that;}
 
 
@@ -541,6 +549,10 @@ Ref string_new(halfword length){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots(CHARACTER_Symbol,1,&length));}
 
+Ref string_new_vector_of_octets(VectorOfOctet* octets){
+    return Object_new(STRING_Class,
+                      (Slots*)OctetArray_slots_vector_of_octets(CHARACTER_Symbol,octets));}
+
 Ref string_new_cstring(const char* string){
     return Object_new(STRING_Class,
                       (Slots*)OctetArray_slots_cstring(CHARACTER_Symbol,string));}
@@ -551,6 +563,10 @@ bool string_p(Ref object){
 uword string_length(Ref string){
     check_class(string,STRING_Class);
     return string->slots->octet_array.dimensions[0];}
+
+octet* string_octets(Ref string){
+    check_class(string,STRING_Class);
+    return string->slots->octet_array.elements->elements;}
 
 char* string_cstring(Ref string){
     check_class(string,STRING_Class);
@@ -654,7 +670,8 @@ Ref symbol_intern_cstring(const char* name){
     return symbol_intern(string_new_cstring(name));}
 
 bool symbol_p(Ref object){
-    return class_of(object)==SYMBOL_Class;}
+    return typep(object,SYMBOL_Class);}
+    /* return class_of(object)==SYMBOL_Class;} */
 
 Ref symbol_package(Ref symbol){
     check_type(symbol,SYMBOL_Class);
@@ -751,6 +768,7 @@ Ref vector_new(Ref elements){
         array->elements->elements[i]=car(elements);}
     return Object_new(VECTOR_Class,(Slots*)array);}
 
+
 /* BIT-VECTOR */
 
 Ref bit_vector_new_octets(uword length,octet* bits){
@@ -759,7 +777,6 @@ Ref bit_vector_new_octets(uword length,octet* bits){
     Array* array=Array_slots(BIT_Symbol,1,dimensions);
     memcpy(array->elements->elements,bits,length);
     return Object_new(BIT_VECTOR_Class,(Slots*)array);}
-
 
 /* CLASS */
 
@@ -1134,8 +1151,8 @@ type_t convert_element_type(Ref element_type){
 /* FILE-STREAM */
 
 Ref file_stream_new(Ref pathname,     /* a PHYSICAL-PATHNAME */
-                       Ref element_type, /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
-                       Ref external_format){
+                    Ref element_type, /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
+                    Ref external_format){
     check_class(pathname,PHYSICAL_PATHNAME_Class);
     type_t type=convert_element_type(element_type);
     encoding_t encoding=encoding_iso_8859_1;
@@ -1143,10 +1160,11 @@ Ref file_stream_new(Ref pathname,     /* a PHYSICAL-PATHNAME */
     on_error_t on_error=on_error_error;
     external_format=normalize_external_format_internal(external_format,&encoding,&new_line,&on_error);
     FileStream* slots=(FileStream*)allocate(sizeof(*slots));
-    slots->objcount=3;
+    slots->objcount=4;
     slots->pathname=pathname;
     slots->element_type=element_type;
     slots->external_format=external_format;
+    slots->string=NIL_Symbol;
     slots->is_open=0;
     slots->direction=direction_input;
     slots->type=type;
@@ -1157,32 +1175,103 @@ Ref file_stream_new(Ref pathname,     /* a PHYSICAL-PATHNAME */
     return Object_new(find_class(symbol_intern_cstring("FILE-STREAM")),
                       (Slots*)slots);}
 
+Ref string_stream_new(FILE* memstream){
+    Ref element_type=S(CHARACTER);
+    Ref external_format=list(K(ISO-8859-1),K(LF),S(NIL));
+    type_t type=type_character;
+    encoding_t encoding=encoding_iso_8859_1;
+    new_line_t new_line=new_line_lf;
+    on_error_t on_error=on_error_ignore;
+    FileStream* slots=(FileStream*)allocate(sizeof(*slots));
+    slots->objcount=4;
+    slots->pathname=NIL_Symbol;
+    slots->element_type=element_type;
+    slots->external_format=external_format;
+    slots->string=NIL_Symbol;
+    slots->is_open=1;
+    slots->direction=direction_input;
+    slots->type=type;
+    slots->encoding=encoding;
+    slots->new_line=new_line;
+    slots->on_error=on_error;
+    slots->stream=memstream;
+    return Object_new(find_class(symbol_intern_cstring("STRING-STREAM")),
+                      (Slots*)slots);}
+
+Ref stream_input_string(Ref string,Ref start,Ref end){
+    uword len   = string_length(string);
+    word istart = (null_p(start)) ?0 : integer_value(start);
+    word iend   = (null_p(end)) ? CHECK_UWORD_TO_WORD(len) : integer_value(end);
+    if((istart<0) || (len<istart)){
+        ERROR("START = %"WORD_FORMAT" is beyond length of string = %"WORD_FORMAT"",istart,len);}
+    if(len<iend){
+        ERROR("END = %"WORD_FORMAT" is beyond length of string = %"WORD_FORMAT"",iend,len);}
+    if(iend<istart){
+        ERROR("END = %"WORD_FORMAT" is before START = %"WORD_FORMAT"",iend,istart);}
+    char* buffer = (char*)string_octets(string)+istart;
+    size_t size = CHECK_WORD_TO_SIZE(iend-istart);
+    FILE* memstream=fmemopen(buffer,size,"r");
+    if(!memstream){
+        ERROR("Cannot create the STRING-STREAM for a string of length %"WORD_FORMAT"",size);}
+    Ref stream=string_stream_new(memstream);
+    stream->slots->file_stream.direction=direction_input;
+    stream->slots->file_stream.string=string;
+    stream->slots->file_stream.buffer=(octet*)buffer;
+    stream->slots->file_stream.buffer_size=size;
+    return stream;}
+
+Ref stream_output_string(unused Ref element_type){
+    /* Element type is not that useful (our BASE-CHAR = CHARACTER), but it's in the API. */
+    Ref string=string_new(STRING_STREAM_BUFFER_SIZE);
+    char* buffer = (char*)string_octets(string);
+    size_t size = STRING_STREAM_BUFFER_SIZE;
+    FILE* memstream=fmemopen(buffer,size,"w");
+    if(!memstream){
+        ERROR("Cannot create the STRING-STREAM for a string of length %"WORD_FORMAT"",size);}
+    Ref stream=string_stream_new(memstream);
+    stream->slots->file_stream.direction=direction_output;
+    stream->slots->file_stream.string=string;
+    stream->slots->file_stream.buffer=(octet*)buffer;
+    string->slots->octet_array.dimensions[0]=size;
+    return stream;}
+
+Ref string_output_stream_get_string(Ref string_output_stream){
+    FILE* cstream=string_output_stream->slots->file_stream.stream;
+    fflush(cstream);
+    long pos=ftell(cstream);
+    /* int err=errno; */
+    if(pos<0){
+        STREAM_ERROR(string_output_stream); /* ,"OS Stream Error %d",err); */}
+    Ref string=string_output_stream->slots->file_stream.string;
+    string->slots->octet_array.dimensions[0]=CHECK_LONG_TO_UWORD(pos);
+    return string;}
+
 Ref stream_pathname(Ref stream){
-    check_class(stream,FILE_STREAM_Class);
+    check_type(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.pathname;}
 
 Ref stream_element_type(Ref stream){
-    check_class(stream,FILE_STREAM_Class);
+    check_type(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.element_type;}
 
 Ref stream_external_format(Ref stream){
-    check_class(stream,FILE_STREAM_Class);
+    check_type(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.external_format;}
 
 Ref stream_direction(Ref stream){
-    check_class(stream,FILE_STREAM_Class);
+    check_type(stream,FILE_STREAM_Class);
     return convert_from_direction(stream->slots->file_stream.direction);}
 
 bool stream_open_p(Ref stream){
-    check_class(stream,FILE_STREAM_Class);
+    check_type(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.is_open;}
 
 FILE* stream_cstream(Ref stream){
-    check_class(stream,FILE_STREAM_Class);
+    check_type(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.stream;}
 
 type_t stream_type(Ref stream){
-    check_class(stream,FILE_STREAM_Class);
+    check_type(stream,FILE_STREAM_Class);
     return stream->slots->file_stream.type;}
 
 

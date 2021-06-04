@@ -7,6 +7,8 @@
 #include "variable.h"
 #include "error.h"
 #include "cons.h"
+#include "string.h"
+#include "character.h"
 
 /* The recursive_p parameters are unused, since we don't deal with #=/## references */
 
@@ -36,37 +38,37 @@ Hard-wired reader macros:
 
 numeric-token  ::=  integer |
                                    ratio   |
-                                   float       
+                                   float
 integer        ::=  [sign]
                                    decimal-digit+
                                    decimal-point |
                                    [sign]
-                                   digit+      
+                                   digit+
 ratio          ::=  [sign]
                                    {digit}+
                                    slash
-                                   {digit}+    
+                                   {digit}+
 float          ::=  [sign]
                                    {decimal-digit}*
                                    decimal-point
                                    {decimal-digit}+
-                                   [exponent]  
-                    | 
+                                   [exponent]
+                    |
                                    [sign]
                                    {decimal-digit}+
                                    [decimal-point
                                            {decimal-digit}*]
-                                   exponent    
+                                   exponent
 exponent       ::=  exponent-marker
                                    [sign]
-                                   {digit}+    
-                                       
-sign---a sign.                         
-slash---a slash                        
-decimal-point---a dot.                        
-exponent-marker---an exponent marker.                        
-decimal-digit---a digit in radix 10.                        
-digit---a digit in the current input radix.                        
+                                   {digit}+
+
+sign---a sign.
+slash---a slash
+decimal-point---a dot.
+exponent-marker---an exponent marker.
+decimal-digit---a digit in radix 10.
+digit---a digit in the current input radix.
 
 
 integer
@@ -80,7 +82,6 @@ float
 
 typedef struct parser_state {
     Ref input_stream;
-    Ref list;
     size_t length;
     octet ch;
     octet filler;
@@ -147,49 +148,22 @@ static octet peek_octet(Ref input_stream,bool* eof,bool* error){
         (*eof)=false;}
     return (octet)c;}
 
-static bool constituentp(octet ch){
-    if(160<=ch){
-        return true;}
-    switch(ch){
-      case ' ':
-      case '"':
-      case '#':
-      case '\'':
-      case '(':
-      case ')':
-      case ',':       
-      case '\\':       
-      case '`':       
-      case '|':       
-          return false;}            
-    if((33<=ch)&&(ch<127)){
-        return true;}
-    return false;}
-
-static bool whitespacep(octet character){
-    switch(character){
-      case 9: /* TAB */
-      case 10: /* LF */
-      case 11: /* VT */
-      case 12: /* FF */
-      case 13: /* CR */
-      case 32: /* SPC */
-      case 0x85: /* NEL */
-          return true;
-      default:
-          return false;}}
-
 static void check_parser_error(parser_state* parser){
     if(parser->error){
-        STREAM_ERROR(parser->input_stream);}
-    if(parser->eof){
-        END_OF_FILE(parser->input_stream);}}
+        STREAM_ERROR(parser->input_stream);}}
+
+static void check_token_too_long(parser_state* parser,const char* what){
+    if(ARRAY_TOTAL_SIZE_LIMIT<=parser->length){
+        READER_ERROR(parser->input_stream,"%s too long (more than %lu)",
+                     what,ARRAY_TOTAL_SIZE_LIMIT);}}
+
+/* if(parser->eof){ */
+/*     END_OF_FILE(parser->input_stream);} */
 
 static octet advance_character(parser_state* parser){
     return ((parser->ch=read_octet(parser->input_stream,&parser->eof,&parser->error)));}
 
 static void skip_spaces(parser_state* parser){
-    advance_character(parser);
     while(!parser->eof && !parser->error && (whitespacep(parser->ch) || (parser->ch==';'))){
         if(parser->ch==';'){
             while(!parser->eof && !parser->error && (parser->ch!=NEL)){
@@ -198,137 +172,111 @@ static void skip_spaces(parser_state* parser){
             advance_character(parser);}}
     check_parser_error(parser);}
 
-static Ref parse_object(parser_state* parser);
-
 static void parse_character_name(parser_state* parser){
     parser->length=0;
     while(!(parser->eof) && ((parser->ch=='-')
                              ||(parser->ch=='_')
                              ||isalnum(parser->ch))){
+        check_token_too_long(parser,"Character name");
         parser->token[parser->length++]=parser->ch;
         advance_character(parser);
-        if(parser->error){
-            check_parser_error(parser);}}}
+        check_parser_error(parser);}}
 
 static Ref parse_character(parser_state* parser){
+    /* We've read #\   We need to read the character or character name */
     advance_character(parser);
     check_parser_error(parser);
+    if(parser->eof){
+        return NIL_Symbol;}
     if(isalpha(parser->ch)){
-        parser->length=1;
-        parser->token[0]=parser->ch;
         parse_character_name(parser);
         parser->token[parser->length]='\0';
-        Ref character=name_character(string_new_cstring((char*)parser->token));
-        if(null_p(character)){
-            READER_ERROR(parser->input_stream,"Invalid character name %s",parser->token);}
+        if(parser->length==1){
+            /* 1-non-alpha char */
+            parser->eof=false;
+            return octet_character(parser->token[0]);}
         else{
-            return character;}}
+            Ref character=name_character(string_new_cstring((char*)parser->token));
+            if(null_p(character)){
+                READER_ERROR(parser->input_stream,"Invalid character name %s",parser->token);}
+            else{
+                parser->eof=false;
+                return character;}}}
     else{
-        return octet_character(parser->ch);}}
-
+        /* 1-non-alpha char */
+        if(printablep(parser->ch)){
+            return octet_character(parser->ch);}
+        else{
+            READER_ERROR(parser->input_stream,"Invalid character after #\\ -- code 0x%02x (%d)",
+                         parser->ch,parser->ch);}}}
 
 static Ref parse_string(parser_state* parser){
+    /* We've read opening "  we need to read the string until closing " */
     parser->length=0;
     parser->escape=false;
     while(true){
         advance_character(parser);
         check_parser_error(parser);
+        if(parser->eof){
+            /* in the middle of a string */
+            return NIL_Symbol;}
         if(parser->escape){
-            if(ARRAY_TOTAL_SIZE_LIMIT<=parser->length){
-                READER_ERROR(parser->input_stream,"String too long (more than %lu)",ARRAY_TOTAL_SIZE_LIMIT);}
+            check_token_too_long(parser,"String");
             parser->token[parser->length++]=parser->ch;}
         else{
             switch(parser->ch){
-              case '\\': parser->escape=true;
+              case '\\':
+                  parser->escape=true;
+                  break;
               case '"':
                   parser->token[parser->length]='\0';
                   return string_new_cstring((char*)parser->token);
               default:
-                  if(ARRAY_TOTAL_SIZE_LIMIT<=parser->length){
-                      READER_ERROR(parser->input_stream,"String too long (more than %lu)",ARRAY_TOTAL_SIZE_LIMIT);}
+                  check_token_too_long(parser,"String");
                   parser->token[parser->length++]=parser->ch;}}}}
 
+static Ref parse_object(parser_state* parser);
+
 static Ref parse_list(parser_state* parser){
-    parser->list=NIL_Symbol;
+    /* We've read opening (  we need to read objects util closing ) */
+    Ref result=NIL_Symbol;
+    advance_character(parser);
     skip_spaces(parser);
+    if(parser->eof){
+        return NIL_Symbol;}
     while(parser->ch!=')'){
         Ref element=parse_object(parser);
-        push(element,&parser->list);
-        skip_spaces(parser);}
-    return nreverse(parser->list);}
+        push(element,&result);
+        skip_spaces(parser);
+        if(parser->eof){
+            return NIL_Symbol;}}
+    parser->eof=false;
+    return nreverse(result);}
 
 static Ref parse_vector(parser_state* parser){
-    return vector_new(parse_list(parser));}
+    Ref elements=parse_list(parser);
+    if(parser->eof){
+        return NIL_Symbol;}
+    return vector_new(elements);}
 
 static Ref parse_bit_vector(parser_state* parser){
     parser->length=0;
     while(true){
         advance_character(parser);
         check_parser_error(parser);
+        if(parser->eof){
+            /* EOF, we're done with the vector, postpone EOF */
+            parser->eof=false;
+            return bit_vector_new_octets(parser->length,parser->token);}
         switch(parser->ch){
           case '0':
           case '1':
-            if(ARRAY_TOTAL_SIZE_LIMIT<=parser->length){
-                READER_ERROR(parser->input_stream,"Bit vector too long (more than %lu)",ARRAY_TOTAL_SIZE_LIMIT);}
-            parser->token[parser->length++]=parser->ch&1;
-            break;
+              check_token_too_long(parser,"Bit vector");
+              parser->token[parser->length++]=parser->ch&1;
+              break;
           default:
               ungetc(parser->ch,stream_cstream(parser->input_stream));
               return bit_vector_new_octets(parser->length,parser->token);}}}
-
-static Ref parse_token(parser_state* parser);
-
-static Ref parse_object(parser_state* parser){
-    switch(parser->ch){
-        /* We cannot have a ';' since skip_space(parser); eats the comments too. */
-      case '\'':  skip_spaces(parser); return cons(S(QUOTE),parse_object(parser));
-      case '"':   return parse_string(parser);
-      case '(':   return parse_list(parser);
-      case '#':
-          parser->ch=read_octet(parser->input_stream,&parser->eof,&parser->error);
-          check_parser_error(parser);
-          switch(parser->ch){
-            case '\\': return parse_character(parser);
-            case '(':  return parse_vector(parser);
-            case '*':  return parse_bit_vector(parser);
-            default:
-                READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}
-          break;
-
-      default:
-          if(constituentp(parser->ch)){
-              return parse_token(parser);}
-          else{
-              /* TODO: free the name! */
-              READER_ERROR(parser->input_stream,"Invalid character #\\%s",
-                           string_cstring(character_name(octet_character(parser->ch))));}}}
-
-static Ref scan_integer(parser_state* parser);
-static Ref scan_float(parser_state* parser);
-static Ref scan_symbol(parser_state* parser);
-
-static Ref parse_token(parser_state* parser){
-    parser->length=0;
-    parser->token[parser->length++]=parser->ch;
-    advance_character(parser);
-    while(!parser->error && !parser->eof && constituentp(parser->ch)){
-        if(ARRAY_TOTAL_SIZE_LIMIT<=parser->length){
-            READER_ERROR(parser->input_stream,"Token too long (more than %lu)",ARRAY_TOTAL_SIZE_LIMIT);}
-        parser->token[parser->length++]=parser->ch;
-        advance_character(parser);}
-    if(parser->error){
-        STREAM_ERROR(parser->input_stream);}
-    else{
-        parser->token[parser->length]='\0';
-        Ref result=scan_integer(parser);
-        if(result==NIL_Symbol){
-            result=scan_float(parser);}
-        if(result==NIL_Symbol){
-            result=scan_symbol(parser);}
-        if(result==NIL_Symbol){
-            READER_ERROR(parser->input_stream,"Invalid token: %s",parser->token);}
-        return result;}}
-
 
 static Ref scan_integer(parser_state* parser){
     /* [-+]?[0-9]+\.? */
@@ -378,19 +326,23 @@ static Ref scan_float(parser_state* parser){
         pos++;
         if(!isdigit(token[pos])){
             return NIL_Symbol;}
-        while(isdigit(token[pos++]));}
+        while(isdigit(token[pos])){
+            pos++;}}
     else{
         if(!isdigit(token[pos])){
             return NIL_Symbol;}
-        while(isdigit(token[pos++]));
+        while(isdigit(token[pos])){
+            pos++;}
         if(token[pos]=='.'){
             pos++;
-            while(isdigit(token[pos++]));}}
+            while(isdigit(token[pos])){
+                pos++;}}}
     if(token[pos]!='\0'){
         switch(token[pos]){
           case 'D':case'E':case'F':case'L':case'S':
           case 'd':case'e':case'f':case'l':case's':
               pos++;
+              break;
           default:
               return NIL_Symbol;}
         switch(token[pos]){
@@ -399,7 +351,8 @@ static Ref scan_float(parser_state* parser){
               break;}
         if(!isdigit(token[pos])){
             return NIL_Symbol;}
-        while(isdigit(token[pos++]));}
+        while(isdigit(token[pos])){
+            pos++;}}
     if(token[pos]!='\0'){
         return NIL_Symbol;}
     floating value;
@@ -407,20 +360,78 @@ static Ref scan_float(parser_state* parser){
     if(n!=1){
         return NIL_Symbol;}
     return float_from_floating(value);}
-    
-static Ref scan_symbol(parser_state* parser){
-    const char* token=(char*)parser->token;
+
+static Ref scan_symbol(parser_state* parser,bool* valid){
+    const char* token=(const char*)octet_upcase(parser->token);
     const char* colon=strchr(token,':');
+    (*valid)=false;
     if(!colon){
+        (*valid)=true;
         return symbol_intern_cstring(token);}
     if(colon==token){
         colon=strchr(token+1,':');
         if(!colon){
+            (*valid)=true;
             return keyword_intern_cstring(token);}
+        /* two or more colons */
         return NIL_Symbol;}
-    /* no package yet */
+    /* colon in the middle -- no package yet */
     return NIL_Symbol;}
-    
+
+static Ref parse_token(parser_state* parser){
+    parser->length=0;
+    while(!parser->error && !parser->eof && constituentp(parser->ch)){
+        check_token_too_long(parser,"Token");
+        parser->token[parser->length++]=parser->ch;
+        advance_character(parser);}
+    check_parser_error(parser);
+    parser->token[parser->length]='\0';
+    bool valid=true;
+    Ref result=scan_integer(parser);
+    if(result==NIL_Symbol){
+        result=scan_float(parser);}
+    if(result==NIL_Symbol){
+        result=scan_symbol(parser,&valid);}
+    if(!valid){
+        READER_ERROR(parser->input_stream,"Invalid token: %s",parser->token);}
+    parser->eof=false; /* We've got a result, so defer EOF */
+    return result;}
+
+static Ref parse_object(parser_state* parser){
+    switch(parser->ch){
+        /* We cannot have a ';' since skip_space(parser); eats the comments too. */
+      case '\'':
+          skip_spaces(parser);
+          if(parser->eof){
+              return NIL_Symbol;}
+          Ref literal=parse_object(parser);
+          return (parser->eof)
+                  ? NIL_Symbol
+                  : list(S(QUOTE),literal,NULL);
+      case '"':
+          return parse_string(parser);
+      case '(':
+          return parse_list(parser);
+      case '#':
+          parser->ch=read_octet(parser->input_stream,&parser->eof,&parser->error);
+          check_parser_error(parser);
+          if(parser->eof){
+              return NIL_Symbol;}
+          switch(parser->ch){
+            case '\\': return parse_character(parser);
+            case '(':  return parse_vector(parser);
+            case '*':  return parse_bit_vector(parser);
+            default:
+                READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}
+          break;
+      default:
+          if(constituentp(parser->ch)){
+              return parse_token(parser);}
+          else{
+              /* TODO: free the name! */
+              READER_ERROR(parser->input_stream,"Invalid character #\\%s",
+                           string_cstring(character_name(octet_character(parser->ch))));}}}
+
 
 Ref kernel_read_char(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
     bool eof;
@@ -480,18 +491,20 @@ Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_valu
 Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
     parser_state parser;
     parser.input_stream=input_stream;
-    parser.list=NIL_Symbol;
     parser.length=0;
     parser.ch=' ';
     parser.eof=false;
     parser.error=false;
     parser.escape=false;
+    advance_character(&parser);
+    skip_spaces(&parser);
+    check_parser_error(&parser);
     Ref object=parse_object(&parser);
     if(parser.eof){
         if(null_p(eof_error_p)){
             return eof_value;}
         END_OF_FILE(input_stream);}
-    if(parser.error){
+    if(parser.error){ /* Should not occur here */
         STREAM_ERROR(input_stream);}
     return object;}
 

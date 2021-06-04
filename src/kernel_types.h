@@ -163,16 +163,19 @@ typedef enum { on_error_error=0xf001, on_error_ignore=0xf002 } on_error_t;
 
 typedef struct FileStream {
     BLOCK_HEADER;
-    Ref pathname;          // a PHYSICAL-PATHNAME
-    Ref element_type;      // CHARACTER or (UNSIGNED-BYTE 8) or BIT
-    Ref external_format;   // Normalized external-format: (list (member :US-ASCII :ISO-8859-1) (member :crlf :cr :lf) (or character (member :error nil)))
+    Ref pathname;         /* a PHYSICAL-PATHNAME */
+    Ref element_type;     /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
+    Ref external_format;  /* Normalized external-format: (list (member :US-ASCII :ISO-8859-1) (member :crlf :cr :lf) (or character (member :error nil))) */
+    Ref string;           /* for STRING-STREAMS */
     halfword is_open;
     halfword direction;
-    halfword type;             // derived from element_type
-    halfword encoding;         // derived from external_format
-    halfword new_line;          // derived from external_format
-    halfword on_error;         // derived from external_format
+    halfword type;        /* derived from element_type */
+    halfword encoding;    /* derived from external_format */
+    halfword new_line;    /* derived from external_format */
+    halfword on_error;    /* derived from external_format */
     FILE* stream;
+    octet* buffer;        /* buffer for memstream; in string. */
+    size_t buffer_size;   /* size of buffer for memstream; in string. */
     // Note: whatever the element-type, we always write the same octets.
     // the above layer will convert possible character or integer into octets,
     // but the usual buffer types will already use VectorOfOctet storage.

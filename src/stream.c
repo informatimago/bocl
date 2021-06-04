@@ -7,6 +7,8 @@
 #include "filename.h"
 #include "printer.h"
 #include "variable.h"
+#include "error.h"
+
 
 
 Ref stream_open(Ref filespec,
@@ -14,7 +16,7 @@ Ref stream_open(Ref filespec,
                     Ref element_type,
                     Ref if_exists,
                     Ref if_does_not_exist,
-                    Ref external_format){    
+                    Ref external_format){
     Ref path;
     if(typep(filespec,PHYSICAL_PATHNAME_Class)) {
         path=filespec;}
@@ -51,7 +53,7 @@ Ref stream_open(Ref filespec,
         stream->slots->file_stream.direction=dir;
         return stream;}
 
-#if 0    
+#if 0
     char* mode;
     switch(dir){
       case direction_input:
@@ -67,21 +69,21 @@ Ref stream_open(Ref filespec,
           }
           else if(if_exists==K(ERROR)){
               mode="wx";
-          } 
+          }
           else if(if_exists==K(OVERWRITE)){
               mode="w";
-          } 
+          }
           else if(if_exists==K(APPEND)){ }
           mode="a";
 
-          else if(if_exists==NIL_Symbol){ } 
+          else if(if_exists==NIL_Symbol){ }
           mode="wx";
-   
+
           else{
               ERROR("Invalid IF-ERROR argument: %s",
                     string_cstring(prin1_to_string(if_exists)));}
           break;}
-    
+
     FILE* file=fopen(cpath,"r");
     int file_error=ferror(file);
     if(file==NULL){
