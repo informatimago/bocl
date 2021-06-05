@@ -6,7 +6,7 @@ PDFS=$(NAME).pdf
 
 VERBOSE=@
 
-all:documents 
+all:documents
 
 documents pdfs :$(PDFS)
 
