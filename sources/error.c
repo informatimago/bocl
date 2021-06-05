@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <sysexits.h>
+#include <stdnoreturn.h>
 #include <limits.h>
 #include <stdint.h>
 #include "error.h"
