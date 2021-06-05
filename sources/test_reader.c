@@ -27,6 +27,8 @@
 static void test_reader(void){
 
     Ref out=variable_value(S(*STANDARD-OUTPUT*));
+    print(bocl_read_cstring("+"),out);
+    print(bocl_read_cstring(" + "),out);
     print(bocl_read_cstring("1234"),out);
     print(bocl_read_cstring("+1234"),out);
     print(bocl_read_cstring("-1234"),out);
