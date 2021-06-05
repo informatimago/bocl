@@ -1,0 +1,890 @@
+# -*- mode:org;coding:utf-8 -*-
+
+#+AUTHOR: Pascal J. Bourguignon
+#+EMAIL: pjb@informatimago.com
+#+DATE: Sat Jun  5 19:25:00 CEST 2021
+#+TITLE: Documentation of the BOCL Bootstrap Common Lisp Implementation
+
+* Prologue                                                         :noexport:
+
+#+LATEX_HEADER: \usepackage[english]{babel}
+#+LATEX_HEADER: \usepackage[autolanguage]{numprint} % Must be loaded *after* babel.
+#+LATEX_HEADER: \usepackage{rotating}
+#+LATEX_HEADER: \usepackage{float}
+#+LATEX_HEADER: \usepackage{fancyhdr}
+#+LATEX_HEADER: \usepackage[margin=0.75in]{geometry}
+
+#+LATEX_HEADER: \usepackage[utf8]{inputenc}
+
+# LATEX_HEADER: \usepackage{indentfirst}
+# LATEX_HEADER: \setlength{\parindent}{0pt}
+#+LATEX_HEADER: \usepackage{parskip}
+
+#+LATEX_HEADER: \usepackage{tikz}
+#+LATEX_HEADER: \usetikzlibrary{positioning, fit, calc, shapes, arrows}
+#+LATEX_HEADER: \usepackage[underline=false]{pgf-umlsd}
+#+LATEX_HEADER: \usepackage{lastpage}
+#+LATEX_HEADER: \pagestyle{fancyplain}
+#+LATEX_HEADER: \pagenumbering{arabic}
+#+LATEX_HEADER: \lhead{\small{Bootstrap Common Lisp}}
+#+LATEX_HEADER: \chead{}
+#+LATEX_HEADER: \rhead{\small{Documentation}}
+#+LATEX_HEADER: \lfoot{}
+#+LATEX_HEADER: \cfoot{\tiny{\copyright{} Pascal J. Bourguignon}}
+#+LATEX_HEADER: \rfoot{\small{Page \thepage \hspace{1pt} de \pageref{LastPage}}}
+
+* Introduction to Bootstrap Common Lisp -- BOCL.
+
+(From Robert Strandh)
+
+BOCL is (meant to one day be) a fully conforming Common Lisp
+implementation with a twist.  It is only meant for bootstrapping other
+Common Lisp implementations on platforms where, for some reason, no
+Common Lisp implementation is already available.  It is not meant for
+writing end-user applications.
+
+This main purpose of BOCL has some consequences to the way it is
+implemented.  In particular, there is no attempt to make it fast, or
+frugal in memory.
+
+Instead, the emphasis is on simplicity, maintainability, and
+correctness.
+
+- BOCL is implemented ISO C =ISO/IEC 9899:2018= ("C17"), targetting
+  POSIX platforms.  We avoid to use constructs with undefined
+  semantics, as the C standard indicates.  Only readily available
+  shell tools are used in order to maximize portability.
+
+- We implement a simple mark-and-sweep garbage collector.
+
+- We take advantage of all situations in which the Common Lisp
+  standard states that some behavior is undefined or implementation
+  defined, in that we then do whatever is the easiest solution for the
+  situation.
+
+- The type FIXNUM does not have a corresponding class.  All integers
+  are represented the same way.
+
+- All objects have the same basic representation as a header
+  containing a pointer to the class of the object and a pointer to a
+  vector (not a Common Lisp vector) with the objects-specific
+  contents.
+
+- The only specialized arrays are those mandated by the Common Lisp
+  standard, and even those arrays do not use any special
+  representation.  The only exceptions are STRING vectors that are
+  specialized using octets to store the characters, and BIT-VECTOR
+  that use the same representation (storing one bit per octet).
+  Since the target platforms provide octet-based file accesses and
+  system interfaces, this leds to simplified interface.
+
+- More generally, we make no attempt to save space.
+
+- All higher level data structures such as hash-tables, packages, CLOS
+  classes, are implemented in Lisp.
+
+- There is no attempt to handle tail-call merging.
+
+- All functions are called with a Common Lisp list of arguments.
+
+Currently, several free (or, more generally, FLOSS) implementations of
+Common Lisp are built from sources in some other language.  That
+language is typically C, but sometimes something else, like C++.
+There are probably several reasons for these implementations to be
+written this way, including historical (there was no widespread
+existing Common Lisp implementation when they were written), limited
+knowledge (the author did not know how to write a Common Lisp
+implementation in Common Lisp), and more.
+
+The process of building a Common Lisp system from sources written in
+some other language is a painful one, especially if one of the main
+objectives is for it to be fast, safe, and helpful to the programmer.
+Large parts of the system must be written in a language that is not
+very well adapted to expressing the semantics of Common Lisp.  Even
+though large parts of the system can be written in Common Lisp,
+because of the way the system is built, many system modules must be
+written in a subset of Common Lisp, making also that part painful to
+write.  For instance, it is common that CLOS not be available until
+very late in the bootstrapping process.
+
+The existence of BOCL will relieve most of the pain of maintainers of
+Common Lisp systems by concentrating that pain into BOCL.  These
+maintainers can now migrate their code from the existing
+implementation language to Common Lisp, relying on BOCL to exist.  At
+the same time, there is considerably less pain because of the
+simplifications to BOCL listed above.
+
+As an exception to the goal of simplicity, BOCL will contain a full
+implementation of the CLOS meta-object protocol (MOP) so as to allow
+implementers of other Common Lisp systems to take advantage of the MOP
+in their own implementations.
+
+In addition to being a bootstrapping tool for Common Lisp
+implementers, we think that BOCL will be an excellent illustration of
+the semantics of Common Lisp.  To make it easier for people interested
+in that topic, we think it is important that the BOCL code be highly
+idiomatic, uniform, and well documented.
+
+BOCL will not happen unless it is contributed to by others, so if you
+have knowledge of how to implement Common Lisp in C or interest in
+learning how to do it, please consider contributing.
+
+* Usage
+
+It is expected that the bocl implementation would be used mostly in
+batch mode, to compile other Common Lisp implementation.
+
+However a standard REPL is provided for tests.
+
+| Option                         | Description                                                            |
+|--------------------------------+------------------------------------------------------------------------|
+| =-h¦--help=                    | print this text                                                        |
+| =-V¦--version=                 | print =(LISP-IMPLEMENTATION-VERSION)= and exit                         |
+| =-E encoding=                  | set encodings                                                          |
+| =-Eterminal encoding=          | specify character encoding to use for =*TERMINAL-IO*=                  |
+| =--terminal-encoding encoding= | specify character encoding to use for =*TERMINAL-IO*=                  |
+| =-n¦-norc¦--no-init=           | suppress loading of default init file =~/.boclrc=                      |
+| =-x¦-e¦--eval form=            | evaluate form (may need to quote form in shell)                        |
+| =-l¦--load file=               | load file                                                              |
+| =-Q¦-q¦--quiet¦--silent=       | if =--batch=, also suppress printing of heralds, prompts.              |
+| =--verbose=                    | verbosity level: affects banner, =*LOAD-VERBOSE*=, =*COMPILE-VERBOSE*= |
+| =--print=                      | sets =*LOAD-PRINT*=, =*COMPILE-PRINT*=                                 |
+| =-b¦--batch=                   | exit when EOF on =*STANDARD-INPUT*=                                    |
+| =--no-sigtrap=                 | obscure option for running under GDB                                   |
+| =-on-error action=             | action can be one of debug, exit, abort, appease                       |
+| =-i¦--init file=               | load initfile (can be repeated)                                        |
+| =-p¦--package package=         | start in the package                                                   |
+| =-repl¦--repl=                 | enter the interactive read-eval-print loop when done (default)         |
+| =-quit¦--quit=                 | quit when argument processing is done                                  |
+| =-w¦--wait=                    | wait for a keypress after program termination                          |
+|                                |                                                                        |
+
+
+Batch example:
+#+BEGIN_EXAMPLE
+bocl --norc --eval '(form)' --load 'file.lisp' --quit
+#+END_EXAMPLE
+
+Interactive example:
+#+BEGIN_EXAMPLE
+> bocl --quiet
+$ (/ 0)
+ERROR: Division by zero    ; note : no debugger.
+$ (quit)
+#+END_EXAMPLE
+
+* Implementation-Dependent Features
+** 1.5.1.5 Conformance Statement
+
+The =Bootstrapping Common Lisp= (=bocl=) implementation (DOES NOT)
+comform (YET) with the requirements of ANSI INCITS 226-1994 (S20018),
+with the following exceptions:
+
+- TBD
+
+** 2. Syntax - Lisp Reader
+
+A conforming lisp reader is implemented in Common Lisp
+(eclector, COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.READER, etc).
+
+cf. chapter 23. Reader.
+
+** 3. Evaluation and Compilation
+
+Do we need a compiler?
+
+The C kernel provides only an =EVAL= interpreter.
+
+The =COMPILE= function performs the minimal compilation (macroexpansion).
+
+We could provid a =COMPILE-FILE= function that would generate a
+pre-macroexpanded "fasl" file, which would imply :compile-toplevel and
+:load-toplevel situations.
+
+Let's run with just the interpreter, and see if the performances are
+enough for the stated goal: compile a CL implementation.  Only if it's
+really too slow, would we seek to implement eg. a virtual machine and
+a byte-code compiler.  But we'd basically reproduce the clisp
+implementation.
+
+** 4. Types and Classes
+
+Operators to implement:
+
+- =COERCE=  since that may change the class
+#+BEGIN_EXAMPLE
+  (coerce #(#\a #\b #\c) 'string) --> "abc"
+#+END_EXAMPLE
+
+- =SUBTYPEP= since that tests the class hierarchy too (parallelism
+  between classes and types).
+
+- =TYPE-OF= = =class-of=
+
+- =TYPEP=
+
+and =DEFTYPE= and a descriptive type system, but that is not used in
+the kernel.
+
+
+| Type           | COMPILED-FUNCTION |
+| Type           | SIMPLE-ARRAY      |
+| Type           | SIMPLE-BIT-VECTOR |
+| Type           | SIMPLE-VECTOR     |
+|----------------+-------------------|
+| Type Specifier | AND               |
+| Type Specifier | EQL               |
+| Type Specifier | MEMBER            |
+| Type Specifier | MOD               |
+| Type Specifier | NOT               |
+| Type Specifier | OR                |
+| Type Specifier | SATISFIES         |
+| Type Specifier | VALUES            |
+
+#+BEGIN_EXAMPLE
+
+(deftype atom () '(not cons))
+(deftype boolean () '(member nil t))
+
+(deftype base-char () 'character)
+(deftype standard-char () 'character)
+(deftype extended-char () 'nil)
+
+(deftype base-string (&optional size)
+  (if size
+      `(string ,size)
+      'string))
+
+(deftype simple-base-string (&optional size)
+  (if size
+      `(simple-array base-char (,size))
+      '(simple-array base-char)))
+
+
+(deftype bit () '(integer 0 1))
+
+(deftype signed-byte (&optional size)
+  (if (eql '* size)
+      'integer
+      `(integer ,(- (expt 2 (- size 1)))
+                ,(- (expt 2 (- size 1)) 1))))
+
+(deftype unsigned-byte (&optional size)
+  (if (eql '* size)
+      '(integer 0)
+      `(integer 0  ,(- (expt 2 size) 1))))
+
+(deftype fixnum () '(signed-byte 32))
+(deftype bignum () '(and integer (not fixnum)))
+(deftype integer (&optional lower-limit upper-limit) 'integer)
+
+(deftype keyword () '(and symbol (satisfies keywordp)))
+(deftype nil () '(member))
+
+(deftype short-float (&optional lower upper)
+  (if lower
+      (if upper
+          `(single-float ,lower ,upper)
+          `(single-float ,lower))
+      'single-float))
+
+(deftype double-float (&optional lower upper)
+  (if lower
+      (if upper
+          `(single-float ,lower ,upper)
+          `(single-float ,lower))
+      'single-float))
+
+(deftype long-float (&optional lower upper)
+  (if lower
+      (if upper
+          `(single-float ,lower ,upper)
+          `(single-float ,lower))
+      'single-float))
+
+#+END_EXAMPLE
+
+** 5. Data and Control Flow
+** 6. Iteration
+
+- =DO= =DO*=
+- =DOTIMES=
+- =DOLIST=
+
+- =LOOP= and =LOOP-FINISH= implementation can be taken from some
+  implementation.
+
+** 7. Objects
+
+CLOS and MOP can be taken from PCL or Closette and/or other implementations.
+
+** 8. Structures
+
+The kernel implements the primitive needed to define structure classes
+and instances.  Remains to implement the DEFSTRUCT macro to generate
+the associated functions (accessors, copiers, predicates,
+constructors, printer function, etc).
+
+** 9. Conditions
+
+An implementation of the condition system may be taken from Kent
+Pitman's canonical implementation or from some other implementation.
+
+** 10. Symbols
+
+✓ cf. eg. COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.PACKAGE
+
+** 11. Packages
+
+✓ cf. eg. COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.PACKAGE
+
+** 12. Numbers
+
+Implement the CL numbers in CL, using the kernel integers and floats.
+Adding the RATIO and COMPLEX classes, and providing all the operations
+dispatching on the class of arguments.
+
+
+TODO: Split the table sections into their correponding chapters.
+
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =LAMBDA-LIST-KEYWORDS=                   |    (&optional &rest &aux |
+|                                          |   &key &allow-other-keys |
+|                                          |       &body &environment |
+|                                          |           &whole &lexpr) |
+| =NIL=                                    |                      nil |
+| =T=                                      |                        t |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =MOST-NEGATIVE-FIXNUM=                   |     -1152921504606846976 |
+| =MOST-POSITIVE-FIXNUM=                   |      1152921504606846975 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =LONG-FLOAT-EPSILON=                     |   1.1102230246251568D-16 |
+| =LONG-FLOAT-NEGATIVE-EPSILON=            |    5.551115123125784D-17 |
+| =MOST-NEGATIVE-LONG-FLOAT=               | -1.7976931348623157D+308 |
+| =MOST-POSITIVE-LONG-FLOAT=               |  1.7976931348623157D+308 |
+| =LEAST-NEGATIVE-LONG-FLOAT=              |                -5.0D-324 |
+| =LEAST-POSITIVE-LONG-FLOAT=              |                 5.0D-324 |
+| =LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT=   | -2.2250738585072014D-308 |
+| =LEAST-POSITIVE-NORMALIZED-LONG-FLOAT=   |  2.2250738585072014D-308 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =DOUBLE-FLOAT-EPSILON=                   |   1.1102230246251568D-16 |
+| =DOUBLE-FLOAT-NEGATIVE-EPSILON=          |    5.551115123125784D-17 |
+| =MOST-NEGATIVE-DOUBLE-FLOAT=             | -1.7976931348623157D+308 |
+| =MOST-POSITIVE-DOUBLE-FLOAT=             |  1.7976931348623157D+308 |
+| =LEAST-POSITIVE-DOUBLE-FLOAT=            |                 5.0D-324 |
+| =LEAST-NEGATIVE-DOUBLE-FLOAT=            |                -5.0D-324 |
+| =LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT= | -2.2250738585072014D-308 |
+| =LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT= |  2.2250738585072014D-308 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =SINGLE-FLOAT-EPSILON=                   |              5.960465E-8 |
+| =SINGLE-FLOAT-NEGATIVE-EPSILON=          |             2.9802326E-8 |
+| =MOST-NEGATIVE-SINGLE-FLOAT=             |           -3.4028235E+38 |
+| =MOST-POSITIVE-SINGLE-FLOAT=             |            3.4028235E+38 |
+| =LEAST-NEGATIVE-SINGLE-FLOAT=            |           -1.4012985E-45 |
+| =LEAST-POSITIVE-SINGLE-FLOAT=            |            1.4012985E-45 |
+| =LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT= |           -1.1754945E-38 |
+| =LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT= |            1.1754945E-38 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =SHORT-FLOAT-EPSILON=                    |              5.960465E-8 |
+| =SHORT-FLOAT-NEGATIVE-EPSILON=           |             2.9802326E-8 |
+| =MOST-NEGATIVE-SHORT-FLOAT=              |           -3.4028235E+38 |
+| =MOST-POSITIVE-SHORT-FLOAT=              |            3.4028235E+38 |
+| =LEAST-NEGATIVE-SHORT-FLOAT=             |           -1.4012985E-45 |
+| =LEAST-POSITIVE-SHORT-FLOAT=             |            1.4012985E-45 |
+| =LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT=  |           -1.1754945E-38 |
+| =LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT=  |            1.1754945E-38 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =BOOLE-CLR=                              |                        0 |
+| =BOOLE-SET=                              |                        1 |
+| =BOOLE-1=                                |                        2 |
+| =BOOLE-2=                                |                        3 |
+| =BOOLE-C1=                               |                        4 |
+| =BOOLE-C2=                               |                        5 |
+| =BOOLE-AND=                              |                        6 |
+| =BOOLE-IOR=                              |                        7 |
+| =BOOLE-XOR=                              |                        8 |
+| =BOOLE-EQV=                              |                        9 |
+| =BOOLE-NAND=                             |                       10 |
+| =BOOLE-NOR=                              |                       11 |
+| =BOOLE-ANDC1=                            |                       12 |
+| =BOOLE-ANDC2=                            |                       13 |
+| =BOOLE-ORC1=                             |                       14 |
+| =BOOLE-ORC2=                             |                       15 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =PI=                                     |      3.141592653589793D0 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =INTERNAL-TIME-UNITS-PER-SECOND=         |                  1000000 |
+|------------------------------------------+--------------------------|
+| Constant Variable                        |                    Value |
+|------------------------------------------+--------------------------|
+| =ARRAY-DIMENSION-LIMIT=                  |        72057594037927936 |
+| =ARRAY-RANK-LIMIT=                       |                     4096 |
+| =ARRAY-TOTAL-SIZE-LIMIT=                 |        72057594037927936 |
+| =CALL-ARGUMENTS-LIMIT=                   |                    65536 |
+| =CHAR-CODE-LIMIT=                        |                  1114112 |
+| =LAMBDA-PARAMETERS-LIMIT=                |                     4096 |
+| =MULTIPLE-VALUES-LIMIT=                  |                      200 |
+
+
+** 13. Characters
+
+✓ almost all implemented in the kernel.
+
+US-ASCII provides the STANDARD-CHARACTER set.
+
+ISO-8859-1 provides those additionnal characters:
+#+BEGIN_EXAMPLE
+" ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
+#+END_EXAMPLE
+
+The advantage of using iso-8859-1 over US-ASCII, is that US-ASCII is a
+7-bit code while iso-8859-1 is a 1-1 8-bit code.  This simplifies the
+external-format and I/O processing by the kernel.
+
+** 14. Conses
+
+✓ Nice list functions to be implemented.
+
+We can simplify a lot with function aliases (first = car, delete =
+remove), etc.
+
+For some operations such as set operations, we may still want to
+provide an optimized implmentation using hash-tables, but it would
+depend on the usage made of those functions in CL implementations.
+They probably don't have to deal with sets that are too big, so a
+simplistic implementation using only the lists could be enough.
+
+** 15. Arrays
+
+✓ Most of array operators are implemented in the kernel.
+
+** 16. Strings
+
+✓ Most of string operators are implemented in the kernel.
+
+** 17. Sequences
+
+Sequence functions are generic (dispatch on the class of arguments),
+so they'll be implemented in CL using either the cons operators or the
+array operators.  Code from implementations can be scavenged.
+
+** 18. Hash Tables
+
+Honests hash-tables can be implemented  in CL.  The kernel provides an
+ID function that  let us implement an efficient hash  function for EQL
+hash-tables.
+
+** 19. Filenames
+
+A logical pathname implementation can be obtained from
+com.informatimago/future/vfs/filenames.lisp
+
+The kernel implements a physical-pathnames wrapper (posix paths).
+
+Remains to implement the generic pathname functions, and pathname
+translations.
+
+** 20. Files
+
+✓ File operators are mostly implemented in the kernel.
+
+We need to implement wrappers to process the pathname arguments
+(=TRANSLATE-PATHNAME=).
+
+** 21. Streams
+
+✓ Stream operators on FILE-STREAM (and perhaps FD-STREAM) are
+implemented in the kernel.
+
+We may import a Gray Stream implementation to wrap them and provide
+the other classes of streams, notably STRING-STREAM.
+
+Implement query functions such as =Y-OR-N-P=, etc
+
+** 22. Printer
+
+- base lisp printing operators print prin1 princ terpri may use the
+  print-object generic function (CLOS). So we may want to implement
+  them with a hook.
+
+- pretty-printer from some library or implementation.
+
+- formatter from some library or implementation.
+
+** 23. Reader
+
+A conforming lisp reader is implemented in Common Lisp
+(eclector, COM.INFORMATIMAGO.COMMON-LISP.LISP-READER.READER, etc).
+
+** 24. System Construction
+
+The kernel provides =LOAD=, and =PROVIDE= and =REQUIRE= for a minimal
+module management. (It cannot run ASDF, so it may be useful to load a
+multi-file CL library.)
+
+We may implement in CL a =COMPILE-FILE= performing at least the
+minimal-compilation saving the result in "fasl" files.
+
+The variables must be defined and used where relevant (=LOAD=,
+=COMPILE-FILE=, =#+/#-= etc).
+
+** 25. Environment
+
+The kernel provide environment operators that depend on the platform.
+The other operators can be implemented in CL or disabled.
+
+For example we may not record docstrings, so =DOCUMENTATION= may do
+nothing, and =DESCRIBE= may do a minimum (eg. just CLASS-OF).
+
+No =DISASSEMBLE= output, minimal =INSPECT=.
+
+We may implement =DRIBBLE= along with the REPL, but =bocl= would be
+used in batch in general.
+
+- =decode-universal-time=
+- =encode-universal-time=
+- =get-decoded-time=
+- =apropos=, =apropos-list= (from the packages)
+- =describe=
+- =describe-object= (generic function)
+- =trace=, =untrace=, =step=  if we hooked cl-stepper, or integrated
+  it in the =kernel:eval=
+- =documentation=, =(setf documentation)= (NOP)
+- =time=
+- =ed= (let's have fun and hook com.informatimago.common-lisp.ed.ed)
+- =inspect=
+- =dribble=
+
+* Extensions to Common Lisp as specified by ANSI INCITS 226-1994 (S20018)
+
+https://en.wikipedia.org/wiki/Common_Lisp
+
+As any other implementation the =bocl= implementation provides a
+few extensions to the CL standard.
+
+** The KERNEL Package
+
+The core of the =bocl= implementation is written in C, with a limited
+set of primitive and restricted operators, that are exported from the
+KERNEL package.
+
+The KERNEL package is not intended to be used by end-user of the
+=bocl= implementation.  Instead, it is used by =bocl= to implement a
+fully conforming Common-Lisp.
+
+The kernel provides:
+
+- a garbage collected heap of fundamental lisp objects.
+
+- fundamental functions for the fundamental lisp objects.
+
+- an =EVAL= function.  The =EVAL= function implements the fundamental
+  special operators.
+
+- a few functions needed to load the =bocl= Common-Lisp implementation:
+   + a tiny lisp reader,
+   + a tiny lisp printer,
+   + a file loader,
+   + etc.
+
+- basic error handling.
+
+- two symbol tables: one for the kernel symbols, and one for keywords
+  (self valued).  We need keywords to read Common-Lisp sources.
+
+- a few operators to define objects in toplevel forms.
+
+- platform functions such as I/O, environment, etc, that couldn't be
+  implemented in conforming Lisp.
+
+*** Symbols exported from the KERNEL package
+
+| NIL       |
+| T         |
+| CHARACTER |
+| …         |
+|           |
+
+*** Kernel Lisp Reader
+
+A minimal lisp reader, with hard-wired readtable must be provided to
+read CL library lisp files.
+
+- parse symbols without package qualifier, and without escapes.
+- parse keywords with a colon prefix.
+- parse integers
+- parse floating-point numbers
+
+Hard-wired reader macros:
+
+| character | lisp object         | example                         |
+|-----------+---------------------+---------------------------------|
+| =;=       | comments            | =; foo=                         |
+| ='=       | quote               | ='foo=                          |
+| ="=       | strings             | ="foo"=  =\\= and =\"= escapes. |
+| =(=       | lists               | =(f o o)= (no dotted list)      |
+| =#\=      | characters          | =#\f=                           |
+| =#(=      | vectors             | =#(f o o)=                      |
+| =#*=      | bit-vectors         | =#*101010=                      |
+
+
+Not read by the Tiny Lisp Reader (an error is signaled):
+
+| character   | lisp object                    | example                      |
+|-------------+--------------------------------+------------------------------|
+|             | conses and dotted lists        | =(a . d)=                    |
+| =#'=        | functions -> (function foo)    | =#'foo=                      |
+| =`=         | backquote  unquote             | =`(,x ,@xs)=                 |
+| =#:=        | uninterned symbols             | =#:foo=                      |
+| =#.=        | read-eval                      | =#.(+ 1 2)=                  |
+| =#B=        | binary numbers                 | =#B10101=                    |
+| =#O=        | octal numbers                  | =#O01234567=                 |
+| =#X=        | hexadecimal numbers            | =#X0123456789ABCDEF=         |
+| =#R=        | radix numbres                  | =#5R01234=                   |
+| =#C=        | complexes                      | =#C(r i)=                    |
+| =#A=        | arrays                         | =#A((…))=                    |
+| =#S=        | structures                     | =#S(foo :x x :y y)=          |
+| =#P=        | pathnames -> (pathname "/foo") | =#P"/foo"=                   |
+| #= / =##=   | references                     | =#1=(foo . #1#)=             |
+| =#+= / =#-= | features                       | =#+foo (foo)=                |
+| =#¦=        | comments                       | =#¦ foo ¦#=                  |
+| =#<=        | unreadable                     | =#<foo>= -> signals an error |
+
+** The Garbage Collector
+*** Function ID
+
+Syntax:
+
+    ID (object) => id
+
+Arguments and Values:
+
+    object -- a lisp object
+
+    id -- an integer
+
+Description:
+
+    The unique ID of the object could be its address converted to
+    integer, if the garbage collector is not moving the objects, or a
+    cached unique integer if the garbage collector may move the
+    object.  The ID of an object won't change while the object is
+    alive.
+
+Result:
+
+    Returns a unique ID of the object.
+
+*** Function GC
+
+Syntax:
+
+    GC (&optional command) => state
+
+Arguments and Values:
+
+    command -- NIL, :ON or :OFF
+
+    state -- an integer or :ON or :OFF
+
+Description:
+
+	If `command` is NIL, the garbage collector is called now.
+    If `command` is :ON then the garbage collector is enabled (initial
+    state).
+    If `command` is :OFF then the garbage collector is disabled.
+
+Results:
+
+    If `command` is NIL, then the number of bytes collected.
+    If `command` is :ON or :OFF, then the previous state of the
+    garbage collector.
+
+** Float
+
+#+BEGIN_EXAMPLE
+(declaim
+
+ (ftype (function (float) bool)
+        floatp)
+
+ (ftype (function (float) float)
+        sin/f cos/f tan/f asin/f acos/f
+        sinh/f cosh/f tanh/f asinh/f acosh/f atanh/f
+        exp/f)
+
+ (ftype (function (float &optional float) float)
+        atan/f log/f)
+
+ (ftype (function (float float) float)
+        +/f -/f */f //f mod/f rem/f sqrt/f
+        expt/f)
+
+ (ftype (function (float float) bool)
+        =/f /=/f </f >/f <=/ >=/f)
+
+ (ftype (function (float &optional float) (values integer float))
+        floor/f  ceiling/f truncate/f round/f)
+
+ (ftype (function (float &optional float) (values float float))
+        ffloor/f fceiling/f ftruncate/f fround/f)
+
+ (ftype (function (float) (values float integer float))
+        decode-float)
+ (ftype (function (float integer) float)
+        scale-float)
+ (ftype (function (float) integer)
+        float-radix)
+ (ftype (function (float &optional float) float)
+        float-sign)
+ (ftype (function (float) integer)
+        float-digits)
+ (ftype (function (float) integer)
+        float-precision)
+ (ftype (function (float) (values float integer integer))
+        integer-decode-float))
+#+END_EXAMPLE
+
+** Integer
+
+#+BEGIN_EXAMPLE
+(declaim
+ (ftype (function (integer integer) byte-specifier)
+        byte)
+ (ftype (function (byte-specifier) integer)
+        byte-size byte-position))
+
+(declaim
+
+ (ftype (function (integer) bool)
+        integerp)
+
+ (ftype (function (integer) integer)
+        exp/i integer-length logcount)
+
+ (ftype (function (integer byte-specifier integer) integer)
+        dpb deposit-field)
+
+ (ftype (function (byte-specifier integer) integer)
+        ldb mask-field)
+
+ (ftype (function (integer integer) integer)
+        +/i -/i */i //i mod/i rem/i sqrt/i
+        expt/i  gcd/i lcm/i ash)
+
+ (ftype (function (integer integer) bool)
+        =/i /=/i </i >/i <=/ >=/i
+        logbitp logtest)
+
+ (ftype (function (integer) integer)
+        isqrt/i)
+
+ (ftype (function (integer &optional integer) (values integer integer))
+        floor/i  ceiling/i truncate/i round/i)
+
+ (ftype (function (integer &optional integer) (values integer integer))
+        ffloor/i fceiling/i ftruncate/i fround/i)
+
+ (ftype (function (string integer integer integer bool) (values integer integer))
+        parse-integer/i))
+#+END_EXAMPLE
+
+** The REPL
+
+The REPL is a standard REPL.
+
+*** Function QUIT
+
+Syntax:
+
+    QUIT (&optional (status 0)) => non-local-exit
+
+Arguments and Values:
+
+    status -- an integer
+
+Description:
+
+    Exits the =bocl= process, with the given STATUS.
+
+** External-format
+
+External-formats can be:
+
+- :DEFAULT in place of (:iso-8859-1 :lf :error)
+
+- a keyword denoting an encoding in (:us-ascii :iso-8859-1);
+  the default line-termination is :lf, and
+  the default encoding error handling is :error (signal an error).
+
+- a list containing:
+
+  + a keyword denoting an encoding in (:us-ascii :iso-8859-1),
+
+  + a line-termination keyword (:dos :crlf :mac :cr :unix :lf),
+    the default if NIL or absent is :LF.
+
+  + an object specifing the handling of encoding errors:
+
+    * a character used as substitution character #\sub is suggested,
+      or an integer used as substitution code 26 (SUB) is suggested.
+      (code-char code) is used on input encoding error.
+      (char-code char) is used on output decoding error.
+
+    * the keyword :error asking for a continuable encoding-error to be
+      signaled, with a substitute-code restart. This is the default if absent.
+
+    * the symbol NIL asking to ignore and skip the unencodable
+      character.
+
+Encoding or decoding errors can only occur with a code>127 given with
+:us-ascii, since we deal only with :us-ascii (7-bit) and :iso-8859-1
+(8-bit) and internal coding is iso-8859-1.
+
+
+Note: kernel:stream-external-format accept only (:crlf :cr :lf) as
+line-termination; the mapping is done in the CL layer.
+
+#+BEGIN_EXAMPLE
+(:us-ascii :crlf #\SUB)     Write the #\SUB character instead.
+(:us-ascii :crlf :error)    Signal an error.
+(:us-ascii :crlf nil)       Ignore and skip the invalid character.
+#+END_EXAMPLE
+
+* The Meta-Object Protocol -- MOP
+
+TBD
+
+* Gray Streams
+
+TBD
+
+* Another System Definition Facility -- ASDF
+
+TBD
+
+* Epilogue                                                         :noexport:
+
+# not-eval: (set-input-method 'latin-1-prefix)
+
+# Local Variables:
+# eval: (auto-fill-mode 1)
+# End:
