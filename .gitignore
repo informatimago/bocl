@@ -2,13 +2,14 @@
 *\!*.asd
 *.fasl
 *.sse2f
-*.o
-*.d
+*.[dao]
+*.so
+*.dylib
 *.bak
 *.[ld]x64fsl
 *.[ld]x32fsl
 *.tex
 --version.lock
 
-src/bocl
-src/test_reader
+sources/bocl
+tests/test_reader

@@ -153,3 +153,7 @@ make clean all VERBOSE=
 make clean all SANITIZE=no
 #+END_EXAMPLE
 
+
+#+BEGIN_EXAMPLE
+make -k run VERBOSE= 'ARGUMENTS=--verbose --quit'
+#+END_EXAMPLE

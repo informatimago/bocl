@@ -1,5 +1,4 @@
-all:deps bocl
-
+all:build
 
 VERBOSE=@
 #VERBOSE=
@@ -16,10 +15,14 @@ endif
 all_SRCS = $(common_SRCS) \
 	main.c \
 	test_reader.c
-bocl_SRCS = main.c $(untested_SRCS) $(tested_SRCS)
-test_reader_SRCS = test_reader.c $(untested_SRCS)
+
+libbocl_SRCS = $(untested_SRCS) $(tested_SRCS)
+libbocl_LIBS = -lm
+libbocl_INCS =
+
 tested_SRCS = \
 	reader.c
+
 untested_SRCS = \
 	bocl.c string_list.c \
 	kernel.c kernel_objects.c memory.c error.c \
@@ -32,9 +35,14 @@ untested_SRCS = \
 	\
 	$(DEBUG_SRCS)
 
+bocl_SRCS        = main.c
+bocl_LIBS        = -L. -lbocl
+bocl_INCS        = -I.
 
+test_reader_SRCS = test_reader.c # $(untested_SRCS)
+test_reader_LIBS = -L. -lbocl
+test_reader_INCS = -I.
 
-UNAME=$(shell uname)
 
 CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                              \
             -fsanitize=bounds -fsanitize=vla-bound                                  \
@@ -52,7 +60,7 @@ LD_SANITIZE_FLAGS =
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
 # -Werror
-WARN_FLAGS        = -Wall  -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
+WARN_FLAGS        = -Wall -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
 					-Wwrite-strings -Wconversion  -Wstrict-prototypes -Wmissing-prototypes \
 					-Wmissing-declarations -Wredundant-decls -Wnested-externs -Winline \
 					\
@@ -60,61 +68,81 @@ WARN_FLAGS        = -Wall  -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
 
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
 
+
+UNAME=$(shell uname)
+
 ifeq ($(UNAME)$(SANITIZE),Darwin)
-CFLAGS    = $(WARN_FLAGS) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c11
-LDFLAGS   = $(LD_SANITIZE_FLAGS) $(DEBUG_FLAGS)
-ASAN_LIB_DIR = /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin
-RUN_ENV = DYLD_LIBRARY_PATH=$(ASAN_LIB_DIR)
-LIBRARIES = \
+
+SDKPATH      = /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+XCODE_DEV    = $(shell xcode-select --print-path)
+ASAN_LIB_DIR = $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin
+
+CFLAGS       = $(WARN_FLAGS) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c11
+LDFLAGS      = $(LD_SANITIZE_FLAGS)
+RUN_ENV      = DYLD_LIBRARY_PATH=$(ASAN_LIB_DIR)
+INCLUDES     = $(libbocl_INCS)
+LIBRARIES    = $(libbocl_LIBS) \
+	-L$(SDKPATH)/usr/lib \
 	-L$(ASAN_LIB_DIR) \
 	-lclang_rt.asan_osx_dynamic \
 	-lgmalloc
-
-# LIBRARIES=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin/libclang_rt.asan_osx_dynamic.dylib \
+# LIBRARIES=$(shell xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin/libclang_rt.asan_osx_dynamic.dylib \
 # 	/usr/lib/libgmalloc.dylib
+SO           = dylib
+SHARED       = -dylib
 
 else
+
 CFLAGS    = $(WARN_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c11
-LDFLAGS   = $(DEBUG_FLAGS)
+LDFLAGS   =
 RUN_ENV   =
-LIBRARIES =
+INCLUDES  = $(libbocl_INCS)
+LIBRARIES = $(libbocl_LIBS)
+SO        = so
+SHARED    = -shared
+
 endif
 
+# ----------------------------------------
 
-DEPFLAGS = -E -MT $@ -MM -MP -MF $*.d
-COMPILE.c    = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@
-MAKEDEPEND.c = $(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) $(DEPFLAGS)
+DEPFLAGS   = -E -MT $@ -MM -MP -MF $*.d
+MAKEDEPEND = $(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES)  $(TARGET_ARCH) $(DEPFLAGS)
+COMPILE    = $(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES)  $(TARGET_ARCH) -fPIC -c
+LINKLIB    = $(LD) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH) $(SHARED)
+LINKBIN    = $(LD) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH)
 
 %.d : %.c
 	@ printf "# Generating dependencies         for %s\n" "$<"
-	$(VERBOSE) $(MAKEDEPEND.c) $<
+	$(VERBOSE) $(MAKEDEPEND) $<
 
 %.o : %.c %.d
 	@ printf "# Compiling %-20s from %s\n" "$@" "$<"
-	$(VERBOSE) $(COMPILE.c) $<
+	$(VERBOSE) $(COMPILE) -o $@ $<
 
-deps:   $(all_SRCS:%.c=%.d)
-include $(all__SRCS:%.c=%.d)
+# ----------------------------------------
 
-
-
-
-bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
-	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
-	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $(bocl_SRCS:%.c=%.o)
-
-test_reader.o : test_reader.c reader.c reader.h
-test_reader:test_reader.o $(test_reader_SRCS:%.c=%.d) $(test_reader_SRCS:%.c=%.o)
-	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_reader_SRCS:%.c=%.o)"
-	$(VERBOSE) $(CC) $(LDLAGS) $(LIBRARIES) -o $@ $(test_reader_SRCS:%.c=%.o)
+.PHONY = clean prepare-macos deps build predefines run sign-gdb gdb
 
 clean:
 	@ printf "# Removing object files and target\n"
 	-$(VERBOSE) rm -rf bocl *.o *.d *.[ld]x{32,64}fsl *.dSYM
 
-gdb:bocl
-	gdb ./bocl
+prepare-macos:
+	- sudo xcode-select --install
+	  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+	  xcode-select --print-path
 
+deps:   $(all_SRCS:%.c=%.d)
+include $(all__SRCS:%.c=%.d)
+
+build: deps libbocl.$(SO) bocl test_reader
+
+predefines:
+	$(VERBOSE) printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
+	$(VERBOSE) cpp -dM  test.c | sort
+
+gdb: bocl
+	$(VERBOSE) $(RUN_ENV) gdb ./bocl
 
 # on macOS, gdb must be codesigned.
 sign-gdb:
@@ -122,6 +150,29 @@ sign-gdb:
 	$(VERBOSE) true See 'https://gist.github.com/gravitylow/fb595186ce6068537a6e9da6d8b5b96d'
 	$(VERBOSE) echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.cs.debugger</key><true/></dict></plist>' >  gdb-entitlement.xml
 	$(VERBOSE) sudo codesign --entitlements gdb-entitlement.xml -fs gdb-cert "$$(which gdb)"
+
+run: bocl
+	$(VERBOSE) $(RUN_ENV) ./bocl $(ARGUMENTS)
+
+# ----------------------------------------
+
+libbocl.$(SO): $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKLIB) -o $@ $(libbocl_SRCS:%.c=%.o)
+
+# for now, we link all the bocl objects into bocl:
+bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) $(libbocl_SRCS:%.c=%.o)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)  $(libbocl_SRCS:%.c=%.o)
+
+#bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) libbocl.$(SO)
+#	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
+#	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)  $(bocl_LIBS)
+
+test_reader: $(test_reader_SRCS:%.c=%.d) $(test_reader_SRCS:%.c=%.o)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_reader_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_reader_SRCS:%.c=%.o) $(test_reader_LIBS)
+
 
 LISP=ccl
 LISP_NORC=--no-init
@@ -143,22 +194,5 @@ kernel_functions.h built_in_functions.h built_in_functions.c : generate-built-in
 		$(LISP_EVAL) '(com.informatimago.bocl.kernel.generate.kernel-functions:generate-built-in-functions)' \
 		$(LISP_QUIT)
 
-test: run_test_bocl run_test_reader
 
-run_test_bocl:bocl
-	@printf "# Testing bocl\n"
-	$(VERBOSE) output=$$($(RUN_ENV)  ./bocl --quiet 2>&1) || ( status=$$? ;\
-	expected="$$(echo '@ERROR: in bocl_read_eval_cstring:  NOT IMPLEMENTED YET' |tr '@' '\012')" ;\
-	[ "$$output" = "$$expected" ] && [ $$status -eq 65 ] || ( printf "output = x%sx\n" "$$output" ; printf "expected = x%sx\n" "$$expected" ; exit 1 ; ) ; )
-	@printf "# Success\n"
-
-run_test_reader:test_reader
-	@printf "# Testing test_reader\n"
-	$(VERBOSE) ./test_reader
-
-run:bocl
-	$(VERBOSE) $(RUN_ENV) ./bocl
-
-predefines:
-	$(VERBOSE) printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
-	$(VERBOSE) cpp -dM  test.c | sort
+#### THE END ####
