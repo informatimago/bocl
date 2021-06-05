@@ -125,7 +125,7 @@ LINKBIN    = $(LD) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH)
 
 clean:
 	@ printf "# Removing object files and target\n"
-	-$(VERBOSE) rm -rf bocl *.o *.d *.[ld]x{32,64}fsl *.dSYM
+	-$(VERBOSE) rm -rf bocl libbocl.* *.o *.d *.[ld]x{32,64}fsl *.dSYM
 
 prepare-macos:
 	- sudo xcode-select --install
@@ -138,8 +138,9 @@ include $(all__SRCS:%.c=%.d)
 build: deps libbocl.$(SO) bocl test_reader
 
 predefines:
-	$(VERBOSE) printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
-	$(VERBOSE) cpp -dM  test.c | sort
+	$(VERBOSE) printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > __predefines.c
+	$(VERBOSE) cpp -dM  __predefines.c | sort
+	-$(VERBOSE) rm -f   __predefines.c
 
 gdb: bocl
 	$(VERBOSE) $(RUN_ENV) gdb ./bocl
