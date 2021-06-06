@@ -3,7 +3,7 @@ all: test
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
 # PROGRAMS    = test_ci test_reader
-PROGRAMS    = test_reader 
+PROGRAMS    = test_reader
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
@@ -11,16 +11,16 @@ test_reader_SRCS = test_reader.c simple_test.c
 test_reader_LIBS = -L../sources -lbocl
 
 test_ci_SRCS = test_ci.c
-test_ci_LIBS = 
+test_ci_LIBS =
 # $(test_ci_SRCS) \
 #
 
 all_SRCS = \
-	$(test_reader_SRCS) 
+	$(test_reader_SRCS)
 
 INCLUDES    += -I/opt/local/include -I../sources
 LIBRARIES   += -L/opt/local/lib -lcunit
-CFLAGS  	+= 
+CFLAGS  	+=
 LDFLAGS 	+=
 RUNLIBS     += $(shell echo $$(pwd)/../sources)
 

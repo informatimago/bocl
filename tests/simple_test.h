@@ -1,7 +1,7 @@
 #ifndef simple_test_h
 #define simple_test_h
 
-#ifdef GITLAB_CI
+#if 0 // def GITLAB_CI
 
 /* https://cunity.gitlab.io/cunit/ */
 
@@ -24,7 +24,7 @@ typedef bool (*eq_pr)(Ref,Ref);
 void simple_test_assert(const char* file, int line, const char* expression, eq_pr eq,Ref expected, Ref value, bool result);
 
 
-#ifdef GITLAB_CI
+#if 0 // def GITLAB_CI
 
 #define TEST_SUITE_SETUP(name)    CU_SUITE_SETUP()
 #define TEST_SUITE_TEARDOWN(name) CU_SUITE_TEARDOWN()
@@ -32,7 +32,7 @@ void simple_test_assert(const char* file, int line, const char* expression, eq_p
 #define TEST_CASE_SETUP(name)     CU_TEST_SETUP()
 #define TEST_CASE_TEARDOWN(name)  CU_TEST_TEARDOWN()
 
-#define TEST_INITIALIZE(name)     
+#define TEST_INITIALIZE(name)
 #define TEST_SUITE(suitename,setup,cleanup) CUNIT_CI_RUN(#suitename,
 #define TEST_CASE(name,function)            CUNIT_CI_TEST(name),
 #define TEST_FINALIZE()                     );

@@ -4,12 +4,12 @@
 #include "simple_test.h"
 #include "variable.h"
 
-#ifndef GITLAB_CI
+#if 1 // ndef GITLAB_CI
 
 void simple_test_initialize(const char* name){
-    CU_set_error_action(CUEA_ABORT);    
-    if (CUE_SUCCESS != CU_initialize_registry()){                  
-        simple_test_process_error(CU_get_error());}               
+    CU_set_error_action(CUEA_ABORT);
+    if (CUE_SUCCESS != CU_initialize_registry()){
+        simple_test_process_error(CU_get_error());}
     CU_set_output_filename(name);}
 
 void simple_test_process_error(unsigned int error){

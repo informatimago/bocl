@@ -104,7 +104,7 @@ ASAN_LIB_DIR = $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12
 CFLAGS       += $(WARN_FLAGS) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17
 LDFLAGS      += $(LD_SANITIZE_FLAGS)
 RUNLIBS      += $(ASAN_LIB_DIR)
-INCLUDES     += 
+INCLUDES     +=
 LIBRARIES    +=  \
 	-L$(SDKPATH)/usr/lib \
 	-L$(ASAN_LIB_DIR) \
@@ -118,8 +118,8 @@ else
 CFLAGS    += $(WARN_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17
 LDFLAGS   +=
 RUNLIBS   +=
-INCLUDES  += 
-LIBRARIES += 
+INCLUDES  +=
+LIBRARIES +=
 SO        = so
 SHARED    = -shared
 
