@@ -80,6 +80,9 @@ typedef struct FuncallableFunctionClass FuncallableFunctionClass;
 #define FREE_BLOCK     UWORD_MAX
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wzero-length-array"
+
 typedef struct Block{
     BLOCK_HEADER;
     struct Block* blocks[0];
@@ -137,6 +140,8 @@ typedef struct OctetArray {
     VectorOfOctet* elements;
     uword dimensions[0];
 } OctetArray;
+
+#pragma GCC diagnostic pop
 
 typedef struct Cons {
     BLOCK_HEADER;
