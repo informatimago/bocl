@@ -125,7 +125,8 @@ SHARED    = -shared
 
 endif
 
-RUN       =  r="$(RUNLIBS)" ; DYLD_LIBRARY_PATH=$${r// /:}
+# /bin/sh:
+RUN       =  DYLD_LIBRARY_PATH=$$(echo "$(RUNLIBS)" |tr ' ' ':')
 
 # ----------------------------------------
 
