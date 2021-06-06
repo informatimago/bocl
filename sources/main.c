@@ -18,7 +18,7 @@
 #include "reader.h"
 #include "variable.h"
 
-static const char* source="http://gitlab.com/informatimago/bocl/";
+static const char* source="http://gitlab.com/bocl/bocl/";
 static const char* bocl_lisp="(defun repl () (catch 'quit (do () () (print (eval (read))))))";
 static char* initfile=NULL;
 static char* pname=NULL;
