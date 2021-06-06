@@ -2,7 +2,7 @@
 #include <stdarg.h>
 #include <sysexits.h>
 #include "memory.h"
-#include "error.h"
+#include "boerror.h"
 #include "kernel.h"
 #include "macros.h"
 #include "variable.h"
@@ -117,11 +117,11 @@ static Zone* zone_allocate(size_t size){
     return zone;}
 
 #define do_zones(zonevar)                                                   \
-    Zone* C(current_zone,__LINE__) ; Zone* zonevar;                         \
-    for( C(current_zone,__LINE__) = zonevar = Zones ;                       \
-         C(current_zone,__LINE__) != NULL ;                                 \
-         (C(current_zone,__LINE__) = C(current_zone,__LINE__)->next_zone,   \
-          zonevar = C(current_zone,__LINE__)))
+    Zone* CS(current_zone,__LINE__) ; Zone* zonevar;                        \
+    for( CS(current_zone,__LINE__) = zonevar = Zones ;                      \
+         CS(current_zone,__LINE__) != NULL ;                                \
+         (CS(current_zone,__LINE__) = CS(current_zone,__LINE__)->next_zone, \
+          zonevar = CS(current_zone,__LINE__)))
 
 static FreeBlock* find_before_free_block(Zone* zone,FreeBlock* free_block){
     FreeBlock* current=&zone->free_list;

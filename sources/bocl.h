@@ -11,5 +11,7 @@ Ref bocl_read_eval_loop_cstring(const char* text);
 Ref bocl_in_package(Ref package_designator);
 Ref bocl_load_cstring(const char* path);
 
+void bocl_call(Ref fname,Ref arguments);
+void bocl_test(void);
 
 #endif

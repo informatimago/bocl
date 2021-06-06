@@ -1,6 +1,6 @@
 #include "bocl.h"
 #include "memory.h"
-#include "error.h"
+#include "boerror.h"
 #include "kernel.h"
 #include "stream.h"
 #include "reader.h"
@@ -82,6 +82,27 @@ Ref bocl_load_cstring(const char* path){
         terpri(out);}
 
     return S(NIL);}
+
+
+void bocl_call(Ref fname,Ref arguments){
+    Ref out=variable_value(S(*STANDARD-OUTPUT*));
+    princ(T("Calling: "),out);
+    prin1(list(fname,arguments,NULL),out);
+    print(symbol_function(fname),out);
+    terpri(out);
+    MultipleValues results={0};
+    kernel_apply(symbol_function(fname),
+                 arguments,
+                 &results);
+    const char* sep="--> ";
+    for(int i=0;i<results.count;i++){
+        printf("%s",sep);
+        sep="    ";
+        prin1(results.values[i],out);
+        terpri(out);}}
+
+void bocl_test(){
+    bocl_call(S(CAR),list(list(S(FOO),NULL),NULL));}
 
 
 /**** THE END ****/

@@ -63,6 +63,7 @@ Ref CLOSURE_Class                            = &uninitialized_object;
 Ref COMPILED_CLOSURE_Class                   = &uninitialized_object;
 Ref FUNCTION_Class                           = &uninitialized_object;
 Ref COMPILED_FUNCTION_Class                  = &uninitialized_object;
+Ref BUILT_IN_FUNCTION_Class                  = &uninitialized_object;
 Ref STANDARD_OBJECT_Class                    = &uninitialized_object;
 Ref FUNCALLABLE_STANDARD_OBJECT_Class        = &uninitialized_object;
 Ref STANDARD_GENERIC_FUNCTION_Class          = &uninitialized_object;
@@ -163,6 +164,7 @@ void kernel_objects_initialize(void){
     COMPILED_CLOSURE_Class                   = make_boot_Object((Slots*)make_boot_BuiltInClass());
     FUNCTION_Class                           = make_boot_Object((Slots*)make_boot_BuiltInClass());
     COMPILED_FUNCTION_Class                  = make_boot_Object((Slots*)make_boot_BuiltInClass());
+    BUILT_IN_FUNCTION_Class                  = make_boot_Object((Slots*)make_boot_BuiltInClass());
     STANDARD_OBJECT_Class                    = make_boot_Object((Slots*)make_boot_StandardClass());
     FUNCALLABLE_STANDARD_OBJECT_Class        = make_boot_Object((Slots*)make_boot_FuncallableStandardClass());
     STANDARD_GENERIC_FUNCTION_Class          = make_boot_Object((Slots*)make_boot_FuncallableStandardClass());
@@ -261,6 +263,7 @@ void kernel_objects_initialize(void){
     COMPILED_CLOSURE_Class                  -> class = BUILT_IN_CLASS_Class;
     FUNCTION_Class                          -> class = BUILT_IN_CLASS_Class;
     COMPILED_FUNCTION_Class                 -> class = BUILT_IN_CLASS_Class;
+    BUILT_IN_FUNCTION_Class                 -> class = BUILT_IN_CLASS_Class;
     STANDARD_OBJECT_Class                   -> class = STANDARD_CLASS_Class;
     FUNCALLABLE_STANDARD_OBJECT_Class       -> class = FUNCALLABLE_STANDARD_CLASS_Class;
     STANDARD_GENERIC_FUNCTION_Class         -> class = FUNCALLABLE_STANDARD_CLASS_Class;
@@ -390,6 +393,7 @@ void kernel_objects_initialize(void){
     push(COMPILED_CLOSURE_Class                  ,&kernel_classes);
     push(FUNCTION_Class                          ,&kernel_classes);
     push(COMPILED_FUNCTION_Class                 ,&kernel_classes);
+    push(BUILT_IN_FUNCTION_Class                 ,&kernel_classes);
     push(STANDARD_OBJECT_Class                   ,&kernel_classes);
     push(FUNCALLABLE_STANDARD_OBJECT_Class       ,&kernel_classes);
     push(STANDARD_GENERIC_FUNCTION_Class         ,&kernel_classes);
@@ -488,6 +492,7 @@ void kernel_objects_initialize(void){
     COMPILED_CLOSURE_Class                   -> slots->class.direct_superclasses = NIL_Symbol;
     FUNCTION_Class                           -> slots->class.direct_superclasses = NIL_Symbol;
     COMPILED_FUNCTION_Class                  -> slots->class.direct_superclasses = NIL_Symbol;
+    BUILT_IN_FUNCTION_Class                  -> slots->class.direct_superclasses = NIL_Symbol;
     STANDARD_OBJECT_Class                    -> slots->class.direct_superclasses = NIL_Symbol;
     FUNCALLABLE_STANDARD_OBJECT_Class        -> slots->class.direct_superclasses = NIL_Symbol;
     STANDARD_GENERIC_FUNCTION_Class          -> slots->class.direct_superclasses = NIL_Symbol;
@@ -587,6 +592,7 @@ void kernel_objects_initialize(void){
     boot_class_add_superclass(COMPILED_CLOSURE_Class                  ,CLOSURE_Class                           );
     boot_class_add_superclass(FUNCTION_Class                          ,T_Class                                 );
     boot_class_add_superclass(COMPILED_FUNCTION_Class                 ,FUNCTION_Class                          );
+    boot_class_add_superclass(BUILT_IN_FUNCTION_Class                 ,FUNCTION_Class                          );
     boot_class_add_superclass(STANDARD_OBJECT_Class                   ,T_Class                                 );
     boot_class_add_superclass(FUNCALLABLE_STANDARD_OBJECT_Class       ,FUNCTION_Class                          );
     boot_class_add_superclass(FUNCALLABLE_STANDARD_OBJECT_Class       ,STANDARD_OBJECT_Class                   );
@@ -692,6 +698,7 @@ void kernel_objects_initialize(void){
     COMPILED_CLOSURE_Class                   -> slots->class.name = symbol_intern_cstring("COMPILED-CLOSURE");
     FUNCTION_Class                           -> slots->class.name = symbol_intern_cstring("FUNCTION");
     COMPILED_FUNCTION_Class                  -> slots->class.name = symbol_intern_cstring("COMPILED-FUNCTION");
+    BUILT_IN_FUNCTION_Class                  -> slots->class.name = symbol_intern_cstring("BUILT-IN-FUNCTION");
     STANDARD_OBJECT_Class                    -> slots->class.name = symbol_intern_cstring("STANDARD-OBJECT");
     FUNCALLABLE_STANDARD_OBJECT_Class        -> slots->class.name = symbol_intern_cstring("FUNCALLABLE-STANDARD-OBJECT");
     STANDARD_GENERIC_FUNCTION_Class          -> slots->class.name = symbol_intern_cstring("STANDARD-GENERIC-FUNCTION");

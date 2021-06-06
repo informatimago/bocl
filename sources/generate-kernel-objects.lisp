@@ -256,6 +256,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (compiled-closure                   (built-in-class)             (closure))
     (function                           (built-in-class)             (t))
     (compiled-function                  (built-in-class)             (function))
+    (built-in-function                  (built-in-class)             (function))
     (standard-object                    (standard-class)             (t))
     (funcallable-standard-object        (funcallable-standard-class) (function                     standard-object))
     (standard-generic-function          (funcallable-standard-class) (generic-function))

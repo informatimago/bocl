@@ -11,7 +11,7 @@
 #include "bocl.h"
 #include "macros.h"
 #include "memory.h"
-#include "error.h"
+#include "boerror.h"
 #include "strdup.h"
 #include "stream.h"
 #include "printer.h"
@@ -331,6 +331,7 @@ int main(int argc,char** argv){
 
     prin1(S(PAPA),variable_value(S(*STANDARD-OUTPUT*)));
     terpri(variable_value(S(*STANDARD-OUTPUT*)));
+    bocl_test();
 
     if(!do_norc){
         initfiles=string_list_cons(initfile,initfiles);}

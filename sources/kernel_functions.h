@@ -63,6 +63,8 @@ Ref standard_input_stream(void);
 Ref standard_output_stream(void);
 Ref standard_error_stream(void);
 bool closurep(Ref par_object);
+bool functionp(Ref par_object);
+bool built_in_function_p(Ref par_object);
 Ref function_name(Ref par_function);
 Ref rplaca(Ref par_cell, Ref par_new_car);
 Ref rplacd(Ref par_cell, Ref par_new_car);
@@ -133,5 +135,7 @@ Ref string_output_stream_get_string(Ref par_string_output_stream);
 Ref stream_open(Ref par_filespec, Ref par_direction, Ref par_element_type, Ref par_if_exists, Ref par_if_does_not_exist, Ref par_external_format);
 Ref stream_finish_output(Ref par_stream);
 Ref stream_finish_output(Ref par_stream);
+bool integer_eq(Ref par_a, Ref par_b);
+bool float_eq(Ref par_a, Ref par_b);
 
 #endif

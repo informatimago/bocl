@@ -54,6 +54,7 @@
                              ((#\<) (write-string "LT"))
                              ((#\=) (write-string "EQ"))
                              ((#\>) (write-string "GT"))
+                             ((#\/) (write-string "_"))
                              (otherwise (write-char ch)))))))
 
 
@@ -67,6 +68,16 @@
   (concatenate 'string "def_" (substitute #\_ #\- (string-downcase pname))))
 
 (defvar *header* :source)
+
+(defun genlist (object)
+  (etypecase object
+    (cons      (format nil "list(~{~A,~}NULL)"
+                       (mapcar (function genlist) object)))
+    (keyword   (format nil "K(~A)" (symbol-name object)))
+    (symbol    (format nil "S(~A)" (symbol-name object)))
+    (integer   (format nil "I(~A)" object))
+    (string    (format nil "T(~S)" object))
+    (character (format nil "C(~A)" (char-name object)))))
 
 (defun generate-kernel-function (fname lambda-list &key (values '(t)) cfun)
   (multiple-value-bind (mandatories optionals rest keys allow-other-keys) (parse-lambda-list lambda-list)
@@ -92,9 +103,9 @@
                             keys)))
 
 
-      (case *header*
+      (ecase *header*
 
-        (:kernel-functions
+        ((:kernel-functions)
          (cond
            ((equal values '())         (write-string "void "))
            ((equal values '(boolean))  (write-string "bool "))
@@ -124,11 +135,18 @@
              (write-string "void")))
          (write-line ");"))
 
-        (:header
+        ((:symbols)
+         (format t "    {   Ref fname=S(~a);~%" fname)
+         (format t "        Ref lambda_list=~A;~%"
+                 (genlist lambda-list))
+         (format t "        symbol_set_function(fname,built_in_function_new(fname,lambda_list,~A));}~%"
+                 (k-fun-name fname)))
+
+        ((:header)
          (format t "void ~A(Ref function,Ref arguments,MultipleValues* results);~%"
                  (k-fun-name fname)))
 
-        (otherwise
+        ((:source)
          (format t "void ~A(Ref function,Ref arguments,MultipleValues* results){~%"
                  (k-fun-name fname))
          (write-line "    push_to_rootset(function);")
@@ -231,7 +249,8 @@
          (write-line "    delete_from_rootset(arguments);")
          (write-line "    delete_from_rootset(function);")
          (write-line "}")
-         (terpri))))))
+         (terpri))
+))))
 
 ;;;
 ;;; Note: generate-built-in-functions may generate duplicate declarations in kernel_functions.h
@@ -343,6 +362,8 @@
              ;; FUNCTIONS
 
              (generate-kernel-function 'closurep '(object) :values '(boolean))
+             (generate-kernel-function 'functionp '(object) :values '(boolean))
+             (generate-kernel-function 'built-in-function-p '(object) :values '(boolean))
              (generate-kernel-function 'function-name '(function))
 
              ;; CONS ====================
@@ -446,6 +467,11 @@
              (generate-kernel-function 'finish-output  '(&optional (stream *standard-output*))       :cfun 'stream-finish-output)
              (generate-kernel-function 'force-output   '(&optional (stream *standard-output*))       :cfun 'stream-finish-output)
 
+             ;; INTEGER ====================
+             (generate-kernel-function '=/i    '(a b)     :values '(boolean) :cfun 'integer-eq)
+             ;; FLOAT ====================
+             (generate-kernel-function '=/f    '(a b)     :values '(boolean) :cfun 'float-eq)
+
              )))
 
     (with-open-file (*standard-output* "kernel_functions.h"
@@ -471,6 +497,8 @@
       (terpri)
       (generate :header)
       (terpri)
+      (write-line "void kernel_initialize_built_in_functions(void);")
+      (terpri)
       (write-line "#endif"))
 
 
@@ -489,5 +517,10 @@
       (terpri)
       (generate :source)
       (terpri)
+
+      (write-line "void kernel_initialize_built_in_functions(void){")
+      (generate :symbols)
+      (write-line "}")
+
       (write-line "/**** THE END ****/"))
     (values)))

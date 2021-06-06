@@ -9,7 +9,7 @@
 #include "kernel_private.h"
 #include "macros.h"
 #include "memory.h"
-#include "error.h"
+#include "boerror.h"
 #include "cons.h"
 #include "variable.h"
 #include "printer.h"
@@ -199,6 +199,8 @@ Ref name_character(Ref name){
     else if(symbolp(name)){
         return name_character(symbol_name(name));}
     else if(stringp(name)){
+        if(string_length(name)==1){
+            return octet_character(name->slots->octet_array.elements->elements[0]);}
         for(int i=0;i<CHAR_CODE_LIMIT;i++){
             if(string_equal(name,character_name(character_table[i]))){
                 return character_table[i];}}
@@ -661,16 +663,19 @@ Ref symbol_new_cstring(const char* name){
     /* make an uninterned symbol */
     return symbol_new(string_new_cstring(name));}
 
-static Ref symbol_intern_obarray(Ref name,Ref obarray){
+static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
     Ref symbol=find_symbol(name,obarray);
     if(symbol){
+        (*internal)=true;
         return symbol;}
+    (*internal)=false;
     symbol=Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,obarray));
     cons_rplacd(obarray,cons(symbol,cons_cdr(obarray)));
     return symbol;}
 
 Ref symbol_intern(Ref name){
-    return symbol_intern_obarray(name,KERNEL_obarray);}
+    bool internal;
+    return symbol_intern_obarray(name,KERNEL_obarray,&internal);}
 
 Ref symbol_intern_cstring(const char* name){
     return symbol_intern(string_new_cstring(name));}
@@ -734,8 +739,10 @@ Ref obarray_all_symbols(Ref obarray){
 /* Note: KEYWORD is not a class, but a subtype of SYMBOL */
 
 Ref keyword_intern(Ref name){
-    Ref keyword=symbol_intern_obarray(name,KEYWORD_obarray);
-    define_constant(keyword,keyword);
+    bool internal;
+    Ref keyword=symbol_intern_obarray(name,KEYWORD_obarray,&internal);
+    if(!internal){
+        define_constant(keyword,keyword);}
     return keyword;}
 
 Ref keyword_intern_cstring(const char* name){
@@ -1359,13 +1366,21 @@ Ref standard_error_stream(void){
 //     Ref lambda_list;
 //     Ref body;
 // } Function;
-//
-// typedef struct BuiltInFunction     {
-//     BLOCK_HEADER;
-//     Ref           lisp_name;       /* the Lisp Symbol naming the kernel function. */
-//     Ref           lambda_list;     /* the lambda list of the kernel function. */
-//     KernelFunctionPtr kernel_function; /* the entry point of to the kernel function. */
-// } BuiltInFunction;
+
+BuiltInFunction* BuiltInFunction_slots(Ref lisp_name,Ref lambda_list,KernelFunctionPtr kernel_function){
+    check_type(lisp_name,SYMBOL_Class);
+    check_type(lambda_list,LIST_Class);
+    BuiltInFunction* that=allocate(sizeof(*that));
+    that->objcount=2;
+    that->lisp_name=lisp_name;
+    that->lambda_list=lambda_list;
+    that->kernel_function=kernel_function;
+    return that;}
+
+Ref built_in_function_new(Ref lisp_name,Ref lambda_list,KernelFunctionPtr kernel_function){
+    return Object_new(find_class(symbol_intern_cstring("BUILT-IN-FUNCTION")),
+                      (Slots*)BuiltInFunction_slots(lisp_name,lambda_list,kernel_function));}
+
 //
 // typedef struct FuncallableStandardObject {
 //     BLOCK_HEADER;
@@ -1377,16 +1392,41 @@ Ref standard_error_stream(void){
 bool closurep(Ref object){
     return class_of(object)==CLOSURE_Class;}
 
+bool functionp(Ref object){
+    return typep(object,FUNCTION_Class);}
+
+bool built_in_function_p(Ref object){
+    return class_of(object)==BUILT_IN_FUNCTION_Class;}
+
 Ref function_name(Ref funclo){
     if(closurep(funclo)){
         return function_name(funclo->slots->closure.function);}
     check_type(funclo,FUNCTION_Class);
     return funclo->slots->function.lisp_name;}
 
-void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){}
-void kernel_apply_closure(Closure* closure,Ref arguments,MultipleValues* results){}
-void kernel_apply_function(Function* function,Ref arguments,MultipleValues* results){}
-void kernel_apply_built_in(BuiltInFunction* function,Ref arguments,MultipleValues* results){}
+void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){
+    if(closurep(function_or_closure)){
+        kernel_apply_closure(function_or_closure,&function_or_closure->slots->closure,arguments,results);}
+    else if(built_in_function_p(function_or_closure)){
+        kernel_apply_built_in(function_or_closure,&function_or_closure->slots->built_in_function,arguments,results);}
+    else if(functionp(function_or_closure)){
+        kernel_apply_function(function_or_closure,&function_or_closure->slots->function,arguments,results);}
+    else{
+        /* TODO: (or function closure) */
+        TYPE_ERROR(function_or_closure,FUNCTION_Class);}}
+
+void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results){
+    NOT_IMPLEMENTED_YET();
+    /* slots->environment */
+    /* slots->function */
+    /*         (closure,arguments,results); */}
+
+void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results){
+    NOT_IMPLEMENTED_YET();
+    /* slots->body(function,arguments,results); */}
+
+void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,MultipleValues* results){
+    slots->kernel_function(function,arguments,results);}
 
 
 /* CONDITION */
@@ -1485,6 +1525,7 @@ void kernel_initialize(void){
     set_garbage_collection_enabled(false);
 
     kernel_objects_initialize();
+    kernel_initialize_built_in_functions();
     kernel_initialize_characters();
     kernel_initialize_features();
     reader_initialize();
@@ -1492,8 +1533,7 @@ void kernel_initialize(void){
 
     kernel_initialize_rootset();
     set_rootset((Block*)kernel_rootset());
-    set_garbage_collection_enabled(true);
-}
+    set_garbage_collection_enabled(true);}
 
 
 

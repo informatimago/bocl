@@ -13,3 +13,6 @@
 
 sources/bocl
 tests/test_reader
+
+*-Listing.xml
+*-Results.xml

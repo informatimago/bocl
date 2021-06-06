@@ -64,6 +64,8 @@ void kernel_STANDARD_INPUT_STREAM(Ref function,Ref arguments,MultipleValues* res
 void kernel_STANDARD_OUTPUT_STREAM(Ref function,Ref arguments,MultipleValues* results);
 void kernel_STANDARD_ERROR_STREAM(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CLOSUREP(Ref function,Ref arguments,MultipleValues* results);
+void kernel_FUNCTIONP(Ref function,Ref arguments,MultipleValues* results);
+void kernel_BUILT_IN_FUNCTION_P(Ref function,Ref arguments,MultipleValues* results);
 void kernel_FUNCTION_NAME(Ref function,Ref arguments,MultipleValues* results);
 void kernel_RPLACA(Ref function,Ref arguments,MultipleValues* results);
 void kernel_RPLACD(Ref function,Ref arguments,MultipleValues* results);
@@ -134,5 +136,9 @@ void kernel_GET_OUTPUT_STREAM_STRING(Ref function,Ref arguments,MultipleValues* 
 void kernel_OPEN(Ref function,Ref arguments,MultipleValues* results);
 void kernel_FINISH_OUTPUT(Ref function,Ref arguments,MultipleValues* results);
 void kernel_FORCE_OUTPUT(Ref function,Ref arguments,MultipleValues* results);
+void kernel_EQ_I(Ref function,Ref arguments,MultipleValues* results);
+void kernel_EQ_F(Ref function,Ref arguments,MultipleValues* results);
+
+void kernel_initialize_built_in_functions(void);
 
 #endif

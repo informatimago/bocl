@@ -11,16 +11,16 @@ string_list* string_list_rest(string_list* list);
 void string_list_free(string_list* list);
 string_list* string_list_nreverse(string_list* list);
 
-#define do_string_list(stringvar,stringlistexpr)                                                    \
-    string_list* C(do_string_list_current,__LINE__) ; char* stringvar;                              \
-    for((C(do_string_list_current,__LINE__) = (stringlistexpr),                                     \
-         stringvar = ((C(do_string_list_current,__LINE__) != NULL)                                  \
-                      ?string_list_first(C(do_string_list_current,__LINE__))                        \
-                      :NULL)) ;                                                                     \
-        C(do_string_list_current,__LINE__) != NULL ;                                                \
-        (C(do_string_list_current,__LINE__) = string_list_rest(C(do_string_list_current,__LINE__)), \
-         stringvar = ((C(do_string_list_current,__LINE__) != NULL)                                  \
-                      ?string_list_first(C(do_string_list_current,__LINE__))                        \
-                               :NULL)))
+#define do_string_list(stringvar,stringlistexpr)                                                        \
+    string_list* CS(do_string_list_current,__LINE__) ; char* stringvar;                                 \
+    for((CS(do_string_list_current,__LINE__) = (stringlistexpr),                                        \
+         stringvar = ((CS(do_string_list_current,__LINE__) != NULL)                                     \
+                      ?string_list_first(CS(do_string_list_current,__LINE__))                           \
+                      :NULL)) ;                                                                         \
+        CS(do_string_list_current,__LINE__) != NULL ;                                                   \
+        (CS(do_string_list_current,__LINE__) = string_list_rest(CS(do_string_list_current,__LINE__)),   \
+         stringvar = ((CS(do_string_list_current,__LINE__) != NULL)                                     \
+                      ?string_list_first(CS(do_string_list_current,__LINE__))                           \
+                      :NULL)))
 
 #endif

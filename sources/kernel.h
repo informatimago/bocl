@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "memory.h"
-#include "error.h"
+#include "boerror.h"
 #include "macros.h"
-#include "limits.h"
+#include "bolimits.h"
 #include "cons.h"
 #include "kernel_types.h"
 #include "kernel_objects.h"
@@ -107,9 +107,11 @@ Ref string_stream_new(FILE* memstream);
 
 /* FUNCTIONS */
 
-void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results);
-void kernel_apply_closure(Closure* closure,Ref arguments,MultipleValues* results);
-void kernel_apply_function(Function* function,Ref arguments,MultipleValues* results);
-void kernel_apply_built_in(BuiltInFunction* function,Ref arguments,MultipleValues* results);
+BuiltInFunction* BuiltInFunction_slots(Ref lisp_name,Ref lambda_list,KernelFunctionPtr kernel_function);
+Ref built_in_function_new(Ref lisp_name,Ref lambda_list,KernelFunctionPtr kernel_function);
 
+void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results);
+void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results);
+void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
+void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,MultipleValues* results);
 #endif
