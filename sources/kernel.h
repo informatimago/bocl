@@ -1,6 +1,10 @@
+#define _POSIX_SOURCE   1
+#define _ISOC11_SOURCE  1
+#define _POSIX_C_SOURCE 200809L
+
 #ifndef kernel_h
 #define kernel_h
-#define _POSIX_SOURCE
+
 #include <unistd.h>
 #include <stdint.h>
 #include <stdbool.h>
