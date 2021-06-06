@@ -6,8 +6,6 @@ stages:
 
 build-code-job:
   stage: build
-  variables:
-    DEFINES:
   script:
     - echo "Dump the environment:"
     - env | sort
@@ -27,8 +25,6 @@ build-code-job:
 
 test-code-job:
   stage: test
-  variables:
-    DEFINES:
   script:
     - echo "Dump the environment:"
     - env | sort
@@ -37,8 +33,6 @@ test-code-job:
 
 cunit:
   stage: test
-  variables:
-    DEFINES:
   script:
     - tests/test_reader
   artifacts:
