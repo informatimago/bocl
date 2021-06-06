@@ -8,7 +8,7 @@ stages:
 install-cunit:
   stage: prepare
   script:
-    - apt-get install cunit
+    - apt-get update  &&  apt-get install -y --no-install-recommends  libcunit1 libcunit1-dev  &&  rm -rf /var/lib/apt/lists/*
 
 build-code-job:
   stage: build
