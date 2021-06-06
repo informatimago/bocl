@@ -24,14 +24,14 @@
 
 #define NOT_IMPLEMENTED_YET()                        error(__FUNCTION__,"NOT IMPLEMENTED YET")
 
-#define CHECK_POINTER(pointer)                       check_pointer(__FUNCTION__,pointer)
-#define CHECK_SIZE_TO_UWORD(size)                    check_size_to_uword(__FUNCTION__,size)
-#define CHECK_LONG_TO_UWORD(value)                   check_long_to_uword(__FUNCTION__,value)
-#define CHECK_SIZE_TO_HALFWORD(size)                 check_size_to_halfword(__FUNCTION__,size)
-#define CHECK_WORD_TO_SIZE(value)                    check_word_to_size(__FUNCTION__,value)
-#define CHECK_UWORD_TO_WORD(value)                   check_uword_to_word(__FUNCTION__,value)
-#define CHECK_UWORD_TO_HALFWORD(size)                check_uword_to_halfword(__FUNCTION__,size)
 #define CHECK_HALFWORD_TO_INT(value)                 check_halfword_to_int(__FUNCTION__,value)
+#define CHECK_LONG_TO_UWORD(value)                   check_long_to_uword(__FUNCTION__,value)
+#define CHECK_POINTER(pointer)                       check_pointer(__FUNCTION__,pointer)
+#define CHECK_SIZE_TO_HALFWORD(size)                 check_size_to_halfword(__FUNCTION__,size)
+#define CHECK_SIZE_TO_UWORD(size)                    check_size_to_uword(__FUNCTION__,size)
+#define CHECK_UWORD_TO_HALFWORD(size)                check_uword_to_halfword(__FUNCTION__,size)
+#define CHECK_UWORD_TO_WORD(value)                   check_uword_to_word(__FUNCTION__,value)
+#define CHECK_WORD_TO_SIZE(value)                    check_word_to_size(__FUNCTION__,value)
 
 _Noreturn void fatal(const char* fname,const char* message_format,...);
 _Noreturn void error(const char* fname,const char* message_format,...);

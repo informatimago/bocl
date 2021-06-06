@@ -1283,7 +1283,7 @@ Ref stream_output_string(unused Ref element_type){
     stream->slots->file_stream.direction=direction_output;
     stream->slots->file_stream.string=string;
     stream->slots->file_stream.buffer=(octet*)buffer;
-    string->slots->octet_array.dimensions[0]=size;
+    string->slots->octet_array.dimensions[0]=CHECK_SIZE_TO_UWORD(size);
     return stream;}
 
 Ref string_output_stream_get_string(Ref string_output_stream){
