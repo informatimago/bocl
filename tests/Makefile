@@ -72,6 +72,6 @@ run_test_bocl: $(BOCL)
 	@printf "# Success\n"
 
 $(LIBBOCL) $(BOCL):
-	$(VERBOSE) $(MAKE) $(MFLAGS) all
+	$(VERBOSE) $(MAKE) $(MFLAGS) -C ../sources build
 
 #### THE END ####
