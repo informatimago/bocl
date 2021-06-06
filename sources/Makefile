@@ -28,6 +28,10 @@ bocl_SRCS        = main.c
 bocl_LIBS        = -L. -lbocl -lm -lc
 bocl_INCS        = -I.
 
+print_types_SRCS = print_types.c
+print_types_LIBS =
+print_types_INCS =
+
 INCLUDES     += $(libbocl_INCS)
 LIBRARIES    += $(libbocl_LIBS)
 
@@ -37,7 +41,7 @@ include common.mk
 deps:   $(all_SRCS:%.c=%.d)
 include $(all_SRCS:%.c=%.d)
 
-build: deps libbocl.$(SO) bocl
+build: deps print_types libbocl.$(SO) bocl
 
 clean:
 	@ printf "# Removing object files and target\n"
@@ -55,7 +59,7 @@ predefines:
 	-$(VERBOSE) rm -f   __predefines.c
 
 gdb: bocl
-	$(VERBOSE) $(RUN_ENV) gdb ./bocl
+	$(VERBOSE) $(RUN) gdb ./bocl
 
 # on macOS, gdb must be codesigned.
 sign-gdb:
@@ -65,9 +69,13 @@ sign-gdb:
 	$(VERBOSE) sudo codesign --entitlements gdb-entitlement.xml -fs gdb-cert "$$(which gdb)"
 
 run: bocl
-	$(VERBOSE) $(RUN_ENV) ./bocl $(ARGUMENTS)
+	$(VERBOSE) $(RUN) ./bocl $(ARGUMENTS)
 
 # ----------------------------------------
+print_types: $(print_types_SRCS:%.c=%.d) $(print_types_SRCS:%.c=%.o)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(print_types_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(print_types_SRCS:%.c=%.o)
+	$(VERBOSE) $(RUN) ./print_types
 
 libbocl.$(SO): $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"

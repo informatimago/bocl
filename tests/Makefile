@@ -46,7 +46,7 @@ test_ci: $(test_ci_SRCS:%.c=%.d) $(test_ci_SRCS:%.c=%.o)
 
 run_test_ci: test_ci
 	@printf "# Testing %s\n" $^
-	$(VERBOSE)  r="$(RUNLIBS)" ; DYLD_LIBRARY_PATH=$${r// /:} ./test_ci
+	$(VERBOSE) $(RUN) ./test_ci
 
 test_reader.e : test_reader.c
 
@@ -56,7 +56,7 @@ test_reader: $(test_reader_SRCS:%.c=%.d) $(test_reader_SRCS:%.c=%.o) $(LIBBOCL)
 
 run_test_reader:test_reader
 	@printf "# Testing %s\n" $^
-	$(VERBOSE) r="$(RUNLIBS)" ; DYLD_LIBRARY_PATH=$${r// /:} ./test_reader ;echo status=$$?
+	$(VERBOSE) $(RUN) ./test_reader ;echo status=$$?
 
 run_test_bocl: $(BOCL)
 	@printf "# Testing bocl\n"

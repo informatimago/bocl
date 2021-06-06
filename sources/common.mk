@@ -45,9 +45,7 @@ WARN_GCC = \
 	-Wswitch-unreachable \
 	-Wtrampolines \
 	-Wunsafe-loop-optimizations \
-	-Wunused-but-set-variable \
-	\
-	-Wno-zero-length-array
+	-Wunused-but-set-variable
 
 WARN_CLANG = \
 	-Walloca \
@@ -126,6 +124,8 @@ SO        = so
 SHARED    = -shared
 
 endif
+
+RUN       =  r="$(RUNLIBS)" ; DYLD_LIBRARY_PATH=$${r// /:}
 
 # ----------------------------------------
 
