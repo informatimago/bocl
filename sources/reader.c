@@ -5,9 +5,9 @@
 #include "macros.h"
 #include "kernel.h"
 #include "variable.h"
-#include "error.h"
+#include "boerror.h"
 #include "cons.h"
-#include "string.h"
+#include "bostring.h"
 #include "character.h"
 
 /* The recursive_p parameters are unused, since we don't deal with #=/## references */
@@ -221,6 +221,7 @@ static Ref parse_string(parser_state* parser){
             /* in the middle of a string */
             return NIL_Symbol;}
         if(parser->escape){
+            parser->escape=false;
             check_token_too_long(parser,"String");
             parser->token[parser->length++]=parser->ch;}
         else{
@@ -230,6 +231,7 @@ static Ref parse_string(parser_state* parser){
                   break;
               case '"':
                   parser->token[parser->length]='\0';
+                  parser->eof=false;
                   return string_new_cstring((char*)parser->token);
               default:
                   check_token_too_long(parser,"String");
@@ -282,6 +284,7 @@ static Ref scan_integer(parser_state* parser){
     /* [-+]?[0-9]+\.? */
     const char* token=(char*)parser->token;
     word sign=1;
+    bool value_set=false;
     word value=0;
     size_t pos=0;
     word digit=0;
@@ -302,6 +305,7 @@ static Ref scan_integer(parser_state* parser){
                   ||((WORD_MAX/10==value)&&(WORD_MAX-10*(WORD_MAX/10)<=digit))){
                   ARITHMETIC_ERROR("Integer too big maximum %"WORD_FORMAT,WORD_MAX);}
               value=(value*10)+digit;
+              value_set=true;
               pos++;
               break;
           case '.':
@@ -311,7 +315,9 @@ static Ref scan_integer(parser_state* parser){
               return NIL_Symbol;
           default:
               return NIL_Symbol;}}
-    return integer_from_word(sign*value);}
+    return (value_set)
+            ?integer_from_word(sign*value)
+            :NIL_Symbol;}
 
 static Ref scan_float(parser_state* parser){
     /* [-+]?[0-9]*(\.[0-9]+)?([DdEeFfLlSs][-+]?[0-9]+)? */
@@ -372,7 +378,7 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
         colon=strchr(token+1,':');
         if(!colon){
             (*valid)=true;
-            return keyword_intern_cstring(token);}
+            return keyword_intern_cstring(token+1);}
         /* two or more colons */
         return NIL_Symbol;}
     /* colon in the middle -- no package yet */
@@ -401,6 +407,7 @@ static Ref parse_object(parser_state* parser){
     switch(parser->ch){
         /* We cannot have a ';' since skip_space(parser); eats the comments too. */
       case '\'':
+          advance_character(parser);
           skip_spaces(parser);
           if(parser->eof){
               return NIL_Symbol;}

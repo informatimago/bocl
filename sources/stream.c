@@ -7,7 +7,7 @@
 #include "filename.h"
 #include "printer.h"
 #include "variable.h"
-#include "error.h"
+#include "boerror.h"
 
 
 

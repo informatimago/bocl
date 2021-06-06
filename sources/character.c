@@ -14,6 +14,9 @@ abcdefghijklmnopqrstuvwxyz
 ?à 224
 ?÷ 247
 ?þ 254
+
+(loop for i from 32 to 126 do (insert(format "%c"i)))
+ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~
 */
 
 bool printablep(octet ch){
@@ -30,6 +33,7 @@ bool constituentp(octet ch){
       case '(':
       case ')':
       case ',':
+      case ';':
       case '\\':
       case '`':
       case '|':

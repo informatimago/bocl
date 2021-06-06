@@ -5,7 +5,7 @@
 #include "data.h"
 #include "variable.h"
 #include "stream.h"
-#include "string.h"
+#include "bostring.h"
 #include "character.h"
 
 /* Printer */
@@ -43,7 +43,12 @@ Ref prin1(Ref object,Ref stream){
     /*     fprintf(out,"NIL"); */
     /*     return object;} */
 
-    if(keywordp(object) || symbolp(object)){
+    if(keywordp(object) ){
+        fprintf(out,":");
+        princ(symbol_name(object),stream);
+        return object;}
+
+    if(symbolp(object)){
         princ(symbol_name(object),stream);
         return object;}
 

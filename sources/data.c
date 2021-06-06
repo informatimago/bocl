@@ -1,7 +1,26 @@
 #include "data.h"
 #include "kernel.h"
+#include "float.h"
+#include "integer.h"
 
 bool eql(Ref a,Ref b){
+    if(integerp(a)){
+        if(a==b){
+            return true;}
+        if(integerp(b)){
+            return integer_value(a)==integer_value(b);}
+        return false;}
+    if(floatp(a)){
+        if(a==b){
+            return true;}
+        if(floatp(b)){
+            return float_value(a)==float_value(b);}
+        return false;}
+    if(characterp(a)){
+        if(characterp(b)){
+            /* characters are interned */
+            return a==b;}
+        return false;}
     return a==b;}
 
 bool equal(Ref a,Ref b){
@@ -22,9 +41,10 @@ bool equal(Ref a,Ref b){
         return eql(a,b) || bit_vector_equal(a,b);}
 
     if(physical_pathname_p(a)){
-         if(!physical_pathname_p(b)){
-             return false;}
-         return eql(a,b) || physical_pathname_equal(a,b);}
+        if(!physical_pathname_p(b)){
+            return false;}
+        return eql(a,b) || physical_pathname_equal(a,b);}
+
 
     return eql(a,b);}
 

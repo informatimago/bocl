@@ -5,15 +5,15 @@
 /* The built-in-functions are declared in kernel_functions.h */
 
 #define do_list(elementvar,listexpr)                                                     \
-    Ref C(do_list_current,__LINE__); Ref elementvar;                             \
-    for((C(do_list_current,__LINE__) = (listexpr),                                       \
-         elementvar = ((consp(C(do_list_current,__LINE__)))                             \
-                       ?cons_car(C(do_list_current,__LINE__))                            \
+    Ref CS(do_list_current,__LINE__); Ref elementvar;                             \
+    for((CS(do_list_current,__LINE__) = (listexpr),                                       \
+         elementvar = ((consp(CS(do_list_current,__LINE__)))                             \
+                       ?cons_car(CS(do_list_current,__LINE__))                            \
                        :NULL)) ;                                                         \
-        consp(C(do_list_current,__LINE__)) ;                                            \
-        (C(do_list_current,__LINE__) = cons_cdr(C(do_list_current,__LINE__)),            \
-         elementvar = ((consp(C(do_list_current,__LINE__)))                             \
-                       ?cons_car(C(do_list_current,__LINE__))                            \
+        consp(CS(do_list_current,__LINE__)) ;                                            \
+        (CS(do_list_current,__LINE__) = cons_cdr(CS(do_list_current,__LINE__)),            \
+         elementvar = ((consp(CS(do_list_current,__LINE__)))                             \
+                       ?cons_car(CS(do_list_current,__LINE__))                            \
                        :NULL)))
 
 Ref push(Ref element,Ref* list);
