@@ -3,37 +3,38 @@
 #include <unistd.h> // import _POSIX_V6_LP64_OFF64
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include "bolimits.h"
 
 #ifdef _POSIX_V6_LP64_OFF64
-typedef int64_t  word;
-typedef uint64_t uword;
-typedef uint32_t halfword;
-#define WORD_MIN INT64_MIN
-#define WORD_MAX INT64_MAX
-#define UWORD_MAX UINT64_MAX
-#define HALFWORD_MAX UINT32_MAX
-#define WORD_FORMAT "lld"
-#define UWORD_FORMAT "llu"
-#define HALFWORD_FORMAT "u"
-#define WORD_X_FORMAT "llx"
-#define UWORD_X_FORMAT "llx"
-#define HALFWORD_X_FORMAT "x"
+typedef int64_t           word;
+typedef uint64_t          uword;
+typedef uint32_t          halfword;
+#define WORD_MIN          INT64_MIN
+#define WORD_MAX          INT64_MAX
+#define UWORD_MAX         UINT64_MAX
+#define HALFWORD_MAX      UINT32_MAX
+#define WORD_FORMAT       PRId64
+#define UWORD_FORMAT      PRIu64
+#define HALFWORD_FORMAT   PRIu32
+#define WORD_X_FORMAT     PRIx64
+#define UWORD_X_FORMAT    PRIx64
+#define HALFWORD_X_FORMAT PRIx32
 #else
-typedef int32_t  word;
-typedef uint32_t uword;
-typedef uint32_t halfword;
-#define WORD_MIN INT32_MIN
-#define WORD_MAX INT32_MAX
-#define UWORD_MAX UINT32_MAX
-#define HALFWORD_MAX UINT32_MAX
-#define WORD_FORMAT "d"
-#define UWORD_FORMAT "u"
-#define HALFWORD_FORMAT "u"
-#define WORD_X_FORMAT "x"
-#define UWORD_X_FORMAT "x"
-#define HALFWORD_X_FORMAT "x"
+typedef int32_t           word;
+typedef uint32_t          uword;
+typedef uint32_t          halfword;
+#define WORD_MIN          INT32_MIN
+#define WORD_MAX          INT32_MAX
+#define UWORD_MAX         UINT32_MAX
+#define HALFWORD_MAX      UINT32_MAX
+#define WORD_FORMAT       PRId32
+#define UWORD_FORMAT      PRIu32
+#define HALFWORD_FORMAT   PRIu32
+#define WORD_X_FORMAT     PRIx32
+#define UWORD_X_FORMAT    PRIx32
+#define HALFWORD_X_FORMAT PRIx32
 #endif
 typedef uint8_t  octet;
 typedef double   floating;
