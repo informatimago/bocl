@@ -5,7 +5,7 @@ all_SRCS = $(common_SRCS) \
 	main.c
 
 libbocl_SRCS = $(untested_SRCS) $(tested_SRCS)
-libbocl_LIBS = -lm
+libbocl_LIBS = -lm -lc
 libbocl_INCS =
 
 tested_SRCS = \
@@ -25,7 +25,7 @@ untested_SRCS = \
 	$(DEBUG_SRCS)
 
 bocl_SRCS        = main.c
-bocl_LIBS        = -L. -lbocl
+bocl_LIBS        = -L. -lbocl -lm -lc
 bocl_INCS        = -I.
 
 INCLUDES     += $(libbocl_INCS)
