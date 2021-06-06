@@ -16,7 +16,7 @@ build-code-job:
     - dpkg-query -L libcunit1 libcunit1-dev
     - ls -c /usr/include/ /usr/local/include/
     - echo "Compile the bocl executable:"
-    - make -k build DEFINES=${DEFINES}
+    - make -k build VERBOSE=   # DEFINES=${DEFINES}
   artifacts:
     paths:
       - sources/bocl
@@ -29,7 +29,7 @@ test-code-job:
     - echo "Dump the environment:"
     - env | sort
     - echo "If the files are built successfully, run some tests:"
-    - make -k test DEFINES=${DEFINES} VERBOSE=
+    - make -k test VERBOSE= # DEFINES=${DEFINES}
 
 cunit:
   stage: test
