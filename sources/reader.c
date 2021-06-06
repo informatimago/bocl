@@ -106,10 +106,11 @@ static octet read_octet(Ref input_stream,bool* eof,bool* error){
         if(type_character==stream_type(input_stream)){
             switch(c){
               case CR:
-                  c=NEL;
-                  int next=getc(cstream);
-                  if((next!=EOF)&&(next!=LF)){
-                      ungetc(next,cstream);}
+                  {
+                      c=NEL;
+                      int next=getc(cstream);
+                      if((next!=EOF)&&(next!=LF)){
+                          ungetc(next,cstream);}}
                   break;
               case LF:
                   c=NEL;
@@ -131,12 +132,13 @@ static octet peek_octet(Ref input_stream,bool* eof,bool* error){
         if(type_character==stream_type(input_stream)){
             switch(c){
               case CR:
-                  c=NEL;
-                  int next=getc(cstream);
-                  if(next==EOF){
-                      ungetc(CR,cstream);}
-                  else if(next!=LF){
-                      ungetc(next,cstream);}
+                  {
+                      c=NEL;
+                      int next=getc(cstream);
+                      if(next==EOF){
+                          ungetc(CR,cstream);}
+                      else if(next!=LF){
+                          ungetc(next,cstream);}}
                   break;
               case LF:
                   c=NEL;
@@ -413,14 +415,15 @@ static Ref parse_object(parser_state* parser){
     switch(parser->ch){
         /* We cannot have a ';' since skip_space(parser); eats the comments too. */
       case '\'':
-          advance_character(parser);
-          skip_spaces(parser);
-          if(parser->eof){
-              return NIL_Symbol;}
-          Ref literal=parse_object(parser);
-          return (parser->eof)
-                  ? NIL_Symbol
-                  : list(S(QUOTE),literal,NULL);
+          {
+              advance_character(parser);
+              skip_spaces(parser);
+              if(parser->eof){
+                  return NIL_Symbol;}
+              Ref literal=parse_object(parser);
+              return (parser->eof)
+                      ? NIL_Symbol
+                      : list(S(QUOTE),literal,NULL);}
       case '"':
           return parse_string(parser);
       case '(':
