@@ -95,6 +95,12 @@ Ref prin1(Ref object,Ref stream){
 
     fprintf(out,"#<");
     prin1(class_name(class_of(object)),stream);
+
+    if(built_in_function_p(object)){
+        fprintf(out," ");
+        prin1(function_name(object),stream);}
+    /* else if(){ */
+    /* } */
     if(classp(object)){
         fprintf(out," ");
         prin1(class_name(object),stream);}
