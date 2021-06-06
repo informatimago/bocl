@@ -1,5 +1,7 @@
 all: test
 
+include ../sources/common.mk
+
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
 # PROGRAMS    = test_ci test_reader
@@ -18,8 +20,13 @@ test_ci_LIBS =
 all_SRCS = \
 	$(test_reader_SRCS)
 
+ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
 LIBRARIES   += -L/opt/local/lib -lcunit
+else
+INCLUDES    += -I../sources
+LIBRARIES   += -lcunit
+endif
 CFLAGS  	+=
 LDFLAGS 	+=
 RUNLIBS     += $(shell echo $$(pwd)/../sources)
@@ -30,7 +37,6 @@ build: deps $(LIBBOCL) $(BOCL) $(PROGRAMS)
 tests: deps $(RUN_TARGETS)
 test:  deps $(RUN_TARGETS)
 
-include ../sources/common.mk
 deps:   $(all_SRCS:%.c=%.d)
 include $(all_SRCS:%.c=%.d)
 

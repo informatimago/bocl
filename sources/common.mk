@@ -28,11 +28,12 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
 LD_SANITIZE_FLAGS =
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
+WARN_NONE= \
+	-Warith-conversion \
+	-Warray-parameter=2 
 
 WARN_GCC = \
 	-Walloc-zero \
-	-Warith-conversion \
-	-Warray-parameter=2 \
 	-Wduplicated-branches \
 	-Wduplicated-cond \
 	-Wformat-signedness \
@@ -126,15 +127,15 @@ SHARED    = -shared
 endif
 
 # /bin/sh:
-RUN       =  DYLD_LIBRARY_PATH=$$(echo "$(RUNLIBS)" |tr ' ' ':')
+RUN       =  LD_LIBRARY_PATH=$$(echo "$(RUNLIBS)" |tr ' ' ':') DYLD_LIBRARY_PATH=${LD_LIBRARY_PATH}
 
 # ----------------------------------------
 
 DEPFLAGS   = -E -MT $@ -MM -MP -MF $*.d
 MAKEDEPEND = $(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $(TARGET_ARCH) $(DEPFLAGS)
 COMPILE    = $(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $(TARGET_ARCH) -fPIC -c
-LINKLIB    = $(LD) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH) $(SHARED)
-LINKBIN    = $(LD) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH)
+LINKLIB    = $(CC) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH) $(SHARED)
+LINKBIN    = $(CC) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH)
 
 %.d : %.c
 	@ printf "# Generating dependencies         for %s\n" "$<"
