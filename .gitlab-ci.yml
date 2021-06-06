@@ -1,7 +1,14 @@
+image: gcc:11
 
 stages:
+  - prepare
   - build
   - test
+
+install-cunit:
+  stage: prepare
+  script:
+    - apt-get install cunit
 
 build-code-job:
   stage: build
