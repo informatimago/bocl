@@ -12,9 +12,10 @@ test_reader_LIBS = -L../sources -lbocl
 
 test_ci_SRCS = test_ci.c
 test_ci_LIBS = 
+# $(test_ci_SRCS) \
+#
 
 all_SRCS = \
-	$(test_ci_SRCS) \
 	$(test_reader_SRCS) 
 
 INCLUDES    += -I/opt/local/include -I../sources
@@ -25,14 +26,14 @@ RUNLIBS     += $(shell echo $$(pwd)/../sources)
 
 .PHONY: clean deps build test tests $(RUN_TARGETS)
 
+build: deps $(LIBBOCL) $(BOCL) $(PROGRAMS)
+tests: deps $(RUN_TARGETS)
+test:  deps $(RUN_TARGETS)
+
 include ../sources/common.mk
 deps:   $(all_SRCS:%.c=%.d)
 include $(all_SRCS:%.c=%.d)
 
-build: deps $(LIBBOCL) $(BOCL) $(PROGRAMS)
-
-tests: $(RUN_TARGETS)
-test:  $(RUN_TARGETS)
 
 clean:
 	@ printf "# Removing object files and target\n"
