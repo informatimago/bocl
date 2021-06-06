@@ -82,27 +82,27 @@ static struct {
     const char* description;
 }  options[]={
     /* Note: we've mixed and merged options from ccl and clisp; other variants may be suggested. */
-    {{"-h","--help",NULL},                  &do_help,    none, {NULL},                                    "print this text"},
-    {{"-V","--version",NULL},               &do_version, none, {NULL},                                    "print (LISP-IMPLEMENTATION-VERSION) and exit"},
+    {{"-h","--help",NULL},                  &do_help,    none, {.name=NULL},                              "print this text"},
+    {{"-V","--version",NULL},               &do_version, none, {.name=NULL},                              "print (LISP-IMPLEMENTATION-VERSION) and exit"},
     {{"-E",NULL},                           NULL,        strg, {"encoding",{.string=&all_encoding}},      "set encodings"},
     {{"-Eterminal",NULL},                   NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"--terminal-encoding",NULL},          NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
-    {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {NULL},                                    "suppress loading of default init file ~/.boclrc"},
-    {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {NULL},                                    "if --batch, also suppress printing of heralds, prompts."},
-    {{"-b","--batch",NULL},                 &do_batch,   none, {NULL},                                    "exit when EOF on *STANDARD-INPUT*"},
-    {{"--verbose",NULL},                    &do_verbose, none, {NULL},                                    "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
-    {{"--print",NULL},                      &do_print,   none, {NULL},                                    "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
-    {{"--dump",NULL},                       &do_dump,    none, {NULL},                                    "dumps the heap"},/* TODO: put that in expressions_and_loads */
-    {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {NULL},                                    "obscure option for running under GDB"},
+    {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {.name=NULL},                              "suppress loading of default init file ~/.boclrc"},
+    {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {.name=NULL},                              "if --batch, also suppress printing of heralds, prompts."},
+    {{"-b","--batch",NULL},                 &do_batch,   none, {.name=NULL},                              "exit when EOF on *STANDARD-INPUT*"},
+    {{"--verbose",NULL},                    &do_verbose, none, {.name=NULL},                              "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
+    {{"--print",NULL},                      &do_print,   none, {.name=NULL},                              "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
+    {{"--dump",NULL},                       &do_dump,    none, {.name=NULL},                              "dumps the heap"},/* TODO: put that in expressions_and_loads */
+    {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {.name=NULL},                              "obscure option for running under GDB"},
     {{"-on-error",NULL},                    NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
     {{"-i","--init",NULL},                  NULL,        elst, {"file",{.list=&initfiles}},               "load initfile (can be repeated)"},
     {{"-x","-e","--eval",NULL},             NULL,        elst, {"form",{.list=&expressions_and_loads}},   "evaluate form (may need to quote form in shell)"},
     {{"-l","--load",NULL},                  NULL,        load, {"file",{.list=&expressions_and_loads}},   "load file"},
     {{"-p","--package",NULL},               NULL,        strg, {"package",{.string=&package}},            "start in the package"},
-    {{"-repl","--repl",NULL},               &do_repl,    none, {NULL},                                    "enter the interactive read-eval-print loop when done (default)"},
-    {{"-quit","--quit",NULL},               &do_quit,    none, {NULL},                                    "quit when argument processing is done"},
-    {{"-w","--wait",NULL},                  &do_wait,    none, {NULL},                                    "wait for a keypress after program termination"},
-    {{NULL},NULL,none,{NULL},NULL}};
+    {{"-repl","--repl",NULL},               &do_repl,    none, {.name=NULL},                              "enter the interactive read-eval-print loop when done (default)"},
+    {{"-quit","--quit",NULL},               &do_quit,    none, {.name=NULL},                              "quit when argument processing is done"},
+    {{"-w","--wait",NULL},                  &do_wait,    none, {.name=NULL},                              "wait for a keypress after program termination"},
+    {{NULL},NULL,none,{.name=NULL},NULL}};
 
 static void print_spaces(size_t nspaces){
     const char* buffer="                                        ";
@@ -230,8 +230,8 @@ static void process_options(int argc,char** argv){
               case load:
                   string_list_push(generate_load_form(argv[i]),options[k].argument.variable.list);
                   break;
+              case none: /* fall thru */
               default:
-                  /* none */
                   break;}}
         i++;}
     /* Some post processing: */

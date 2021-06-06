@@ -28,12 +28,67 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
 LD_SANITIZE_FLAGS =
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
+# Not known (to clang):
+GCC_WARN_FLAGS = \
+	-Walloc-zero \
+	-Warith-conversion \
+	-Warray-parameter=2 \
+	-Wduplicated-branches \
+	-Wduplicated-cond \
+	-Wformat-signedness \
+	-Wformat-truncation \
+	-Wfree-nonheap-object \
+	-Wjump-misses-init \
+	-Wlogical-op \
+	-Wshift-overflow=2 \
+	-Wstringop-overflow=4 \
+	-Wswitch-unreachable \
+	-Wtrampolines \
+	-Wunsafe-loop-optimizations \
+	-Wunused-but-set-variable \
+
+
 # -Werror
-WARN_FLAGS        = -Wall -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align \
-					-Wwrite-strings -Wconversion  -Wstrict-prototypes -Wmissing-prototypes \
-					-Wmissing-declarations -Wredundant-decls -Wnested-externs -Winline \
-					\
-					-Wno-unused-parameter
+WARN_FLAGS = \
+	-Wall -Wpedantic -Wextra \
+	-Waggregate-return \
+	-Walloca \
+	-Warray-bounds \
+	-Wbad-function-cast \
+	-Wcast-align \
+	-Wcast-qual \
+	-Wconversion  \
+	-Wconversion \
+	-Wdangling-else \
+	-Wdate-time \
+	-Wexpansion-to-defined \
+	-Wformat-nonliteral \
+	-Wformat-security \
+	-Wframe-address \
+	-Winline \
+	-Wmissing-declarations \
+	-Wmissing-include-dirs \
+	-Wmissing-prototypes \
+	-Wnested-externs \
+	-Wnull-dereference \
+	-Woverlength-strings \
+	-Wpointer-arith \
+	-Wredundant-decls \
+	-Wshadow \
+	-Wstack-protector \
+	-Wstrict-prototypes \
+	-Wswitch-default \
+	-Wswitch-enum \
+	-Wundef \
+	-Wunused \
+	-Wunused-const-variable \
+	-Wunused-local-typedefs \
+	-Wunused-macros \
+	-Wunused-parameter \
+	-Wwrite-strings \
+	\
+	-Wno-zero-length-array
+
 
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
 

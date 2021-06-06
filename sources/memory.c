@@ -373,7 +373,7 @@ void memory_dump(FILE* out){
                  if(!free_block_p(block)){
                      fprintf(out,"          objcount            %12"BH_FORMAT"\n",block_objcount(block));
                      for(uword i=0;i<block_objcount(block);i++){
-                         fprintf(out,"          object[%2"UWORD_FORMAT"]      %16p\n",i,block->blocks[i]);}}
+                         fprintf(out,"          object[%2"UWORD_FORMAT"]      %16p\n",i,(void*)block->blocks[i]);}}
                  fprintf(out,"          /end            %16p\n\n",(void*)next_block(block));
                  block=next_block(block);}}}}
 

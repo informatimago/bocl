@@ -46,7 +46,7 @@ void simple_test_finalize(unsigned int* failure_count){
 #endif
 
 
-void simple_test_assert(const char* file, int line, const char* expression, eq_pr eq,Ref expected, Ref value, bool result){
+void simple_test_assert(const char* file, int line, const char* expression,unused eq_pr eq,Ref expected, Ref value, bool result){
     if(!result){
         Ref out=variable_value(S(*STANDARD-OUTPUT*));
         printf("%s:%d: %s FAILED\n",file,line,expression);

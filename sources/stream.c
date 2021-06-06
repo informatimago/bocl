@@ -12,11 +12,11 @@
 
 
 Ref stream_open(Ref filespec,
-                    Ref direction,
-                    Ref element_type,
-                    Ref if_exists,
-                    Ref if_does_not_exist,
-                    Ref external_format){
+                Ref direction,
+                Ref element_type,
+                unused Ref if_exists,
+                Ref if_does_not_exist,
+                Ref external_format){
     Ref path;
     if(typep(filespec,PHYSICAL_PATHNAME_Class)) {
         path=filespec;}

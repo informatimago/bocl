@@ -5,6 +5,9 @@
 #include "data.h"
 #include "printer.h"
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+
 void make_constant_variable(Ref symbol){
     if(special_variable_p(symbol)){
         ERROR("Cannot make constant a special variable %s",
@@ -26,6 +29,8 @@ void make_special_variable(Ref symbol){
 
 bool special_variable_p(Ref symbol){
     return !nullp(getf(symbol_plist(symbol),S($SPECIAL),S(NIL)));}
+
+#pragma GCC diagnostic pop
 
 Ref define_constant(Ref symbol,Ref value){
     symbol_set_value(symbol,value);

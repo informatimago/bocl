@@ -176,9 +176,13 @@ Ref gun(void){
    /* gun::res is live (for the FOO var reference) */}
 #+END_SRC
 
-* Error Management
-** Non-Local Exits from C Functions
+* Environments
 
+** Dynamic binding
+
+** Lexical Environment
+
+** Non-Local Exits from C Functions
 
 #+BEGIN_SRC lisp
 (defun f (exit)

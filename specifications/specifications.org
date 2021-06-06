@@ -154,6 +154,7 @@ operators of the kernel with normal CL operators (notably to deal with
 genericity, eg CL:+ dispatches to kernel:+/i (integer) or kernel:+/f
 (floating-point) or bocl:+/c (complex), etc).
 
+Note: it is not planed to support threads or lisp processes.
 
 *** Usage
 

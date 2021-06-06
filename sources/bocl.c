@@ -12,6 +12,7 @@
 Ref bocl_eval(Ref sexp){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));
    princ(T(";; The Mighty Eval Function is not there yet, so your sexps are safe!"),out);
+   print(sexp,out);
    terpri(out);
    return S(NIL);}
 
@@ -95,7 +96,7 @@ void bocl_call(Ref fname,Ref arguments){
                  arguments,
                  &results);
     const char* sep="--> ";
-    for(int i=0;i<results.count;i++){
+    for(uword i=0;i<results.count;i++){
         printf("%s",sep);
         sep="    ";
         prin1(results.values[i],out);

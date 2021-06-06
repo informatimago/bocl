@@ -1114,7 +1114,8 @@ Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
 
 Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
     if(characterp(on_error_o)){
-        (*on_error)=(on_error_t)integer_value(character_code(on_error_o));
+        word value=integer_value(character_code(on_error_o));
+        (*on_error)=(on_error_t)value;
         return on_error_o;}
     else if(on_error_o==K(ERROR)){
         (*on_error)=on_error_error;
@@ -1247,12 +1248,13 @@ Ref string_stream_new(FILE* memstream){
 
 Ref stream_input_string(Ref string,Ref start,Ref end){
     uword len   = string_length(string);
+    word slen   = CHECK_UWORD_TO_WORD(len);
     word istart = (nullp(start)) ?0 : integer_value(start);
-    word iend   = (nullp(end)) ? CHECK_UWORD_TO_WORD(len) : integer_value(end);
-    if((istart<0) || (len<istart)){
+    word iend   = (nullp(end)) ? slen : integer_value(end);
+    if((istart<0) || (slen<istart)){
         ERROR("START = %"WORD_FORMAT" is beyond length of string = %"WORD_FORMAT"",istart,len);}
-    if(len<iend){
-        ERROR("END = %"WORD_FORMAT" is beyond length of string = %"WORD_FORMAT"",iend,len);}
+    if(slen<iend){
+        ERROR("END = %"WORD_FORMAT" is beyond length of string = %"WORD_FORMAT"",iend,slen);}
     if(iend<istart){
         ERROR("END = %"WORD_FORMAT" is before START = %"WORD_FORMAT"",iend,istart);}
     char* buffer = (char*)string_octets(string)+istart;
@@ -1450,7 +1452,7 @@ Ref pop_mandatory_argument(Ref function,Ref* arguments){
         free(fname);}
     return pop(arguments);}
 
-Ref pop_optional_argument(Ref function,Ref* arguments,Ref default_value){
+Ref pop_optional_argument(unused Ref function,Ref* arguments,Ref default_value){
     return nullp(*arguments)
             ? default_value
             : pop(arguments);}

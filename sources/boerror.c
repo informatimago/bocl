@@ -25,7 +25,10 @@ _Noreturn void fatal(const char* fname,const char* message_format,...){
     va_list ap;
     fprintf(stderr,"\nIn %s:\n",fname);
     va_start(ap,message_format);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
     vfprintf(stderr,message_format,ap);
+#pragma GCC diagnostic pop
     va_end(ap);
     fprintf(stderr,"\n\n");
     exit(EX_SOFTWARE);}
@@ -35,7 +38,10 @@ _Noreturn void error(const char* fname,const char* message_format,...){
     va_list ap;
     fprintf(stderr,"\nIn %s:\n",fname);
     va_start(ap,message_format);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
     vfprintf(stderr,message_format,ap);
+#pragma GCC diagnostic pop
     va_end(ap);
     fprintf(stderr,"\n\n");
     exit(EX_DATAERR);}
@@ -64,7 +70,7 @@ uword check_size_to_uword(const char* fname,size_t size){
           size,UWORD_MAX);}
 
 uword check_long_to_uword(const char* fname,long value){
-    if((0<=value) && (value<UWORD_MAX)){
+    if((0<=value) /* && (value<UWORD_MAX) always true */){
         return (uword)value;}
     error(fname,"Value long %l too big for an uword (max = %"UWORD_FORMAT")",
           value,UWORD_MAX);}
