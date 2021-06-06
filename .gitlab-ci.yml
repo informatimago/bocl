@@ -8,6 +8,7 @@ build-code-job:
   variables:
     DEFINES: -DGITLAB_CI=1
   script:
+    - env
     - echo "Compile the bocl executable:"
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
