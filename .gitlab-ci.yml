@@ -13,6 +13,7 @@ build-code-job:
   artifacts:
     paths:
       - sources/bocl
+      - tests/test_reader
     expire_in: 3 days
 
 test-code-job:
@@ -25,8 +26,8 @@ test-code-job:
 cunit:
   stage: test
   script:
-    - ./test_reader
+    - tests/test_reader
   artifacts:
     when: always
     reports:
-      junit: ./test_reader-cunit-test.xml
+      junit: tests/test_reader-cunit-test.xml
