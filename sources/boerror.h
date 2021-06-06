@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "kernel_types.h"
 
-#ifdef strict_iso_c
+#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
 /* TODO: we could also remove the fname parameter altogether */
 #ifndef __FUNCTION__
 #define __FUNCTION__ "some function"

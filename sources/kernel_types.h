@@ -80,12 +80,19 @@ typedef struct FuncallableFunctionClass FuncallableFunctionClass;
 #define FREE_BLOCK     UWORD_MAX
 #endif
 
+#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
+#define VARRAY(field)      field[1]
+#define VARRAY_MIN(count)  (((count)<=0)?1:(count))
+#else
+#define VARRAY(field)      field[0]
+#define VARRAY_MIN(count)  (count)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wzero-length-array"
+#endif
 
 typedef struct Block{
     BLOCK_HEADER;
-    struct Block* blocks[0];
+    struct Block* VARRAY(blocks);
 } Block;
 
 typedef struct Object* Ref;
@@ -97,18 +104,18 @@ typedef struct Object {
 
 typedef struct VectorOfObject {
     BLOCK_HEADER;
-    Ref elements[0]; /* length is objcount in the block_header */
+    Ref VARRAY(elements); /* length is objcount in the block_header */
 } VectorOfObject;
 
 typedef struct VectorOfUWord {
     BLOCK_HEADER;
-    uword elements[0];  /* length is (size/8-1) the block_header */
+    uword VARRAY(elements);  /* length is (size/8-1) the block_header */
 } VectorOfUWord;
 
 typedef struct VectorOfOctet {
     BLOCK_HEADER;
     uword length;       /* used length<=(size/8-2) */
-    octet elements[0];  /* allocated length is (size/8-2) the block_header */
+    octet VARRAY(elements);  /* allocated length is (size/8-2) the block_header */
 } VectorOfOctet;
 
 typedef struct Character {
@@ -131,17 +138,22 @@ typedef struct Array {
     BLOCK_HEADER;
     Ref element_type;
     VectorOfObject* elements;
-    uword dimensions[0];
+    uword VARRAY(dimensions);
 } Array;
 
 typedef struct OctetArray {
     BLOCK_HEADER;
     Ref element_type;
     VectorOfOctet* elements;
-    uword dimensions[0];
+    uword VARRAY(dimensions);
 } OctetArray;
 
+#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
+/* --- */
+#else
 #pragma GCC diagnostic pop
+#endif
+
 
 typedef struct Cons {
     BLOCK_HEADER;

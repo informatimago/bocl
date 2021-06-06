@@ -101,7 +101,7 @@ SDKPATH      = /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
 XCODE_DEV    = $(shell xcode-select --print-path)
 ASAN_LIB_DIR = $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin
 
-CFLAGS       += $(WARN_FLAGS) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c11
+CFLAGS       += $(WARN_FLAGS) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17
 LDFLAGS      += $(LD_SANITIZE_FLAGS)
 RUNLIBS      += $(ASAN_LIB_DIR)
 INCLUDES     += 

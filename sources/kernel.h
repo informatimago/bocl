@@ -77,7 +77,6 @@ Ref keyword_intern_cstring(const char* name);
 /* BIT-VECTOR */
 
 Ref bit_vector_new_octets(uword length,octet* bits);
-bool bit_vector_equal(Ref a,Ref b);
 
 /* External-Format */
 

@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <ctype.h>
@@ -66,7 +67,7 @@ Ref make_boot_Object(Slots* slots){
 /* VectorOfObject */
 
 VectorOfObject* VectorOfObject_slots(halfword size){
-    VectorOfObject* that=allocate(sizeof(*that)+sizeof(that->elements[0])*size);
+    VectorOfObject* that=allocate(offsetof(VectorOfObject,elements)+sizeof(that->elements[0])*VARRAY_MIN(size));
     that->objcount=size;
     for(halfword i=0;i<size;i++){
         that->elements[i]=NIL_Symbol;}
@@ -75,7 +76,7 @@ VectorOfObject* VectorOfObject_slots(halfword size){
 /* VectorOfUWord */
 
 VectorOfUWord* VectorOfUWord_slots(halfword size){
-    VectorOfUWord* that=allocate(sizeof(*that)+sizeof(that->elements[0])*size);
+    VectorOfUWord* that=allocate(offsetof(VectorOfUWord,elements)+sizeof(that->elements[0])*VARRAY_MIN(size));
     memset(that->elements,CHECK_HALFWORD_TO_INT(size),sizeof(that->elements[0]));
     return that;}
 
@@ -83,7 +84,7 @@ VectorOfUWord* VectorOfUWord_slots(halfword size){
 /* VectorOfOctet */
 
 VectorOfOctet* VectorOfOctet_slots(halfword length){
-    VectorOfOctet* that=allocate(sizeof(*that)+sizeof(that->elements[0])*length);
+    VectorOfOctet* that=allocate(offsetof(VectorOfOctet,elements)+sizeof(that->elements[0])*VARRAY_MIN(length));
     that->length=length;
     memset(that->elements,CHECK_HALFWORD_TO_INT(length),sizeof(that->elements[0]));
     return that;}
@@ -93,7 +94,7 @@ VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
     if(HALFWORD_MAX<len){
         ERROR("string too long %ld",len);}
     halfword length=(halfword)len;
-    VectorOfOctet* that=allocate(sizeof(*that)+sizeof(that->elements[0])*length);
+    VectorOfOctet* that=allocate(offsetof(VectorOfOctet,elements)+sizeof(that->elements[0])*VARRAY_MIN(length));
     that->length=length;
     for(halfword i=0;i<length;i++){
         that->elements[i]=(octet)value[i];}
@@ -107,7 +108,7 @@ Array* Array_slots(Ref element_type,halfword rank,halfword* dimensions)  {
     for(halfword i=0;i<rank;i++){
         total_array_size=(halfword)(total_array_size*dimensions[i]);}
     VectorOfObject* elements=VectorOfObject_slots(total_array_size);
-    Array* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
+    Array* that=allocate(offsetof(Array,dimensions)+sizeof(that->dimensions[0])*VARRAY_MIN(rank));
     that->objcount=2;
     that->element_type=element_type;
     that->elements=elements;
@@ -125,7 +126,7 @@ OctetArray* OctetArray_slots(Ref element_type,halfword rank,halfword* dimensions
     for(halfword i=0;i<rank;i++){
         total_array_size=(halfword)(total_array_size*dimensions[i]);}
     VectorOfOctet* elements=VectorOfOctet_slots(total_array_size);
-    OctetArray* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
+    OctetArray* that=allocate(offsetof(OctetArray,dimensions)+sizeof(that->dimensions[0])*VARRAY_MIN(rank));
     that->objcount=2;
     that->element_type=element_type;
     that->elements=elements;
@@ -136,7 +137,7 @@ OctetArray* OctetArray_slots(Ref element_type,halfword rank,halfword* dimensions
 OctetArray* OctetArray_slots_cstring(Ref element_type,const char* initial_value){
     VectorOfOctet* elements=VectorOfOctet_slots_cstring(initial_value);
     halfword rank=1;
-    OctetArray* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
+    OctetArray* that=allocate(offsetof(OctetArray,dimensions)+sizeof(that->dimensions[0])*VARRAY_MIN(rank));
     that->objcount=2;
     that->element_type=element_type;
     that->elements=elements;
@@ -145,7 +146,7 @@ OctetArray* OctetArray_slots_cstring(Ref element_type,const char* initial_value)
 
 static OctetArray* OctetArray_slots_vector_of_octets(Ref element_type, VectorOfOctet* octets){
     halfword rank=1;
-    OctetArray* that=allocate(sizeof(*that)+rank*sizeof(that->dimensions[0]));
+    OctetArray* that=allocate(offsetof(OctetArray,dimensions)+sizeof(that->dimensions[0])*VARRAY_MIN(rank));
     that->objcount=2;
     that->element_type=element_type;
     that->elements=octets;
