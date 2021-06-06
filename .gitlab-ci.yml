@@ -15,4 +15,4 @@ bat-job:
   artifacts:
     when: on_success
     reports:
-      junit: tests/test_reader-cunit-test.xml
+      junit: test_reader-cunit-test.xml
