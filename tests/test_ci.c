@@ -1,4 +1,8 @@
+#ifdef CI
 #include "CUnit/CUnitCI.h"
+#else
+#include "CUnit/CUnit.h"
+#endif
 
 char *buf = NULL;
 size_t bufsize = 32;
@@ -36,7 +40,14 @@ static void test_simple_pass2(void) {
     CU_ASSERT_FATAL(2 > 1);
 }
 
+#ifdef CI
 CUNIT_CI_RUN("my-suite",
              CUNIT_CI_TEST(test_simple_pass1),
              CUNIT_CI_TEST(test_simple_pass2),
              );
+#else
+CUNIT_RUN("my-suite",
+          CUNIT_TEST(test_simple_pass1),
+          CUNIT_TEST(test_simple_pass2),
+          );
+#endif
