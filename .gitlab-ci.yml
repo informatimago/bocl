@@ -1,26 +1,22 @@
 image: gcc:11
 
 stages:
-  - prepare
   - build
   - test
-
-install-cunit:
-  stage: prepare
-  script:
-    - apt-get update  &&  apt-get install -y --no-install-recommends  libcunit1 libcunit1-dev  &&  rm -rf /var/lib/apt/lists/*
 
 build-code-job:
   stage: build
   variables:
-    DEFINES: -UGITLAB_CI
+    DEFINES:
   script:
     - echo "Dump the environment:"
     - env | sort
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
-    - ls /usr/include/
-    - ls /usr/local/include/
+    - echo "Install CUnit"
+    - apt-get update  &&  apt-get install -y --no-install-recommends  libcunit1 libcunit1-dev  &&  rm -rf /var/lib/apt/lists/*
+    - dpkg-query -L libcunit1 libcunit1-dev
+    - ls -c /usr/include/ /usr/local/include/
     - echo "Compile the bocl executable:"
     - make -k build DEFINES=${DEFINES}
   artifacts:
@@ -32,7 +28,7 @@ build-code-job:
 test-code-job:
   stage: test
   variables:
-    DEFINES: -UGITLAB_CI
+    DEFINES:
   script:
     - echo "Dump the environment:"
     - env | sort
@@ -42,7 +38,7 @@ test-code-job:
 cunit:
   stage: test
   variables:
-    DEFINES: -UGITLAB_CI
+    DEFINES:
   script:
     - tests/test_reader
   artifacts:
