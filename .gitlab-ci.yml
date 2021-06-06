@@ -8,11 +8,12 @@ build-code-job:
   variables:
     DEFINES: -DGITLAB_CI=1
   script:
+    - echo "Dump the environment:"
     - env | sort
-    - echo "Compile the bocl executable:"
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
-    - make -k build
+    - echo "Compile the bocl executable:"
+    - make -k build DEFINES=${DEFINES}
   artifacts:
     paths:
       - sources/bocl
@@ -24,9 +25,10 @@ test-code-job:
   variables:
     DEFINES: -DGITLAB_CI=1
   script:
+    - echo "Dump the environment:"
     - env | sort
     - echo "If the files are built successfully, run some tests:"
-    - make -k test DEFINES=-DGITLAB_CI=1 VERBOSE=
+    - make -k test DEFINES=${DEFINES} VERBOSE=
 
 cunit:
   stage: test
