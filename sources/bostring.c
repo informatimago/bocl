@@ -23,7 +23,7 @@ octet* octet_upcase(octet* string){
     while(*current){
         if(((97<=(*current))&&((*current)<=122))
            ||((224<=(*current))&&((*current)<=254)&&((*current)!=247))){
-            (*current)=(*current)-32;}
+            (*current)=(*current)-(octet)32;}
         current++;}
     return string;}
 

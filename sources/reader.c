@@ -113,6 +113,8 @@ static octet read_octet(Ref input_stream,bool* eof,bool* error){
                   break;
               case LF:
                   c=NEL;
+                  break;
+              default:
                   break;}}
         (*error)=false;
         (*eof)=false;}
@@ -269,7 +271,7 @@ static Ref parse_bit_vector(parser_state* parser){
         if(parser->eof){
             /* EOF, we're done with the vector, postpone EOF */
             parser->eof=false;
-            return bit_vector_new_octets(parser->length,parser->token);}
+            return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}
         switch(parser->ch){
           case '0':
           case '1':
@@ -278,7 +280,7 @@ static Ref parse_bit_vector(parser_state* parser){
               break;
           default:
               ungetc(parser->ch,stream_cstream(parser->input_stream));
-              return bit_vector_new_octets(parser->length,parser->token);}}}
+              return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}}}
 
 static Ref scan_integer(parser_state* parser){
     /* [-+]?[0-9]+\.? */
@@ -327,6 +329,8 @@ static Ref scan_float(parser_state* parser){
     switch(token[pos]){
       case '+':case '-':
           pos++;
+          break;
+      default:
           break;}
     if(token[pos]=='.'){
         pos++;
@@ -354,6 +358,8 @@ static Ref scan_float(parser_state* parser){
         switch(token[pos]){
           case'+': case'-':
               pos++;
+              break;
+          default:
               break;}
         if(!isdigit(token[pos])){
             return NIL_Symbol;}

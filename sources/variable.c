@@ -5,8 +5,10 @@
 #include "data.h"
 #include "printer.h"
 
+#ifndef GITLAB_CI
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+#endif
 
 void make_constant_variable(Ref symbol){
     if(special_variable_p(symbol)){
@@ -30,7 +32,9 @@ void make_special_variable(Ref symbol){
 bool special_variable_p(Ref symbol){
     return !nullp(getf(symbol_plist(symbol),S($SPECIAL),S(NIL)));}
 
+#ifndef GITLAB_CI
 #pragma GCC diagnostic pop
+#endif
 
 Ref define_constant(Ref symbol,Ref value){
     symbol_set_value(symbol,value);

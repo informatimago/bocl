@@ -64,23 +64,22 @@ void* check_pointer(const char* fname,void* pointer){
     fatal(fname,"FATAL ERROR: OUT-OF-MEMORY");}
 
 uword check_size_to_uword(const char* fname,size_t size){
-    if((0<=size) && (size<UWORD_MAX)){
+    if(/* (0<=size) && */ (size<UWORD_MAX)){
         return (uword)size;}
     error(fname,"Size %z too big for an uword (max = %"UWORD_FORMAT")",
           size,UWORD_MAX);}
+
+halfword check_size_to_halfword(const char* fname,size_t size){
+    if(/* (0<=size) && */ (size<HALFWORD_MAX)){
+        return (halfword)size;}
+    error(fname,"Size %z too big for a halfword (max = %"HALFWORD_FORMAT")",
+          size,HALFWORD_MAX);}
 
 uword check_long_to_uword(const char* fname,long value){
     if((0<=value) /* && (value<UWORD_MAX) always true */){
         return (uword)value;}
     error(fname,"Value long %l too big for an uword (max = %"UWORD_FORMAT")",
           value,UWORD_MAX);}
-
-
-halfword check_size_to_halfword(const char* fname,size_t size){
-    if((0<=size) && (size<HALFWORD_MAX)){
-        return (halfword)size;}
-    error(fname,"Size %z too big for a halfword (max = %"HALFWORD_FORMAT")",
-          size,HALFWORD_MAX);}
 
 size_t check_word_to_size(const char* fname,word value){
     if((0<=value) && (((size_t)WORD_MAX<SIZE_MAX) || (value<(word)SIZE_MAX))){
@@ -101,7 +100,7 @@ halfword check_uword_to_halfword(const char* fname,uword value){
           value,HALFWORD_MAX);}
 
 int check_halfword_to_int(const char* fname,halfword value){
-    if((0<=value) && ((HALFWORD_MAX<INT_MAX) || (value<(word)INT_MAX))){
+    if(/* (0<=value) && */ ((HALFWORD_MAX<INT_MAX) || (value<(word)INT_MAX))){
         return (int)value;}
     error(fname,"Half word %"HALFWORD_FORMAT" too big for a int (max = %zu)",
           value,INT_MAX);}

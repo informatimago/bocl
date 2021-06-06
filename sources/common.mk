@@ -28,7 +28,7 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
 LD_SANITIZE_FLAGS =
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
-# Not known (to clang):
+# Not known (to clang), or the gcc on gitlab.
 GCC_WARN_FLAGS = \
 	-Walloc-zero \
 	-Warith-conversion \
@@ -46,6 +46,8 @@ GCC_WARN_FLAGS = \
 	-Wtrampolines \
 	-Wunsafe-loop-optimizations \
 	-Wunused-but-set-variable \
+	\
+	-Wno-zero-length-array
 
 
 # -Werror
@@ -86,8 +88,6 @@ WARN_FLAGS = \
 	-Wunused-macros \
 	-Wunused-parameter \
 	-Wwrite-strings \
-	\
-	-Wno-zero-length-array
 
 
 DEBUG_FLAGS       = -g -g3 -ggdb -O0

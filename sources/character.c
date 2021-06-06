@@ -37,7 +37,9 @@ bool constituentp(octet ch){
       case '\\':
       case '`':
       case '|':
-          return false;}
+          return false;
+      default:
+          break;}
     if((33<=ch)&&(ch<127)){
         return true;}
     return false;}
