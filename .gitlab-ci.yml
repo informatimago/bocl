@@ -10,12 +10,8 @@ build-code-job:
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
     - make -k build
-    - make -k documents
   artifacts:
     paths:
-      - specifications/specifications.pdf
-      - design/design.pdf
-      - documentation/documentation.pdf
       - sources/bocl
     expire_in: 3 days
 
