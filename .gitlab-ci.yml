@@ -29,7 +29,7 @@ test-code-job:
     - echo "Dump the environment:"
     - env | sort
     - echo "If the files are built successfully, run some tests:"
-    - make -k test VERBOSE= # DEFINES=${DEFINES}
+    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test VERBOSE= # DEFINES=${DEFINES}
 
 cunit:
   stage: test
