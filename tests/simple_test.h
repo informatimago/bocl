@@ -3,6 +3,8 @@
 
 #ifdef GITLAB_CI
 
+/* https://cunity.gitlab.io/cunit/ */
+
 #include "CUnit/CUnitCI.h"
 
 #else
