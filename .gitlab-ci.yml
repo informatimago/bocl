@@ -9,10 +9,14 @@ build-code-job:
     - echo "Compile the bocl executable:"
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
-    - make -k bocl
+    - make -k build
+    - make -k documents
   artifacts:
     paths:
-      - src/bocl
+      - specifications/specifications.pdf
+      - design/design.pdf
+      - documentation/documentation.pdf
+      - sources/bocl
     expire_in: 3 days
 
 test-code-job:
@@ -20,4 +24,4 @@ test-code-job:
   script:
     - env
     - echo "If the files are built successfully, run some tests:"
-    - make -k test GITLAB_CI=yes VERBOSE=
+    - make -k test DEFINES=-DGITLAB_CI=1 VERBOSE=

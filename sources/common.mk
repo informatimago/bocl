@@ -5,11 +5,11 @@ VERBOSE=@
 SANITIZE=
 
 ifdef DEBUG
-DEFINES    = -DDEBUG=yes
-DEBUG_SRCS = debug.c
+DEFINES    += -DDEBUG=yes
+DEBUG_SRCS += debug.c
 else
-DEFINES    =
-DEBUG_SRCS =
+DEFINES    +=
+DEBUG_SRCS +=
 endif
 
 
