@@ -4,13 +4,15 @@
 #include "simple_test.h"
 #include "variable.h"
 
+#ifndef GITLAB_CI
+
 void simple_test_initialize(const char* name){
     CU_set_error_action(CUEA_ABORT);    
     if (CUE_SUCCESS != CU_initialize_registry()){                  
         simple_test_process_error(CU_get_error());}               
     CU_set_output_filename(name);}
 
-void simple_test_process_error(CU_ErrorCode error){
+void simple_test_process_error(unsigned int error){
     if(CUE_SUCCESS!=error){
         fprintf(stderr,"%s\n",CU_get_error_msg());
         exit(EX_SOFTWARE);}}
@@ -20,13 +22,6 @@ void* simple_test_check(void* object){
         CU_cleanup_registry();
         simple_test_process_error(CU_get_error());}
     return object;}
-
-void simple_test_assert(const char* file, int line, const char* expression, eq_pr eq,Ref expected, Ref value, bool result){
-    if(!result){
-        Ref out=variable_value(S(*STANDARD-OUTPUT*));
-        printf("%s:%d: %s FAILED\n",file,line,expression);
-        printf("    expected   = ");prin1(expected,out);terpri(out);
-        printf("    expression = ");prin1(value,out);terpri(out);}}
 
 void simple_test_finalize(unsigned int* failure_count){
     /* Run all tests using the CUnit Basic interface */
@@ -47,5 +42,16 @@ void simple_test_finalize(unsigned int* failure_count){
     (*failure_count)=CU_get_number_of_failure_records();
     CU_cleanup_registry();
     simple_test_process_error(CU_get_error());}
+
+#endif
+
+
+void simple_test_assert(const char* file, int line, const char* expression, eq_pr eq,Ref expected, Ref value, bool result){
+    if(!result){
+        Ref out=variable_value(S(*STANDARD-OUTPUT*));
+        printf("%s:%d: %s FAILED\n",file,line,expression);
+        printf("    expected   = ");prin1(expected,out);terpri(out);
+        printf("    expression = ");prin1(value,out);terpri(out);}}
+
 
 /**** THE END ****/

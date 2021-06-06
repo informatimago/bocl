@@ -18,5 +18,6 @@ build-code-job:
 test-code-job:
   stage: test
   script:
+    - env
     - echo "If the files are built successfully, run some tests:"
-    - make -k test VERBOSE=
+    - make -k test GITLAB_CI=yes VERBOSE=
