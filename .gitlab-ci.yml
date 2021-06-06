@@ -12,6 +12,8 @@ build-code-job:
     - env | sort
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
+    - ls /usr/include/
+    - ls /usr/local/include/
     - echo "Compile the bocl executable:"
     - make -k build DEFINES=${DEFINES}
   artifacts:
