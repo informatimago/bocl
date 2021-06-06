@@ -8,7 +8,7 @@ build-code-job:
   variables:
     DEFINES: -DGITLAB_CI=1
   script:
-    - env
+    - env | sort
     - echo "Compile the bocl executable:"
     - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
     - cpp -dM  test.c | sort
@@ -24,7 +24,7 @@ test-code-job:
   variables:
     DEFINES: -DGITLAB_CI=1
   script:
-    - env
+    - env | sort
     - echo "If the files are built successfully, run some tests:"
     - make -k test DEFINES=-DGITLAB_CI=1 VERBOSE=
 
