@@ -1,3 +1,5 @@
+default:
+  image: debian
 
 stages:
   - build
