@@ -1,40 +1,22 @@
 image: gcc:11
 
 stages:
-  - build
-  - test
+  - build-and-test
 
-build-code-job:
-  stage: build
+bat-job:
+  stage: build-and-test
   script:
-    - echo "Dump the environment:"
-    - env | sort
-    - printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
-    - cpp -dM  test.c | sort
+    - # echo "Dump the environment:"
+    - # env | sort
+    - # printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
+    - # cpp -dM  test.c | sort
     - echo "Install CUnit"
     - apt-get update  &&  apt-get install -y --no-install-recommends  libcunit1 libcunit1-dev  &&  rm -rf /var/lib/apt/lists/*
     - dpkg-query -L libcunit1 libcunit1-dev
-    - ls -c /usr/include/ /usr/local/include/
+    - # ls -c /usr/include/ /usr/local/include/
     - echo "Compile the bocl executable:"
-    - make -k build VERBOSE=   # DEFINES=${DEFINES}
-  artifacts:
-    paths:
-      - sources/bocl
-      - tests/test_reader
-    expire_in: 3 days
-
-test-code-job:
-  stage: test
-  script:
-    - echo "Dump the environment:"
-    - env | sort
-    - echo "If the files are built successfully, run some tests:"
-    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test VERBOSE= # DEFINES=${DEFINES}
-
-cunit:
-  stage: test
-  script:
-    - tests/test_reader
+    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k build # VERBOSE= # DEFINES=${DEFINES}
+    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test  # VERBOSE= # DEFINES=${DEFINES}
   artifacts:
     when: always
     reports:
