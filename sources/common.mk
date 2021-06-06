@@ -28,8 +28,8 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
 LD_SANITIZE_FLAGS =
 NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
-# Not known (to clang), or the gcc on gitlab.
-GCC_WARN_FLAGS = \
+
+WARN_GCC = \
 	-Walloc-zero \
 	-Warith-conversion \
 	-Warray-parameter=2 \
@@ -49,24 +49,26 @@ GCC_WARN_FLAGS = \
 	\
 	-Wno-zero-length-array
 
+WARN_CLANG = \
+	-Walloca \
+	-Wdangling-else \
+	-Wexpansion-to-defined \
+	-Wframe-address \
+	-Wunused-const-variable
 
 # -Werror
 WARN_FLAGS = \
 	-Wall -Wpedantic -Wextra \
 	-Waggregate-return \
-	-Walloca \
 	-Warray-bounds \
 	-Wbad-function-cast \
 	-Wcast-align \
 	-Wcast-qual \
 	-Wconversion  \
 	-Wconversion \
-	-Wdangling-else \
 	-Wdate-time \
-	-Wexpansion-to-defined \
 	-Wformat-nonliteral \
 	-Wformat-security \
-	-Wframe-address \
 	-Winline \
 	-Wmissing-declarations \
 	-Wmissing-include-dirs \
@@ -83,7 +85,6 @@ WARN_FLAGS = \
 	-Wswitch-enum \
 	-Wundef \
 	-Wunused \
-	-Wunused-const-variable \
 	-Wunused-local-typedefs \
 	-Wunused-macros \
 	-Wunused-parameter \
@@ -101,7 +102,7 @@ SDKPATH      = /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
 XCODE_DEV    = $(shell xcode-select --print-path)
 ASAN_LIB_DIR = $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin
 
-CFLAGS       += $(WARN_FLAGS) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17
+CFLAGS       += $(WARN_FLAGS) $(WARN_CLANG) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=iso9899:2018  -D_POSIX_C_SOURCE=200809L
 LDFLAGS      += $(LD_SANITIZE_FLAGS)
 RUNLIBS      += $(ASAN_LIB_DIR)
 INCLUDES     +=
@@ -115,7 +116,8 @@ SHARED       = -dylib
 
 else
 
-CFLAGS    += $(WARN_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17
+CC        = gcc
+CFLAGS    += $(WARN_FLAGS) $(WARN_GCC) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17 -D_POSIX_C_SOURCE=200809L
 LDFLAGS   +=
 RUNLIBS   +=
 INCLUDES  +=

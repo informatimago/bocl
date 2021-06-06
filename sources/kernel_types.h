@@ -1,6 +1,5 @@
 #ifndef kernel_types_h
 #define kernel_types_h
-#define _POSIX_SOURCE
 #include <unistd.h> // import _POSIX_V6_LP64_OFF64
 #include <stdio.h>
 #include <stdint.h>
