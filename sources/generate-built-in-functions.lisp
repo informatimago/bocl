@@ -68,6 +68,7 @@
   (concatenate 'string "def_" (substitute #\_ #\- (string-downcase pname))))
 
 (defvar *header* :source)
+(defvar *kernel-functions* nil)
 
 (defun genlist (object)
   (etypecase object
@@ -106,34 +107,39 @@
       (ecase *header*
 
         ((:kernel-functions)
-         (cond
-           ((equal values '())         (write-string "void "))
-           ((equal values '(boolean))  (write-string "bool "))
-           ((equal values '(uword))    (write-string "uword "))
-           ((equal values '(word))     (write-string "word "))
-           ((equal values '(t))        (write-string "Ref "))
-           (t (error "Multiple-values not supported yet. ~S" values)))
-         (format t "~A(" (if cfun (c-fun-name cfun) (c-fun-name fname)))
-         (let ((sep ""))
-           (dolist (man mandatories)
-             (format t "~ARef ~A" sep (c-par-name man))
-             (setf sep ", "))
-           (dolist (opt optionals)
-             (let ((opt-name  (if (listp opt)
-                                  (first opt)
-                                  opt)))
-               (format t "~ARef ~A" sep (c-par-name opt-name))
-               (setf sep ", ")))
-           (when rest
-             (format t "~ARef ~A" sep (c-par-name rest))
-             (setf sep ", "))
-           (dolist (key keywords)
-             (let ((key-name (first key)))
-               (format t "~ARef ~A" sep (c-par-name key-name))
-               (setf sep ", ")))
-           (when (string= sep "")
-             (write-string "void")))
-         (write-line ");"))
+         (let ((k-fun-name (if cfun (c-fun-name cfun) (c-fun-name fname))))
+           (if (member k-fun-name *kernel-functions* :test (function equal))
+               (warn "Function ~A is already generated.~%" k-fun-name)
+               (progn
+                 (push k-fun-name *kernel-functions*)
+                 (cond
+                   ((equal values '())         (write-string "void "))
+                   ((equal values '(boolean))  (write-string "bool "))
+                   ((equal values '(uword))    (write-string "uword "))
+                   ((equal values '(word))     (write-string "word "))
+                   ((equal values '(t))        (write-string "Ref "))
+                   (t (error "Multiple-values not supported yet. ~S" values)))
+                 (format t "~A(" k-fun-name)
+                 (let ((sep ""))
+                   (dolist (man mandatories)
+                     (format t "~ARef ~A" sep (c-par-name man))
+                     (setf sep ", "))
+                   (dolist (opt optionals)
+                     (let ((opt-name  (if (listp opt)
+                                          (first opt)
+                                          opt)))
+                       (format t "~ARef ~A" sep (c-par-name opt-name))
+                       (setf sep ", ")))
+                   (when rest
+                     (format t "~ARef ~A" sep (c-par-name rest))
+                     (setf sep ", "))
+                   (dolist (key keywords)
+                     (let ((key-name (first key)))
+                       (format t "~ARef ~A" sep (c-par-name key-name))
+                       (setf sep ", ")))
+                   (when (string= sep "")
+                     (write-string "void")))
+                 (write-line ");")))))
 
         ((:symbols)
          (format t "    {   Ref fname=S(~a);~%" fname)
@@ -250,7 +256,7 @@
          (write-line "    delete_from_rootset(function);")
          (write-line "}")
          (terpri))
-))))
+        ))))
 
 ;;;
 ;;; Note: generate-built-in-functions may generate duplicate declarations in kernel_functions.h
@@ -261,7 +267,8 @@
 
 (defun generate-built-in-functions ()
   (flet ((generate (header)
-           (let ((*header* header))
+           (let ((*header* header)
+                 (*kernel-functions* '()))
 
              (generate-kernel-function 'kernel-rootset '())
 
