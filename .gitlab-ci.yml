@@ -16,5 +16,4 @@ bat-job:
     when: on_success
     reports:
       junit: test_reader-Results.xml
-      junit: test_reader-Listing.xml 
 
