@@ -21,10 +21,6 @@
 #include "reader.h"
 #include "variable.h"
 
-/* ============================================================ */
-/* We want to unit test the internals: */
-#include "reader.c"
-/* ============================================================ */
 
 TEST_SUITE_SETUP(reader_init){
     kernel_initialize();
