@@ -1,22 +1,13 @@
 all:build
 
+PROGRAMS = print_types bocl
 
-all_SRCS = $(common_SRCS) \
-	main.c
-
-libbocl_SRCS = $(untested_SRCS) $(tested_SRCS)
-libbocl_LIBS = -lm -lc
-libbocl_INCS =
-
-tested_SRCS = \
-	reader.c
-
-untested_SRCS = \
+common_SRCS = \
 	bocl.c string_list.c \
 	kernel.c kernel_objects.c memory.c boerror.c \
 	built_in_functions.c \
 	variable.c cons.c data.c \
-	stream.c  printer.c filename.c \
+	stream.c reader.c printer.c filename.c \
 	character.c bostring.c bit_vector.c vector.c \
 	integer.c float.c \
 	\
@@ -24,7 +15,13 @@ untested_SRCS = \
 	\
 	$(DEBUG_SRCS)
 
-bocl_SRCS        = main.c
+all_SRCS = main.c $(common_SRCS)
+
+libbocl_SRCS 	 = $(common_SRCS)
+libbocl_LIBS 	 = -lm -lc
+libbocl_INCS 	 =
+
+bocl_SRCS        = main.c $(common_SRCS)
 bocl_LIBS        = -L. -lbocl -lm -lc
 bocl_INCS        = -I.
 
@@ -41,11 +38,11 @@ include common.mk
 deps:   $(all_SRCS:%.c=%.d)
 include $(all_SRCS:%.c=%.d)
 
-build: deps print_types libbocl.$(SO) bocl
+build: deps libbocl.$(SO) $(PROGRAMS)
 
 clean:
 	@ printf "# Removing object files and target\n"
-	-$(VERBOSE) rm -rf bocl libbocl.* *.o *.d *.[ld]x{32,64}fsl *.dSYM
+	-$(VERBOSE) rm -rf  libbocl.* $(PROGRAMS) *.o *.d *.[ld]x{32,64}fsl *.dSYM
 
 prepare-macos:
 	- sudo xcode-select --install
@@ -82,9 +79,9 @@ libbocl.$(SO): $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
 	$(VERBOSE) $(LINKLIB) -o $@ $(libbocl_SRCS:%.c=%.o)
 
 # for now, we link all the bocl objects into bocl:
-bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) $(libbocl_SRCS:%.c=%.o)
+bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
-	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)  $(libbocl_SRCS:%.c=%.o)
+	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)
 
 #bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) libbocl.$(SO)
 #	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
