@@ -6,18 +6,14 @@ stages:
 bat-job:
   stage: build-and-test
   script:
-    - # echo "Dump the environment:"
-    - # env | sort
-    - # printf '#define _POSIX_SOURCE\n#include <unistd.h>\n' > test.c
-    - # cpp -dM  test.c | sort
     - echo "Install CUnit"
     - apt-get update  &&  apt-get install -y --no-install-recommends  libcunit1 libcunit1-dev  &&  rm -rf /var/lib/apt/lists/*
     - dpkg-query -L libcunit1 libcunit1-dev
-    - # ls -c /usr/include/ /usr/local/include/
     - echo "Compile the bocl executable:"
     - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k build # VERBOSE= # DEFINES=${DEFINES}
     - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test  # VERBOSE= # DEFINES=${DEFINES}
   artifacts:
-    when: always
+    when: on_success
     reports:
-      junit: tests/test_reader-cunit-test.xml
+      junit: test_reader-Results.xml
+
