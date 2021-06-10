@@ -3,6 +3,7 @@
 #include "kernel.h"
 #include "boerror.h"
 #include "cons.h"
+#include "environment.h"
 
 typedef enum {
     non_local_exit_initial=0,
