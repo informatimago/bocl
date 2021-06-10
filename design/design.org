@@ -176,13 +176,113 @@ Ref gun(void){
    /* gun::res is live (for the FOO var reference) */}
 #+END_SRC
 
+* Built In Objects
+TBD
 * Environments
 
-** Dynamic binding
+Environment objects will instances of a =BUILT-IN-CLASS=, with mostly
+lisp object references, but also one pointer to the list of
+=KERNEL:EVAL= =Frame=.
 
-** Lexical Environment
+** Run-time Bindings.
 
+The environment objects are complex and contain a lot of
+compilation-time information that is not needed at runtime.  Their
+structure would also multiply the nodes.
+
+Instead, in addition to the minimal compilation, we could perform some
+simple transformation to build run-time environemnts that would be
+flatter.
+
+#+BEGIN_SRC lisp
+
+  (defun foo (x y)
+    (let* ((a 2)
+           (b (* a x))
+           (c (+ b y)))
+      (+ a b c)))
+
+  ;; expands to
+
+  (defun foo (x y)
+    (let ((a 2))
+      (let ((b (* a x)))
+        (let ((c (+ b y)))
+          (+ a b c)))))
+
+#+END_SRC
+
+Four environment objects would be instanciated: one for the FOO
+parameter, and one for each LET.
+
+Looking up for =A= in =(+ A B C)= would involve walking 3 environment
+objects (one per LET).
+
+Furthermore, accessing the variable would invove one more indirection
+into the variable object.
+
+Instead, we could flatten the environments:
+
+#+BEGIN_SRC lisp
+
+  (defun foo (x y)
+    (let* ((a 2)
+           (b (* a x))
+           (c (+ b y)))
+      (+ a
+         (let ((a (+ x y))
+               (c (- x y)))
+           (* a b c))
+         c)))
+
+  ;; expands to
+
+  (defun foo (&rest arguments)
+    (let ((variables (vector-of-object 7)))
+      (symbol-macrolet ((x (aref variables 0))
+                        (y (aref variables 1))
+                        (a (aref variables 2))
+                        (b (aref variables 3))
+                        (c (aref variables 4))
+                        (setf x (pop arguments)
+                              y (pop arguments)
+                              a 2
+                              b (* a x)
+                              c (+ b y))
+                        (+ a (symbol-macrolet ((a (aref variables 5))
+                                               (c (aref variables 6)))
+                               (* a b c))
+                           c)))))
+
+  ;; which would expand to:
+
+  (defun foo (&rest arguments)
+    (let ((variables (vector-of-object 7)))
+      (setf (aref variables 0) (pop arguments)
+            (aref variables 1) (pop arguments)
+            (aref variables 2) 2
+            (aref variables 3) (* (aref variables 2) (aref variables 0))
+            (aref variables 4) (+ (aref variables 3) (aref variables 1)))
+      (+  (aref variables 2)
+          (* (aref variables 5)
+             (aref variables 3)
+             (aref variables 6))
+          (aref variables 4))))
+
+#+END_SRC
+
+ie. keeping for each lambda a single flat lexical environment as a
+vector of object, and generating mapping between variable names and
+vector slots
+
+*** Dynamic binding
+*** Lexical Environment
 ** Non-Local Exits from C Functions
+
+The Non-Local Exits are implemented in C using =setjmp=/=longjmp= in
+linked =Frame= structures, allocated on the C stack in the =evale()=
+function.  The =Frame= structures are also referenced from the
+=environment= objects.
 
 #+BEGIN_SRC lisp
 (defun f (exit)
@@ -230,6 +330,207 @@ void garbonzo(){
 #+END_SRC
 
 ** CONDITIONS
+
+* Minimal Compilation & Eval
+
+We implement in C an interpreter =KERNEL:EVAL= function.  However, to
+simplify the interpret, and therefore the C code, some special
+operators will be implemented as macros (in meta-circular fashion), so
+that only a reduced set of special operators need to be implemented in
+=KERNEL:EVAL=.
+
+** Minimal Compilation
+
+The Minimal Compilation is a process implemented by =CL:COMPILE= and
+=CL:COMPILE-FILE=, =CL:EVAL= and =(CL:COERCE sexp 'FUNCTION)=.
+
+It consists into walking the code, and macro-expanding it.  The
+resulting code will only contain function applications and
+special-operators (those not implemented as macros).
+
+=CL:COMPILE-FILE= can save the macro-expanded forms into fasl files,
+that can be loaded as "compiled" forms, and directly interpreted.
+
+Loading lisp source files, will require a Minimal Compilation phase,
+before interpretation.
+
+In addition to macro-expansion, Minimal Compilation must deal with:
+
+- =EVAL-WHEN=
+- =LOAD-TIME-VALUE=
+
+*** CL:EVAL
+
+=CL:EVAL= must perform Minimal Compilation on the source form given in
+argument, to be interpreted by =KERNEL:EVAL=.
+
+#+BEGIN_SRC lisp
+  (defun CL:EVAL (form)
+    (funcall (compile nil `(lambda () ,form))))
+#+END_SRC
+
+=FUNCALL= will call =KERNEL:EVAL= on the compiled function.
+
+*** CL:COERCE
+
+#+BEGIN_SRC lisp
+(CL:COERCE lambda-expression 'FUNCTION)
+(CL:COERCE lambda-expression 'COMPILED-FUNCTION)
+#+END_SRC
+
+Both forms must perform the minimal-compilation on the
+lambda-expression:
+
+#+BEGIN_SRC lisp
+  (defun CL:COERCE (object result-type)
+    (case result-type
+      ((function compiled-function) (compile nil object))
+      (…)))
+#+END_SRC
+
+*** CL:BLOCK / CL:RETURN-FROM
+
+The minimal compilation of CL:BLOCK and CL:RETURN-FROM must substitute
+the block name symbol for a unique (non-interned) symbol.
+
+#+BEGIN_SRC lisp
+  (flet ((f (exit)
+           (block foo
+             (if (zerop (random 2))
+                 (funcall exit 42)
+                 (return-from foo 33)))))
+    (block foo
+      (f (lambda (res) (return-from foo res)))))
+  ;; --> 42 or 33
+#+END_SRC
+
+*** Additional Minimal Compilation Transformations
+
+| Source Form            | Compiled Form                  | Notes                                     |
+|------------------------+--------------------------------+-------------------------------------------|
+| ((lambda (…) …) args…) | (funcall (lambda (…) …) args…) | Lambda expession must have been compiled. |
+
+** Special Operators
+
+| Special Operator       | Implementation      | Notes                             |
+|------------------------+---------------------+-----------------------------------|
+| =TAGBODY=              | Macro               | Uses =CATCH=                      |
+| =GO=                   | Macro               | Uses =THROW=                      |
+| =UNWIND-PROTECT=       |                     |                                   |
+| =BLOCK=                |                     | Frame / Lexical Binding           |
+| =RETURN-FROM=          |                     | Non-Local Exit                    |
+| =CATCH=                | =KERNEL:EVAL=       | Frame / Catch                     |
+| =THROW=                | =KERNEL:EVAL=       | Non-Local Exit                    |
+| =QUOTE=                | =KERNEL:EVAL=       |                                   |
+| =SETQ=                 | =KERNEL:EVAL=       | M.C. removes the symbol-macro.    |
+| =IF=                   | =KERNEL:EVAL=       |                                   |
+| =FUNCTION=             |                     | Closure Creation                  |
+| =FLET=                 |                     | Frame / Function Binding          |
+| =LABELS=               |                     | Frame / Function Binding          |
+| =LET=                  |                     | Frame / Lexical & Dynamic Binding |
+| =LET*=                 |                     | Frame / Lexical & Dynamic Binding |
+| =PROGV=                |                     | Frame / Dynamic Binding           |
+| =PROGN=                |                     |                                   |
+| =LOCALLY=              |                     |                                   |
+| =MACROLET=             |                     | Frame                             |
+| =SYMBOL-MACROLET=      |                     | Frame                             |
+| =MULTIPLE-VALUE-CALL=  | =KERNEL:EVAL=       |                                   |
+| =MULTIPLE-VALUE-PROG1= | =KERNEL:EVAL=       |                                   |
+| =LOAD-TIME-VALUE=      | Minimal Compilation |                                   |
+| =EVAL-WHEN=            | Minimal Compilation |                                   |
+| =THE=                  | Macro               | No Op, or =CHECK-TYPE=.           |
+|------------------------+---------------------+-----------------------------------|
+| (compiled-fun args)    | =KERNEL:EVAL=       | Function Application.             |
+| (built-in-fun args)    | =KERNEL:EVAL=       | Function Application.             |
+
+** =KERNEL:EVAL=
+
+*** Non-Local Exits and Frames
+
+
+cf. `5.2 Transfer of Control to an Exit Point`
+http://www.lispworks.com/documentation/HyperSpec/Body/05_b.htm
+
+
+Take for example, =BLOCK= and =RETURN-FROM=.
+
+To process a =BLOCK= form, =KERNEL:EVAL= must set up and link a
+dynamic frame identifying the block, and a return point, to itself, in
+case a non-local exit occurs in the interpreted subforms (or called
+built-in C functions).
+
+
+The unwinding process calls longjmp from on Frame to the next Frame,
+until we reach the target Frame (unwind_next_frame);
+
+target_frame is the target frame of the non-local exit.
+
+All the frames in the environment, from the first down to the
+target_frame are long jumped to one another.
+
+All but the =target_frame= is long jumped to with =non_local_exit_unwind=
+result, and the =frame->target= set to =target_frame=.  The frame should
+clean up, call =pop_frame()= itself from the environment, and call
+=unwind_next_frame(itself)= to unwind the next frame.
+
+The target_frame is long jumped to with non_local_exit_target
+result.  It should pop_frame itself from the environment.
+
+
+The basic control flow structure of an unwind-protect (or block,
+catch, etc):
+
+#+BEGIN_SRC C
+  int result=setjmp(&frame.block_non_local_exit);
+  switch(result){
+    case non_local_exit_initial:
+        push_frame(&frame,environment);
+        BODY();
+        pop_frame(&frame,environment);
+        break;
+    case non_local_exit_unwind:
+        /* non-local-exit to an upper frame,
+        but we get a chance to unwind here */
+        CLEANUP();
+        pop_frame(&frame,environment);
+        unwind_next_frame(frame);
+        break;
+    case non_local_exit_target:
+    default:
+        /* non-local-exit, were' the target */
+        CLEANUP();
+        pop_frame(&frame,environment);
+        break;}
+#+END_SRC
+
+In the C KERNEL:EVAL function, this control flow is abstracted with
+the =UNWIND=, =UWBODY= and =UWCLEANUP= macros.
+
+
+And the basic control flow structure of a non-local exit:
+
+#+BEGIN_SRC C
+  Frame* target_frame=find_???_frame(name,environment);
+  if(NULL==target_frame){
+      error("No ??? named ~A",name);}
+  COMPUTE_RESULT();
+  /* Non-local exit: */
+  Frame* frame=pop_frame(NULL,environement);
+  frame->target_frame=target_frame;
+  unwind_next_frame(frame);
+#+END_SRC
+
+With =unwind_next_frame=:
+
+#+BEGIN_SRC C
+_Noreturn unwind_next_frame(Frame* frame){
+    /* Unwind one frame */
+    non_local_exit_t exit=((frame->next==frame->target)
+                           ?non_local_exit_target
+                           :non_local_exit_unwind);
+    frame->next->target=frame->target;
+    longjmp(frame->next->non_local_exit,exit);}
+#+END_SRC
 
 * Epilogue                                                         :noexport:
 
