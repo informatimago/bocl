@@ -540,7 +540,6 @@ results as specified.  Class (not type) checking is performed.
 (make-object 'structure-class size)
 #+END_EXAMPLE
 
-
 **** 7. Objects
 
 The kernel only provides some infrastructure operators, since we use
@@ -570,7 +569,6 @@ in the external-format.
 
 Note: NEL would be the only character with char-code>127 mapped to a
 :US-ASCII stream!
-
 
 **** 18. Hashtables
 
@@ -1332,11 +1330,9 @@ Results:
         parse-integer/i))
 #+END_EXAMPLE
 
-
 *** The REPL
 
 The REPL is a standard REPL.
-
 
 **** Function QUIT
 
