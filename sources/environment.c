@@ -1,5 +1,6 @@
 #include "kernel.h"
 #include "environment.h"
+#include "boerror.h"
 
 Ref environment_dynamic_variables(Ref environment){
     check_class(environment,ENVIRONMENT_Class);
@@ -35,6 +36,11 @@ Ref environment_next_environment(Ref environment){
     check_class(environment,ENVIRONMENT_Class);
     Environment* env=&(environment->slots->environment);
     return env->next_environment;}
+
+Ref environment_find_frame_environment(Frame* frame,Ref environment){
+    NOT_IMPLEMENTED_YET();
+    return environment;}
+
 
 Ref environment_frames(Ref environment){
     uword pool=open_live_pool();
