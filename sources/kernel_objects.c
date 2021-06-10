@@ -21,6 +21,32 @@ Ref KERNEL_obarray   = &uninitialized_object;  /* list of interned symbols */
 Ref KEYWORD_obarray  = &uninitialized_object;  /* list of interned keywords */
 Ref UNBOUND_Object   = &uninitialized_object;
 
+Ref BLOCK_Symbol                             = &uninitialized_object;
+Ref CATCH_Symbol                             = &uninitialized_object;
+Ref EVAL_WHEN_Symbol                         = &uninitialized_object;
+Ref FLET_Symbol                              = &uninitialized_object;
+Ref FUNCTION_Symbol                          = &uninitialized_object;
+Ref GO_Symbol                                = &uninitialized_object;
+Ref IF_Symbol                                = &uninitialized_object;
+Ref LABELS_Symbol                            = &uninitialized_object;
+Ref LET_Symbol                               = &uninitialized_object;
+Ref LET__Symbol                              = &uninitialized_object;
+Ref LOAD_TIME_VALUE_Symbol                   = &uninitialized_object;
+Ref LOCALLY_Symbol                           = &uninitialized_object;
+Ref MACROLET_Symbol                          = &uninitialized_object;
+Ref MULTIPLE_VALUE_CALL_Symbol               = &uninitialized_object;
+Ref MULTIPLE_VALUE_PROG1_Symbol              = &uninitialized_object;
+Ref PROGN_Symbol                             = &uninitialized_object;
+Ref PROGV_Symbol                             = &uninitialized_object;
+Ref QUOTE_Symbol                             = &uninitialized_object;
+Ref RETURN_FROM_Symbol                       = &uninitialized_object;
+Ref SETQ_Symbol                              = &uninitialized_object;
+Ref SYMBOL_MACROLET_Symbol                   = &uninitialized_object;
+Ref TAGBODY_Symbol                           = &uninitialized_object;
+Ref THE_Symbol                               = &uninitialized_object;
+Ref THROW_Symbol                             = &uninitialized_object;
+Ref UNWIND_PROTECT_Symbol                    = &uninitialized_object;
+
 Ref T_Class                                  = &uninitialized_object;
 Ref CHARACTER_Class                          = &uninitialized_object;
 Ref ARRAY_Class                              = &uninitialized_object;
@@ -31,6 +57,7 @@ Ref SEQUENCE_Class                           = &uninitialized_object;
 Ref CONS_Class                               = &uninitialized_object;
 Ref NULL_Class                               = &uninitialized_object;
 Ref SYMBOL_Class                             = &uninitialized_object;
+Ref ENVIRONMENT_Class                        = &uninitialized_object;
 Ref LIST_Class                               = &uninitialized_object;
 Ref COMPLEX_Class                            = &uninitialized_object;
 Ref NUMBER_Class                             = &uninitialized_object;
@@ -81,6 +108,7 @@ Ref FUNCALLABLE_STANDARD_CLASS_Class         = &uninitialized_object;
 Ref STANDARD_CLASS_Class                     = &uninitialized_object;
 Ref BUILT_IN_CLASS_Class                     = &uninitialized_object;
 Ref STRUCTURE_CLASS_Class                    = &uninitialized_object;
+Ref STRUCTURE_OBJECT_Class                   = &uninitialized_object;
 Ref FORWARD_REFERENCED_CLASS_Class           = &uninitialized_object;
 Ref CLASS_Class                              = &uninitialized_object;
 Ref METAOBJECT_Class                         = &uninitialized_object;
@@ -132,6 +160,7 @@ void kernel_objects_initialize(void){
     CONS_Class                               = make_boot_Object((Slots*)make_boot_BuiltInClass());
     NULL_Class                               = make_boot_Object((Slots*)make_boot_BuiltInClass());
     SYMBOL_Class                             = make_boot_Object((Slots*)make_boot_BuiltInClass());
+    ENVIRONMENT_Class                        = make_boot_Object((Slots*)make_boot_BuiltInClass());
     LIST_Class                               = make_boot_Object((Slots*)make_boot_BuiltInClass());
     COMPLEX_Class                            = make_boot_Object((Slots*)make_boot_BuiltInClass());
     NUMBER_Class                             = make_boot_Object((Slots*)make_boot_BuiltInClass());
@@ -182,6 +211,7 @@ void kernel_objects_initialize(void){
     STANDARD_CLASS_Class                     = make_boot_Object((Slots*)make_boot_StandardClass());
     BUILT_IN_CLASS_Class                     = make_boot_Object((Slots*)make_boot_StandardClass());
     STRUCTURE_CLASS_Class                    = make_boot_Object((Slots*)make_boot_StandardClass());
+    STRUCTURE_OBJECT_Class                   = make_boot_Object((Slots*)make_boot_StructureClass());
     FORWARD_REFERENCED_CLASS_Class           = make_boot_Object((Slots*)make_boot_StandardClass());
     CLASS_Class                              = make_boot_Object((Slots*)make_boot_StandardClass());
     METAOBJECT_Class                         = make_boot_Object((Slots*)make_boot_StandardClass());
@@ -231,6 +261,7 @@ void kernel_objects_initialize(void){
     CONS_Class                              -> class = BUILT_IN_CLASS_Class;
     NULL_Class                              -> class = BUILT_IN_CLASS_Class;
     SYMBOL_Class                            -> class = BUILT_IN_CLASS_Class;
+    ENVIRONMENT_Class                       -> class = BUILT_IN_CLASS_Class;
     LIST_Class                              -> class = BUILT_IN_CLASS_Class;
     COMPLEX_Class                           -> class = BUILT_IN_CLASS_Class;
     NUMBER_Class                            -> class = BUILT_IN_CLASS_Class;
@@ -281,6 +312,7 @@ void kernel_objects_initialize(void){
     STANDARD_CLASS_Class                    -> class = STANDARD_CLASS_Class;
     BUILT_IN_CLASS_Class                    -> class = STANDARD_CLASS_Class;
     STRUCTURE_CLASS_Class                   -> class = STANDARD_CLASS_Class;
+    STRUCTURE_OBJECT_Class                  -> class = STRUCTURE_CLASS_Class;
     FORWARD_REFERENCED_CLASS_Class          -> class = STANDARD_CLASS_Class;
     CLASS_Class                             -> class = STANDARD_CLASS_Class;
     METAOBJECT_Class                        -> class = STANDARD_CLASS_Class;
@@ -361,6 +393,7 @@ void kernel_objects_initialize(void){
     push(CONS_Class                              ,&kernel_classes);
     push(NULL_Class                              ,&kernel_classes);
     push(SYMBOL_Class                            ,&kernel_classes);
+    push(ENVIRONMENT_Class                       ,&kernel_classes);
     push(LIST_Class                              ,&kernel_classes);
     push(COMPLEX_Class                           ,&kernel_classes);
     push(NUMBER_Class                            ,&kernel_classes);
@@ -411,6 +444,7 @@ void kernel_objects_initialize(void){
     push(STANDARD_CLASS_Class                    ,&kernel_classes);
     push(BUILT_IN_CLASS_Class                    ,&kernel_classes);
     push(STRUCTURE_CLASS_Class                   ,&kernel_classes);
+    push(STRUCTURE_OBJECT_Class                  ,&kernel_classes);
     push(FORWARD_REFERENCED_CLASS_Class          ,&kernel_classes);
     push(CLASS_Class                             ,&kernel_classes);
     push(METAOBJECT_Class                        ,&kernel_classes);
@@ -460,6 +494,7 @@ void kernel_objects_initialize(void){
     CONS_Class                               -> slots->class.direct_superclasses = NIL_Symbol;
     NULL_Class                               -> slots->class.direct_superclasses = NIL_Symbol;
     SYMBOL_Class                             -> slots->class.direct_superclasses = NIL_Symbol;
+    ENVIRONMENT_Class                        -> slots->class.direct_superclasses = NIL_Symbol;
     LIST_Class                               -> slots->class.direct_superclasses = NIL_Symbol;
     COMPLEX_Class                            -> slots->class.direct_superclasses = NIL_Symbol;
     NUMBER_Class                             -> slots->class.direct_superclasses = NIL_Symbol;
@@ -510,6 +545,7 @@ void kernel_objects_initialize(void){
     STANDARD_CLASS_Class                     -> slots->class.direct_superclasses = NIL_Symbol;
     BUILT_IN_CLASS_Class                     -> slots->class.direct_superclasses = NIL_Symbol;
     STRUCTURE_CLASS_Class                    -> slots->class.direct_superclasses = NIL_Symbol;
+    STRUCTURE_OBJECT_Class                   -> slots->class.direct_superclasses = NIL_Symbol;
     FORWARD_REFERENCED_CLASS_Class           -> slots->class.direct_superclasses = NIL_Symbol;
     CLASS_Class                              -> slots->class.direct_superclasses = NIL_Symbol;
     METAOBJECT_Class                         -> slots->class.direct_superclasses = NIL_Symbol;
@@ -560,6 +596,7 @@ void kernel_objects_initialize(void){
     boot_class_add_superclass(NULL_Class                              ,SYMBOL_Class                            );
     boot_class_add_superclass(NULL_Class                              ,LIST_Class                              );
     boot_class_add_superclass(SYMBOL_Class                            ,T_Class                                 );
+    boot_class_add_superclass(ENVIRONMENT_Class                       ,T_Class                                 );
     boot_class_add_superclass(LIST_Class                              ,SEQUENCE_Class                          );
     boot_class_add_superclass(COMPLEX_Class                           ,NUMBER_Class                            );
     boot_class_add_superclass(NUMBER_Class                            ,T_Class                                 );
@@ -614,6 +651,7 @@ void kernel_objects_initialize(void){
     boot_class_add_superclass(STANDARD_CLASS_Class                    ,CLASS_Class                             );
     boot_class_add_superclass(BUILT_IN_CLASS_Class                    ,CLASS_Class                             );
     boot_class_add_superclass(STRUCTURE_CLASS_Class                   ,CLASS_Class                             );
+    boot_class_add_superclass(STRUCTURE_OBJECT_Class                  ,T_Class                                 );
     boot_class_add_superclass(FORWARD_REFERENCED_CLASS_Class          ,CLASS_Class                             );
     boot_class_add_superclass(CLASS_Class                             ,SPECIALIZER_Class                       );
     boot_class_add_superclass(METAOBJECT_Class                        ,STANDARD_OBJECT_Class                   );
@@ -666,6 +704,7 @@ void kernel_objects_initialize(void){
     CONS_Class                               -> slots->class.name = symbol_intern_cstring("CONS");
     NULL_Class                               -> slots->class.name = symbol_intern_cstring("NULL");
     SYMBOL_Class                             -> slots->class.name = symbol_intern_cstring("SYMBOL");
+    ENVIRONMENT_Class                        -> slots->class.name = symbol_intern_cstring("ENVIRONMENT");
     LIST_Class                               -> slots->class.name = symbol_intern_cstring("LIST");
     COMPLEX_Class                            -> slots->class.name = symbol_intern_cstring("COMPLEX");
     NUMBER_Class                             -> slots->class.name = symbol_intern_cstring("NUMBER");
@@ -716,6 +755,7 @@ void kernel_objects_initialize(void){
     STANDARD_CLASS_Class                     -> slots->class.name = symbol_intern_cstring("STANDARD-CLASS");
     BUILT_IN_CLASS_Class                     -> slots->class.name = symbol_intern_cstring("BUILT-IN-CLASS");
     STRUCTURE_CLASS_Class                    -> slots->class.name = symbol_intern_cstring("STRUCTURE-CLASS");
+    STRUCTURE_OBJECT_Class                   -> slots->class.name = symbol_intern_cstring("STRUCTURE-OBJECT");
     FORWARD_REFERENCED_CLASS_Class           -> slots->class.name = symbol_intern_cstring("FORWARD-REFERENCED-CLASS");
     CLASS_Class                              -> slots->class.name = symbol_intern_cstring("CLASS");
     METAOBJECT_Class                         -> slots->class.name = symbol_intern_cstring("METAOBJECT");
@@ -758,6 +798,32 @@ void kernel_objects_initialize(void){
     NIL_Symbol->class = NULL_Class;
     T_Symbol = symbol_intern_cstring("T");
     BIT_Symbol = symbol_intern_cstring("BIT");
+
+    BLOCK_Symbol = symbol_intern_cstring("BLOCK");
+    CATCH_Symbol = symbol_intern_cstring("CATCH");
+    EVAL_WHEN_Symbol = symbol_intern_cstring("EVAL-WHEN");
+    FLET_Symbol = symbol_intern_cstring("FLET");
+    FUNCTION_Symbol = symbol_intern_cstring("FUNCTION");
+    GO_Symbol = symbol_intern_cstring("GO");
+    IF_Symbol = symbol_intern_cstring("IF");
+    LABELS_Symbol = symbol_intern_cstring("LABELS");
+    LET_Symbol = symbol_intern_cstring("LET");
+    LET__Symbol = symbol_intern_cstring("LET*");
+    LOAD_TIME_VALUE_Symbol = symbol_intern_cstring("LOAD-TIME-VALUE");
+    LOCALLY_Symbol = symbol_intern_cstring("LOCALLY");
+    MACROLET_Symbol = symbol_intern_cstring("MACROLET");
+    MULTIPLE_VALUE_CALL_Symbol = symbol_intern_cstring("MULTIPLE-VALUE-CALL");
+    MULTIPLE_VALUE_PROG1_Symbol = symbol_intern_cstring("MULTIPLE-VALUE-PROG1");
+    PROGN_Symbol = symbol_intern_cstring("PROGN");
+    PROGV_Symbol = symbol_intern_cstring("PROGV");
+    QUOTE_Symbol = symbol_intern_cstring("QUOTE");
+    RETURN_FROM_Symbol = symbol_intern_cstring("RETURN-FROM");
+    SETQ_Symbol = symbol_intern_cstring("SETQ");
+    SYMBOL_MACROLET_Symbol = symbol_intern_cstring("SYMBOL-MACROLET");
+    TAGBODY_Symbol = symbol_intern_cstring("TAGBODY");
+    THE_Symbol = symbol_intern_cstring("THE");
+    THROW_Symbol = symbol_intern_cstring("THROW");
+    UNWIND_PROTECT_Symbol = symbol_intern_cstring("UNWIND-PROTECT");
 
 }
 

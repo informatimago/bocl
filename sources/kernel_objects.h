@@ -16,6 +16,32 @@ extern Ref KERNEL_obarray;  /* list of interned symbols */
 extern Ref KEYWORD_obarray; /* list of interned keywords */
 extern Ref UNBOUND_Object;
 
+extern Ref BLOCK_Symbol;
+extern Ref CATCH_Symbol;
+extern Ref EVAL_WHEN_Symbol;
+extern Ref FLET_Symbol;
+extern Ref FUNCTION_Symbol;
+extern Ref GO_Symbol;
+extern Ref IF_Symbol;
+extern Ref LABELS_Symbol;
+extern Ref LET_Symbol;
+extern Ref LET__Symbol;
+extern Ref LOAD_TIME_VALUE_Symbol;
+extern Ref LOCALLY_Symbol;
+extern Ref MACROLET_Symbol;
+extern Ref MULTIPLE_VALUE_CALL_Symbol;
+extern Ref MULTIPLE_VALUE_PROG1_Symbol;
+extern Ref PROGN_Symbol;
+extern Ref PROGV_Symbol;
+extern Ref QUOTE_Symbol;
+extern Ref RETURN_FROM_Symbol;
+extern Ref SETQ_Symbol;
+extern Ref SYMBOL_MACROLET_Symbol;
+extern Ref TAGBODY_Symbol;
+extern Ref THE_Symbol;
+extern Ref THROW_Symbol;
+extern Ref UNWIND_PROTECT_Symbol;
+
 extern Ref T_Class;
 extern Ref CHARACTER_Class;
 extern Ref ARRAY_Class;
@@ -26,6 +52,7 @@ extern Ref SEQUENCE_Class;
 extern Ref CONS_Class;
 extern Ref NULL_Class;
 extern Ref SYMBOL_Class;
+extern Ref ENVIRONMENT_Class;
 extern Ref LIST_Class;
 extern Ref COMPLEX_Class;
 extern Ref NUMBER_Class;
@@ -76,6 +103,7 @@ extern Ref FUNCALLABLE_STANDARD_CLASS_Class;
 extern Ref STANDARD_CLASS_Class;
 extern Ref BUILT_IN_CLASS_Class;
 extern Ref STRUCTURE_CLASS_Class;
+extern Ref STRUCTURE_OBJECT_Class;
 extern Ref FORWARD_REFERENCED_CLASS_Class;
 extern Ref CLASS_Class;
 extern Ref METAOBJECT_Class;

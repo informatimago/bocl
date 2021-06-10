@@ -224,6 +224,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (cons                               (built-in-class)             (list))
     (null                               (built-in-class)             (symbol                      list))
     (symbol                             (built-in-class)             (t))
+    (environment                        (built-in-class)             (t))
     (list                               (built-in-class)             (sequence))
     (complex                            (built-in-class)             (number))
     (number                             (built-in-class)             (t))
@@ -274,6 +275,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (standard-class                     (standard-class)             (class))
     (built-in-class                     (standard-class)             (class))
     (structure-class                    (standard-class)             (class))
+    (structure-object                   (structure-class)            (t))
     (forward-referenced-class           (standard-class)             (class))
     (class                              (standard-class)             (specializer))
     (metaobject                         (standard-class)             (standard-object))
@@ -311,8 +313,7 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (unbound-variable                   (standard-class)             (cell-error))
     (unbound-slot                       (standard-class)             (cell-error))
     (undefined-function                 (standard-class)             (cell-error))
-    (cell-error                         (standard-class)             (error))
-    ))
+    (cell-error                         (standard-class)             (error))))
 
 (defun cinfo-class-name                (entry) (car entry))
 (defun cinfo-class-metaclass           (entry) (caadr entry))
@@ -350,9 +351,24 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
                         (|Function|)))
 
 
+(defparameter *symbols*
+  '(
+    ;; eval will need the special operator symbols:
+    block catch eval-when flet function go
+    if labels let let* load-time-value locally macrolet
+    multiple-value-call multiple-value-prog1 progn progv quote
+    return-from setq symbol-macrolet tagbody the throw
+    unwind-protect))
+
+(defun c-symbol-name (cfun)
+  (with-output-to-string (*standard-output*)
+    (loop :for ch :across (string cfun)
+          :do (write-char (case ch
+                            ((#\- #\/ #\*) #\_)
+                            (otherwise ch))))))
 
 (defun class-c-name (lisp-name)
-   (intern (format nil "~A_Class" (substitute #\_ #\- (string lisp-name)))))
+   (intern (format nil "~A_Class" (c-symbol-name lisp-name))))
 
 (defun lisp-to-camel (sym)
   (format nil "~{~@(~A~)~}" (split-string (string sym) "-" t)))
@@ -381,6 +397,9 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (write-line "extern Ref KERNEL_obarray;  /* list of interned symbols */")
     (write-line "extern Ref KEYWORD_obarray; /* list of interned keywords */")
     (write-line "extern Ref UNBOUND_Object;")
+    (terpri)
+    (dolist (sym *symbols*)
+      (format t "extern Ref ~A_Symbol;~%" (c-symbol-name sym)))
     (terpri)
     (dolist (class *classes*)
       (let* ((var-name (class-c-name class)))
@@ -417,6 +436,10 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (write-line "Ref KERNEL_obarray   = &uninitialized_object;  /* list of interned symbols */")
     (write-line "Ref KEYWORD_obarray  = &uninitialized_object;  /* list of interned keywords */")
     (write-line "Ref UNBOUND_Object   = &uninitialized_object;")
+    (terpri)
+    (dolist (sym *symbols*)
+      (format t "Ref ~40A = &uninitialized_object;~%"
+              (concatenate 'string (c-symbol-name sym) "_Symbol")))
     (terpri)
     (dolist (class *classes*)
       (let* ((var-name (class-c-name class)))
@@ -497,6 +520,10 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     (write-line "    NIL_Symbol->class = NULL_Class;")
     (write-line "    T_Symbol = symbol_intern_cstring(\"T\");")
     (write-line "    BIT_Symbol = symbol_intern_cstring(\"BIT\");")
+    (terpri)
+    (dolist (sym *symbols*)
+      (format t "    ~A_Symbol = symbol_intern_cstring(~S);~%"
+              (c-symbol-name sym) (symbol-name sym)))
     (terpri)
     (write-line "}")
     (terpri)
