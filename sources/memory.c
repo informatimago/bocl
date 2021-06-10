@@ -311,6 +311,15 @@ static uword sweep(void){
             total+=sweep_zone(zone);}}
     return total;}
 
+
+uword open_live_pool(void){
+    NOT_IMPLEMENTED_YET();
+    return 0;}
+
+void close_live_pool(uword pool){
+    NOT_IMPLEMENTED_YET();}
+
+
 Block* rootset=NULL;
 void set_rootset(Block* block){
     rootset=block;}

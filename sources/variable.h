@@ -4,7 +4,6 @@
 
 void make_constant_variable(Ref symbol);
 bool constant_variable_p(Ref symbol);
-
 void make_special_variable(Ref symbol);
 bool special_variable_p(Ref symbol);
 

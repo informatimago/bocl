@@ -3,7 +3,7 @@
 #include "kernel.h"
 #include "kernel_objects.h"
 #include "data.h"
-
+#include "memory.h"
 
 /* Cons */
 
@@ -57,7 +57,8 @@ uword list_length(Ref list){
     return i;}
 
 Ref push(Ref element,Ref* list){
-    return (*list)=cons(element,(*list));}
+    WITH_LIVE_POOL;
+    LP_RETURN1(((*list)=cons(element,(*list))));}
 
 Ref pop(Ref* list){
     Ref result=car(*list);
@@ -98,6 +99,7 @@ Ref nconc(Ref list,Ref tail){
         return list;}}
 
 Ref list(Ref first_element,...){
+    WITH_LIVE_POOL;
     Ref list=cons(first_element,NIL_Symbol);
     Ref tail=list;
     va_list ap;
@@ -109,9 +111,10 @@ Ref list(Ref first_element,...){
         element=va_arg(ap,Ref);
     }
     va_end(ap);
-    return list;}
+    LP_RETURN1(list);}
 
 Ref copy_list(Ref list){
+    WITH_LIVE_POOL;
     if(nullp(list)){
         return list;}
     Ref result=cons(car(list),NIL_Symbol);
@@ -121,7 +124,7 @@ Ref copy_list(Ref list){
         rplacd(tail,cons(car(list),NIL_Symbol));
         list=cdr(list);}
     rplacd(tail,cdr(list));
-    return result;}
+    LP_RETURN1(result);}
 
 Ref memq(Ref item,Ref list){
     while(consp(list) && !eql(item,car(list))){
@@ -140,13 +143,14 @@ Ref nreverse(Ref list){
     return result;}
 
 Ref reverse(Ref list){
+    WITH_LIVE_POOL;
     if(list==NIL_Symbol){
-        return NIL_Symbol;}
+        LP_RETURN1(NIL_Symbol);}
     Ref result=NIL_Symbol;
     while(consp(list)){
         result=cons(car(list),result);
         list=cdr(list);}
-    return result;}
+    LP_RETURN1(result);}
 
 /* Plist */
 
@@ -159,14 +163,15 @@ Ref getf(Ref plist,Ref indicator,Ref default_value){
             :default_value;}
 
 Ref putf(Ref plist,Ref indicator,Ref new_value){
+    WITH_LIVE_POOL;
     Ref current=plist;
     while(consp(current) && !eql(indicator,car(current))){
         current=cddr(current);}
     if(consp(current)){
         rplaca(cdr(current),new_value);
-        return plist;}
+        LP_RETURN1(plist);}
     else{
-        return cons(indicator,cons(new_value,plist));}}
+        LP_RETURN1(cons(indicator,cons(new_value,plist)));}}
 
 bool remf(Ref plist,Ref indicator){
     if(consp(plist) && eql(indicator,car(plist))){
