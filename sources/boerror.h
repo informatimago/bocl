@@ -32,19 +32,21 @@
 #define CHECK_UWORD_TO_HALFWORD(size)                check_uword_to_halfword(__FUNCTION__,size)
 #define CHECK_UWORD_TO_WORD(value)                   check_uword_to_word(__FUNCTION__,value)
 #define CHECK_WORD_TO_SIZE(value)                    check_word_to_size(__FUNCTION__,value)
+#define CHECK_WORD_TO_UWORD(value)                   check_word_to_uword(__FUNCTION__,value)
 
 _Noreturn void fatal(const char* fname,const char* message_format,...);
 _Noreturn void error(const char* fname,const char* message_format,...);
 _Noreturn void type_error(const char* fname,Ref object,Ref class);
 
-void* check_pointer(const char* fname,void* pointer);
-uword check_size_to_uword(const char* fname,size_t size);
-uword check_long_to_uword(const char* fname,long value);
-halfword check_size_to_halfword(const char* fname,size_t size);
-size_t check_word_to_size(const char* fname,word value);
-word check_uword_to_word(const char* fname,uword value);
-halfword check_uword_to_halfword(const char* fname,uword value);
-int check_halfword_to_int(const char* fname,halfword value);
+void*    check_pointer           (const char* fname,void*    pointer);
+uword    check_word_to_uword     (const char* fname,word     value);
+size_t   check_word_to_size      (const char* fname,word     value);
+word     check_uword_to_word     (const char* fname,uword    value);
+halfword check_uword_to_halfword (const char* fname,uword    value);
+int      check_halfword_to_int   (const char* fname,halfword value);
+uword    check_size_to_uword     (const char* fname,size_t   size);
+halfword check_size_to_halfword  (const char* fname,size_t   size);
+uword    check_long_to_uword     (const char* fname,long     value);
 
 void report_error(Ref error);
 

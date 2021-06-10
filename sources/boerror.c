@@ -81,6 +81,12 @@ uword check_long_to_uword(const char* fname,long value){
     error(fname,"Value long %l too big for an uword (max = %"UWORD_FORMAT")",
           value,UWORD_MAX);}
 
+uword check_word_to_uword(const char* fname,word value){
+    if((0<=value) && (((uword)WORD_MAX<UWORD_MAX) || (value<(word)UWORD_MAX))){
+        return (uword)value;}
+    error(fname,"Word %"WORD_FORMAT" too big for a uword (max = %"UWORD_FORMAT")",
+          value,UWORD_MAX);}
+
 size_t check_word_to_size(const char* fname,word value){
     if((0<=value) && (((size_t)WORD_MAX<SIZE_MAX) || (value<(word)SIZE_MAX))){
         return (size_t)value;}
