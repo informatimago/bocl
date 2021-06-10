@@ -6,7 +6,8 @@ common_SRCS = \
 	bocl.c string_list.c \
 	kernel.c kernel_objects.c memory.c boerror.c \
 	built_in_functions.c \
-	variable.c cons.c data.c \
+	eval.c environment.c \
+	variable.c cons.c data.c structure.c \
 	stream.c reader.c printer.c filename.c \
 	character.c bostring.c bit_vector.c vector.c \
 	integer.c float.c \
