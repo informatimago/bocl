@@ -2,6 +2,7 @@
 #define kernel_types_h
 #include <unistd.h> // import _POSIX_V6_LP64_OFF64
 #include <stdio.h>
+#include <setjmp.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -44,6 +45,7 @@ typedef union  Slots  Slots;
 
 /* Slots */
 
+typedef struct Environment              Environment;
 typedef struct VectorOfObject           VectorOfObject;
 typedef struct VectorOfUWord            VectorOfUWord;
 typedef struct VectorOfOctet            VectorOfOctet;
@@ -101,6 +103,61 @@ typedef struct Object {
     Ref class;
     Slots* slots;
 } Object;
+
+
+
+
+typedef struct MultipleValues {
+    uword count;
+    Ref values[MULTIPLE_VALUES_LIMIT];
+} MultipleValues;
+
+typedef enum {
+    frame_protect=1,
+    frame_dynamic_binding,
+    frame_block,
+    frame_catch,
+    frame_handler,
+    frame_restart,
+} frame_type;
+
+
+typedef struct Frame {
+    struct Frame* next;
+    struct Frame* target;
+    frame_type type;
+    union {
+        struct {
+            Ref name;
+        } block;
+        struct {
+            Ref object;
+        } catch;
+        struct {
+            Ref conditions;
+        } handler;
+        struct {
+            Ref restart;
+            Ref arguments;
+        } restart;
+    } parameters;
+    MultipleValues* results;
+    jmp_buf non_local_exit;
+} Frame;
+
+typedef struct Environment {
+    BLOCK_HEADER;               /* objcount=7 */
+    Ref dynamic_variables;      /* Local dynamic variables */
+    Ref lexical_variables;
+    Ref lexical_functions;
+    Ref lexical_blocks;         /* used while minimal-compiling */
+    Ref lexical_catchs;         /* used while minimal-compiling */
+    Ref lexical_declarations;   /* used while minimal-compiling */
+    Ref next_environment;
+    Frame* frames;
+} Environment;
+
+
 
 typedef struct VectorOfObject {
     BLOCK_HEADER;
@@ -220,6 +277,9 @@ typedef struct BuiltInClass {
 
 typedef struct StructureClass {
     CLASS_HEADER;
+    Ref slot_names; /* A list of symbols naming the slots. */
+    uword nslots; /* in instances of this instance of structure-class */
+    /* Instances of this  instance of structure-class use VectorOfObject to store the slots. */
 } StructureClass;
 
 typedef struct FuncallableStandardClass {
@@ -228,12 +288,6 @@ typedef struct FuncallableStandardClass {
 
 
 /* Function Objects */
-
-typedef struct MultipleValues {
-    uword count;
-    Ref values[MULTIPLE_VALUES_LIMIT];
-} MultipleValues;
-
 typedef void (*KernelFunctionPtr)(Ref function,Ref arguments,MultipleValues* results);
 
 typedef struct Closure            {
@@ -268,6 +322,7 @@ typedef struct FuncallableStandardObject {
 
 typedef union Slots {
     /* Internal Object structures: */
+    Environment                 environment;
     VectorOfObject              vector_of_object;
     VectorOfUWord               vector_of_uword;
     VectorOfOctet               vector_of_octet;
@@ -297,6 +352,7 @@ Ref make_boot_Object(Slots* slots);
 Class* make_boot_Class(void);
 StandardClass* make_boot_StandardClass(void);
 BuiltInClass* make_boot_BuiltInClass(void);
+StructureClass* make_boot_StructureClass(void);
 FuncallableStandardClass* make_boot_FuncallableStandardClass(void);
 
 

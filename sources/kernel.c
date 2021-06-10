@@ -13,11 +13,12 @@
 #include "memory.h"
 #include "boerror.h"
 #include "cons.h"
-#include "variable.h"
-#include "printer.h"
-#include "reader.h"
-#include "stream.h"
 #include "data.h"
+#include "structure.h"
+#include "variable.h"
+#include "stream.h"
+#include "reader.h"
+#include "printer.h"
 
 /* Internal Object Structure */
 
@@ -35,12 +36,13 @@ static OctetArray*               OctetArray_slots                   (Ref  elemen
 static OctetArray*               OctetArray_slots_cstring           (Ref  element_type, const char* initial_value);
 static OctetArray*               OctetArray_slots_vector_of_octets  (Ref  element_type, VectorOfOctet* octets);
 static StandardClass*            StandardClass_slots                (Ref  name,         Ref  superclasses) unused;
-static StructureClass*           StructureClass_slots               (Ref  name,         Ref  superclasses) unused;
+static StructureClass*           StructureClass_slots               (Ref class_name,    Ref  direct_superclass,Ref slot_names);
 static Symbol*                   Symbol_slots                       (Ref  name,         Ref  package);
 static VectorOfObject*           VectorOfObject_slots               (halfword size);
 static VectorOfOctet*            VectorOfOctet_slots                (halfword length);
 static VectorOfOctet*            VectorOfOctet_slots_cstring        (const char* value);
 static VectorOfUWord*            VectorOfUWord_slots                (halfword size) unused;
+static Environment*              Environment_slots                  (Ref next_environment);
 
 
 
@@ -853,7 +855,7 @@ void class_add_superclass(Ref class, Ref superclass){
 
 
 Ref find_class(Ref name){
-    {do_list(class,kernel_classes){
+    {dolist(class,kernel_classes){
             if(eql(class->slots->class.name,name)){
                 return class;}}}
     return NULL;}
@@ -981,12 +983,65 @@ BuiltInClass* make_boot_BuiltInClass(void){
 
 /* STRUCTURE-CLASS */
 
-StructureClass* StructureClass_slots(Ref name,Ref superclasses){
+
+/* TODO: implement initial-offset
+For this, we may have to keep an a-list of slot-names with their
+indexes, to deal with the holes, and to record the initial-offset in
+the structure-class.
+*/
+
+
+StructureClass* make_boot_StructureClass(void){
     StructureClass* that=allocate(sizeof(*that));
-    that->objcount=2;
-    that->name=name;
-    that->direct_superclasses=superclasses;
+    that->objcount=3;
+    that->name=&uninitialized_object;
+    that->direct_superclasses=&uninitialized_object;
+    that->slot_names=&uninitialized_object;
     return that;}
+
+StructureClass* StructureClass_slots(Ref class_name,Ref direct_superclass,Ref slot_names){
+    WITH_LIVE_POOL;
+    StructureClass* that=allocate(sizeof(*that));
+    that->objcount=3;
+    that->name=class_name;
+    that->direct_superclasses=list(direct_superclass,NULL);
+    that->slot_names=slot_names;
+    that->nslots=list_length(slot_names)+direct_superclass->slots->structure_class.nslots;
+    LP_RETURN1(that);}
+
+Ref make_structure_class(Ref name,Ref direct_superclass,Ref slots){
+    WITH_LIVE_POOL;
+    /*
+    Creates a class that has structure-class metaclass,
+    direct_superclass or structure-object as superclass.
+
+    SLOTS is a list of symbols naming the additionnal slots to the new
+    structure class.
+
+    (An instance will have the concatenation of all the slots lists of all
+    the superclasses of its structure-class).
+    */
+    check_class(name,SYMBOL_Class);
+    if(direct_superclass==NIL_Symbol){
+        direct_superclass=STRUCTURE_OBJECT_Class;}
+    else{
+        check_type(direct_superclass,STRUCTURE_OBJECT_Class);}
+    check_type(slots,LIST_Class);
+    /* TODO: check that all elements of slots is a symbol */
+    LP_RETURN1(Object_new(STRUCTURE_CLASS_Class,
+                          (Slots*)StructureClass_slots(name,direct_superclass,slots)));}
+
+Ref make_structure_instance(Ref structure_class){
+    WITH_LIVE_POOL;
+    /*
+    Creates an instance of the structure_class.
+    All slots are initialized to NIL.
+    */
+    check_class(structure_class,STRUCTURE_CLASS_Class);
+    VectorOfObject* slots=VectorOfObject_slots(CHECK_UWORD_TO_HALFWORD(structure_class->slots->structure_class.nslots));
+    Ref instance=Object_new(structure_class,(Slots*)slots);
+    LP_RETURN1(instance);}
+
 
 /* FUNCALLABLE-STANDARD-CLASS */
 
@@ -1353,6 +1408,23 @@ Ref standard_error_stream(void){
     stream->slots->file_stream.stream=stderr;
     return stream;}
 
+/* ENVIRONMENT */
+
+static Environment* Environment_slots(Ref next_environment){
+    Environment* that=allocate(sizeof(*that));
+    that->objcount=7;
+    that->dynamic_variables    = NIL_Symbol;
+    that->lexical_variables    = NIL_Symbol;
+    that->lexical_functions    = NIL_Symbol;
+    that->lexical_blocks       = NIL_Symbol;
+    that->lexical_catchs       = NIL_Symbol;
+    that->lexical_declarations = NIL_Symbol;
+    that->next_environment     = next_environment;
+    that->frames=NULL;
+    return that;}
+
+Ref environment_new(Ref next_environment){
+    return Object_new(ENVIRONMENT_Class,(Slots*)Environment_slots(next_environment));}
 
 
 /* FUNCTION */
@@ -1382,8 +1454,7 @@ BuiltInFunction* BuiltInFunction_slots(Ref lisp_name,Ref lambda_list,KernelFunct
     return that;}
 
 Ref built_in_function_new(Ref lisp_name,Ref lambda_list,KernelFunctionPtr kernel_function){
-    return Object_new(find_class(symbol_intern_cstring("BUILT-IN-FUNCTION")),
-                      (Slots*)BuiltInFunction_slots(lisp_name,lambda_list,kernel_function));}
+    return Object_new(BUILT_IN_FUNCTION_Class,(Slots*)BuiltInFunction_slots(lisp_name,lambda_list,kernel_function));}
 
 //
 // typedef struct FuncallableStandardObject {
@@ -1532,6 +1603,7 @@ void kernel_initialize(void){
     kernel_initialize_built_in_functions();
     kernel_initialize_characters();
     kernel_initialize_features();
+    structure_initialize();
     reader_initialize();
     stream_initialize();
 
