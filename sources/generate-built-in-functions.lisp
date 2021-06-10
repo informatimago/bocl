@@ -50,16 +50,21 @@
                (with-output-to-string (*standard-output*)
                  (loop :for ch :across (string fname)
                        :do (case ch
-                             ((#\-) (write-char #\_))
+                             ((#\- #\/) (write-char #\_))
                              ((#\<) (write-string "LT"))
                              ((#\=) (write-string "EQ"))
                              ((#\>) (write-string "GT"))
-                             ((#\/) (write-string "_"))
                              (otherwise (write-char ch)))))))
 
 
 (defun c-fun-name (cfun)
-  (substitute #\_ #\- (string-downcase cfun)))
+  (with-output-to-string (*standard-output*)
+    (loop :for ch :across (string-downcase cfun)
+          :do (write-char (case ch
+                            ((#\- #\/) #\_)
+                            (otherwise ch))))))
+
+
 
 (defun c-par-name (pname)
   (concatenate 'string "par_" (substitute #\_ #\- (string-downcase pname))))
@@ -327,10 +332,10 @@
              (generate-kernel-function 'symbol-function '(symbol))
              (generate-kernel-function 'symbol-plist    '(symbol))
 
-             (generate-kernel-function 'symbol-set-package  '(symbol new-package))
-             (generate-kernel-function 'symbol-set-value    '(symbol new-value))
-             (generate-kernel-function 'symbol-set-function '(symbol new-function))
-             (generate-kernel-function 'symbol-set-plist    '(symbol new-plist))
+             (generate-kernel-function 'symbol-set-package  '(new-package  symbol))
+             (generate-kernel-function 'symbol-set-value    '(new-value    symbol))
+             (generate-kernel-function 'symbol-set-function '(new-function symbol))
+             (generate-kernel-function 'symbol-set-plist    '(new-plist    symbol))
 
              (generate-kernel-function 'symbolp    '(object) :values '(boolean))
              (generate-kernel-function 'boundp     '(symbol) :values '(boolean) :cfun 'symbol-boundp)
@@ -384,16 +389,17 @@
 
              ;; List
 
-             (generate-kernel-function 'list-length  '(list) :values '(uword))
+             (generate-kernel-function 'list-length    '(list) :values '(uword))
+             (generate-kernel-function 'list-position  '(object list))
 
-             (generate-kernel-function 'nconc  '(list tail))
-             (generate-kernel-function 'last  '(list))
-             (generate-kernel-function 'memq  '(item list))
-             (generate-kernel-function 'copy-list '(list))
-             (generate-kernel-function 'list      '(&rest elements) :cfun 'copy-list)
-             (generate-kernel-function 'delete    '(object list))
-             (generate-kernel-function 'nreverse  '(list))
-             (generate-kernel-function 'reverse   '(list))
+             (generate-kernel-function 'nconc          '(list tail))
+             (generate-kernel-function 'last           '(list))
+             (generate-kernel-function 'memq           '(item list))
+             (generate-kernel-function 'copy-list      '(list))
+             (generate-kernel-function 'list           '(&rest elements) :cfun 'copy-list)
+             (generate-kernel-function 'delete         '(object list))
+             (generate-kernel-function 'nreverse       '(list))
+             (generate-kernel-function 'reverse        '(list))
 
              ;; Plist
 
@@ -426,8 +432,8 @@
              (generate-kernel-function 'stringp       '(object)  :values '(boolean))
              (generate-kernel-function 'char          '(string index) :cfun 'char-ref)
              (generate-kernel-function 'schar         '(string index) :cfun 'char-ref)
-             (generate-kernel-function 'set-char      '(string index new-char) :cfun 'char-set)
-             (generate-kernel-function 'set-schar     '(string index new-char) :cfun 'char-set)
+             (generate-kernel-function 'set-char      '(new-char string index) :cfun 'char-set)
+             (generate-kernel-function 'set-schar     '(new-char string index) :cfun 'char-set)
 
              ;; DATA ====================
 
@@ -478,6 +484,82 @@
              (generate-kernel-function '=/i    '(a b)     :values '(boolean) :cfun 'integer-eq)
              ;; FLOAT ====================
              (generate-kernel-function '=/f    '(a b)     :values '(boolean) :cfun 'float-eq)
+
+             ;; STRUCTURE ====================
+
+             (generate-kernel-function 'make-structure-class           '(name direct-superclass slots))
+             (generate-kernel-function 'structure-class-instance-size  '(structure-class))
+             (generate-kernel-function 'structure-class-direct-slots   '(structure-class))
+             (generate-kernel-function 'structure-class-slots          '(structure-class))
+
+             (generate-kernel-function 'make-structure-instance        '(structure-class))
+             (generate-kernel-function 'structurep                     '(object)     :values '(boolean))
+             (generate-kernel-function 'structure-get                  '(structure-instance index))
+             (generate-kernel-function 'structure-set                  '(new-value structure-instance index))
+
+             ;; ENVIRONMENT ====================
+
+             (generate-kernel-function 'make-environment  '(&optional next-environment)  :cfun 'environment-new)
+
+             (generate-kernel-function 'environment-dynamic-variables        '(environment))
+             (generate-kernel-function 'environment-lexical-variables        '(environment))
+             (generate-kernel-function 'environment-lexical-functions        '(environment))
+             (generate-kernel-function 'environment-lexical-blocks           '(environment))
+             (generate-kernel-function 'environment-lexical-catchs           '(environment))
+             (generate-kernel-function 'environment-lexical-declarations     '(environment))
+             (generate-kernel-function 'environment-next-environment         '(environment))
+             (generate-kernel-function 'environment-frames                   '(environment)) ; for debugging, backtrace
+
+             (generate-kernel-function 'environment-add-dynamic-variable     '(variable environment))
+             (generate-kernel-function 'environment-add-lexical-variable     '(variable environment))
+             (generate-kernel-function 'environment-add-lexical-function     '(function environment))
+             (generate-kernel-function 'environment-add-lexical-block        '(name        environment))
+             (generate-kernel-function 'environment-add-lexical-catch        '(tag         environment))
+             (generate-kernel-function 'environment-add-lexical-declaration  '(declaration environment))
+
+             (generate-kernel-function 'environment-find-variable            '(name environment))
+             (generate-kernel-function 'environment-find-function            '(name environment))
+             (generate-kernel-function 'environment-find-block               '(name environment))
+             (generate-kernel-function 'environment-find-catch               '(tag environment))
+
+             ;; (generate-kernel-function 'env/make-constant-variable           '(name))
+             ;; (generate-kernel-function 'env/make-global-special-variable     '(name))
+             ;; (generate-kernel-function 'env/make-local-special-variable      '(name))
+             ;; (generate-kernel-function 'env/make-lexical-variable            '(name))
+             ;; (generate-kernel-function 'env/make-global-symbol-macro         '(name))
+             ;; (generate-kernel-function 'env/make-local-symbol-macro          '(name))
+             ;; (generate-kernel-function 'env/make-global-function             '(name))
+             ;; (generate-kernel-function 'env/make-local-function              '(name))
+             ;; (generate-kernel-function 'env/make-global-macro                '(name))
+             ;; (generate-kernel-function 'env/make-local-macro                 '(name))
+             ;;
+             ;; (generate-kernel-function 'env/variablep                        '(object) :values '(boolean))
+             ;; (generate-kernel-function 'env/constant-variable-p              '(object) :values '(boolean))
+             ;; (generate-kernel-function 'env/special-variable-p               '(object) :values '(boolean))
+             ;; (generate-kernel-function 'env/variable-name                    '(variable))
+             ;; (generate-kernel-function 'env/variable-value                   '(variable))
+             ;; (generate-kernel-function 'env/variable-set-value               '(new-value variable))
+             ;;
+             ;; (generate-kernel-function 'env/symbol-macro-p                   '(object) :values '(boolean))
+             ;; (generate-kernel-function 'env/symbol-macro-name                '(symbol-macro))
+             ;; (generate-kernel-function 'env/symbol-macro-expansion           '(symbol-macro))
+             ;; (generate-kernel-function 'env/symbol-macro-set-expansion       '(new-expansion symbol-macro))
+             ;;
+             ;; (generate-kernel-function 'env/functionp                        '(object) :values '(boolean))
+             ;; (generate-kernel-function 'env/function-name                    '(function))
+             ;; (generate-kernel-function 'env/function-lambda-list             '(function))
+             ;; (generate-kernel-function 'env/function-body                    '(function))
+             ;; (generate-kernel-function 'env/function-compiler-macro          '(function))
+             ;; (generate-kernel-function 'env/function-set-lambda-list         '(new-lambda-list     function))
+             ;; (generate-kernel-function 'env/function-set-body                '(new-body            function))
+             ;; (generate-kernel-function 'env/function-set-compiler-macro      '(new-compiler-macro  function))
+             ;;
+             ;; (generate-kernel-function 'env/macro-function-p                 '(object) :values '(boolean))
+             ;; (generate-kernel-function 'env/macro-name                       '(macro))
+             ;; (generate-kernel-function 'env/macro-lambda-list                '(macro))
+             ;; (generate-kernel-function 'env/macro-body                       '(macro))
+             ;; (generate-kernel-function 'env/macro-set-lambda-list            '(new-lambda-list     macro))
+             ;; (generate-kernel-function 'env/macro-set-body                   '(new-body            macro))
 
              )))
 

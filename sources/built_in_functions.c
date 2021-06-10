@@ -439,11 +439,11 @@ void kernel_SYMBOL_SET_PACKAGE(Ref function,Ref arguments,MultipleValues* result
     push_to_rootset(function);
     push_to_rootset(arguments);
     Ref current=arguments;
-    Ref par_symbol = pop_mandatory_argument(function,&current);
     Ref par_new_package = pop_mandatory_argument(function,&current);
+    Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = symbol_set_package(par_symbol, par_new_package);
+    results->values[0] = symbol_set_package(par_new_package, par_symbol);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -452,11 +452,11 @@ void kernel_SYMBOL_SET_VALUE(Ref function,Ref arguments,MultipleValues* results)
     push_to_rootset(function);
     push_to_rootset(arguments);
     Ref current=arguments;
-    Ref par_symbol = pop_mandatory_argument(function,&current);
     Ref par_new_value = pop_mandatory_argument(function,&current);
+    Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = symbol_set_value(par_symbol, par_new_value);
+    results->values[0] = symbol_set_value(par_new_value, par_symbol);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -465,11 +465,11 @@ void kernel_SYMBOL_SET_FUNCTION(Ref function,Ref arguments,MultipleValues* resul
     push_to_rootset(function);
     push_to_rootset(arguments);
     Ref current=arguments;
-    Ref par_symbol = pop_mandatory_argument(function,&current);
     Ref par_new_function = pop_mandatory_argument(function,&current);
+    Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = symbol_set_function(par_symbol, par_new_function);
+    results->values[0] = symbol_set_function(par_new_function, par_symbol);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -478,11 +478,11 @@ void kernel_SYMBOL_SET_PLIST(Ref function,Ref arguments,MultipleValues* results)
     push_to_rootset(function);
     push_to_rootset(arguments);
     Ref current=arguments;
-    Ref par_symbol = pop_mandatory_argument(function,&current);
     Ref par_new_plist = pop_mandatory_argument(function,&current);
+    Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = symbol_set_plist(par_symbol, par_new_plist);
+    results->values[0] = symbol_set_plist(par_new_plist, par_symbol);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -993,6 +993,19 @@ void kernel_LIST_LENGTH(Ref function,Ref arguments,MultipleValues* results){
     delete_from_rootset(function);
 }
 
+void kernel_LIST_POSITION(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    Ref par_list = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = list_position(par_object, par_list);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 void kernel_NCONC(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
@@ -1366,12 +1379,12 @@ void kernel_SET_CHAR(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
     Ref current=arguments;
+    Ref par_new_char = pop_mandatory_argument(function,&current);
     Ref par_string = pop_mandatory_argument(function,&current);
     Ref par_index = pop_mandatory_argument(function,&current);
-    Ref par_new_char = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = char_set(par_string, par_index, par_new_char);
+    results->values[0] = char_set(par_new_char, par_string, par_index);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1380,12 +1393,12 @@ void kernel_SET_SCHAR(Ref function,Ref arguments,MultipleValues* results){
     push_to_rootset(function);
     push_to_rootset(arguments);
     Ref current=arguments;
+    Ref par_new_char = pop_mandatory_argument(function,&current);
     Ref par_string = pop_mandatory_argument(function,&current);
     Ref par_index = pop_mandatory_argument(function,&current);
-    Ref par_new_char = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = char_set(par_string, par_index, par_new_char);
+    results->values[0] = char_set(par_new_char, par_string, par_index);
     delete_from_rootset(arguments);
     delete_from_rootset(function);
 }
@@ -1735,6 +1748,346 @@ void kernel_EQ_F(Ref function,Ref arguments,MultipleValues* results){
     delete_from_rootset(function);
 }
 
+void kernel_MAKE_STRUCTURE_CLASS(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_name = pop_mandatory_argument(function,&current);
+    Ref par_direct_superclass = pop_mandatory_argument(function,&current);
+    Ref par_slots = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = make_structure_class(par_name, par_direct_superclass, par_slots);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRUCTURE_CLASS_INSTANCE_SIZE(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_structure_class = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = structure_class_instance_size(par_structure_class);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRUCTURE_CLASS_DIRECT_SLOTS(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_structure_class = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = structure_class_direct_slots(par_structure_class);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRUCTURE_CLASS_SLOTS(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_structure_class = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = structure_class_slots(par_structure_class);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_MAKE_STRUCTURE_INSTANCE(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_structure_class = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = make_structure_instance(par_structure_class);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRUCTUREP(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(structurep(par_object));
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRUCTURE_GET(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_structure_instance = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = structure_get(par_structure_instance, par_index);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_STRUCTURE_SET(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_new_value = pop_mandatory_argument(function,&current);
+    Ref par_structure_instance = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = structure_set(par_new_value, par_structure_instance, par_index);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_MAKE_ENVIRONMENT(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref def_next_environment = variable_value(S(NIL));
+    Ref par_next_environment = pop_optional_argument(function,&current,def_next_environment);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_new(par_next_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_DYNAMIC_VARIABLES(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_dynamic_variables(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_LEXICAL_VARIABLES(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_lexical_variables(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_LEXICAL_FUNCTIONS(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_lexical_functions(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_LEXICAL_BLOCKS(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_lexical_blocks(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_LEXICAL_CATCHS(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_lexical_catchs(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_LEXICAL_DECLARATIONS(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_lexical_declarations(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_NEXT_ENVIRONMENT(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_next_environment(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_FRAMES(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_frames(par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_ADD_DYNAMIC_VARIABLE(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_variable = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_add_dynamic_variable(par_variable, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_ADD_LEXICAL_VARIABLE(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_variable = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_add_lexical_variable(par_variable, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_ADD_LEXICAL_FUNCTION(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_function = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_add_lexical_function(par_function, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_ADD_LEXICAL_BLOCK(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_name = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_add_lexical_block(par_name, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_ADD_LEXICAL_CATCH(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_tag = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_add_lexical_catch(par_tag, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_ADD_LEXICAL_DECLARATION(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_declaration = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_add_lexical_declaration(par_declaration, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_FIND_VARIABLE(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_name = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_find_variable(par_name, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_FIND_FUNCTION(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_name = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_find_function(par_name, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_FIND_BLOCK(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_name = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_find_block(par_name, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
+void kernel_ENVIRONMENT_FIND_CATCH(Ref function,Ref arguments,MultipleValues* results){
+    push_to_rootset(function);
+    push_to_rootset(arguments);
+    Ref current=arguments;
+    Ref par_tag = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = environment_find_catch(par_tag, par_environment);
+    delete_from_rootset(arguments);
+    delete_from_rootset(function);
+}
+
 
 void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(KERNEL-ROOTSET);
@@ -1843,16 +2196,16 @@ void kernel_initialize_built_in_functions(void){
         Ref lambda_list=list(S(SYMBOL),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SYMBOL_PLIST));}
     {   Ref fname=S(SYMBOL-SET-PACKAGE);
-        Ref lambda_list=list(S(SYMBOL),S(NEW-PACKAGE),NULL);
+        Ref lambda_list=list(S(NEW-PACKAGE),S(SYMBOL),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SYMBOL_SET_PACKAGE));}
     {   Ref fname=S(SYMBOL-SET-VALUE);
-        Ref lambda_list=list(S(SYMBOL),S(NEW-VALUE),NULL);
+        Ref lambda_list=list(S(NEW-VALUE),S(SYMBOL),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SYMBOL_SET_VALUE));}
     {   Ref fname=S(SYMBOL-SET-FUNCTION);
-        Ref lambda_list=list(S(SYMBOL),S(NEW-FUNCTION),NULL);
+        Ref lambda_list=list(S(NEW-FUNCTION),S(SYMBOL),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SYMBOL_SET_FUNCTION));}
     {   Ref fname=S(SYMBOL-SET-PLIST);
-        Ref lambda_list=list(S(SYMBOL),S(NEW-PLIST),NULL);
+        Ref lambda_list=list(S(NEW-PLIST),S(SYMBOL),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SYMBOL_SET_PLIST));}
     {   Ref fname=S(SYMBOLP);
         Ref lambda_list=list(S(OBJECT),NULL);
@@ -1980,6 +2333,9 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(LIST-LENGTH);
         Ref lambda_list=list(S(LIST),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_LIST_LENGTH));}
+    {   Ref fname=S(LIST-POSITION);
+        Ref lambda_list=list(S(OBJECT),S(LIST),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_LIST_POSITION));}
     {   Ref fname=S(NCONC);
         Ref lambda_list=list(S(LIST),S(TAIL),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_NCONC));}
@@ -2068,10 +2424,10 @@ void kernel_initialize_built_in_functions(void){
         Ref lambda_list=list(S(STRING),S(INDEX),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SCHAR));}
     {   Ref fname=S(SET-CHAR);
-        Ref lambda_list=list(S(STRING),S(INDEX),S(NEW-CHAR),NULL);
+        Ref lambda_list=list(S(NEW-CHAR),S(STRING),S(INDEX),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SET_CHAR));}
     {   Ref fname=S(SET-SCHAR);
-        Ref lambda_list=list(S(STRING),S(INDEX),S(NEW-CHAR),NULL);
+        Ref lambda_list=list(S(NEW-CHAR),S(STRING),S(INDEX),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_SET_SCHAR));}
     {   Ref fname=S(EQL);
         Ref lambda_list=list(S(A),S(B),NULL);
@@ -2142,5 +2498,86 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(=/F);
         Ref lambda_list=list(S(A),S(B),NULL);
         symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_EQ_F));}
+    {   Ref fname=S(MAKE-STRUCTURE-CLASS);
+        Ref lambda_list=list(S(NAME),S(DIRECT-SUPERCLASS),S(SLOTS),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_STRUCTURE_CLASS));}
+    {   Ref fname=S(STRUCTURE-CLASS-INSTANCE-SIZE);
+        Ref lambda_list=list(S(STRUCTURE-CLASS),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_STRUCTURE_CLASS_INSTANCE_SIZE));}
+    {   Ref fname=S(STRUCTURE-CLASS-DIRECT-SLOTS);
+        Ref lambda_list=list(S(STRUCTURE-CLASS),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_STRUCTURE_CLASS_DIRECT_SLOTS));}
+    {   Ref fname=S(STRUCTURE-CLASS-SLOTS);
+        Ref lambda_list=list(S(STRUCTURE-CLASS),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_STRUCTURE_CLASS_SLOTS));}
+    {   Ref fname=S(MAKE-STRUCTURE-INSTANCE);
+        Ref lambda_list=list(S(STRUCTURE-CLASS),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_STRUCTURE_INSTANCE));}
+    {   Ref fname=S(STRUCTUREP);
+        Ref lambda_list=list(S(OBJECT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_STRUCTUREP));}
+    {   Ref fname=S(STRUCTURE-GET);
+        Ref lambda_list=list(S(STRUCTURE-INSTANCE),S(INDEX),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_STRUCTURE_GET));}
+    {   Ref fname=S(STRUCTURE-SET);
+        Ref lambda_list=list(S(NEW-VALUE),S(STRUCTURE-INSTANCE),S(INDEX),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_STRUCTURE_SET));}
+    {   Ref fname=S(MAKE-ENVIRONMENT);
+        Ref lambda_list=list(S(&OPTIONAL),S(NEXT-ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_ENVIRONMENT));}
+    {   Ref fname=S(ENVIRONMENT-DYNAMIC-VARIABLES);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_DYNAMIC_VARIABLES));}
+    {   Ref fname=S(ENVIRONMENT-LEXICAL-VARIABLES);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_LEXICAL_VARIABLES));}
+    {   Ref fname=S(ENVIRONMENT-LEXICAL-FUNCTIONS);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_LEXICAL_FUNCTIONS));}
+    {   Ref fname=S(ENVIRONMENT-LEXICAL-BLOCKS);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_LEXICAL_BLOCKS));}
+    {   Ref fname=S(ENVIRONMENT-LEXICAL-CATCHS);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_LEXICAL_CATCHS));}
+    {   Ref fname=S(ENVIRONMENT-LEXICAL-DECLARATIONS);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_LEXICAL_DECLARATIONS));}
+    {   Ref fname=S(ENVIRONMENT-NEXT-ENVIRONMENT);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_NEXT_ENVIRONMENT));}
+    {   Ref fname=S(ENVIRONMENT-FRAMES);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_FRAMES));}
+    {   Ref fname=S(ENVIRONMENT-ADD-DYNAMIC-VARIABLE);
+        Ref lambda_list=list(S(VARIABLE),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_ADD_DYNAMIC_VARIABLE));}
+    {   Ref fname=S(ENVIRONMENT-ADD-LEXICAL-VARIABLE);
+        Ref lambda_list=list(S(VARIABLE),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_ADD_LEXICAL_VARIABLE));}
+    {   Ref fname=S(ENVIRONMENT-ADD-LEXICAL-FUNCTION);
+        Ref lambda_list=list(S(FUNCTION),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_ADD_LEXICAL_FUNCTION));}
+    {   Ref fname=S(ENVIRONMENT-ADD-LEXICAL-BLOCK);
+        Ref lambda_list=list(S(NAME),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_ADD_LEXICAL_BLOCK));}
+    {   Ref fname=S(ENVIRONMENT-ADD-LEXICAL-CATCH);
+        Ref lambda_list=list(S(TAG),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_ADD_LEXICAL_CATCH));}
+    {   Ref fname=S(ENVIRONMENT-ADD-LEXICAL-DECLARATION);
+        Ref lambda_list=list(S(DECLARATION),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_ADD_LEXICAL_DECLARATION));}
+    {   Ref fname=S(ENVIRONMENT-FIND-VARIABLE);
+        Ref lambda_list=list(S(NAME),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_FIND_VARIABLE));}
+    {   Ref fname=S(ENVIRONMENT-FIND-FUNCTION);
+        Ref lambda_list=list(S(NAME),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_FIND_FUNCTION));}
+    {   Ref fname=S(ENVIRONMENT-FIND-BLOCK);
+        Ref lambda_list=list(S(NAME),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_FIND_BLOCK));}
+    {   Ref fname=S(ENVIRONMENT-FIND-CATCH);
+        Ref lambda_list=list(S(TAG),S(ENVIRONMENT),NULL);
+        symbol_set_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_FIND_CATCH));}
 }
 /**** THE END ****/
