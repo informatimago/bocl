@@ -188,4 +188,13 @@ bool remf(Ref plist,Ref indicator){
         return false;}}
 
 
+Ref list_position(Ref object,Ref list){
+    uword pos=0;
+    while(consp(list) && (object!=car(list))){
+        pos++;
+        list=cdr(list);}
+    return consp(list)
+            ?integer_from_uword(pos)
+            :NIL_Symbol;}
+
 /**** THE END ****/
