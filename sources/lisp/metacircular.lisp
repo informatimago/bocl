@@ -275,27 +275,28 @@
 
 (defmacro go (label)
   (let ((name (label-to-functionname label)))
-    `(throw ,name #',name)))
+    `(throw ,name (function ,name))))
 
 
 (defmacro tagbody (&body body)
-  (let* ((init-tag (gensym)) (go-tag (gensym)) (return-tag (gensym))
-         (functions
-           (mapcon
-            #'(lambda (seq &aux (label (car seq) (s (cdr seq)))
-                             (when (atom label)
-                               (let ((p (position-if #'atom s)))
-                                 `((,(label-to-functionname label) ()
-                                    ,@(subseq s 0 (or p (length s)))
-                                    ,(if p `(,(label-to-functionname (elt s p)))
-                                         `(throw ,return-tag 'nil)))))))
-                `(,init-tag ,@body))))
-         `(let* ((,go-tag (list nil)) (,return-tag (list nil))
-                 ,@(mapcar #'(lambda (f) `(,(car f) ,go-tag)) functions))
-            (catch ,return-tag
-              (labels ,functions
-                (let ((nxt-label #',(caar functions)))
-                  (loop (setq nxt-label (catch ,go-tag (funcall nxt-label)))))))))))
+  (let* ((init-tag   (gensym))
+         (go-tag     (gensym))
+         (return-tag (gensym))
+         (functions  (mapcon (lambda (seq &aux (label (car seq) (s (cdr seq))))
+                               (when (atom label)
+                                 (let ((p (position-if #'atom s)))
+                                   `((,(label-to-functionname label) ()
+                                      ,@(subseq s 0 (or p (length s)))
+                                      ,(if p
+                                           `(,(label-to-functionname (elt s p)))
+                                           `(throw ,return-tag 'nil)))))))
+                             `(,init-tag ,@body))))
+    `(let* ((,go-tag (list nil)) (,return-tag (list nil))
+            ,@(mapcar (lambda (f) `(,(car f) ,go-tag)) functions))
+       (catch ,return-tag
+         (labels ,functions
+           (let ((nxt-label (function ,(caar functions))))
+             (loop (setq nxt-label (catch ,go-tag (funcall nxt-label)))))))))))
 
 
 ;; "CATCH/THROW" EMULATED BY "TAGBODY/GO" AND SPECIAL VARIABLES  The
@@ -575,25 +576,25 @@
   acquaintances)
 
 (defmacro function (lexp)
-  (let* ((gvars (free-globals lexp))
-         (fvars (free-lexicals lexp))
-         (ffns (free-functions lexp))
-         (acql (gensym)))
-    `(make-function-closure
-      :acquaintances (vector ,@fvars ,@(mapcar #'(lambda (f) `#',v) ffns))
-      :lambda
-      #'(lambda (,acql ,@(cadr lexp))
-          (symbol-macrolet ; handle free lexical and global variable names.
-              (,@(mapcar #'(lambda (v i) `(,v '(svref ,acql ,i)))
-                         fvars (iota-list (length fvars)))
-               ,@(mapcar #'(lambda (v) `(,v '(symbol-value ',v))) gvars ))
-            (macrolet ; handle free function names.
-                ,(mapcar
-                  #'(lambda (f i)
-                      `(,f (&rest a)
-                           (list* 'funcall '(svref ,acql ,(+ i (length fvars))) a)))
-                  ffns (iota-list (length fns))))
-            ,@(cddr lexp))))))
+(let* ((gvars (free-globals lexp))
+       (fvars (free-lexicals lexp))
+       (ffns (free-functions lexp))
+       (acql (gensym)))
+  `(make-function-closure
+    :acquaintances (vector ,@fvars ,@(mapcar #'(lambda (f) `#',v) ffns))
+    :lambda
+    #'(lambda (,acql ,@(cadr lexp))
+        (symbol-macrolet ; handle free lexical and global variable names.
+            (,@(mapcar #'(lambda (v i) `(,v '(svref ,acql ,i)))
+                       fvars (iota-list (length fvars)))
+             ,@(mapcar #'(lambda (v) `(,v '(symbol-value ',v))) gvars ))
+          (macrolet                     ; handle free function names.
+              ,(mapcar
+                #'(lambda (f i)
+                    `(,f (&rest a)
+                         (list* 'funcall '(svref ,acql ,(+ i (length fvars))) a)))
+                ffns (iota-list (length fns))))
+          ,@(cddr lexp))))))
 
 
 ;; CONCLUSIONS
