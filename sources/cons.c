@@ -44,6 +44,27 @@ Ref cdadr(Ref cell){ return cdr(car(cdr(cell))); }
 Ref cddar(Ref cell){ return cdr(cdr(car(cell))); }
 Ref cdddr(Ref cell){ return cdr(cdr(cdr(cell))); }
 
+
+Ref caaaar(Ref cell){ return car(car(car(car(cell)))); }
+Ref caaadr(Ref cell){ return car(car(car(cdr(cell)))); }
+Ref caadar(Ref cell){ return car(car(cdr(car(cell)))); }
+Ref caaddr(Ref cell){ return car(car(cdr(cdr(cell)))); }
+
+Ref cadaar(Ref cell){ return car(cdr(car(car(cell)))); }
+Ref cadadr(Ref cell){ return car(cdr(car(cdr(cell)))); }
+Ref caddar(Ref cell){ return car(cdr(cdr(car(cell)))); }
+Ref cadddr(Ref cell){ return car(cdr(cdr(cdr(cell)))); }
+
+Ref cdaaar(Ref cell){ return cdr(car(car(car(cell)))); }
+Ref cdaadr(Ref cell){ return cdr(car(car(cdr(cell)))); }
+Ref cdadar(Ref cell){ return cdr(car(cdr(car(cell)))); }
+Ref cdaddr(Ref cell){ return cdr(car(cdr(cdr(cell)))); }
+
+Ref cddaar(Ref cell){ return cdr(cdr(car(car(cell)))); }
+Ref cddadr(Ref cell){ return cdr(cdr(car(cdr(cell)))); }
+Ref cdddar(Ref cell){ return cdr(cdr(cdr(car(cell)))); }
+Ref cddddr(Ref cell){ return cdr(cdr(cdr(cdr(cell)))); }
+
 /* List */
 
 
@@ -57,8 +78,12 @@ uword list_length(Ref list){
     return i;}
 
 Ref push(Ref element,Ref* list){
-    WITH_LIVE_POOL;
-    LP_RETURN1(((*list)=cons(element,(*list))));}
+    uword pool=open_live_pool();
+    add_to_live_pool(element);
+    add_to_live_pool(*list);
+    (*list)=cons(element,(*list));
+    close_live_pool(pool);
+    return (*list);}
 
 Ref pop(Ref* list){
     Ref result=car(*list);
@@ -99,22 +124,34 @@ Ref nconc(Ref list,Ref tail){
         return list;}}
 
 Ref list(Ref first_element,...){
-    WITH_LIVE_POOL;
-    Ref list=cons(first_element,NIL_Symbol);
-    Ref tail=list;
+    uword pool=open_live_pool();
+    /* save the arguments to the rootset before allocating anything: */
+    add_to_live_pool(first_element);
     va_list ap;
     va_start(ap,first_element);
     Ref element=va_arg(ap,Ref);
+    while(element){
+        add_to_live_pool(element);
+        element=va_arg(ap,Ref);
+    }
+    va_end(ap);
+    /* then allocate the list: */
+    Ref list=cons(first_element,NIL_Symbol);
+    Ref tail=list;
+    va_start(ap,first_element);
+    element=va_arg(ap,Ref);
     while(element){
         cons_rplacd(tail,cons(element,NIL_Symbol));
         tail=cons_cdr(tail);
         element=va_arg(ap,Ref);
     }
     va_end(ap);
-    LP_RETURN1(list);}
+    close_live_pool(pool);
+    return list;}
 
 Ref copy_list(Ref list){
-    WITH_LIVE_POOL;
+    uword pool=open_live_pool();
+    add_to_live_pool(list);
     if(nullp(list)){
         return list;}
     Ref result=cons(car(list),NIL_Symbol);
@@ -124,12 +161,18 @@ Ref copy_list(Ref list){
         rplacd(tail,cons(car(list),NIL_Symbol));
         list=cdr(list);}
     rplacd(tail,cdr(list));
-    LP_RETURN1(result);}
+    close_live_pool(pool);
+    return result;}
 
 Ref memq(Ref item,Ref list){
     while(consp(list) && !eql(item,car(list))){
         list=cdr(list);}
     return list;}
+
+Ref assq(Ref key,Ref alist){
+    while(consp(alist) && !eql(key,caar(alist))){
+        alist=cdr(alist);}
+    return car(alist);}
 
 Ref nreverse(Ref list){
     if(list==NIL_Symbol){
@@ -143,14 +186,17 @@ Ref nreverse(Ref list){
     return result;}
 
 Ref reverse(Ref list){
-    WITH_LIVE_POOL;
+    uword pool=open_live_pool();
+    add_to_live_pool(list);
     if(list==NIL_Symbol){
-        LP_RETURN1(NIL_Symbol);}
+        close_live_pool(pool);
+        return NIL_Symbol;}
     Ref result=NIL_Symbol;
     while(consp(list)){
         result=cons(car(list),result);
         list=cdr(list);}
-    LP_RETURN1(result);}
+    close_live_pool(pool);
+    return result;}
 
 /* Plist */
 
@@ -163,15 +209,21 @@ Ref getf(Ref plist,Ref indicator,Ref default_value){
             :default_value;}
 
 Ref putf(Ref plist,Ref indicator,Ref new_value){
-    WITH_LIVE_POOL;
+    uword pool=open_live_pool();
+    add_to_live_pool(plist);
+    add_to_live_pool(indicator);
+    add_to_live_pool(new_value);
     Ref current=plist;
     while(consp(current) && !eql(indicator,car(current))){
         current=cddr(current);}
     if(consp(current)){
         rplaca(cdr(current),new_value);
-        LP_RETURN1(plist);}
+        close_live_pool(pool);
+        return plist;}
     else{
-        LP_RETURN1(cons(indicator,cons(new_value,plist)));}}
+        Ref result=cons(indicator,cons(new_value,plist));
+        close_live_pool(pool);
+        return result;}}
 
 bool remf(Ref plist,Ref indicator){
     if(consp(plist) && eql(indicator,car(plist))){
@@ -201,5 +253,6 @@ Ref list_position(Ref object,Ref list){
     return consp(list)
             ?integer_from_uword(pos)
             :NIL_Symbol;}
+
 
 /**** THE END ****/
