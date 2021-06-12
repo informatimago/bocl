@@ -191,6 +191,7 @@ cf. chapter 23. Reader.
 
 ** 3. Evaluation and Compilation
 
+
 Do we need a compiler?
 
 The C kernel provides only an =EVAL= interpreter.
@@ -206,6 +207,21 @@ enough for the stated goal: compile a CL implementation.  Only if it's
 really too slow, would we seek to implement eg. a virtual machine and
 a byte-code compiler.  But we'd basically reproduce the clisp
 implementation.
+
+** 3.4 Lambda List
+
+The initforms in the lambda lists are evaluated only when needed,
+(when the argument is absent).
+
+However, their expressions are macro-expanded during the compilation
+(minimal-compilation) macro-expansion phase.
+
+The &key parameters are bound in the order of appearance,
+independently of the order of the key value pairs in the argument
+list.  Only the first occurence of a given key is used in the argument
+list.
+
+
 
 ** 4. Types and Classes
 
@@ -442,7 +458,6 @@ TODO: Split the table sections into their correponding chapters.
 | =CHAR-CODE-LIMIT=                        |                  1114112 |
 | =LAMBDA-PARAMETERS-LIMIT=                |                     4096 |
 | =MULTIPLE-VALUES-LIMIT=                  |                      200 |
-
 
 ** 13. Characters
 
