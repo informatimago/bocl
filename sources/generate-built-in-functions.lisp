@@ -1,7 +1,14 @@
 (defpackage "COM.INFORMATIMAGO.BOCL.KERNEL.GENERATE.KERNEL-FUNCTIONS"
   (:use "COMMON-LISP")
+  (:use "COM.INFORMATIMAGO.COMMON-LISP.CESARUM.UTILITY")
   (:export "GENERATE-BUILT-IN-FUNCTIONS"
-           "GENERATE-KERNEL-FUNCTION"))
+           "GENERATE-KERNEL-FUNCTION"
+           "GENERATE-STRUCTURE"
+           "GENERATE-STRUCTURE-FUNCTIONS"))
+
+(defpackage "KERNEL"
+  (:use))
+
 (in-package "COM.INFORMATIMAGO.BOCL.KERNEL.GENERATE.KERNEL-FUNCTIONS")
 
 (defun parse-lambda-list (lambda-list)
@@ -42,8 +49,33 @@
 
 
 
+(defun scat (&rest string-designators)
+  "Interns the concatenation of the STRING-DESIGNATORS."
+  (intern (apply (function concatenate) 'string
+                 (mapcar (function string) string-designators))))
+
 (defun keywordize (sym)
   (intern (string sym) "KEYWORD"))
+
+
+(defun c-symbol-name (cfun)
+  (with-output-to-string (*standard-output*)
+    (loop :for ch :across (string cfun)
+          :do (write-char (case ch
+                            ((#\- #\/ #\*) #\_)
+                            (otherwise ch))))))
+
+
+(defun class-c-name (lisp-name)
+  (intern (format nil "~A_Class" (c-symbol-name lisp-name))))
+
+
+(defun c-fun-name (cfun)
+  (with-output-to-string (*standard-output*)
+    (loop :for ch :across (string-downcase cfun)
+          :do (write-char (case ch
+                            ((#\- #\/) #\_)
+                            (otherwise ch))))))
 
 (defun k-fun-name (fname)
   (concatenate 'string "kernel_"
@@ -57,15 +89,6 @@
                              (otherwise (write-char ch)))))))
 
 
-(defun c-fun-name (cfun)
-  (with-output-to-string (*standard-output*)
-    (loop :for ch :across (string-downcase cfun)
-          :do (write-char (case ch
-                            ((#\- #\/) #\_)
-                            (otherwise ch))))))
-
-
-
 (defun c-par-name (pname)
   (concatenate 'string "par_" (substitute #\_ #\- (string-downcase pname))))
 
@@ -73,6 +96,7 @@
   (concatenate 'string "def_" (substitute #\_ #\- (string-downcase pname))))
 
 (defvar *header* :source)
+(defvar *column* 0)
 (defvar *kernel-functions* nil)
 
 (defun genlist (object)
@@ -84,6 +108,7 @@
     (integer   (format nil "I(~A)" object))
     (string    (format nil "T(~S)" object))
     (character (format nil "C(~A)" (char-name object)))))
+
 
 (defun generate-kernel-function (fname lambda-list &key (values '(t)) cfun)
   (multiple-value-bind (mandatories optionals rest keys allow-other-keys) (parse-lambda-list lambda-list)
@@ -111,10 +136,12 @@
 
       (ecase *header*
 
-        ((:kernel-functions)
+
+        ((:kernel-header :kernel-signature)
+
          (let ((k-fun-name (if cfun (c-fun-name cfun) (c-fun-name fname))))
            (if (member k-fun-name *kernel-functions* :test (function equal))
-               (warn "Function ~A is already generated.~%" k-fun-name)
+               (warn "Function ~A is already generated." k-fun-name)
                (progn
                  (push k-fun-name *kernel-functions*)
                  (cond
@@ -144,13 +171,31 @@
                        (setf sep ", ")))
                    (when (string= sep "")
                      (write-string "void")))
-                 (write-line ");")))))
+                 (if (eql *header* :kernel-header)
+                     (write-line ");")
+                     (write-string ")"))))))
+
+
+        ((:kernel-source)
+         ;; They're hand-written in kernel.c
+         )
+
+
+        ((:package-exports)
+
+         (let* ((sfname (string fname))
+                (size   (+ 3 (length sfname))))
+           (when (< *print-right-margin* (+ *column* size))
+             (format t "~%   ")
+             (setf *column* 3))
+           (format t " ~S" sfname)
+           (incf *column* size)))
 
         ((:symbols)
          (format t "    {   Ref fname=S(~a);~%" fname)
          (format t "        Ref lambda_list=~A;~%"
                  (genlist lambda-list))
-         (format t "        symbol_set_function(fname,built_in_function_new(fname,lambda_list,~A));}~%"
+         (format t "        set_symbol_function(fname,built_in_function_new(fname,lambda_list,~A));}~%"
                  (k-fun-name fname)))
 
         ((:header)
@@ -160,8 +205,9 @@
         ((:source)
          (format t "void ~A(Ref function,Ref arguments,MultipleValues* results){~%"
                  (k-fun-name fname))
-         (write-line "    push_to_rootset(function);")
-         (write-line "    push_to_rootset(arguments);")
+         (write-line "    uword pool=open_live_pool();")
+         (write-line "    add_to_live_pool(function);")
+         (write-line "    add_to_live_pool(arguments);")
          (write-line "    Ref current=arguments;")
          (dolist (man mandatories)
            (format t "    Ref ~A = pop_mandatory_argument(function,&current);~%"
@@ -257,8 +303,7 @@
          (if (member values '((boolean) (uword) (word)) :test (function equal))
              (format t "));~%")
              (format t ");~%"))
-         (write-line "    delete_from_rootset(arguments);")
-         (write-line "    delete_from_rootset(function);")
+         (write-line "    close_live_pool(pool);")
          (write-line "}")
          (terpri))
         ))))
@@ -276,6 +321,8 @@
                  (*kernel-functions* '()))
 
              (generate-kernel-function 'kernel-rootset '())
+
+             ;; (generate-kernel-function 'test-key '(&key (a 1 ap) (b 2 bp)))
 
 
              ;; CLASS
@@ -332,10 +379,10 @@
              (generate-kernel-function 'symbol-function '(symbol))
              (generate-kernel-function 'symbol-plist    '(symbol))
 
-             (generate-kernel-function 'symbol-set-package  '(new-package  symbol))
-             (generate-kernel-function 'symbol-set-value    '(new-value    symbol))
-             (generate-kernel-function 'symbol-set-function '(new-function symbol))
-             (generate-kernel-function 'symbol-set-plist    '(new-plist    symbol))
+             (generate-kernel-function 'set-symbol-package  '(new-package  symbol))
+             (generate-kernel-function 'set-symbol-value    '(new-value    symbol))
+             (generate-kernel-function 'set-symbol-function '(new-function symbol))
+             (generate-kernel-function 'set-symbol-plist    '(new-plist    symbol))
 
              (generate-kernel-function 'symbolp    '(object) :values '(boolean))
              (generate-kernel-function 'boundp     '(symbol) :values '(boolean) :cfun 'symbol-boundp)
@@ -383,8 +430,10 @@
              (generate-kernel-function 'rplaca  '(cell new-car))
              (generate-kernel-function 'rplacd  '(cell new-car))
 
-             (dolist (op '(car cdr caar cadr cdar cddr caaar caadr cadar caddr
-                           cdaar cdadr cddar cdddr))
+             (dolist (op '(car cdr caar cadr cdar cddr
+                           caaar caadr cadar caddr cdaar cdadr cddar cdddr
+                           caaaar caaadr caadar caaddr cadaar cadadr caddar cadddr
+                           cdaaar cdaadr cdadar cdaddr cddaar cddadr cdddar cddddr))
                (generate-kernel-function op '(cons)))
 
              ;; List
@@ -395,6 +444,7 @@
              (generate-kernel-function 'nconc          '(list tail))
              (generate-kernel-function 'last           '(list))
              (generate-kernel-function 'memq           '(item list))
+             (generate-kernel-function 'assq           '(key alist))
              (generate-kernel-function 'copy-list      '(list))
              (generate-kernel-function 'list           '(&rest elements) :cfun 'copy-list)
              (generate-kernel-function 'delete         '(object list))
@@ -487,10 +537,10 @@
 
              ;; STRUCTURE ====================
 
-             (generate-kernel-function 'make-structure-class           '(name direct-superclass slots))
+             (generate-kernel-function 'make-structure-class           '(name direct-superclass offset slots))
              (generate-kernel-function 'structure-class-instance-size  '(structure-class))
-             (generate-kernel-function 'structure-class-direct-slots   '(structure-class))
-             (generate-kernel-function 'structure-class-slots          '(structure-class))
+             (generate-kernel-function 'structure-class-instance-direct-slots   '(structure-class))
+             (generate-kernel-function 'structure-class-instance-slots          '(structure-class))
 
              (generate-kernel-function 'make-structure-instance        '(structure-class))
              (generate-kernel-function 'structurep                     '(object)     :values '(boolean))
@@ -501,67 +551,30 @@
 
              (generate-kernel-function 'make-environment  '(&optional next-environment)  :cfun 'environment-new)
 
-             (generate-kernel-function 'environment-dynamic-variables        '(environment))
-             (generate-kernel-function 'environment-lexical-variables        '(environment))
-             (generate-kernel-function 'environment-lexical-functions        '(environment))
-             (generate-kernel-function 'environment-lexical-blocks           '(environment))
-             (generate-kernel-function 'environment-lexical-catchs           '(environment))
-             (generate-kernel-function 'environment-lexical-declarations     '(environment))
+             (generate-kernel-function 'environment-variables        '(environment))
+             (generate-kernel-function 'environment-functions        '(environment))
+             (generate-kernel-function 'environment-blocks           '(environment))
+             (generate-kernel-function 'environment-catchs           '(environment))
+             (generate-kernel-function 'environment-declarations     '(environment))
              (generate-kernel-function 'environment-next-environment         '(environment))
              (generate-kernel-function 'environment-frames                   '(environment)) ; for debugging, backtrace
 
-             (generate-kernel-function 'environment-add-dynamic-variable     '(variable environment))
-             (generate-kernel-function 'environment-add-lexical-variable     '(variable environment))
-             (generate-kernel-function 'environment-add-lexical-function     '(function environment))
-             (generate-kernel-function 'environment-add-lexical-block        '(name        environment))
-             (generate-kernel-function 'environment-add-lexical-catch        '(tag         environment))
-             (generate-kernel-function 'environment-add-lexical-declaration  '(declaration environment))
+             (generate-kernel-function 'environment-add-variable     '(variable environment))
+             (generate-kernel-function 'environment-add-function     '(function environment))
+             (generate-kernel-function 'environment-add-block        '(name        environment))
+             (generate-kernel-function 'environment-add-catch        '(tag         environment))
+             (generate-kernel-function 'environment-add-declaration  '(declaration environment))
 
              (generate-kernel-function 'environment-find-variable            '(name environment))
              (generate-kernel-function 'environment-find-function            '(name environment))
              (generate-kernel-function 'environment-find-block               '(name environment))
              (generate-kernel-function 'environment-find-catch               '(tag environment))
 
-             ;; (generate-kernel-function 'env/make-constant-variable           '(name))
-             ;; (generate-kernel-function 'env/make-global-special-variable     '(name))
-             ;; (generate-kernel-function 'env/make-local-special-variable      '(name))
-             ;; (generate-kernel-function 'env/make-lexical-variable            '(name))
-             ;; (generate-kernel-function 'env/make-global-symbol-macro         '(name))
-             ;; (generate-kernel-function 'env/make-local-symbol-macro          '(name))
-             ;; (generate-kernel-function 'env/make-global-function             '(name))
-             ;; (generate-kernel-function 'env/make-local-function              '(name))
-             ;; (generate-kernel-function 'env/make-global-macro                '(name))
-             ;; (generate-kernel-function 'env/make-local-macro                 '(name))
-             ;;
-             ;; (generate-kernel-function 'env/variablep                        '(object) :values '(boolean))
-             ;; (generate-kernel-function 'env/constant-variable-p              '(object) :values '(boolean))
-             ;; (generate-kernel-function 'env/special-variable-p               '(object) :values '(boolean))
-             ;; (generate-kernel-function 'env/variable-name                    '(variable))
-             ;; (generate-kernel-function 'env/variable-value                   '(variable))
-             ;; (generate-kernel-function 'env/variable-set-value               '(new-value variable))
-             ;;
-             ;; (generate-kernel-function 'env/symbol-macro-p                   '(object) :values '(boolean))
-             ;; (generate-kernel-function 'env/symbol-macro-name                '(symbol-macro))
-             ;; (generate-kernel-function 'env/symbol-macro-expansion           '(symbol-macro))
-             ;; (generate-kernel-function 'env/symbol-macro-set-expansion       '(new-expansion symbol-macro))
-             ;;
-             ;; (generate-kernel-function 'env/functionp                        '(object) :values '(boolean))
-             ;; (generate-kernel-function 'env/function-name                    '(function))
-             ;; (generate-kernel-function 'env/function-lambda-list             '(function))
-             ;; (generate-kernel-function 'env/function-body                    '(function))
-             ;; (generate-kernel-function 'env/function-compiler-macro          '(function))
-             ;; (generate-kernel-function 'env/function-set-lambda-list         '(new-lambda-list     function))
-             ;; (generate-kernel-function 'env/function-set-body                '(new-body            function))
-             ;; (generate-kernel-function 'env/function-set-compiler-macro      '(new-compiler-macro  function))
-             ;;
-             ;; (generate-kernel-function 'env/macro-function-p                 '(object) :values '(boolean))
-             ;; (generate-kernel-function 'env/macro-name                       '(macro))
-             ;; (generate-kernel-function 'env/macro-lambda-list                '(macro))
-             ;; (generate-kernel-function 'env/macro-body                       '(macro))
-             ;; (generate-kernel-function 'env/macro-set-lambda-list            '(new-lambda-list     macro))
-             ;; (generate-kernel-function 'env/macro-set-body                   '(new-body            macro))
+
+             (generate-kernel-function 'env-special-variable-p '(object) :values '(boolean))
 
              )))
+
 
     (with-open-file (*standard-output* "kernel_functions.h"
                                        :direction :output
@@ -571,9 +584,20 @@
       (write-line "#define kernel_functions_h")
       (write-line "#include \"kernel_types.h\"")
       (terpri)
-      (generate :kernel-functions)
+      (generate :kernel-header)
       (terpri)
       (write-line "#endif"))
+
+    ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    ;;
+    ;; No :kernel-source  kerne_function.c
+    ;; since this is already
+    ;; implemented manually in kernel.c
+    ;;
+    ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+
 
     (with-open-file (*standard-output* "built_in_functions.h"
                                        :direction :output
@@ -606,10 +630,27 @@
       (terpri)
       (generate :source)
       (terpri)
-
       (write-line "void kernel_initialize_built_in_functions(void){")
       (generate :symbols)
       (write-line "}")
-
       (write-line "/**** THE END ****/"))
+
+
+    (with-open-file (*standard-output* "lisp/kernel-package.lisp"
+                                       :direction :output
+                                       :if-does-not-exist :create
+                                       :if-exists :supersede)
+      (write-line "(DEFPACKAGE \"KERNEL\"")
+      (write-line "  (:USE)")
+      (write-line "  (:EXPORT")
+      (write-string "   ")
+      (setf *column* 3)
+      (setf *print-right-margin* 80)
+      (generate :package-exports)
+      ;; TODO: better collect symbols from the OBARRAY dynamically?
+      ;; TODO: we're missing the *symbols* and perhaps others.
+      (write-line "))")
+      (terpri))
+
+
     (values)))
