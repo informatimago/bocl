@@ -102,19 +102,5 @@ Ref env_local_macro_lambda_list(Ref par_local_macro);
 Ref set_env_local_macro_lambda_list(Ref par_new_lambda_list, Ref par_local_macro);
 Ref env_local_macro_body(Ref par_local_macro);
 Ref set_env_local_macro_body(Ref par_new_body, Ref par_local_macro);
-extern Ref PACKAGE_Class;
-bool packagep(Ref par_object);
-Ref make_package(Ref par_name, Ref par_nicknames, Ref par_shadowing_symbols, Ref par_use_list, Ref par_used_by_list);
-Ref copy_package(Ref par_package);
-Ref package_name(Ref par_package);
-Ref set_package_name(Ref par_new_name, Ref par_package);
-Ref package_nicknames(Ref par_package);
-Ref set_package_nicknames(Ref par_new_nicknames, Ref par_package);
-Ref package_shadowing_symbols(Ref par_package);
-Ref set_package_shadowing_symbols(Ref par_new_shadowing_symbols, Ref par_package);
-Ref package_use_list(Ref par_package);
-Ref set_package_use_list(Ref par_new_use_list, Ref par_package);
-Ref package_used_by_list(Ref par_package);
-Ref set_package_used_by_list(Ref par_new_used_by_list, Ref par_package);
 
 #endif

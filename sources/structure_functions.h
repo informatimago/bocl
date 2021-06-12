@@ -93,19 +93,6 @@ void kernel_ENV_LOCAL_MACRO_LAMBDA_LIST(Ref function,Ref arguments,MultipleValue
 void kernel_SET_ENV_LOCAL_MACRO_LAMBDA_LIST(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_LOCAL_MACRO_BODY(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SET_ENV_LOCAL_MACRO_BODY(Ref function,Ref arguments,MultipleValues* results);
-void kernel_PACKAGEP(Ref function,Ref arguments,MultipleValues* results);
-void kernel_MAKE_PACKAGE(Ref function,Ref arguments,MultipleValues* results);
-void kernel_COPY_PACKAGE(Ref function,Ref arguments,MultipleValues* results);
-void kernel_PACKAGE_NAME(Ref function,Ref arguments,MultipleValues* results);
-void kernel_SET_PACKAGE_NAME(Ref function,Ref arguments,MultipleValues* results);
-void kernel_PACKAGE_NICKNAMES(Ref function,Ref arguments,MultipleValues* results);
-void kernel_SET_PACKAGE_NICKNAMES(Ref function,Ref arguments,MultipleValues* results);
-void kernel_PACKAGE_SHADOWING_SYMBOLS(Ref function,Ref arguments,MultipleValues* results);
-void kernel_SET_PACKAGE_SHADOWING_SYMBOLS(Ref function,Ref arguments,MultipleValues* results);
-void kernel_PACKAGE_USE_LIST(Ref function,Ref arguments,MultipleValues* results);
-void kernel_SET_PACKAGE_USE_LIST(Ref function,Ref arguments,MultipleValues* results);
-void kernel_PACKAGE_USED_BY_LIST(Ref function,Ref arguments,MultipleValues* results);
-void kernel_SET_PACKAGE_USED_BY_LIST(Ref function,Ref arguments,MultipleValues* results);
 
 void kernel_initialize_structure_functions(void);
 
