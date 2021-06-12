@@ -13,6 +13,8 @@
 #include "kernel_objects.h"
 #include "kernel_functions.h"
 #include "built_in_functions.h"
+#include "kernel_structure_functions.h"
+#include "structure_functions.h"
 
 
 /* Only the "C" functions are declared here.  The declarations of Lisp
