@@ -11,10 +11,10 @@
 
 Ref bocl_eval(Ref sexp){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));
-   princ(T(";; The Mighty Eval Function is not there yet, so your sexps are safe!"),out);
-   print(sexp,out);
-   terpri(out);
-   return S(NIL);}
+    princ(T(";; The Mighty Eval Function is not there yet, so your sexps are safe!"),out);
+    return sexp;
+    /* return S(NIL); */
+}
 
 Ref bocl_read_cstring(const char* text){
     Ref stream=stream_input_string(string_new_cstring(text),I(0),NIL_Symbol);
@@ -23,8 +23,6 @@ Ref bocl_read_cstring(const char* text){
 Ref bocl_read_eval_cstring(const char* text){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));
     Ref sexp=bocl_read_cstring(text);
-    prin1(sexp,out);
-    terpri(out);
     Ref result=bocl_eval(sexp);
     stream_finish_output(out);
     return result;}
@@ -35,8 +33,6 @@ Ref bocl_repl(Ref inp,Ref out){
         princ(T("bocl> "),out);
         stream_finish_output(out);
         Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
-        prin1(sexp,out);
-        terpri(out);
         if((sexp==inp)||equal(sexp,list(S(QUIT),NULL))){
             return I(0);}
         Ref result=bocl_eval(sexp);
@@ -108,6 +104,8 @@ void bocl_call(Ref fname,Ref arguments){
         terpri(out);}}
 
 void bocl_test(){
+    prin1(S(PAPA),variable_value(S(*STANDARD-OUTPUT*)));
+    terpri(variable_value(S(*STANDARD-OUTPUT*)));
     bocl_call(S(CAR),list(list(S(FOO),NULL),NULL));}
 
 

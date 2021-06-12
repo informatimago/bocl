@@ -307,10 +307,10 @@ int main(int argc,char** argv){
 
     if(do_batch){
         /* TODO: update once packages are implemented: */
-        bocl_read_eval_cstring("(DEFPARAMETER BOCL-*BATCH*  T)");}
+        bocl_read_eval_cstring("(DEFPARAMETER *BATCH*  T)");}
     else{
         /* TODO: update once packages are implemented: */
-        bocl_read_eval_cstring("(DEFPARAMETER BOCL-*BATCH*  NIL)");}
+        bocl_read_eval_cstring("(DEFPARAMETER *BATCH*  NIL)");}
 
     define_parameter(S(*LOAD-VERBOSE*),S(NIL));
     define_parameter(S(*COMPILE-VERBOSE*),S(NIL));
@@ -328,10 +328,6 @@ int main(int argc,char** argv){
         define_parameter(S(*COMPILE-PRINT*),S(T));
         bocl_read_eval_cstring("(SETQ *LOAD-PRINT*      T)");
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
-
-    prin1(S(PAPA),variable_value(S(*STANDARD-OUTPUT*)));
-    terpri(variable_value(S(*STANDARD-OUTPUT*)));
-    bocl_test();
 
     if(!do_norc){
         initfiles=string_list_cons(initfile,initfiles);}
