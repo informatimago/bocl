@@ -221,7 +221,7 @@ static Block* allocate_in_zones(halfword size){
             ?allocate_in_best_zone(best_zone,size)
             :NULL;}
 
-void* allocate(size_t size){
+static Block* allocate_internal(size_t size){
     /*
     Allocates a block of given size (including block header).
     If no free block is available, the garbage collector is invoked (unless disabled).
@@ -241,6 +241,11 @@ void* allocate(size_t size){
                 Zone* new_zone=zone_allocate(DefaultZoneSize);
                 block=allocate_in_zone(new_zone,hsize);}}}
     return block;}
+
+void* allocate(size_t size){
+    Block* result=allocate_internal(size);
+    add_to_live_pool((void*)result);
+    return result;}
 
 
 static bool garbage_collection_enabled=true;
@@ -312,38 +317,88 @@ static uword sweep(void){
     return total;}
 
 
-uword open_live_pool(void){
-    NOT_IMPLEMENTED_YET();
-    return 0;}
 
-void close_live_pool(uword pool){
-    NOT_IMPLEMENTED_YET();}
+#define LivePool_MaxSize 1020
 
+typedef struct LivePool {
+    BLOCK_HEADER;
+    struct LivePool* next;
+    Block*           blocks[LivePool_MaxSize];
+    uword            offset;
+} LivePool;
 
-Block* rootset=NULL;
+typedef struct RootSet {
+    BLOCK_HEADER;
+    LivePool* live_pool;
+    Block*    kernel_rootset;
+} RootSet;
+
+static RootSet* rootset;
+
 void set_rootset(Block* block){
-    rootset=block;}
+    rootset->kernel_rootset=block;}
+
+uword open_live_pool(void){
+    return rootset->live_pool->offset+rootset->live_pool->objcount;}
+
+void add_to_live_pool(Ref object){
+    LivePool* pool=rootset->live_pool;
+    /* 1- save the object the the pool */
+    pool->blocks[pool->objcount-1]=(Block*)object;
+    pool->objcount++;
+    /* 2- if the pool is full, add some space with gc disabled: */
+    if(LivePool_MaxSize+1<=pool->objcount){
+        bool saved=garbage_collection_enabled;
+        garbage_collection_enabled=false;
+        LivePool* new=(LivePool*)allocate_internal(sizeof(LivePool));
+        garbage_collection_enabled=saved;
+        new->objcount=1;
+        new->next=pool;
+        new->offset=pool->offset+pool->objcount;
+        rootset->live_pool=new;}}
+
+void close_live_pool(uword objcount){
+    while(objcount < rootset->live_pool->offset){
+        rootset->live_pool=rootset->live_pool->next;}
+    if(objcount < rootset->live_pool->offset+LivePool_MaxSize+1){
+        rootset->live_pool->objcount = (halfword)(objcount - rootset->live_pool->offset);}}
+
+
 
 uword garbage_collect(void){
     if(!garbage_collection_enabled){
         return 0;}
-    mark(rootset);
+    mark((Block*)rootset);
     return sweep();}
+
+
 
 void memory_initialize(void){
     zone_allocate(DefaultZoneSize);
-}
+    rootset=(RootSet*)allocate_internal(sizeof(*rootset));
+    rootset->objcount=2;
+    rootset->kernel_rootset=NULL;
+    rootset->live_pool=(LivePool*)allocate_internal(sizeof(LivePool));
+    rootset->live_pool->objcount=1;
+    rootset->live_pool->next=NULL;
+    rootset->live_pool->offset=0;}
 
 
+
+/* ======================================================================== */
+
+/* For memory dump: */
 static bool in_root_set_p(Block* block){
     /* We assume the root set is a lisp list */
-    Block* current=rootset;
+    Block* current=rootset->kernel_rootset;
     if(current==NULL){
         return false;}
-    while(block_objcount(current)==2){
-        if(current->blocks[0]==block){
+    while(current
+          && (block_objcount(current)==2)
+          && (block_objcount(current->blocks[1])==2)){
+        if(current->blocks[1]->blocks[0]==block){
             return true;}
-        current=current->blocks[1];}
+        current=current->blocks[1]->blocks[1];}
     return false;}
 
 static bool in_free_list(FreeBlock* list,Block* block){
