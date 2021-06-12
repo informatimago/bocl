@@ -19,6 +19,7 @@
 #include "stream.h"
 #include "reader.h"
 #include "printer.h"
+#include "structure_functions.h"
 
 /* Internal Object Structure */
 
@@ -36,7 +37,7 @@ static OctetArray*               OctetArray_slots                   (Ref  elemen
 static OctetArray*               OctetArray_slots_cstring           (Ref  element_type, const char* initial_value);
 static OctetArray*               OctetArray_slots_vector_of_octets  (Ref  element_type, VectorOfOctet* octets);
 static StandardClass*            StandardClass_slots                (Ref  name,         Ref  superclasses) unused;
-static StructureClass*           StructureClass_slots               (Ref class_name,    Ref  direct_superclass,Ref slot_names);
+static StructureClass*           StructureClass_slots               (Ref class_name,    Ref  direct_superclass, Ref offset, Ref slot_names);
 static Symbol*                   Symbol_slots                       (Ref  name,         Ref  package);
 static VectorOfObject*           VectorOfObject_slots               (halfword size);
 static VectorOfOctet*            VectorOfOctet_slots                (halfword length);
@@ -477,9 +478,11 @@ static void kernel_initialize_characters(void){
         push(character_table[i],&characterset);}}
 
 
-
 /* INTEGER */
 /* Before we use a bigint library, let's just use 64-bit integers: */
+
+static Ref integer_table[INTEGER_INTERN_MAX - INTEGER_INTERN_MIN];
+static Ref integerset;
 
 Integer* Integer_slots(word value){
     Integer* that=allocate(sizeof(*that));
@@ -487,9 +490,13 @@ Integer* Integer_slots(word value){
     return that;}
 
 Ref integer_from_word(word value){
+    if((INTEGER_INTERN_MIN<=value) && (value<INTEGER_INTERN_MAX)){
+        return integer_table[value-INTEGER_INTERN_MIN];}
     return Object_new(INTEGER_Class,(Slots*)Integer_slots(value));}
 
 Ref integer_from_uword(uword value){
+    if(value<INTEGER_INTERN_MAX){
+        return integer_table[(word)value-INTEGER_INTERN_MIN];}
     return Object_new(INTEGER_Class,(Slots*)Integer_slots(CHECK_UWORD_TO_WORD(value)));}
 
 bool integerp(Ref object){
@@ -498,6 +505,12 @@ bool integerp(Ref object){
 word integer_value(Ref object){
     check_class(object,INTEGER_Class);
     return object->slots->integer.value;}
+
+static void kernel_initialize_integers(void){
+    integerset=NIL_Symbol;
+    for(word i=INTEGER_INTERN_MIN;i<INTEGER_INTERN_MAX;i++){
+        integer_table[i-INTEGER_INTERN_MIN] = Object_new(INTEGER_Class,(Slots*)Integer_slots(i));
+        push(integer_table[i-INTEGER_INTERN_MIN],&integerset);}}
 
 
 /* FLOAT */
@@ -716,20 +729,20 @@ Ref symbol_plist(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.plist;}
 
-Ref symbol_set_package(Ref symbol,Ref new_package){
+Ref set_symbol_package(Ref symbol,Ref new_package){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.package=new_package;}
 
-Ref symbol_set_value(Ref symbol,Ref new_value){
+Ref set_symbol_value(Ref symbol,Ref new_value){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.value=new_value;}
 
-Ref symbol_set_function(Ref symbol,Ref new_function){
+Ref set_symbol_function(Ref symbol,Ref new_function){
     check_type(symbol,SYMBOL_Class);
     check_type(new_function,FUNCTION_Class);
     return symbol->slots->symbol.function=new_function;}
 
-Ref symbol_set_plist(Ref symbol,Ref new_plist){
+Ref set_symbol_plist(Ref symbol,Ref new_plist){
     check_type(symbol,SYMBOL_Class);
     if(consp(new_plist)||nullp(new_plist)){
         return symbol->slots->symbol.plist=new_plist;}
@@ -999,21 +1012,35 @@ StructureClass* make_boot_StructureClass(void){
     that->slot_names=&uninitialized_object;
     return that;}
 
-StructureClass* StructureClass_slots(Ref class_name,Ref direct_superclass,Ref slot_names){
-    WITH_LIVE_POOL;
+StructureClass* StructureClass_slots(Ref class_name,Ref direct_superclass,Ref offset, Ref slot_names){
+    uword pool=open_live_pool();
+    add_to_live_pool(class_name);
+    add_to_live_pool(direct_superclass);
+    add_to_live_pool(offset);
+    add_to_live_pool(slot_names);
     StructureClass* that=allocate(sizeof(*that));
-    that->objcount=3;
+    that->objcount=4;
     that->name=class_name;
     that->direct_superclasses=list(direct_superclass,NULL);
+    that->offset=offset;
     that->slot_names=slot_names;
-    that->nslots=list_length(slot_names)+direct_superclass->slots->structure_class.nslots;
-    LP_RETURN1(that);}
+    that->nslots=direct_superclass->slots->structure_class.nslots
+            +(uword)integer_value(offset)
+            +list_length(slot_names);
+    close_live_pool(pool);
+    return that;}
 
-Ref make_structure_class(Ref name,Ref direct_superclass,Ref slots){
-    WITH_LIVE_POOL;
+Ref make_structure_class(Ref name,Ref direct_superclass,Ref offset,Ref slots){
+    uword pool=open_live_pool();
+    add_to_live_pool(name);
+    add_to_live_pool(direct_superclass);
+    add_to_live_pool(offset);
+    add_to_live_pool(slots);
     /*
     Creates a class that has structure-class metaclass,
     direct_superclass or structure-object as superclass.
+
+    OFFSET is an offset number of slots inserted before the SLOTS.
 
     SLOTS is a list of symbols naming the additionnal slots to the new
     structure class.
@@ -1025,14 +1052,17 @@ Ref make_structure_class(Ref name,Ref direct_superclass,Ref slots){
     if(direct_superclass==NIL_Symbol){
         direct_superclass=STRUCTURE_OBJECT_Class;}
     else{
-        check_type(direct_superclass,STRUCTURE_OBJECT_Class);}
+        check_type(direct_superclass,STRUCTURE_CLASS_Class);}
     check_type(slots,LIST_Class);
     /* TODO: check that all elements of slots is a symbol */
-    LP_RETURN1(Object_new(STRUCTURE_CLASS_Class,
-                          (Slots*)StructureClass_slots(name,direct_superclass,slots)));}
+    Ref class=Object_new(STRUCTURE_CLASS_Class,
+                         (Slots*)StructureClass_slots(name,direct_superclass,offset,slots));
+    close_live_pool(pool);
+    return class;}
 
 Ref make_structure_instance(Ref structure_class){
-    WITH_LIVE_POOL;
+    uword pool=open_live_pool();
+    add_to_live_pool(structure_class);
     /*
     Creates an instance of the structure_class.
     All slots are initialized to NIL.
@@ -1040,7 +1070,8 @@ Ref make_structure_instance(Ref structure_class){
     check_class(structure_class,STRUCTURE_CLASS_Class);
     VectorOfObject* slots=VectorOfObject_slots(CHECK_UWORD_TO_HALFWORD(structure_class->slots->structure_class.nslots));
     Ref instance=Object_new(structure_class,(Slots*)slots);
-    LP_RETURN1(instance);}
+    close_live_pool(pool);
+    return instance;}
 
 
 /* FUNCALLABLE-STANDARD-CLASS */
@@ -1412,14 +1443,13 @@ Ref standard_error_stream(void){
 
 static Environment* Environment_slots(Ref next_environment){
     Environment* that=allocate(sizeof(*that));
-    that->objcount=7;
-    that->dynamic_variables    = NIL_Symbol;
-    that->lexical_variables    = NIL_Symbol;
-    that->lexical_functions    = NIL_Symbol;
-    that->lexical_blocks       = NIL_Symbol;
-    that->lexical_catchs       = NIL_Symbol;
-    that->lexical_declarations = NIL_Symbol;
-    that->next_environment     = next_environment;
+    that->objcount=6;
+    that->variables        = NIL_Symbol;
+    that->functions        = NIL_Symbol;
+    that->blocks           = NIL_Symbol;
+    that->catchs           = NIL_Symbol;
+    that->declarations     = NIL_Symbol;
+    that->next_environment = next_environment;
     that->frames=NULL;
     return that;}
 
@@ -1601,9 +1631,13 @@ void kernel_initialize(void){
 
     kernel_objects_initialize();
     kernel_initialize_built_in_functions();
+    kernel_initialize_integers();
     kernel_initialize_characters();
     kernel_initialize_features();
-    structure_initialize();
+
+    structure_initialize(); /* before: */
+    kernel_initialize_structure_functions();
+
     reader_initialize();
     stream_initialize();
 
