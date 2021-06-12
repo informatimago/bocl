@@ -102,6 +102,8 @@ static void check_arg_count_even(Ref arguments){
 
 Ref evale(Ref form,Ref environment,MultipleValues* results){
     uword pool=open_live_pool();
+    add_to_live_pool(form);
+    add_to_live_pool(environment);
 
     if(symbolp(form)){
         /* Symbol macros must have been expanded by the minimal compilation,
