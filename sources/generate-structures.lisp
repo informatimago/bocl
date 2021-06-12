@@ -294,14 +294,14 @@
                                    (:conc-name   env/local-macro-))
                                  '(name lambda-list body))
 
-             (generate-structure '(package
-                                   (:constructor make-package)
-                                   (:predicate   packagep))
-                                 '(name
-                                   nicknames
-                                   shadowing-symbols
-                                   use-list
-                                   used-by-list))
+             ;; (generate-structure '(package
+             ;;                       (:constructor make-package)
+             ;;                       (:predicate   packagep))
+             ;;                     '(name
+             ;;                       nicknames
+             ;;                       shadowing-symbols
+             ;;                       use-list
+             ;;                       used-by-list))
 
              )))
 
