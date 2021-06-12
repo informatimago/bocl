@@ -36,6 +36,7 @@
 ;;;; *************************************************************************
 
 (defpackage "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER"
+  (:nicknames "COM.INFORMATIMAGO.BOCL.MINIMAL-COMPILER")
   (:nicknames "MC" "MINIMAL-COMPILER")
   (:use "COMMON-LISP")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP-SEXP.SOURCE-FORM")
@@ -59,6 +60,15 @@
              (format stream "A variable with the name ~S is already defined, while defining: ~S"
                      (variable-name-collision-name condition)
                      (variable-name-collision-new-definition condition)))))
+
+
+(defvar *macroexpand-hook* 'funcall)
+;; It will be (coerce *macroexpand-hook* 'function)
+
+
+;; symbol-plist keys:
+(defconstant +key/compiler-macro-function+ 'compiler-macro-function)
+
 
 ;;;
 ;;; Utilities
@@ -85,7 +95,7 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
            (symbolp  (second form))
            (null (cddr form)))))
 
-(cl:defun lambda-list-p (form)
+(cl:defun lambda-expression-p (form)
   (and (listp form) (eql 'lambda (first form))))
 
 (cl:defun go-tag-p (form)
@@ -99,7 +109,7 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
      ;; (compile nil form)
      (coerce form 'function))
 
-    ((lambda-list-p form)
+    ((lambda-expression-p form)
 
      ;; (eval form)
      ;; (compile nil form)
@@ -109,136 +119,6 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
      (warn "Is that a function? ~S" form)
      (coerce form 'function))))
 
-
-;;;
-;;; Environment
-;;;
-
-(defstruct (env/variable
-            (:constructor env/make-variable))
-  name)
-
-(defstruct (env/function
-            (:constructor env/make-function))
-  name
-  lambda-list
-  lambda-expression
-  environment) ;for closure
-
-(defstruct (env/symbol-macro
-            (:constructor env/make-symbol-macro))
-  name
-  expansion)
-
-(defstruct (env/macro
-            (:constructor env/make-macro))
-  name
-  function)
-
-
-(defstruct (env/block
-            (:constructor env/make-block))
-  name)
-
-(defstruct (env/catch
-            (:constructor env/make-catch))
-  tag)
-
-(defstruct (env/protect
-            (:constructor env/make-protect))
-  cleanup)
-
-(defstruct (env/handler
-            (:constructor env/make-handler))
-  conditions
-  body)
-
-(defstruct (env/restart
-            (:constructor env/make-restart))
-  name
-  lambda-list
-  body)
-
-
-(defstruct environment
-  variables
-  functions
-  symbol-macros
-  macros
-  ;; --------
-  protects
-  blocks
-  catchs
-  handlers
-  restarts)
-
-
-
-(defparameter *global-environment* (make-environment))
-
-(defvar *macroexpand-hook* 'funcall)
-;; It will be (coerce *macroexpand-hook* 'function)
-
-;; symbol-plist keys:
-(defconstant +key/compiler-macro-function+ 'compiler-macro-function)
-
-
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
-
-  (defparameter *environment-slots*
-    '(variable function symbol-macro macro protect block
-      catch handler restart))
-
-  (cl:defmacro extend-environment (slot objects env)
-    ;; TODO: instanciated global environment
-    `(progn
-       (unless ,env (setf ,env *global-environment*))
-       (make-environment
-        ,@(loop
-            :for eslot :in *environment-slots*
-            :for accessor-form := `(,(scat 'environment- eslot 's) ,env)
-            :collect (keywordize eslot 's)
-            :collect (if (eql slot eslot)
-                         `(append ,objects ,accessor-form)
-                         accessor-form)))))
-
-  (cl:defun generate-environment-functions ()
-    `(progn
-       ,@(mapcar
-          (lambda (slot)
-            (let ((parameter      (scat slot 's))
-                  (accessor-form  `(,(scat 'environment- slot 's) env))
-                  (name-key-form  `(function ,(scat 'env/ slot '-name))))
-              `(progn
-
-                 (cl:defun ,(scat 'extend-environment-with- slot 's) (,parameter  env)
-                   (extend-environment ,slot ,parameter env))
-
-                 (cl:defun (scat 'push- slot '-onto-environment) (,slot env)
-                   ;; TODO: instanciated global environment
-                   (unless env (setf env *global-environment*))
-                   (push ,slot ,accessor-form)
-                   env)
-
-                 (cl:defun ,(scat 'pop- slot '-from-environment) (name env)
-                   ;; TODO: instanciated global environment
-                   (unless env (setf env *global-environment*))
-                   (setf ,accessor-form (remove name ,accessor-form :key ,name-key-form :count 1))
-                   env)
-
-                 (cl:defun ,(scat 'env/find- slot) (name env)
-                   ;; TODO: instanciated global environment
-                   (unless env (setf env *global-environment*))
-                   (find name ,accessor-form :key ,name-key-form))
-
-                 )))
-          *environment-slots*)))
-
-  (generate-environment-functions)
-
-
-  ) ;;eval-when
 
 
 
@@ -345,28 +225,6 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
                                              :function new-function)
                                             environment))))
 
-(cl:defmacro defmacro (&environment environment name lambda-list &body decl-doc-body)
-  (let* ((ll            (parse-lambda-list lambda-list :macro))
-         (whole         (if (lambda-list-whole-parameter-p ll)
-                            (parameter-specifier (lambda-list-whole-parameter ll))
-                            (gensym "whole")))
-         (env-parameter (if (lambda-list-environment-parameter-p ll)
-                            (parameter-specifier (lambda-list-environment-parameter ll))
-                            (gensym "environment"))))
-    (remove-whole-parameter ll)
-    (remove-environment-parameter ll)
-    (multiple-value-bind (declarations docstrings body) (parse-body :lambda decl-doc-body)
-      `(progn
-         (setf (env/macro-function ',name)
-               (lambda (,whole ,env-parameter)
-                 (declare (ignorable ,env-parameter))
-                 (destructuring-bind ,lambda-list ,whole
-                   (locally ,@declarations
-                     ,@(mapcar (lambda (subform) (minimal-compile environment subform))
-                               body))))
-               ,@(when docstrings
-                   `((documentation ',name 'function) ',(first docstrings))))
-         ',name))))
 
 (cl:defun so/macrolet (name lambda-list decl-and-body environment)
   (let* ((ll            (parse-lambda-list lambda-list :macro))
@@ -442,28 +300,58 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
         (minimal-compile env (env/symbol-macro-expansion symac))
         form)))
 
-(cl:defun minimal-compile/function (env form)
-  (destructuring-bind (function fname) form
-    ;; TODO: if name is a lambda expression we needs to
-    ;;       minimal-compile it.  we need to use the environment, both
-    ;;       to  minimal-compile, and to lookup the function (and
-    ;;       build a closure.
-    (if (lambda-list-p fname)
-        (destructuring-bind (lambda lambda-list &body body) fname
-          ;; TODO: parse lambda-list
-          `(,function (,lambda ,lambda-list
-                        ,(minimal-compile (extend-environment-with-variables
-                                           (mapcar (lambda (parameter)
-                                                     (env/make-variable :name parameter))
-                                                   lambda-list)
-                                           env)
-                                          `(progn ,@body)))))
-        `(,function ,fname))))
-
 (cl:defun minimal-compile/quote (env form)
   (declare (ignore env))
   (destructuring-bind (quote object) form
     `(,quote ,object)))
+
+(cl:defun minimal-compile/lambda-list (env ll)
+  "Mutates the lambda-list ll, replacing the initform expressions by their minimally compiled versions."
+  ;; TODO: process declarations (special)
+  ;; open a new environment frame for the lambda-list:
+  (let ((env (extend-environment-with-variables '() env)))
+    (loop
+      :for parameter :in (lambda-list-parameters ll)
+      :do (when (parameter-initform-p parameter)
+            (setf (parameter-initform parameter)
+                  (minimal-compile env (parameter-initform parameter))))
+          ;; Add the new parameter variable bindings to the environment:
+          (dolist (name (parameter-parameter-list parameter))
+            (setf env (push-variable-onto-environment (env/make-variable :name name)
+                                                      env)))
+      :finally (return (values ll env)))))
+
+(cl:defun minimal-compile/lambda-expression (env form)
+  ;; TODO: process declarations (special)
+  (destructuring-bind (lambda (&rest lambda-list) &body decl-and-body) form
+    (assert (eq lambda 'lambda))
+    (multiple-value-bind (declarations docstrings body) decl-and-body
+      (declare (ignore docstrings))
+      (let ((ll (parse-lambda-list lambda-list :ordinary)))
+        (multiple-value-bind (mc-ll mc-env) (minimal-compile/lambda-list env ll)
+          (let ((mc-env (push-block-onto-environment (env/make-block :name name) mc-env)))
+            ;; TODO: process declarations (special)
+            `(lambda ,(make-lambda-list mc-ll)
+               (block ,name
+                 (locally ,declarations
+                   ,@(mapcar (lambda (subform) (minimal-compile mc-env subform))
+                             body))))))))))
+
+(cl:defun minimal-compile/function (env form)
+  (destructuring-bind (function fname) form
+    (if (lambda-expression-p fname)
+        `(,function ,(minimal-compile/lambda-expression env fname))
+        `(,function ,fname))))
+
+(cl:defun minimal-compile/call (env form)
+  (destructuring-bind (function &rest arguments) form
+    `(,(if (lambda-expression-p function)
+           (minimal-compile/lambda-expression env function)
+           function)
+      ,@(mapcar (lambda (expr) (minimal-compile env expr)) arguments))))
+
+
+
 
 (cl:defun minimal-compile/if (env form)
   (destructuring-bind (if test then &optional else) form
@@ -572,12 +460,12 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
            (funs (mapcar
                   (lambda (fun funinfo)
                     (destructuring-bind (funobj lambda-list declarations body) funinfo
-                      (let* ((fname       (env-function-name        funobj))
-                             (ll          (env-function-lambda-list funobj))
+                      (let* ((fname       (env/function-name        funobj))
+                             (ll          (env/function-lambda-list funobj))
                              (benv        (extend-environment-with-lambda-list
                                            (mapcar (lambda (parameter)
                                                      (env/make-variable :name parameter))
-                                                   (lambda-list-parameters ll))
+                                                   (make-parameter-list ll))
                                            env))
                              ;; TODO: process declarations; fundamentally
                              ;; special declaration -> dynamic-variable (and parameters).
@@ -700,19 +588,13 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
 
 (cl:defun minimal-compile/the (env form)
   (destructuring-bind (the value-type expr) form
-    `(,the ,value-type ,(minimap-compile env expr))))
+    `(,the ,value-type ,(minimal-compile env expr))))
 
 
 (cl:defun minimal-compile/eval-when (env form)
   (destructuring-bind (eval-when situations &rest forms) form
     `(,eval-when ,situations
        ,@(mapcar (lambda (expr) (minimal-compile env expr)) forms))))
-
-
-(cl:defun minimal-compile/funcall (env form)
-  (destructuring-bind (funcall function &rest arguments) form
-    `(,funcall ,@(mapcar (lambda (expr) (minimal-compile env expr))
-                         (cons function arguments)))))
 
 
 (cl:defun minimal-compile (env form)
@@ -767,8 +649,7 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
              (let ((expansion (funcall (coerce-to-function *macroexpand-hook*)
                                        mf form env)))
                (minimal-compile env expansion)))
-            (t (minimal-compile/funcall env form)))))))))
-
+            (t (minimal-compile/call env form)))))))))
 
 
 #-(and)
@@ -874,73 +755,4 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
                    (cons (first form) (mexpand (rest form) env))))))))))
 
 
-;;;
-;;;
-;;;
-
-
-(cl:defmacro defun (&environment environment name lambda-list &body decl-doc-body)
-  ;; TODO: instanciated global environment
-  (unless environment (setf environment *global-environment*))
-  (setf environment *global-environment*)
-  (multiple-value-bind (declarations docstrings body) (parse-body :lambda decl-doc-body)
-    `(progn
-       ;; TODO: process declarations (special)
-       (setf (symbol-function ',name)
-             (lambda ,lambda-list
-               ,@declarations
-               ,@(mapcar (lambda (subform) (minimal-compile environment subform))
-                         body))
-             ,@(when docstrings
-                 `((documentation ',name 'function) ',(first docstrings))))
-       ',name)))
-
-
-(cl:defun print-minimal-expansion (form)
-  (let ((*print-circle* nil)
-        (*PRINT-RIGHT-MARGIN* 80))
-    (format t "~2%Source form:~%")
-    (pprint form)
-    (format t "~2%Minimal compilation:~%")
-    (pprint (minimal-compile (make-environment) form))
-    #+ccl   (format t "~2%CCL ccl::macroexpand-all:~%")
-    #+ccl   (pprint (ccl::macroexpand-all form))
-    #+clisp (format t "~2%CLISP ext:expand-form:~%")
-    #+clisp (pprint (ext:expand-form form))
-    (values)))
-
-(defmacro dotimes ((var count-form &optional result-form) &body decl-tagbody)
-  (destructuring-bind (declarations docstrings body) (parse-body :locally decl-tagbody)
-    (declare (ignore docstrings))
-    (let ((vcount (gensym "count"))
-          (vvar   (gensym "var"))
-          (vloop  (gensym "loop")))
-      `(let ((,vcount ,count-form)
-             (,vvar 0)
-             (,var  0))
-         ,@declarations
-         (check-type ,vcount integer)
-         (block nil
-           (tagbody
-              ,vloop
-              (setf ,var ,vvar)
-              (if (>= ,vvar ,vcount)
-                  (return ,result-form))
-              ,@body
-              (incf ,vvar)
-              (go ,vloop)))))))
-
-(print-minimal-expansion '(dotimes (i 42) (print i)))
-(print-minimal-expansion '(defun minimal-compile/function (env form)
-                             (declare (ignore env))
-                             (destructuring-bind (function fname) form
-                               `(,function ,fname))))
-
-
-(pprint (generate-environment-functions))
-
-
-
-;;; TODO defgeneric, defmethod
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; THE END ;;;;

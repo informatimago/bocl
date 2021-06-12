@@ -1,8 +1,17 @@
-(in-package "COM.INFORMATIMAGO.BOCL.IMPLEMENTATION")
+;;;; -*- mode:lisp;coding:iso-8859-1 -*-
+
+;;; This file contains a prototype of the interpreter EVAL function
+;;; equivalent to the KERNEL:EVAL function, implemented in COMMON-LISP.
+
+(defpackage "COM.INFORMATIMAGO.BOCL.PROTOTYPE.EVAL"
+  (:use "COMMON-LISP")
+  (:use "COM.INFORMATIMAGO.BOCL.ENVIRONMENT")
+  (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP-SEXP.SOURCE-FORM")
+  (:shadow "EVAL")
+  (:export "EVAL"))
+(in-package "COM.INFORMATIMAGO.BOCL.PROTOTYPE.EVAL")
 
 
-(defun eval (form)
-  (evale form *environment*))
 
 (defun check-arg-count (form min max)
   (assert (<= min (length (cdr form)) max)))
@@ -42,8 +51,8 @@
         ;; We don't implement (function (setf x)), only symbols and lambda:
         (check-arg-count form 1 1)
         (if (symbolp (second form))
-            (env/get-function-value (second form) *environment*)
-            (make-closure (second form) *environment*)))
+            (env/get-function-value (second form) environment)
+            (make-closure (second form) environment)))
 
        ((IF)
         (check-arg-count form 2 3)
@@ -74,7 +83,7 @@
         (minimal-compile/unwind-protect       env form))
        
        ((BLOCK)
-        (let ((*environment* (environment/block (second form) *environment*)))
+        (let ((environment (environment/block (second form) environment)))
           (tiny-eval `(progn ,(cddr form)))))
        ((RETURN-FROM)
         (check-arg-count form 1 2)
@@ -127,3 +136,9 @@
                                        mf form env)))
                (minimal-compile env expansion)))
             (t (minimal-compile/funcall env form)))))))))
+
+(defun eval (form)
+  (evale form (global-environment)))
+
+
+;;;; THE END ;;;;

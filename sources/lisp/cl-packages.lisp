@@ -1,4 +1,4 @@
-;;;;  -*- mode:lisp;coding:utf-8 -*-
+;;;; -*- mode:lisp;coding:iso-8859-1 -*-
 ;;;;*************************************************************************
 ;;;;FILE:               cl-package.lisp
 ;;;;LANGUAGE:           Common-Lisp

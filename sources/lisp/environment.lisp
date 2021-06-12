@@ -1,3 +1,8 @@
+;;;; -*- mode:lisp;coding:iso-8859-1 -*-
+
+(defpackage "COM.INFORMATIMAGO.BOCL.ENVIRONMENT"
+  (:use "COMMON-LISP")
+  (:export "GLOBAL-ENVIRONMENT"))
 (in-package "COM.INFORMATIMAGO.BOCL.ENVIRONMENT")
 
 
@@ -109,7 +114,7 @@ variable-constantp
 (add-local-function  name environment)
 (add-local-macro     name environment)
 
-(function-type function) -> (function (…) …) 
+(function-type function) -> (function (…) …)
 (function-ignore function) -> boolean
 (function-dynamic-extend function) -> boolean
 (function-inline function) -> boolean
@@ -257,7 +262,7 @@ Signal an error if the closure is not complete (if no binding is found).
 
 
 (let ((*print-right-margin* 60))
-  (pprint (parse-tagbody (cdr '(tagbody 
+  (pprint (parse-tagbody (cdr '(tagbody
                                 (setq n (f2 flag (lambda () (go out))))
                                 out
                                 (prin1 n))))))
@@ -363,3 +368,123 @@ will involve a non-local exit, to find the tagbody concerned.
              (generate-kernel-function 'env/macro-body                       '(macro))
              (generate-kernel-function 'env/macro-set-lambda-list            '(new-lambda-list     macro))
              (generate-kernel-function 'env/macro-set-body                   '(new-body            macro))
+
+
+
+
+;;;
+;;; Environment
+;;;
+
+(defstruct (env/variable
+            (:constructor env/make-variable))
+  name)
+
+(defstruct (env/function
+            (:constructor env/make-function))
+  name
+  lambda-list
+  lambda-expression
+  environment) ;for closure
+
+(defstruct (env/symbol-macro
+            (:constructor env/make-symbol-macro))
+  name
+  expansion)
+
+(defstruct (env/macro
+            (:constructor env/make-macro))
+  name
+  function)
+
+
+(defstruct (env/block
+            (:constructor env/make-block))
+  name)
+
+(defstruct (env/catch
+            (:constructor env/make-catch))
+  tag)
+
+(defstruct (env/protect
+            (:constructor env/make-protect))
+  cleanup)
+
+(defstruct (env/handler
+            (:constructor env/make-handler))
+  conditions
+  body)
+
+(defstruct (env/restart
+            (:constructor env/make-restart))
+  name
+  lambda-list
+  body)
+
+(defstruct environment
+  variables
+  functions
+  symbol-macros
+  macros
+  ;; --------
+  protects
+  blocks
+  catchs
+  handlers
+  restarts)
+
+(defparameter *global-environment* (make-environment))
+
+
+(defparameter *environment-slots*
+  '(variable function symbol-macro macro protect block
+    catch handler restart))
+
+(defmacro extend-environment (slot objects env)
+  ;; TODO: instanciated global environment
+  `(progn
+     (unless ,env (setf ,env *global-environment*))
+     (make-environment
+      ,@(loop
+          :for eslot :in *environment-slots*
+          :for accessor-form := `(,(scat 'environment- eslot 's) ,env)
+          :collect (keywordize eslot 's)
+          :collect (if (eql slot eslot)
+                       `(append ,objects ,accessor-form)
+                       accessor-form)))))
+
+(defun generate-environment-functions ()
+  `(progn
+     ,@(mapcar
+        (lambda (slot)
+          (let ((parameter      (scat slot 's))
+                (accessor-form  `(,(scat 'environment- slot 's) env))
+                (name-key-form  `(function ,(scat 'env/ slot '-name))))
+            `(progn
+
+               (defun ,(scat 'extend-environment-with- slot 's) (,parameter  env)
+                 (extend-environment ,slot ,parameter env))
+
+               (defun ,(scat 'push- slot '-onto-environment) (,slot env)
+                 ;; TODO: instanciated global environment
+                 (unless env (setf env *global-environment*))
+                 (push ,slot ,accessor-form)
+                 env)
+
+               (defun ,(scat 'pop- slot '-from-environment) (name env)
+                 ;; TODO: instanciated global environment
+                 (unless env (setf env *global-environment*))
+                 (setf ,accessor-form (remove name ,accessor-form :key ,name-key-form :count 1))
+                 env)
+
+               (defun ,(scat 'env/find- slot) (name env)
+                 ;; TODO: instanciated global environment
+                 (unless env (setf env *global-environment*))
+                 (find name ,accessor-form :key ,name-key-form))
+
+               )))
+        *environment-slots*)))
+
+(generate-environment-functions)
+
+;;;; THE END ;;;;

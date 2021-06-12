@@ -1,20 +1,5 @@
+;;;; -*- mode:lisp;coding:iso-8859-1 -*-
+
 ;;;; ============================================================
 ;;;; BOCL implementation over the BOCL kernel.
 ;;;; ============================================================
-
-;; macros
-
-;; symbols
-;; packages
-;; structures
-;; list
-;; sequence
-;; array
-;; reader
-;; loop
-;; clos-mop
-;; gray-streams
-;; formatter
-;; printer
-;; debugger
-

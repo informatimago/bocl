@@ -1,13 +1,13 @@
-;;;; -*- mode:lisp;coding:utf-8 -*-
+;;;; -*- mode:lisp;coding:iso-8859-1 -*-
 ;;;;**************************************************************************
 ;;;;FILE:               bignum.lisp
 ;;;;LANGUAGE:           Common-Lisp
 ;;;;SYSTEM:             Common-Lisp
 ;;;;USER-INTERFACE:     NONE
 ;;;;DESCRIPTION
-;;;;    
+;;;;
 ;;;;    Implements bignum arithmetic in lisp using lists of fixnums.
-;;;;    
+;;;;
 ;;;;AUTHORS
 ;;;;    <PJB> Pascal J. Bourguignon <pjb@informatimago.com>
 ;;;;MODIFICATIONS
@@ -15,19 +15,19 @@
 ;;;;BUGS
 ;;;;LEGAL
 ;;;;    GPL
-;;;;    
+;;;;
 ;;;;    Copyright Pascal J. Bourguignon 2009 - 2009
-;;;;    
+;;;;
 ;;;;    This program is free software; you can redistribute it and/or
 ;;;;    modify it under the terms of the GNU General Public License
 ;;;;    as published by the Free Software Foundation; either version
 ;;;;    2 of the License, or (at your option) any later version.
-;;;;    
+;;;;
 ;;;;    This program is distributed in the hope that it will be
 ;;;;    useful, but WITHOUT ANY WARRANTY; without even the implied
 ;;;;    warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 ;;;;    PURPOSE.  See the GNU General Public License for more details.
-;;;;    
+;;;;
 ;;;;    You should have received a copy of the GNU General Public
 ;;;;    License along with this program; if not, write to the Free
 ;;;;    Software Foundation, Inc., 59 Temple Place, Suite 330,
@@ -44,11 +44,11 @@
 ;; "Return how many days left."
 ;;   (- (encode-universal-time 0 0 0 16 9 2008)
 ;;      (get-universal-time)))
-;; 
-;; 
+;;
+;;
 ;; (defparameter *time-bases*       '(60       60        24    30     12))
 ;; (defparameter *time-bases-names* '("second" "minute" "hour" "day" "month" "year"))
-;; 
+;;
 ;; (defmacro define-base-decomposer (name bases)
 ;;   "Note: BASES is evaluated."
 ;;   `(defun ,name (value)
@@ -59,10 +59,10 @@
 ;;                       (decompose q (cdr bases)
 ;;                                  (cons (unless (zerop r) r) result))))))
 ;;        (decompose value ,bases '()))))
-;; 
+;;
 ;; (define-base-decomposer time-interval-to-components *time-bases*)
-;; 
-;; 
+;;
+;;
 ;; (defun format-decomposed-value (decomposed-values bases)
 ;;   (substitute #\. #\,
 ;;    (format nil "~:{~:[~*~;~:*~A ~A~2:*~P~*, ~]~}"
@@ -70,7 +70,7 @@
 ;;                    (reverse decomposed-values)
 ;;                    (reverse bases)))
 ;;    :from-end t :count 1))
-;; 
+;;
 ;; (format-decomposed-value (time-interval-to-components (remaining-safak))
 ;;                         *time-bases-names*)
 
@@ -658,41 +658,41 @@ PRE: (>= a b)"
 ;; ;; Wrote file /home/pjb/src/lisp/encours/scratch/base.fas
 ;; 0 errors, 1 warning
 ;; ;; Loading file /home/pjb/src/lisp/encours/scratch/base.fas ...
-;; (TEST/SEQUENCE-LEFT-TRIM)                                    SUCCESS 
-;; (TEST/OPERATION #'+ #'U%PLUS)                                SUCCESS 
-;; (TEST/OPERATION #'- #'U%MINUS MAX #'IDENTITY)                SUCCESS 
-;; (TEST/OPERATION #'* #'U%TIMES)                               SUCCESS 
-;; (TEST/U%TIMES-DIGIT)                                         SUCCESS 
-;; (TEST/U%ZERO)                                                SUCCESS 
-;; (TEST/U%NORMALIZE)                                           SUCCESS 
-;; (TEST/U%NORMALIZE%REVERSE)                                   SUCCESS 
-;; (TEST/U%<)                                                   SUCCESS 
-;; (TEST/U%DIVIDE)                                              SUCCESS 
-;; 
+;; (TEST/SEQUENCE-LEFT-TRIM)                                    SUCCESS
+;; (TEST/OPERATION #'+ #'U%PLUS)                                SUCCESS
+;; (TEST/OPERATION #'- #'U%MINUS MAX #'IDENTITY)                SUCCESS
+;; (TEST/OPERATION #'* #'U%TIMES)                               SUCCESS
+;; (TEST/U%TIMES-DIGIT)                                         SUCCESS
+;; (TEST/U%ZERO)                                                SUCCESS
+;; (TEST/U%NORMALIZE)                                           SUCCESS
+;; (TEST/U%NORMALIZE%REVERSE)                                   SUCCESS
+;; (TEST/U%<)                                                   SUCCESS
+;; (TEST/U%DIVIDE)                                              SUCCESS
+;;
 ;; Run time: 2.000125 sec.
 ;; Space: 17210864 Bytes
 ;; GC: 10, GC time: 0.328022 sec.
 ;; ;; Loaded file /home/pjb/src/lisp/encours/scratch/base.fas
 ;; T
-;; 
-;; 
+;;
+;;
 ;; C/USER[401]> (load "base.lisp")
 ;; ;; Loading file base.lisp ...
-;; (TEST/SEQUENCE-LEFT-TRIM)                                    SUCCESS 
-;; (TEST/OPERATION #'+ #'U%PLUS)                                SUCCESS 
-;; (TEST/OPERATION #'- #'U%MINUS MAX #'IDENTITY)                SUCCESS 
-;; (TEST/OPERATION #'* #'U%TIMES)                               SUCCESS 
-;; (TEST/U%TIMES-DIGIT)                                         SUCCESS 
-;; (TEST/U%ZERO)                                                SUCCESS 
-;; (TEST/U%NORMALIZE)                                           SUCCESS 
-;; (TEST/U%NORMALIZE%REVERSE)                                   SUCCESS 
-;; (TEST/U%<)                                                   SUCCESS 
-;; (TEST/U%DIVIDE)                                              SUCCESS 
-;; 
+;; (TEST/SEQUENCE-LEFT-TRIM)                                    SUCCESS
+;; (TEST/OPERATION #'+ #'U%PLUS)                                SUCCESS
+;; (TEST/OPERATION #'- #'U%MINUS MAX #'IDENTITY)                SUCCESS
+;; (TEST/OPERATION #'* #'U%TIMES)                               SUCCESS
+;; (TEST/U%TIMES-DIGIT)                                         SUCCESS
+;; (TEST/U%ZERO)                                                SUCCESS
+;; (TEST/U%NORMALIZE)                                           SUCCESS
+;; (TEST/U%NORMALIZE%REVERSE)                                   SUCCESS
+;; (TEST/U%<)                                                   SUCCESS
+;; (TEST/U%DIVIDE)                                              SUCCESS
+;;
 ;; Run time: 13.340833 sec.
 ;; Space: 57696024 Bytes
 ;; GC: 32, GC time: 0.876053 sec.
-;; 
+;;
 ;; ;; Loaded file base.lisp
 ;; T
 ;; C/USER[402]>
