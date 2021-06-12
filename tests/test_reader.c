@@ -196,7 +196,9 @@ static void test_read_string(void){
     TEST_EQ(string_eq,T(""),                bocl_read_cstring("\"\""));
     TEST_EQ(string_eq,T("X"),               bocl_read_cstring("\"X\""));
     TEST_EQ(string_eq,T("A string with \"another string\" in it and some \\escape\\!"),
-           bocl_read_cstring("\"A string with \\\"another string\\\" in it and some \\\\escape\\\\!\""));}
+           bocl_read_cstring("\"A string with \\\"another string\\\" in it and some \\\\escape\\\\!\""));
+    TEST_EQ(equal,list(S(WRITE-LINE),T("Hello World"),NULL),
+            bocl_read_cstring("(write-line \"Hello World\")"));}
 
 static void test_read_quote(void){
     TEST_EQ(equal,list(S(QUOTE),I(42),NULL),            bocl_read_cstring("'42 33"));
