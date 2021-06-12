@@ -45,7 +45,8 @@ build: deps libbocl.$(SO) $(PROGRAMS)
 
 clean:
 	@ printf "# Removing object files and target\n"
-	-$(VERBOSE) rm -rf  libbocl.* $(PROGRAMS) *.o *.d *.[ld]x{32,64}fsl *.dSYM
+	-$(VERBOSE) rm -rf libbocl.* $(PROGRAMS) *.o *.d *.e *.dSYM
+	-$(VERBOSE)	rm -rf *.tem */*.tem *.[ld]x{32,64}fsl */*.[ld]x{32,64}fsl
 
 prepare-macos:
 	- sudo xcode-select --install

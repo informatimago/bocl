@@ -6,7 +6,7 @@
 kernel_functions.h, but we have docstring comments here. ;-) */
 
 Ref make_structure_class(Ref name,Ref direct_superclass,Ref offset,Ref slots);
-/* 
+/*
 Creates a class that has structure-class metaclass,
 direct_superclass or structure-object as superclass.
 
@@ -35,7 +35,7 @@ structure_class (including the slots defined in the superclasses).
 
 Ref make_structure_instance(Ref structure_class);
 /*
-Creates an instance of the structure_class. 
+Creates an instance of the structure_class.
 All slots are initialized to NIL.
 */
 
@@ -54,7 +54,7 @@ May signal an out-of-bound error.
 Ref structure_set(Ref new_value,Ref structure_instance,Ref index);
 /*
 index can be either an integer indexing the slots, or a symbol naming the wanted slot.
-sets the slot value of the indexed slot, 
+sets the slot value of the indexed slot,
 return the new-value.
 May signal an out-of-bound error.
 */
