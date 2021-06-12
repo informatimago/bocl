@@ -11,7 +11,7 @@ void make_constant_variable(Ref symbol){
               string_cstring(symbol_name(symbol)));}
     Ref plist=symbol_plist(symbol);
     plist=putf(plist,S($CONSTANT),S(T));
-    symbol_set_plist(symbol,plist);}
+    set_symbol_plist(symbol,plist);}
 
 bool constant_variable_p(Ref symbol){
    return !nullp(getf(symbol_plist(symbol),S($CONSTANT),S(NIL)));}
@@ -22,25 +22,25 @@ void make_special_variable(Ref symbol){
               string_cstring(symbol_name(symbol)));}
     Ref plist=symbol_plist(symbol);
     plist=putf(plist,S($SPECIAL),S(T));
-    symbol_set_plist(symbol,plist);}
+    set_symbol_plist(symbol,plist);}
 
 bool special_variable_p(Ref symbol){
     return !nullp(getf(symbol_plist(symbol),S($SPECIAL),S(NIL)));}
 
 Ref define_constant(Ref symbol,Ref value){
-    symbol_set_value(symbol,value);
+    set_symbol_value(symbol,value);
     make_constant_variable(symbol);
     return symbol;}
 
 Ref define_variable(Ref symbol,Ref value){
     make_special_variable(symbol);
     if(!(symbol_boundp(symbol)||eql(value,UNBOUND_Object))){
-        symbol_set_value(symbol,value);}
+        set_symbol_value(symbol,value);}
     return symbol;}
 
 Ref define_parameter(Ref symbol,Ref value){
     make_special_variable(symbol);
-    symbol_set_value(symbol,value);
+    set_symbol_value(symbol,value);
     return symbol;}
 
 Ref variable_value(Ref symbol){
