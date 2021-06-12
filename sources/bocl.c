@@ -57,9 +57,14 @@ Ref bocl_in_package(Ref package_designator){
     return S(NIL);}
 
 Ref bocl_load_cstring(const char* path){
+    Ref out = variable_value(S(*STANDARD-OUTPUT*));
+
+    princ(T("STREAM-OPEN not implemented yet."),out);
+    terpri(out);
+    return NIL_Symbol;
+
     bool do_verbose = is_true(variable_value(S(*LOAD-VERBOSE*)));
     bool do_print   = is_true(variable_value(S(*LOAD-PRINT*)));
-    Ref out = variable_value(S(*STANDARD-OUTPUT*));
     Ref inp = stream_open(physical_pathname_new_cstring(path),
                              K(INPUT),
                              S(CHARACTER),
