@@ -121,7 +121,6 @@ typedef enum {
     frame_restart,
 } frame_type;
 
-
 typedef struct Frame {
     struct Frame* next;
     struct Frame* target;
@@ -146,13 +145,12 @@ typedef struct Frame {
 } Frame;
 
 typedef struct Environment {
-    BLOCK_HEADER;               /* objcount=7 */
-    Ref dynamic_variables;      /* Local dynamic variables */
-    Ref lexical_variables;
-    Ref lexical_functions;
-    Ref lexical_blocks;         /* used while minimal-compiling */
-    Ref lexical_catchs;         /* used while minimal-compiling */
-    Ref lexical_declarations;   /* used while minimal-compiling */
+    BLOCK_HEADER;               /* objcount=6 */
+    Ref variables;
+    Ref functions;
+    Ref blocks;         /* used while minimal-compiling */
+    Ref catchs;         /* used while minimal-compiling */
+    Ref declarations;   /* used while minimal-compiling */
     Ref next_environment;
     Frame* frames;
 } Environment;
@@ -277,6 +275,7 @@ typedef struct BuiltInClass {
 
 typedef struct StructureClass {
     CLASS_HEADER;
+    Ref offset; /* An integer, number of additionnal slots. */
     Ref slot_names; /* A list of symbols naming the slots. */
     uword nslots; /* in instances of this instance of structure-class */
     /* Instances of this  instance of structure-class use VectorOfObject to store the slots. */
