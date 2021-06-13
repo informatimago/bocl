@@ -490,6 +490,9 @@
              (generate-kernel-function 'eql    '(a b) :values '(boolean))
              (generate-kernel-function 'equal  '(a b) :values '(boolean))
 
+             (generate-kernel-function 'values       '(&rest values) :cfun 'values)
+             (generate-kernel-function 'values-list  '(values)       :cfun 'values)
+
              ;; FILENAME ====================
 
              (generate-kernel-function 'pathname  '(pathname-designator))
