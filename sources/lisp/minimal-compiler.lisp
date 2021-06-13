@@ -137,27 +137,6 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
   ;; TODO: instanciated global environment
   (setf (get name +key/compiler-macro-function+ nil) new-function))
 
-(cl:defmacro define-compiler-macro (name lambda-list &body decl-doc-body)
-  (let* ((ll          (parse-lambda-list lambda-list :macro))
-         (whole       (if (lambda-list-whole-parameter-p ll)
-                          (parameter-specifier (lambda-list-whole-parameter ll))
-                          (gensym "whole")))
-         (environment (if (lambda-list-environment-parameter-p ll)
-                          (parameter-specifier (lambda-list-environment-parameter ll))
-                          (gensym "environment"))))
-    (remove-whole-parameter ll)
-    (remove-environment-parameter ll)
-    (multiple-value-bind (declarations docstrings body) (parse-body :lambda decl-doc-body)
-      `(progn
-         (setf (compiler-macro-function ',name)
-               (lambda (,whole ,environment)
-                 (declare (ignorable ,environment))
-                 (destructuring-bind ,lambda-list ,whole
-                   (locally ,@declarations
-                     ,@body)))
-               ,@(when docstrings
-                   `((documentation ',name 'compiler-macro) ',(first docstrings))))
-         ',name))))
 
 ;;;
 ;;; Symbol macros
@@ -185,18 +164,9 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
                                             environment)))
   new-expansion)
 
-(cl:defmacro define-symbol-macro (&whole form symbol expansion)
-  `(progn
-     (eval-when (:compile-toplevel)
-       (when (env/find-variable symbol nil)
-         (cerror 'variable-name-collision-error
-                 :name symbol :new-definition ',form)))
-     (setf (symbol-macro-expansion ',symbol nil) ',expansion)
-     ',symbol))
-
 
 ;; (cl:defmacro symbol-macrolet (&environment environment (&rest symbol-expansion-clauses) decl-and-body)
-;;   (multiple-value-bind (declarations docstrings body) (parse-body :locally decl-and-body)
+;;   (multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-body)
 ;;
 ;;     ))
 
