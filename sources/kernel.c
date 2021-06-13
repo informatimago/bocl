@@ -1509,6 +1509,11 @@ Ref function_name(Ref funclo){
     check_type(funclo,FUNCTION_Class);
     return funclo->slots->function.lisp_name;}
 
+void values(Ref function_or_closure,Ref arguments,MultipleValues* results){
+    results->count=0;
+    while(consp(arguments) && (results->count<MULTIPLE_VALUES_LIMIT)){
+        results->values[results->count++]=car(arguments);}}
+
 void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){
     if(closurep(function_or_closure)){
         kernel_apply_closure(function_or_closure,&function_or_closure->slots->closure,arguments,results);}
