@@ -10,7 +10,7 @@
                             (gensym "environment"))))
     (remove-whole-parameter ll)
     (remove-environment-parameter ll)
-    (multiple-value-bind (declarations docstrings body) (parse-body :lambda decl-doc-body)
+    (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
       `(progn
          (setf (env/macro-function ',name)
                (coerce-to-function
@@ -31,7 +31,7 @@
   ;; TODO: instanciated global environment
   (unless environment (setf environment *global-environment*))
   (setf environment *global-environment*)
-  (multiple-value-bind (declarations docstrings body) (parse-body :lambda decl-doc-body)
+  (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
     `(progn
        (setf (symbol-function ',name)
              (coerce-to-function

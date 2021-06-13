@@ -14,7 +14,7 @@
     (values)))
 
 (defmacro dotimes ((var count-form &optional result-form) &body decl-tagbody)
-  (destructuring-bind (declarations docstrings body) (parse-body :locally decl-tagbody)
+  (destructuring-bind (docstrings declarations body) (parse-body :locally decl-tagbody)
     (declare (ignore docstrings))
     (let ((vcount (gensym "count"))
           (vvar   (gensym "var"))
