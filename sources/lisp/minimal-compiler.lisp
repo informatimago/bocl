@@ -236,7 +236,7 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
                             (gensym "environment"))))
     (remove-whole-parameter ll)
     (remove-environment-parameter ll)
-    (multiple-value-bind (declarations docstrings body) (parse-body :lambda decl-and-body)
+    (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
       (declare (ignore docstrings))
       (setf (macro-function name environment)
             (coerce-to-function `(lambda (,whole ,env-parameter)
@@ -533,7 +533,7 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
                                                             (first binding))))
                              bindings)
                      env)))
-           (multiple-value-bind (declarations docstrings body) (parse-body :locally decl-and-body)
+           (multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-body)
              (declare (ignore docstrings))
              ;; TODO: process special declarations!
              (append declarations
@@ -663,7 +663,7 @@ RETURN: A new keyword with STRING-DESIGNATOR as name.
                  (if (eql '&body (first (last binds)))
                      (let ((&body (gensym "&BODY")))
                        `(destructuring-bind ,(append (butlast binds) (list '&body body)) ,form
-                          (multiple-value-bind (declarations docstrings body) (parse-body :locally body)
+                          (multiple-value-bind (docstrings declarations body) (parse-body :locally body)
                             ,@body)))
                      `(destructuring-bind ,binds ,form ,@body))))
       (multiple-value-bind (expansion win) (macroexpand-1 form env)
