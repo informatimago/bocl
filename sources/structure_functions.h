@@ -33,8 +33,10 @@ void kernel_ENV_LOCAL_SPECIAL_VARIABLE(Ref function,Ref arguments,MultipleValues
 void kernel_COPY_LOCAL_SPECIAL_VARIABLE(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_LOCAL_SPECIAL_VARIABLE_NAME(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_NAME(Ref function,Ref arguments,MultipleValues* results);
-void kernel_ENV_LOCAL_SPECIAL_VARIABLE_VALUE(Ref function,Ref arguments,MultipleValues* results);
-void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_VALUE(Ref function,Ref arguments,MultipleValues* results);
+void kernel_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_BOUNDP(Ref function,Ref arguments,MultipleValues* results);
+void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_BOUNDP(Ref function,Ref arguments,MultipleValues* results);
+void kernel_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_VALUE(Ref function,Ref arguments,MultipleValues* results);
+void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_VALUE(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_GLOBAL_FUNCTION_P(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_MAKE_GLOBAL_FUNCTION(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_GLOBAL_FUNCTION(Ref function,Ref arguments,MultipleValues* results);

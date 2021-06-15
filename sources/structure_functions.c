@@ -326,10 +326,12 @@ void kernel_ENV_MAKE_LOCAL_SPECIAL_VARIABLE(Ref function,Ref arguments,MultipleV
     Ref current=arguments;
     Ref def_name = variable_value(S(NIL));
     Ref par_name = pop_key_argument(function,&current,K(NAME),def_name);
-    Ref def_value = variable_value(S(NIL));
-    Ref par_value = pop_key_argument(function,&current,K(VALUE),def_value);
+    Ref def_saved_boundp = variable_value(S(NIL));
+    Ref par_saved_boundp = pop_key_argument(function,&current,K(SAVED-BOUNDP),def_saved_boundp);
+    Ref def_saved_value = variable_value(S(NIL));
+    Ref par_saved_value = pop_key_argument(function,&current,K(SAVED-VALUE),def_saved_value);
     results->count=1;
-    results->values[0] = env_make_local_special_variable(par_name, par_value);
+    results->values[0] = env_make_local_special_variable(par_name, par_saved_boundp, par_saved_value);
     close_live_pool(pool);
 }
 
@@ -382,7 +384,7 @@ void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_NAME(Ref function,Ref arguments,Multi
     close_live_pool(pool);
 }
 
-void kernel_ENV_LOCAL_SPECIAL_VARIABLE_VALUE(Ref function,Ref arguments,MultipleValues* results){
+void kernel_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_BOUNDP(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
     add_to_live_pool(arguments);
@@ -390,20 +392,45 @@ void kernel_ENV_LOCAL_SPECIAL_VARIABLE_VALUE(Ref function,Ref arguments,Multiple
     Ref par_local_special_variable = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = env_local_special_variable_value(par_local_special_variable);
+    results->values[0] = env_local_special_variable_saved_boundp(par_local_special_variable);
     close_live_pool(pool);
 }
 
-void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_VALUE(Ref function,Ref arguments,MultipleValues* results){
+void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_BOUNDP(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
     add_to_live_pool(arguments);
     Ref current=arguments;
-    Ref par_new_value = pop_mandatory_argument(function,&current);
+    Ref par_new_saved_boundp = pop_mandatory_argument(function,&current);
     Ref par_local_special_variable = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_env_local_special_variable_value(par_new_value, par_local_special_variable);
+    results->values[0] = set_env_local_special_variable_saved_boundp(par_new_saved_boundp, par_local_special_variable);
+    close_live_pool(pool);
+}
+
+void kernel_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_VALUE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_local_special_variable = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = env_local_special_variable_saved_value(par_local_special_variable);
+    close_live_pool(pool);
+}
+
+void kernel_SET_ENV_LOCAL_SPECIAL_VARIABLE_SAVED_VALUE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_new_saved_value = pop_mandatory_argument(function,&current);
+    Ref par_local_special_variable = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = set_env_local_special_variable_saved_value(par_new_saved_value, par_local_special_variable);
     close_live_pool(pool);
 }
 
@@ -1147,7 +1174,7 @@ void kernel_initialize_structure_functions(void){
     LEXICAL_VARIABLE_Class           = make_structure_class(S(LEXICAL_VARIABLE),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(VALUE),NULL));
     CONSTANT_VARIABLE_Class          = make_structure_class(S(CONSTANT_VARIABLE),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(VALUE),NULL));
     GLOBAL_SPECIAL_VARIABLE_Class    = make_structure_class(S(GLOBAL_SPECIAL_VARIABLE),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(VALUE),NULL));
-    LOCAL_SPECIAL_VARIABLE_Class     = make_structure_class(S(LOCAL_SPECIAL_VARIABLE),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(VALUE),NULL));
+    LOCAL_SPECIAL_VARIABLE_Class     = make_structure_class(S(LOCAL_SPECIAL_VARIABLE),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(SAVED-BOUNDP),S(SAVED-VALUE),NULL));
     GLOBAL_FUNCTION_Class            = make_structure_class(S(GLOBAL_FUNCTION),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),S(COMPILER-MACRO),NULL));
     LOCAL_FUNCTION_Class             = make_structure_class(S(LOCAL_FUNCTION),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),NULL));
     GLOBAL_SYMBOL_MACRO_Class        = make_structure_class(S(GLOBAL_SYMBOL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(EXPANSION),NULL));

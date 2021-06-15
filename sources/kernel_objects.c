@@ -46,6 +46,13 @@ Ref TAGBODY_Symbol                           = &uninitialized_object;
 Ref THE_Symbol                               = &uninitialized_object;
 Ref THROW_Symbol                             = &uninitialized_object;
 Ref UNWIND_PROTECT_Symbol                    = &uninitialized_object;
+Ref SETF_Symbol                              = &uninitialized_object;
+Ref LAMBDA_Symbol                            = &uninitialized_object;
+Ref DECLARE_Symbol                           = &uninitialized_object;
+Ref SPECIAL_Symbol                           = &uninitialized_object;
+Ref COMPILE_Symbol                           = &uninitialized_object;
+Ref LOAD_Symbol                              = &uninitialized_object;
+Ref EVAL_Symbol                              = &uninitialized_object;
 
 Ref T_Class                                  = &uninitialized_object;
 Ref CHARACTER_Class                          = &uninitialized_object;
@@ -824,6 +831,13 @@ void kernel_objects_initialize(void){
     THE_Symbol = symbol_intern_cstring("THE");
     THROW_Symbol = symbol_intern_cstring("THROW");
     UNWIND_PROTECT_Symbol = symbol_intern_cstring("UNWIND-PROTECT");
+    SETF_Symbol = symbol_intern_cstring("SETF");
+    LAMBDA_Symbol = symbol_intern_cstring("LAMBDA");
+    DECLARE_Symbol = symbol_intern_cstring("DECLARE");
+    SPECIAL_Symbol = symbol_intern_cstring("SPECIAL");
+    COMPILE_Symbol = symbol_intern_cstring("COMPILE");
+    LOAD_Symbol = symbol_intern_cstring("LOAD");
+    EVAL_Symbol = symbol_intern_cstring("EVAL");
 
 }
 

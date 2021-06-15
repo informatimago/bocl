@@ -43,7 +43,7 @@ static VectorOfObject*           VectorOfObject_slots               (halfword si
 static VectorOfOctet*            VectorOfOctet_slots                (halfword length);
 static VectorOfOctet*            VectorOfOctet_slots_cstring        (const char* value);
 static VectorOfUWord*            VectorOfUWord_slots                (halfword size) unused;
-static Environment*              Environment_slots                  (Ref next_environment);
+static Environment*              Environment_slots                  (Ref next_environment,bool is_toplevel);
 
 
 
@@ -728,6 +728,16 @@ Ref symbol_function(Ref symbol){
 Ref symbol_plist(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.plist;}
+
+Ref symbol_make_unbound(Ref symbol){
+    check_type(symbol,SYMBOL_Class);
+    symbol->slots->symbol.value=UNBOUND_Object;
+    return symbol;}
+
+Ref symbol_make_funbound(Ref symbol){
+    check_type(symbol,SYMBOL_Class);
+    symbol->slots->symbol.function=UNBOUND_Object;
+    return symbol;}
 
 Ref set_symbol_package(Ref symbol,Ref new_package){
     check_type(symbol,SYMBOL_Class);
@@ -1441,7 +1451,7 @@ Ref standard_error_stream(void){
 
 /* ENVIRONMENT */
 
-static Environment* Environment_slots(Ref next_environment){
+static Environment* Environment_slots(Ref next_environment,bool is_toplevel){
     Environment* that=allocate(sizeof(*that));
     that->objcount=6;
     that->variables        = NIL_Symbol;
@@ -1451,10 +1461,11 @@ static Environment* Environment_slots(Ref next_environment){
     that->declarations     = NIL_Symbol;
     that->next_environment = next_environment;
     that->frames=NULL;
+    that->is_toplevel=is_toplevel;
     return that;}
 
-Ref environment_new(Ref next_environment){
-    return Object_new(ENVIRONMENT_Class,(Slots*)Environment_slots(next_environment));}
+Ref environment_new(Ref next_environment,Ref toplevelp){
+    return Object_new(ENVIRONMENT_Class,(Slots*)Environment_slots(next_environment,!nullp(toplevelp)));}
 
 
 /* FUNCTION */
@@ -1509,7 +1520,7 @@ Ref function_name(Ref funclo){
     check_type(funclo,FUNCTION_Class);
     return funclo->slots->function.lisp_name;}
 
-void values(Ref function_or_closure,Ref arguments,MultipleValues* results){
+void values(Ref arguments,MultipleValues* results){
     results->count=0;
     while(consp(arguments) && (results->count<MULTIPLE_VALUES_LIMIT)){
         results->values[results->count++]=car(arguments);}}
@@ -1628,6 +1639,8 @@ static void kernel_initialize_features(void){
     define_constant(S(CHAR-CODE-LIMIT),         I(CHAR_CODE_LIMIT));
     define_constant(S(LAMBDA-PARAMETERS-LIMIT), I(LAMBDA_PARAMETERS_LIMIT));
     define_constant(S(MULTIPLE-VALUES-LIMIT),   I(MULTIPLE_VALUES_LIMIT));
+
+    define_variable(S(*LOADING-FASL-FILE*),     S(NIL));
 }
 
 void kernel_initialize(void){

@@ -174,6 +174,18 @@ Ref assq(Ref key,Ref alist){
         alist=cdr(alist);}
     return car(alist);}
 
+Ref firsts(Ref alist){
+    uword pool=open_live_pool();
+    add_to_live_pool(alist);
+    Ref result=NIL_Symbol;
+    while(consp(alist)){
+        if(consp(car(alist))){
+            push(caar(alist),&result);}
+        alist=cdr(alist);}
+    result=nreverse(result);
+    close_live_pool(pool);
+    return result;}
+
 Ref nreverse(Ref list){
     if(list==NIL_Symbol){
         return NIL_Symbol;}

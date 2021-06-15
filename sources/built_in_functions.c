@@ -18,6 +18,17 @@ void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);
 }
 
+void kernel_GET_EVAL_COUNTERS(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = get_eval_counters();
+    close_live_pool(pool);
+}
+
 void kernel_CLASS_NEW(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
@@ -520,6 +531,30 @@ void kernel_FBOUNDP(Ref function,Ref arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = as_boolean(symbol_fboundp(par_symbol));
+    close_live_pool(pool);
+}
+
+void kernel_MAKUNBOUND(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_symbol = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = symbol_make_unbound(par_symbol);
+    close_live_pool(pool);
+}
+
+void kernel_FMAKUNBOUND(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_symbol = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = symbol_make_funbound(par_symbol);
     close_live_pool(pool);
 }
 
@@ -1223,32 +1258,6 @@ void kernel_LAST(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);
 }
 
-void kernel_MEMQ(Ref function,Ref arguments,MultipleValues* results){
-    uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref par_item = pop_mandatory_argument(function,&current);
-    Ref par_list = pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    results->count=1;
-    results->values[0] = memq(par_item, par_list);
-    close_live_pool(pool);
-}
-
-void kernel_ASSQ(Ref function,Ref arguments,MultipleValues* results){
-    uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref par_key = pop_mandatory_argument(function,&current);
-    Ref par_alist = pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    results->count=1;
-    results->values[0] = assq(par_key, par_alist);
-    close_live_pool(pool);
-}
-
 void kernel_COPY_LIST(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
@@ -1306,6 +1315,44 @@ void kernel_REVERSE(Ref function,Ref arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = reverse(par_list);
+    close_live_pool(pool);
+}
+
+void kernel_MEMQ(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_item = pop_mandatory_argument(function,&current);
+    Ref par_list = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = memq(par_item, par_list);
+    close_live_pool(pool);
+}
+
+void kernel_ASSQ(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_key = pop_mandatory_argument(function,&current);
+    Ref par_alist = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = assq(par_key, par_alist);
+    close_live_pool(pool);
+}
+
+void kernel_FIRSTS(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_alist = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = firsts(par_alist);
     close_live_pool(pool);
 }
 
@@ -1631,6 +1678,27 @@ void kernel_EQUAL(Ref function,Ref arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = as_boolean(equal(par_a, par_b));
+    close_live_pool(pool);
+}
+
+void kernel_VALUES(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_values = current;
+    values(par_values, results);
+    close_live_pool(pool);
+}
+
+void kernel_VALUES_LIST(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_values = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    values(par_values, results);
     close_live_pool(pool);
 }
 
@@ -2062,9 +2130,23 @@ void kernel_MAKE_ENVIRONMENT(Ref function,Ref arguments,MultipleValues* results)
     Ref current=arguments;
     Ref def_next_environment = variable_value(S(NIL));
     Ref par_next_environment = pop_optional_argument(function,&current,def_next_environment);
+    Ref def_toplevelp = variable_value(S(NIL));
+    Ref par_toplevelp = pop_optional_argument(function,&current,def_toplevelp);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = environment_new(par_next_environment);
+    results->values[0] = environment_new(par_next_environment, par_toplevelp);
+    close_live_pool(pool);
+}
+
+void kernel_ENVIRONMENT_IS_TOPLEVEL(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = as_boolean(environment_is_toplevel(par_environment));
     close_live_pool(pool);
 }
 
@@ -2286,6 +2368,9 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(KERNEL-ROOTSET);
         Ref lambda_list=S(NIL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_KERNEL_ROOTSET));}
+    {   Ref fname=S(GET-EVAL-COUNTERS);
+        Ref lambda_list=S(NIL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_EVAL_COUNTERS));}
     {   Ref fname=S(CLASS-NEW);
         Ref lambda_list=list(S(NAME),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CLASS_NEW));}
@@ -2409,6 +2494,12 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(FBOUNDP);
         Ref lambda_list=list(S(SYMBOL),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FBOUNDP));}
+    {   Ref fname=S(MAKUNBOUND);
+        Ref lambda_list=list(S(SYMBOL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKUNBOUND));}
+    {   Ref fname=S(FMAKUNBOUND);
+        Ref lambda_list=list(S(SYMBOL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FMAKUNBOUND));}
     {   Ref fname=S(INTERN-KEYWORD);
         Ref lambda_list=list(S(NAME),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_INTERN_KEYWORD));}
@@ -2583,12 +2674,6 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(LAST);
         Ref lambda_list=list(S(LIST),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_LAST));}
-    {   Ref fname=S(MEMQ);
-        Ref lambda_list=list(S(ITEM),S(LIST),NULL);
-        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MEMQ));}
-    {   Ref fname=S(ASSQ);
-        Ref lambda_list=list(S(KEY),S(ALIST),NULL);
-        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ASSQ));}
     {   Ref fname=S(COPY-LIST);
         Ref lambda_list=list(S(LIST),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_COPY_LIST));}
@@ -2604,6 +2689,15 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(REVERSE);
         Ref lambda_list=list(S(LIST),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_REVERSE));}
+    {   Ref fname=S(MEMQ);
+        Ref lambda_list=list(S(ITEM),S(LIST),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MEMQ));}
+    {   Ref fname=S(ASSQ);
+        Ref lambda_list=list(S(KEY),S(ALIST),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ASSQ));}
+    {   Ref fname=S(FIRSTS);
+        Ref lambda_list=list(S(ALIST),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FIRSTS));}
     {   Ref fname=S(GETF);
         Ref lambda_list=list(S(PLIST),S(INDICATOR),S(&OPTIONAL),S(DEFAULT-VALUE),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GETF));}
@@ -2679,6 +2773,12 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(EQUAL);
         Ref lambda_list=list(S(A),S(B),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_EQUAL));}
+    {   Ref fname=S(VALUES);
+        Ref lambda_list=list(S(&REST),S(VALUES),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_VALUES));}
+    {   Ref fname=S(VALUES-LIST);
+        Ref lambda_list=list(S(VALUES),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_VALUES_LIST));}
     {   Ref fname=S(PATHNAME);
         Ref lambda_list=list(S(PATHNAME-DESIGNATOR),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_PATHNAME));}
@@ -2767,8 +2867,11 @@ void kernel_initialize_built_in_functions(void){
         Ref lambda_list=list(S(NEW-VALUE),S(STRUCTURE-INSTANCE),S(INDEX),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_STRUCTURE_SET));}
     {   Ref fname=S(MAKE-ENVIRONMENT);
-        Ref lambda_list=list(S(&OPTIONAL),S(NEXT-ENVIRONMENT),NULL);
+        Ref lambda_list=list(S(&OPTIONAL),S(NEXT-ENVIRONMENT),S(TOPLEVELP),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_ENVIRONMENT));}
+    {   Ref fname=S(ENVIRONMENT-IS-TOPLEVEL);
+        Ref lambda_list=list(S(ENVIRONMENT),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_IS_TOPLEVEL));}
     {   Ref fname=S(ENVIRONMENT-VARIABLES);
         Ref lambda_list=list(S(ENVIRONMENT),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ENVIRONMENT_VARIABLES));}

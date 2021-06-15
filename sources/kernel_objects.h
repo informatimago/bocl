@@ -41,6 +41,13 @@ extern Ref TAGBODY_Symbol;
 extern Ref THE_Symbol;
 extern Ref THROW_Symbol;
 extern Ref UNWIND_PROTECT_Symbol;
+extern Ref SETF_Symbol;
+extern Ref LAMBDA_Symbol;
+extern Ref DECLARE_Symbol;
+extern Ref SPECIAL_Symbol;
+extern Ref COMPILE_Symbol;
+extern Ref LOAD_Symbol;
+extern Ref EVAL_Symbol;
 
 extern Ref T_Class;
 extern Ref CHARACTER_Class;

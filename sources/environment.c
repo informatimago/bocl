@@ -5,6 +5,12 @@
 #include "memory.h"
 #include "kernel_structure_functions.h"
 
+
+bool environment_is_toplevel(Ref environment){
+    check_class(environment,ENVIRONMENT_Class);
+    Environment* env=&(environment->slots->environment);
+    return env->is_toplevel;}
+
 Ref environment_variables(Ref environment){
     check_class(environment,ENVIRONMENT_Class);
     Environment* env=&(environment->slots->environment);
@@ -71,6 +77,9 @@ Ref environment_frames(Ref environment){
           case frame_catch:
               push(list(CATCH_Symbol,frame_env,frame->parameters.catch.object,NULL),&results);
               break;
+          case frame_tagbody:
+              push(list(TAGBODY_Symbol,frame_env,firsts(frame->parameters.tagbody.tags),NULL),&results);
+              break;
           case frame_handler:
               push(list(S(HANDLER),frame_env,frame->parameters.handler.conditions,NULL),&results);
               break;
@@ -124,13 +133,17 @@ Ref environment_add_declaration(Ref declaration, Ref environment){
     return environment;}
 
 Ref environment_find_variable(Ref name, Ref environment){
-}
+    NOT_IMPLEMENTED_YET();
+    return NIL_Symbol;}
 Ref environment_find_function(Ref name, Ref environment){
-}
+    NOT_IMPLEMENTED_YET();
+    return NIL_Symbol;}
 Ref environment_find_block(Ref name, Ref environment){
-}
+    NOT_IMPLEMENTED_YET();
+    return NIL_Symbol;}
 Ref environment_find_catch(Ref tag, Ref environment){
-}
+    NOT_IMPLEMENTED_YET();
+    return NIL_Symbol;}
 
 
 bool env_special_variable_p(Ref object){

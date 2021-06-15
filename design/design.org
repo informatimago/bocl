@@ -179,18 +179,185 @@ Ref gun(void){
 * Built In Objects
 TBD
 * Environments
+** Environment Kinds
 
-Environment objects will instances of a =BUILT-IN-CLASS=, with mostly
-lisp object references, but also one pointer to the list of
-=KERNEL:EVAL= =Frame=.
+There are two kinds of environments:
 
-** Run-time Bindings.
+- compilation-time (minimal-compilation) ie. macroexpansion-time
+  &environment environments.  The compilation-time environments are
+  used while analysing (macroexpanding) the source code, to record the
+  lexical objects used by inner macros and minimal-compilation.
 
-The environment objects are complex and contain a lot of
-compilation-time information that is not needed at runtime.  Their
-structure would also multiply the nodes.
+- run-time environments.  The run-time environments are parts of the
+  =Frame= that is stored on the heap, to be referenced by closure, and
+  that contain the local lexical variable and function bindings.
 
-Instead, in addition to the minimal compilation, we could perform some
+
+The =COM.INFORMATIMAGO.BOCL.ENVIRONMENT= package implements
+compilation-time environments, and produces from them the information
+required to generate the run-time environment meta-information.  The
+=Frames= are allocated by the interpreter =KERNEL:EVAL= function for
+the special-operators requiring them.
+
+The minimal-compilation process should store with the generated
+special-operator forms, the run-time environment meta-information.
+
+Operators openning a new =Frame=:
+
+| Operator       | CT/RT             | Scope           | Binding    | Exit                       |
+|----------------+-------------------+-----------------+------------+----------------------------|
+| UNWIND-PROTECT | Frame             | dynamic         | cleanup    | Execute cleanup            |
+| HANDLER        | Frame             | dynamic         | handlers   | Remove handlers            |
+| RESTART        | Frame             | dynamic         | restarts   | Remove restarts            |
+| CATCH          | Frame             | dynamic         | object     | Remove catch object        |
+| BLOCK          | CT, Frame         | lexical         | blocks     | Remove scope (blocks)      |
+| TAGBODY        | CT, Frame         | lexical         | tags       | Remove scope (tags)        |
+| PROGV          | CT, Frame         | dynamic         | variable   | Remove scope (variables)   |
+| LET            | CT, RT, Frame(*)  | lexical/dynamic | variables  | Remove scopes (variables)  |
+| LET*           | CT, RT, Frame(*)¥ | lexical/dynamic | variables  | Remove scopes (variables)  |
+| FLET           | CT, RT            | lexical         | functions  | Remove scope (functions)   |
+| LABELS         | CT, RT            | lexical         | functions  | Remove scope (functions)   |
+| LAMBDA         | CT, RT            | lexical/dynamic | parameters | Remove scopes (parameters) |
+|----------------+-------------------+-----------------+------------+----------------------------|
+
+(*): only when there's a dynamic binding.
+¥: normally LET* is minimal-compiled into embedded LETs.
+
+UNWIND-PROTECT, HANDLER-CASE, HANDLER-BIND, RESTART-CASE,
+RESTART-BIND, and CATCH don't need to be recorded in the
+compilation-time environment, since they're purely dynamic constructs,
+without any lexical dependency.
+
+#+BEGIN_EXAMPLE
+
+(defun f () (declare (special goo)) goo)
+
+(let ((goo 42))
+  (list
+   goo
+   (let ((goo 33))
+     (declare (special goo))color-picker--previous-channel
+     (list
+      goo
+      (f)
+      (let ((goo 22))
+        (list goo
+              (f)
+              (locally
+                  (declare (special goo))
+                (f))
+              (let ((goo 11))
+                (declare (special goo))
+                (f))))))))
+;; --> (42 (33 33 (22 33 33 11)))
+
+#+END_EXAMPLE
+
+
+| Class <- Subclass                             |
+|-----------------------------------------------|
+| variable <- symbol-macro                      |
+| variable <- authentic-variable                |
+| authentic-variable <- lexical-variable        |
+| authentic-variable <- local-special-variable  |
+| authentic-variable <- global-special-variable |
+| authentic-variable <- constant-variable       |
+| symbol-macro <- global-symbol-macro           |
+| symbol-macro <- local-symbol-macro            |
+|                                               |
+| function <- authentic-function                |
+| authentic-function <- local-function          |
+| authentic-function <- global-function         |
+| global-function <- generic-function           |
+| function <- macro                             |
+| macro <- local-macro                          |
+| macro <- global-macro                         |
+| function <- special-operator                  |
+|                                               |
+| block                                         |
+|                                               |
+| tag                                           |
+|                                               |
+| declaration <- special-declaration            |
+|                                               |
+
+** Compilation-time Environments
+
+At compilation-time (macroexpansion-time), the compiler uses an
+environement objects to record the objects visible in the lexical
+scopes. Those environments are passed to compiler-macros, macros
+functions, and other functions that take a &environment parameter.
+
+These environment objects record:
+
+- local functions (flet, labels, macrolet),
+- local variables (lexical and dynamic binding, symbol-macrolet),
+- declarations
+- block names,
+- tagbody tags,
+
+They don't record CATCH objects, since they are computed dynamically.
+
+Additionnaly, the compiler (minimal-compiler) manages a global
+environment where the global definitions are recorded:
+
+- global functions,
+- global macros,
+- global symbol-macros,
+- global compiler-macros,
+- global special variables (dynamic binding),
+- global constant variables (no binding),
+
+These compilation-time environments let the compiler know what run-time
+environment will exist and map the local variables and local functions
+to run-time environment and indexes.
+
+** Global Environment
+
+The global environment is reifed as an =ENVIRONMENT= object.
+
+The defining standard macros registers the definitions in this global
+environment object.  (When not running in bocl, the host environment
+is not used).
+
+** Run-time Environments
+
+The run-time environments can be stored partially in automatic Frames
+(in =evale()=) and on heap =VectorOfObject= for closures.
+
+The Frames are structures allocated on the stack in =evale()=, and
+used mainly to manage non-local-exits.
+
+There are specialised frames for:
+- unwind-protect,
+- block,
+- catch,
+- tagbody,
+- condition handler,
+- restart.
+
+Dynamic scopes also use a unwind-protect Frame to cleanup the dynamic
+bindings.
+
+We could add Frames for lexical bindings, and for local functions.
+Those frames would allocate the storage for lexical local variables
+and local functions on the heap in a =VectorOfObject=.
+
+The local variables and local functions would be mapped to indexes
+into these =VectorOfObject=.
+
+⚠ how to ensure the frame =VectorOfObject= is in the rootset?
+
+
+
+# Environment objects will be instances of a =BUILT-IN-CLASS=, with
+# mostly lisp object references, but also one pointer to the list of
+# =KERNEL:EVAL= =Frame=.
+#
+
+** Run-time Environment Optimization
+
+Instead, in addition to the minimal-compilation, we could perform some
 simple transformation to build run-time environemnts that would be
 flatter.
 
@@ -239,18 +406,18 @@ Instead, we could flatten the environments:
 
   (defun foo (&rest arguments)
     (let ((variables (vector-of-object 7)))
-      (symbol-macrolet ((x (aref variables 0))
-                        (y (aref variables 1))
-                        (a (aref variables 2))
-                        (b (aref variables 3))
-                        (c (aref variables 4))
+      (symbol-macrolet ((x (vref variables 0))
+                        (y (vref variables 1))
+                        (a (vref variables 2))
+                        (b (vref variables 3))
+                        (c (vref variables 4))
                         (setf x (pop arguments)
                               y (pop arguments)
                               a 2
                               b (* a x)
                               c (+ b y))
-                        (+ a (symbol-macrolet ((a (aref variables 5))
-                                               (c (aref variables 6)))
+                        (+ a (symbol-macrolet ((a (vref variables 5))
+                                               (c (vref variables 6)))
                                (* a b c))
                            c)))))
 
@@ -258,16 +425,16 @@ Instead, we could flatten the environments:
 
   (defun foo (&rest arguments)
     (let ((variables (vector-of-object 7)))
-      (setf (aref variables 0) (pop arguments)
-            (aref variables 1) (pop arguments)
-            (aref variables 2) 2
-            (aref variables 3) (* (aref variables 2) (aref variables 0))
-            (aref variables 4) (+ (aref variables 3) (aref variables 1)))
-      (+  (aref variables 2)
-          (* (aref variables 5)
-             (aref variables 3)
-             (aref variables 6))
-          (aref variables 4))))
+      (setf (vref variables 0) (pop arguments)
+            (vref variables 1) (pop arguments)
+            (vref variables 2) 2
+            (vref variables 3) (* (vref variables 2) (vref variables 0))
+            (vref variables 4) (+ (vref variables 3) (vref variables 1)))
+      (+  (vref variables 2)
+          (* (vref variables 5)
+             (vref variables 3)
+             (vref variables 6))
+          (vref variables 4))))
 
 #+END_SRC
 
@@ -275,8 +442,93 @@ ie. keeping for each lambda a single flat lexical environment as a
 vector of object, and generating mapping between variable names and
 vector slots
 
+REJECTED:
+
+But this would require more compiler and optimization processing that
+what we're prepared to perform in the minimal compiler.  We would have
+to detect escaping bindings, to know what needs to be kept in a
+separate vector.
+
 *** Dynamic binding
 *** Lexical Environment
+** Functions & Closures
+
+There are several classes of function objets:
+
+- =COMPILED-CLOSURE= / =Closure=
+- =COMPILED-FUNCTION= / =Function=
+- =BUILT-IN-FUNCTION= / =BuiltInFunction=
+- =FUNCALLABLE-STANDARD-OBJECT= / =FuncallableStandardObject=
+
+All function objects can be called with =kernel_apply()=.
+
+#+BEGIN_SRC c
+void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results);
+#+END_SRC
+
+*** =BUILT-IN-FUNCTION= / =BuiltInFunction=
+
+=BUILT-IN-FUNCTION= are implemented in C in the kernel.
+
+- =lisp-name= : a symbol naming the kernel function.
+- =lambda-list= : the lisp lambda-list of the kernel function.
+- =kernel-function= : a =KernelFunctionPtr= entry point.
+
+#+BEING_SRC c
+typedef void (*KernelFunctionPtr)(Ref function,Ref arguments,MultipleValues* results);
+#+END_SRC
+
+The =lisp-name= symbol is =fboundp= and its =symbol-function= is the
+=BUILT-IN-FUNCTION= object.
+
+*** =COMPILED-FUNCTION=
+
+A compiled function has:
+
+- =lisp-name= : a symbol naming the kernel function.
+- =lambda-list= : the lisp lambda-list of the kernel function.
+- =body= : a single form body.
+
+Compiling (minimal-compilation = macroexpansion) a function produces a
+lambda-expression:
+
+#+BEGIN_SRC lisp
+  (defun foo (lambda-list…)
+    body…)
+  ;; -->
+  (lambda (mc-lambda-list…) (block foo mc-body…))
+
+  ;; The body is:
+  (block foo mc-body…)
+#+END_SRC
+
+#+BEGIN_SRC lisp
+  (lambda (lambda-list…)
+    body…)
+  ;; -->
+  (lambda (mc-lambda-list…) (progn mc-body…))
+
+  ;; The body is:
+  (progn mc-body…)
+#+END_SRC
+
+*** =CLOSURE=
+
+A closure contains:
+
+- a =function=,
+- an =environment= object, where the free variables of the functions
+  are searched.
+
+The function is usally a =FUNCTION= object. (=BUILT-IN-FUNCTION= don't
+have free variables).
+
+=COMPILED-CLOSURE= refers a =COMPILED-FUNCTION=.
+
+*** =FuncallableStandardObject=
+
+TBD MOP
+
 ** Non-Local Exits from C Functions
 
 The Non-Local Exits are implemented in C using =setjmp=/=longjmp= in
@@ -410,15 +662,24 @@ the block name symbol for a unique (non-interned) symbol.
 |------------------------+--------------------------------+-------------------------------------------|
 | ((lambda (…) …) args…) | (funcall (lambda (…) …) args…) | Lambda expession must have been compiled. |
 
+** Declarations
+
+Declarations to process:
+- DECLARATION
+  (declaim (declaration foo)) --> push foo on environment-lexical-declarations of the (global-environment)
+  (declare (declaration foo)) --> push foo on environment-lexical-declarations
+- NOTINLINE (but then, our interprete doesn't inline anything, so we're good)
+- SPECIAL
+
 ** Special Operators
 
 | Special Operator       | Implementation      | Notes                             |
 |------------------------+---------------------+-----------------------------------|
-| =TAGBODY=              | Macro               | Uses =CATCH=                      |
-| =GO=                   | Macro               | Uses =THROW=                      |
-| =UNWIND-PROTECT=       |                     |                                   |
-| =BLOCK=                |                     | Frame / Lexical Binding           |
-| =RETURN-FROM=          |                     | Non-Local Exit                    |
+| =TAGBODY=              | =KERNEL:EVAL=       |                      |
+| =GO=                   | =KERNEL:EVAL=       |                       |
+| =UNWIND-PROTECT=       | =KERNEL:EVAL=       |                                   |
+| =BLOCK=                | =KERNEL:EVAL=       | Frame / Lexical Binding           |
+| =RETURN-FROM=          | =KERNEL:EVAL=       | Non-Local Exit                    |
 | =CATCH=                | =KERNEL:EVAL=       | Frame / Catch                     |
 | =THROW=                | =KERNEL:EVAL=       | Non-Local Exit                    |
 | =QUOTE=                | =KERNEL:EVAL=       |                                   |
@@ -442,6 +703,188 @@ the block name symbol for a unique (non-interned) symbol.
 |------------------------+---------------------+-----------------------------------|
 | (compiled-fun args)    | =KERNEL:EVAL=       | Function Application.             |
 | (built-in-fun args)    | =KERNEL:EVAL=       | Function Application.             |
+
+** Special Operator FUNCTION
+
+`(FUNCTION foo)`
+`(FUNCTION (SETF foo))`
+
+Find function `foo` or `(SETF foo)` in the environment: global or lexical.
+Return the function closure.
+
+`(FUNCTION (LAMBDA (...) ...))`
+
+Create an interpreted anonymous function with the lambda expression.
+Find the free variables and (local) free functions.
+Create a closure with the function and its free bindings.
+Signal an error if the closure is not complete (if no binding is found).
+
+** Special Operator TAGBODY
+
+Interpretation of a tagbody consists in interpreting sequentially the
+forms in the body.  GO may jump to another section of the same
+tagbody.  But in any case, unless GO is a tagbody-toplevel form, it
+will involve a non-local exit, to find the tagbody concerned.
+
+
+We keep the tags in the environments, and each tag keeps a reference
+to its tagbodies and the other tags.
+
+So the minimal-compilation of =TAGBODY= can compute a table mapping
+tags to rest of tagbody forms, and substitute the =GO= tags.  We
+encode both the =TAGBODY= form, and the tag index in the new =GO= tag.
+
+This table can be stored in a  vector, so that the search for the tags
+doesn't need  to be performed by  GO at run-time, but  is performed at
+compilation-time.  At run-time, a local  =GO= can jump switch directly
+to the entry  in the table, and  an inner =GO= can  find the =TAGBODY=
+frame counting  them up, before jump  switch directly to the  entry in
+the target =TAGBODY= table.
+
+On architectures with w-bit words, we'll use (w/2)-2 bits to identify
+the tagbody, and (w/2) bits to identify the tag.
+
+
+#+BEGIN_SRC lisp
+
+(defun parse-tagbody (body)
+  (flet ((go-tag-p (object) (or (symbolp object) (integerp object))))
+    (loop
+      with sections = '()
+      for form on body
+      do (if (go-tag-p (car form))
+             (push form sections))
+      finally (return (coerce (nreverse sections) 'vector)))))
+
+(cl:defun minimal-compile/tagbody (env form)
+  ;; There should be a tagbody environment too, but we expect tagbody to be macro-expanded to something else.
+  (destructuring-bind (tagbody &body body) form
+    `(,tagbody
+        ,(parse-tagbody form)
+        ,@(mapcar (lambda (subform)
+                      (if (go-tag-p subform)
+                        subform         ; a tag
+                        (minimal-compile env subform)))
+                  body))))
+
+(let ((*print-right-margin* 60)
+      (*print-circle* t))
+  (pprint (parse-tagbody (cdr '(tagbody (setq val 1)
+                                (go point-a)
+                                (setq val (+ val 16))
+                                point-c (setq val (+ val 4))
+                                (go point-b)
+                                (setq val (+ val 32))
+                                point-a (setq val (+ val 2))
+                                (go point-c)
+                                (setq val (+ val 64))
+                                point-b (setq val (+ val 8)))))))
+
+#((point-c (setq val (+ val 4)) (go point-b)
+   (setq val (+ val 32))
+   . #1=(point-a (setq val (+ val 2)) (go point-c)
+         (setq val (+ val 64))
+         . #2=(point-b (setq val (+ val 8)))))
+  #1# #2#)
+
+#+END_SRC
+
+So the minimally-compiled tagbody form would be:
+
+#+BEGIN_SRC lisp
+   (tagbody #(#1=(point-c #7=(setq val (+ val 4))
+                 #8=(go point-b)
+                 #9=(setq val (+ val 32))
+                 . #2=(point-a #10=(setq val (+ val 2))
+                       #11=(go point-c)
+                       #12=(setq val (+ val 64))
+                       . #3=(point-b #13=(setq val (+ val 8)))))
+             #2# #3#)
+     #4=(setq val 1)
+     #5=(go point-a)
+     #6=(setq val (+ val 16))
+   point-c #7#
+     #8#
+     #9#
+   point-a #10#
+     #11#
+     #12#
+   point-b #13#)
+#+END_SRC
+
+with the added vector mapping tags to subforms sequence.
+GO forms can then be minimally-compiled as an indexed GO
+
+Also, tagbody-toplevel GO forms can be interpreted directly by the
+TAGBODY special operator, without going thru the Frame unwinding
+mechanism.
+
+#+BEGIN_SRC c
+body=tags[go_tag_index];
+#+END_SRC
+
+** Functions
+
+#+BEGIN_SRC lisp
+  (defun foo (x y)
+    (+ x y))
+
+  (lambda (x y)
+    (block foo
+      (+ x y)))
+
+  (symbol-funtion 'foo)
+
+  (env:find-function 'foo (global-environment))
+#+END_SRC
+
+Natively, global objects are stored naturally, in the symbol slots.
+However, some objects don't have a symbol slot:
+
+- CONSTANT-VARIABLE declaration
+- SPECIAL declaration
+- NOTINLINE declaration
+- COMPILER-MACRO-FUNCTION
+- SYMBOL-MACRO
+
+Those objects will be stored in the symbol-plist, under the following keys:
+- KERNEL:$CONSTANT-VARIABLE
+- KERNEL:$SPECIAL
+- KERNEL:$NOTINLINE
+- KERNEL:$COMPILER-MACRO-FUNCTION
+- KERNEL:$SYMBOL-MACRO
+
+Storing objects in the global-environment structure is only useful:
+
+- when running the minimal-compiler and its set of standard macro on a
+  host environment.
+
+- for a few forms when they appear in toplevel:
+    + BLOCK
+    + TAGBODY
+
+  but their objecs will be poped as soon as those toplevel forms are
+  finished processing.  Note: see =COMPILE-FILE= and fasl files.
+
+- for declarations, but they're not processed:
+    + proclaimed or declaimed DECLARATIONS
+
+
+Expansion of =DEFUN= =foo=:
+#+BEGIN_SRC lisp
+(setf (symbol-function 'foo)  (function (lambda (x y)
+                                (block foo
+                                  (+ x y)))))
+
+(push-function-onto-environment
+ (make-global-function :name 'foo :lambda-list '(x y) :body '(block foo (+ x y)))
+ (global-environment))
+
+(pprint (global-environment))
+
+#S(environment :variables nil :functions (#S(global-function :name foo :lambda-list (x y) :body (block foo (+ x y))))
+               :compiler-macros nil :declarations nil :blocks nil :tags nil :next nil)
+#+END_SRC
 
 ** =KERNEL:EVAL=
 
@@ -531,6 +974,29 @@ _Noreturn unwind_next_frame(Frame* frame){
     frame->next->target=frame->target;
     longjmp(frame->next->non_local_exit,exit);}
 #+END_SRC
+
+** =COMPILE-FILE= and fasl files
+
+The implementation architecture is that of:
+
+- a  minimal-compiler  that expands  the  macros  and performs  a  few
+  transformations on the resulting form.
+
+- a KERNEL:EVAL interpreter that executes directly the minimally
+  compiled form.
+
+Note: KERNEL:EVAL may not be able to evaluate a pure source form
+(yet). In anycase, this would be much slower (macroexpansions).
+
+The minimal-compiler is invoked automatically by each defining form
+(=defun=, =defmacro=, =function=, etc).
+
+=COMPILE-FILE= will process forms read from a source file, applying
+the minimal-compilation of each toplevel form.  Some of those forms
+will be evaluated in the compilation environment (eval-when
+:compile-toplevel).  The other minimally-compiled forms are saved in a
+fasl file, which therefore a lisp file containing only special
+operators and function calls.
 
 * Epilogue                                                         :noexport:
 

@@ -11,18 +11,22 @@
                (:file "bocl-packages"     :depends-on ())
                (:file "bocl"              :depends-on ())
 
-               (:file "minimal-compiler"  :depends-on ("environment"))
-               (:file "mc-macros"         :depends-on ("minimal-compiler"))
-               (:file "mc-test"           :depends-on ("minimal-compiler"))
+               (:file "environment"       :depends-on ())
 
-               (:file "environment"       :depends-on ("bocl-packages"))
+               (:file "minimal-compiler"  :depends-on ("bocl-packages"
+                                                       "environment"))
 
-               (:file "special-operators" :depends-on ("bocl-packages"))
+               (:file "macros"            :depends-on ("bocl-packages"
+                                                       "minimal-compiler"))
+
+               (:file "mc-test"           :depends-on ("minimal-compiler"
+                                                       "macros"))
+
                (:file "structures"        :depends-on ("bocl-packages"))
                (:file "bignum"            :depends-on ("bocl-packages"))
 
-               
-               (:file "eval"              :depends-on ("bocl-packages"))
+
+               ;; (:file "eval"              :depends-on ("bocl-packages"))
 
 
                ;; (:file "cl-packages"       :depends-on ())

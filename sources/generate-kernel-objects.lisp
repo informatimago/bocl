@@ -358,7 +358,10 @@ RETURN: The shortest path of length>0 from FROM to TO if it exists, or NIL.
     if labels let let* load-time-value locally macrolet
     multiple-value-call multiple-value-prog1 progn progv quote
     return-from setq symbol-macrolet tagbody the throw
-    unwind-protect))
+    unwind-protect
+    ;; other symbols needed by eval:
+    setf lambda declare special compile load eval
+    ))
 
 (defun c-symbol-name (cfun)
   (with-output-to-string (*standard-output*)

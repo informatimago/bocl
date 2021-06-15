@@ -22,6 +22,10 @@ typedef uint32_t          halfword;
 #define WORD_X_FORMAT     PRIx64
 #define UWORD_X_FORMAT    PRIx64
 #define HALFWORD_X_FORMAT PRIx32
+
+#define TAG_MASK          0x00000000FFFFFFFF
+#define TAGBODY_SHIFT     32
+
 #else
 typedef int32_t           word;
 typedef uint32_t          uword;
@@ -36,7 +40,12 @@ typedef uint32_t          halfword;
 #define WORD_X_FORMAT     PRIx32
 #define UWORD_X_FORMAT    PRIx32
 #define HALFWORD_X_FORMAT PRIx32
+
+#define TAG_MASK          0x0000FFFF
+#define TAGBODY_SHIFT     16
+
 #endif
+
 typedef uint8_t  octet;
 typedef double   floating;
 
@@ -117,6 +126,7 @@ typedef enum {
     frame_dynamic_binding,
     frame_block,
     frame_catch,
+    frame_tagbody,
     frame_handler,
     frame_restart,
 } frame_type;
@@ -132,6 +142,10 @@ typedef struct Frame {
         struct {
             Ref object;
         } catch;
+        struct {
+            Ref tags; /* a list of sublist of the tagbody body, each starting with a different tag */
+            Ref target_tag; /* set by GO, the tag we must jump to */
+        } tagbody;
         struct {
             Ref conditions;
         } handler;
@@ -153,8 +167,8 @@ typedef struct Environment {
     Ref declarations;   /* used while minimal-compiling */
     Ref next_environment;
     Frame* frames;
+    bool is_toplevel;
 } Environment;
-
 
 
 typedef struct VectorOfObject {
@@ -354,5 +368,44 @@ BuiltInClass* make_boot_BuiltInClass(void);
 StructureClass* make_boot_StructureClass(void);
 FuncallableStandardClass* make_boot_FuncallableStandardClass(void);
 
+
+
+typedef struct {
+    word variable;
+    word literal;
+
+    word compiler_macro;
+    word global_function;
+    word local_function;
+    word global_macro;
+    word local_macro;
+    word lambda_function;
+
+    word QUOTE;
+    word FUNCTION;
+    word SETQ;
+    word IF;
+    word BLOCK;
+    word RETURN_FROM;
+    word CATCH;
+    word THROW;
+    word UNWIND_PROTECT;
+    word TAGBODY;
+    word GO;
+    word LET;
+    word LET_;
+    word FLET;
+    word LABELS;
+    word SYMBOL_MACROLET;
+    word MACROLET;
+    word MULTIPLE_VALUE_CALL;
+    word MULTIPLE_VALUE_PROG1;
+    word PROGN;
+    word PROGV;
+    word LOCALLY;
+    word THE;
+    word EVAL_WHEN;
+    word LOAD_TIME_VALUE;
+} eval_counters_t;
 
 #endif

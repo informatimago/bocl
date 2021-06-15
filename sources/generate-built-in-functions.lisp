@@ -145,6 +145,7 @@
                (progn
                  (push k-fun-name *kernel-functions*)
                  (cond
+                   ((equal values :multiple)   (write-string "void "))
                    ((equal values '())         (write-string "void "))
                    ((equal values '(boolean))  (write-string "bool "))
                    ((equal values '(uword))    (write-string "uword "))
@@ -169,6 +170,9 @@
                      (let ((key-name (first key)))
                        (format t "~ARef ~A" sep (c-par-name key-name))
                        (setf sep ", ")))
+                   (when (equal values :multiple)
+                     (write-string ", MultipleValues* results")
+                     (setf sep ", "))
                    (when (string= sep "")
                      (write-string "void")))
                  (if (eql *header* :kernel-header)
@@ -266,6 +270,8 @@
          (unless (or rest keywords)
            (write-line  "    check_no_more_arguments(function,current);"))
          (cond
+           ((equal values :multiple)
+            (write-string "    "))
            ((equal values '())
             (write-line "    results->count=0;")
             (write-string "    "))
@@ -282,6 +288,7 @@
             (write-line   "    results->count=1;")
             (write-string "    results->values[0] = "))
            (t (error "Multiple-values not supported yet. ~S" values)))
+         ;; C function call:
          (format t "~A(" (if cfun (c-fun-name cfun) (c-fun-name fname)))
          (let ((sep ""))
            (dolist (man mandatories)
@@ -299,7 +306,10 @@
            (dolist (key keywords)
              (let ((key-name (first key)))
                (format t "~A~A" sep (c-par-name key-name))
-               (setf sep ", "))))
+               (setf sep ", ")))
+           (when (equal values :multiple)
+             (write-string ", results")
+             (setf sep ", ")))
          (if (member values '((boolean) (uword) (word)) :test (function equal))
              (format t "));~%")
              (format t ");~%"))
@@ -321,6 +331,7 @@
                  (*kernel-functions* '()))
 
              (generate-kernel-function 'kernel-rootset '())
+             (generate-kernel-function 'get-eval-counters '())
 
              ;; (generate-kernel-function 'test-key '(&key (a 1 ap) (b 2 bp)))
 
@@ -384,9 +395,11 @@
              (generate-kernel-function 'set-symbol-function '(new-function symbol))
              (generate-kernel-function 'set-symbol-plist    '(new-plist    symbol))
 
-             (generate-kernel-function 'symbolp    '(object) :values '(boolean))
-             (generate-kernel-function 'boundp     '(symbol) :values '(boolean) :cfun 'symbol-boundp)
-             (generate-kernel-function 'fboundp    '(symbol) :values '(boolean) :cfun 'symbol-fboundp)
+             (generate-kernel-function 'symbolp     '(object) :values '(boolean))
+             (generate-kernel-function 'boundp      '(symbol) :values '(boolean) :cfun 'symbol-boundp)
+             (generate-kernel-function 'fboundp     '(symbol) :values '(boolean) :cfun 'symbol-fboundp)
+             (generate-kernel-function 'makunbound  '(symbol) :cfun 'symbol-make-unbound)
+             (generate-kernel-function 'fmakunbound '(symbol) :cfun 'symbol-make-funbound)
 
              (generate-kernel-function 'intern-keyword  '(name) :cfun 'keyword-intern)
              (generate-kernel-function 'keywordp        '(object) :values '(boolean))
@@ -443,13 +456,16 @@
 
              (generate-kernel-function 'nconc          '(list tail))
              (generate-kernel-function 'last           '(list))
-             (generate-kernel-function 'memq           '(item list))
-             (generate-kernel-function 'assq           '(key alist))
+
              (generate-kernel-function 'copy-list      '(list))
              (generate-kernel-function 'list           '(&rest elements) :cfun 'copy-list)
              (generate-kernel-function 'delete         '(object list))
              (generate-kernel-function 'nreverse       '(list))
              (generate-kernel-function 'reverse        '(list))
+
+             (generate-kernel-function 'memq           '(item list))
+             (generate-kernel-function 'assq           '(key alist))
+             (generate-kernel-function 'firsts         '(alist))
 
              ;; Plist
 
@@ -490,8 +506,8 @@
              (generate-kernel-function 'eql    '(a b) :values '(boolean))
              (generate-kernel-function 'equal  '(a b) :values '(boolean))
 
-             (generate-kernel-function 'values       '(&rest values) :cfun 'values)
-             (generate-kernel-function 'values-list  '(values)       :cfun 'values)
+             (generate-kernel-function 'values       '(&rest values) :cfun 'values :values :multiple)
+             (generate-kernel-function 'values-list  '(values)       :cfun 'values :values :multiple)
 
              ;; FILENAME ====================
 
@@ -552,7 +568,8 @@
 
              ;; ENVIRONMENT ====================
 
-             (generate-kernel-function 'make-environment  '(&optional next-environment)  :cfun 'environment-new)
+             (generate-kernel-function 'make-environment  '(&optional next-environment toplevelp)  :cfun 'environment-new)
+             (generate-kernel-function 'environment-is-toplevel      '(environment) :values '(boolean))
 
              (generate-kernel-function 'environment-variables        '(environment))
              (generate-kernel-function 'environment-functions        '(environment))

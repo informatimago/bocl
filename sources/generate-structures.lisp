@@ -250,7 +250,7 @@
                                    (:constructor env/local-special-variable (name))
                                    (:predicate   env/local-special-variable-p)
                                    (:conc-name   env/local-special-variable-))
-                                 '(name value))
+                                 '(name saved-boundp saved-value))
 
              (generate-structure '(global-function
                                    (:constructor env/make-global-function)

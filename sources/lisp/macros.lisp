@@ -1,37 +1,128 @@
-(cl:defpackage "COM.INFORMATIMAGO.BOCL.MACROS"
+;;;; -*- mode:lisp;coding:utf-8 -*-
+;;;;**************************************************************************
+;;;;FILE:               macros.lisp
+;;;;LANGUAGE:           Common-Lisp
+;;;;SYSTEM:             Common-Lisp
+;;;;USER-INTERFACE:     NONE
+;;;;DESCRIPTION
+;;;;
+;;;;    This packages defines the standard Common Lisp macros.
+;;;;
+;;;;AUTHORS
+;;;;    <PJB> Pascal J. Bourguignon <pjb@informatimago.com>
+;;;;MODIFICATIONS
+;;;;    2021-06-16 <PJB> Created.
+;;;;BUGS
+;;;;LEGAL
+;;;;    AGPL3
+;;;;
+;;;;    Copyright Pascal J. Bourguignon 2021 - 2021
+;;;;
+;;;;    This program is free software: you can redistribute it and/or modify
+;;;;    it under the terms of the GNU Affero General Public License as published by
+;;;;    the Free Software Foundation, either version 3 of the License, or
+;;;;    (at your option) any later version.
+;;;;
+;;;;    This program is distributed in the hope that it will be useful,
+;;;;    but WITHOUT ANY WARRANTY; without even the implied warranty of
+;;;;    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;;;;    GNU Affero General Public License for more details.
+;;;;
+;;;;    You should have received a copy of the GNU Affero General Public License
+;;;;    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;;;;**************************************************************************
+;;;;
+
+(cl:defpackage "COM.INFORMATIMAGO.COMMON-LISP.LISP.MACROS"
+  (:nicknames "COM.INFORMATIMAGO.BOCL.MACROS")
   (:use "COMMON-LISP")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP-SEXP.SOURCE-FORM")
-  (:use "KERNEL")
-  (:shadow
+
+  (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER")
+  (:shadowing-import-from
+   "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER"
    . #1=(
-         "DECLAIM" "DEFINE-COMPILER-MACRO"
-         "DEFINE-SYMBOL-MACRO" "DEFMACRO" "LAMBDA" "DEFTYPE"
-         "AND" "CASE" "CCASE" "COND" "CTYPECASE" "DEFCONSTANT"
-         "DEFINE-MODIFY-MACRO" "DEFINE-SETF-EXPANDER"
-         "DEFPARAMETER" "DEFSETF" "DEFUN" "DEFVAR"
-         "DESTRUCTURING-BIND" "ECASE" "ETYPECASE"
-         "MULTIPLE-VALUE-BIND" "MULTIPLE-VALUE-LIST"
-         "MULTIPLE-VALUE-SETQ" "NTH-VALUE" "OR" "PROG" "PROG*"
-         "PROG1" "PROG2" "PSETF" "PSETQ" "RETURN" "ROTATEF"
-         "SETF" "SHIFTF" "TYPECASE" "UNLESS" "WHEN" "DO" "DO*"
-         "DOTIMES" "DOLIST" "LOOP" "LOOP-FINISH" "CALL-METHOD"
-         "DEFCLASS" "DEFGENERIC" "DEFINE-METHOD-COMBINATION"
-         "DEFMETHOD" "WITH-ACCESSORS" "WITH-SLOTS" "DEFSTRUCT"
-         "ASSERT" "CHECK-TYPE" "DEFINE-CONDITION"
-         "HANDLER-BIND" "HANDLER-CASE" "IGNORE-ERRORS"
-         "RESTART-BIND" "RESTART-CASE"
-         "WITH-CONDITION-RESTARTS" "WITH-SIMPLE-RESTART"
-         "DEFPACKAGE" "DO-SYMBOLS" "DO-EXTERNAL-SYMBOLS"
-         "DO-ALL-SYMBOLS" "IN-PACKAGE" "WITH-PACKAGE-ITERATOR"
-         "DECF" "INCF" "POP" "PUSH" "PUSHNEW" "REMF"
-         "WITH-HASH-TABLE-ITERATOR" "WITH-INPUT-FROM-STRING"
-         "WITH-OPEN-STREAM" "WITH-OUTPUT-TO-STRING"
-         "WITH-OPEN-FILE" "PPRINT-EXIT-IF-LIST-EXHAUSTED"
-         "PPRINT-POP" "FORMATTER" "PPRINT-LOGICAL-BLOCK"
-         "PRINT-UNREADABLE-OBJECT" "WITH-STANDARD-IO-SYNTAX"
-         "WITH-COMPILATION-UNIT" "STEP" "TIME" "TRACE"
-         "UNTRACE"))
-  (:export . #1#))
+         "COMPILER-MACRO-FUNCTION" "MACRO-FUNCTION"
+         "MACROEXPAND" "MACROEXPAND-1"
+         "LAMBDA" "SETF"))
+  (:export . #1#)
+
+  (:shadow
+   . #9=(
+         "AND" "ASSERT" "CALL-METHOD" "CASE" "CCASE" "CHECK-TYPE"
+         "COND" "CTYPECASE" "DECF" "DECLAIM" "DEFCLASS" "DEFCONSTANT"
+         "DEFGENERIC" "DEFINE-COMPILER-MACRO" "DEFINE-CONDITION"
+         "DEFINE-METHOD-COMBINATION" "DEFINE-MODIFY-MACRO"
+         "DEFINE-SETF-EXPANDER" "DEFINE-SYMBOL-MACRO" "DEFMACRO"
+         "DEFMETHOD" "DEFPACKAGE" "DEFPARAMETER" "DEFSETF" "DEFSTRUCT"
+         "DEFTYPE" "DEFUN" "DEFVAR" "DESTRUCTURING-BIND" "DO" "DO*"
+         "DO-ALL-SYMBOLS" "DO-EXTERNAL-SYMBOLS" "DO-SYMBOLS" "DOLIST"
+         "DOTIMES" "ECASE" "ETYPECASE" "FORMATTER" "HANDLER-BIND"
+         "HANDLER-CASE" "IGNORE-ERRORS" "IN-PACKAGE" "INCF"
+         "LOOP" "LOOP-FINISH" "MULTIPLE-VALUE-BIND"
+         "MULTIPLE-VALUE-LIST" "MULTIPLE-VALUE-SETQ" "NTH-VALUE" "OR"
+         "POP" "PPRINT-EXIT-IF-LIST-EXHAUSTED" "PPRINT-LOGICAL-BLOCK"
+         "PPRINT-POP" "PRINT-UNREADABLE-OBJECT" "PROG" "PROG*" "PROG1"
+         "PROG2" "PSETF" "PSETQ" "PUSH" "PUSHNEW" "REMF"
+         "RESTART-BIND" "RESTART-CASE" "RETURN" "ROTATEF"
+         "SHIFTF" "STEP" "TIME" "TRACE" "TYPECASE" "UNLESS" "UNTRACE"
+         "WHEN" "WITH-ACCESSORS" "WITH-COMPILATION-UNIT"
+         "WITH-CONDITION-RESTARTS" "WITH-HASH-TABLE-ITERATOR"
+         "WITH-INPUT-FROM-STRING" "WITH-OPEN-FILE" "WITH-OPEN-STREAM"
+         "WITH-OUTPUT-TO-STRING" "WITH-PACKAGE-ITERATOR"
+         "WITH-SIMPLE-RESTART" "WITH-SLOTS" "WITH-STANDARD-IO-SYNTAX"
+
+         ;; "LAMBDA" "SETF"
+         ))
+  (:export . #9#)
+
+  ;; (:use "KERNEL")
+  ;; (:shadowing-import-from
+  ;;  "KERNEL"
+  ;;
+  ;;  "KERNEL-ROOTSET" "GET-EVAL-COUNTERS" "CLASS-NEW" "CLASSP" "CLASS-NAME"
+  ;;  "CLASS-DIRECT-SUPERCLASSES" "CLASS-ADD-SUPERCLASS" "CLASS-OF" "FIND-CLASS"
+  ;;  "SUBCLASSP" "TYPEP" "CHECK-TYPE" "CHECK-CLASS" "BUILT-IN-CLASS-NEW" "CONS"
+  ;;  "CONSP" "CONS-CAR" "CONS-CDR" "CONS-RPLACA" "CONS-RPLACD" "INTEGERP"
+  ;;  "FLOATP" "CHARACTERP" "CHAR-CODE" "CHAR-INT" "CHAR-NAME" "CODE-CHAR"
+  ;;  "NAME-CHAR" "FIND-SYMBOL" "MAKE-SYMBOL" "INTERN" "SYMBOL-NAME"
+  ;;  "SYMBOL-PACKAGE" "SYMBOL-VALUE" "SYMBOL-FUNCTION" "SYMBOL-PLIST"
+  ;;  "SET-SYMBOL-PACKAGE" "SET-SYMBOL-VALUE" "SET-SYMBOL-FUNCTION"
+  ;;  "SET-SYMBOL-PLIST" "SYMBOLP" "BOUNDP" "FBOUNDP" "MAKUNBOUND" "FMAKUNBOUND"
+  ;;  "INTERN-KEYWORD" "KEYWORDP" "OBARRAY-ALL-SYMBOLS" "NULL"
+  ;;  "NORMALIZE-EXTERNAL-FORMAT" "PHYSICAL-PATHNAME" "PHYSICAL-PATHNAME-EQUAL"
+  ;;  "PHYSICAL-PATHNAME-P" "PATHNAMEP" "MAKE-FILE-STREAM" "STREAM-PATHNAME"
+  ;;  "STREAM-ELEMENT-TYPE" "STREAM-EXTERNAL-FORMAT" "STREAM-DIRECTION"
+  ;;  "OPEN-STREAM-P" "STANDARD-INPUT-STREAM" "STANDARD-OUTPUT-STREAM"
+  ;;  "STANDARD-ERROR-STREAM" "CLOSUREP" "FUNCTIONP" "BUILT-IN-FUNCTION-P"
+  ;;  "FUNCTION-NAME" "RPLACA" "RPLACD" "CAR" "CDR" "CAAR" "CADR" "CDAR" "CDDR"
+  ;;  "CAAAR" "CAADR" "CADAR" "CADDR" "CDAAR" "CDADR" "CDDAR" "CDDDR" "CAAAAR"
+  ;;  "CAAADR" "CAADAR" "CAADDR" "CADAAR" "CADADR" "CADDAR" "CADDDR" "CDAAAR"
+  ;;  "CDAADR" "CDADAR" "CDADDR" "CDDAAR" "CDDADR" "CDDDAR" "CDDDDR" "LIST-LENGTH"
+  ;;  "LIST-POSITION" "NCONC" "LAST" "COPY-LIST" "LIST" "DELETE" "NREVERSE"
+  ;;  "REVERSE" "MEMQ" "ASSQ" "FIRSTS" "GETF" "PUTF" "REMF" "VECTOR" "VECTORP"
+  ;;  "VECTOR-LENGTH" "SVREF" "SVREF-SET" "BIT-VECTOR-P" "BIT-VECTOR-LENGTH" "BIT"
+  ;;  "SBIT" "BIT-SET" "SBIT-SET" "BIT-VECTOR-EQUAL" "STRING-LENGTH" "STRING="
+  ;;  "STRING-EQUAL" "STRINGP" "CHAR" "SCHAR" "SET-CHAR" "SET-SCHAR" "EQL" "EQUAL"
+  ;;  "VALUES" "VALUES-LIST" "PATHNAME" "NAMESTRING" "PRIN1-TO-STRING" "PRINT"
+  ;;  "PRIN1" "PRINC" "TERPRI" "KERNEL-READ-CHAR" "KERNEL-PEEK-CHAR" "KERNEL-READ"
+  ;;  "KERNEL-READ-PRESERVING-WHITESPACE" "KERNEL-READ-DELIMITED-LIST"
+  ;;  "KERNEL-READ-FROM-STRING" "MAKE-STRING-INPUT-STREAM"
+  ;;  "MAKE-STRING-OUTPUT-STREAM" "GET-OUTPUT-STREAM-STRING" "OPEN"
+  ;;  "FINISH-OUTPUT" "FORCE-OUTPUT" "=/I" "=/F" "MAKE-STRUCTURE-CLASS"
+  ;;  "STRUCTURE-CLASS-INSTANCE-SIZE" "STRUCTURE-CLASS-INSTANCE-DIRECT-SLOTS"
+  ;;  "STRUCTURE-CLASS-INSTANCE-SLOTS" "MAKE-STRUCTURE-INSTANCE" "STRUCTUREP"
+  ;;  "STRUCTURE-GET" "STRUCTURE-SET" "MAKE-ENVIRONMENT" "ENVIRONMENT-IS-TOPLEVEL"
+  ;;  "ENVIRONMENT-VARIABLES" "ENVIRONMENT-FUNCTIONS" "ENVIRONMENT-BLOCKS"
+  ;;  "ENVIRONMENT-CATCHS" "ENVIRONMENT-DECLARATIONS"
+  ;;  "ENVIRONMENT-NEXT-ENVIRONMENT" "ENVIRONMENT-FRAMES"
+  ;;  "ENVIRONMENT-ADD-VARIABLE" "ENVIRONMENT-ADD-FUNCTION"
+  ;;  "ENVIRONMENT-ADD-BLOCK" "ENVIRONMENT-ADD-CATCH"
+  ;;  "ENVIRONMENT-ADD-DECLARATION" "ENVIRONMENT-FIND-VARIABLE"
+  ;;  "ENVIRONMENT-FIND-FUNCTION" "ENVIRONMENT-FIND-BLOCK"
+  ;;  "ENVIRONMENT-FIND-CATCH" "ENV-SPECIAL-VARIABLE-P")
+
+  )
 (cl:in-package  "COM.INFORMATIMAGO.BOCL.MACROS")
 
 ;;; ============================================================
@@ -40,10 +131,6 @@
 
   (cl:defvar *environment* nil)
 
-
-  (cl:defun env/find-variable (name environment))
-  (cl:defun (cl:setf symbol-macro-expansion) (new-expansion symbol-macro environment) new-expansion)
-  
   (cl:defun register-compiler-macro (name lambda-expression docstring
                                      &optional (*environment* *environment*))
     ;; TODO: Test for function in the global environment?
@@ -69,37 +156,141 @@
   (cl:defun register-type (name lambda-expression docstring
                            &optional (*environment* *environment*))
     ;; TODO register a type.
-    (cl:setf (getf name '$type) lambda-expression)
+    (cl:setf (getf name 'kernel:$type) lambda-expression)
     (cl:when docstring
       (cl:setf (documentation name 'type) docstring)))
 
 
   (cl:defun register-constant-variable (name initial-value docstring
                                         &optional (*environment* *environment*))
+    (declare (ignore initial-value))
     ;; TODO register a variable in the environment
-    (cl:when (getf name '$special)
+    (cl:when (getf name 'kernel:$special)
       (error 'variable-name-collision-error
              :name name :new-definition 'constant-variable))
-    (cl:setf (getf name '$constant-variable) t)
-    (cl:when docstring  
+    (cl:setf (getf name 'kernel:$constant-variable) t)
+    (cl:when docstring
       (cl:setf (documentation name 'variable) docstring)))
 
   (cl:defun register-dynamic-variable (name initial-value docstring
                                        &optional (*environment* *environment*))
     ;; TODO register a variable in the environment
-    (cl:when (getf name '$constant-variable)
+    (cl:when (getf name 'kernel:$constant-variable)
       (error 'variable-name-collision-error
              :name name :new-definition 'dynamic-variable))
-    (cl:setf (getf name '$special) t)
-    (cl:when docstring  
+    (cl:setf (getf name 'kernel:$special) t)
+    (cl:when docstring
       (cl:setf (documentation name 'variable) docstring)))
 
-  (cl:defun register-lexical-variable (name initial-value
-                                       &optional (*environment* *environment*))
-    ;; TODO register a variable in the environment
+  );;eval-when
 
-    ))
+;;; ============================================================
 
+
+#-(and) ; Its macroexpansion follows.
+(cl:defmacro defmacro (name (&rest lambda-list) &body decl-docs-body)
+  (let* ((ll          (parse-lambda-list lambda-list :macro))
+         (whole       (if (lambda-list-whole-parameter-p ll)
+                          (parameter-specifier (lambda-list-whole-parameter ll))
+                          (gensym "whole")))
+         (environment (if (lambda-list-environment-parameter-p ll)
+                          (parameter-specifier (lambda-list-environment-parameter ll))
+                          (gensym "environment"))))
+    (remove-whole-parameter ll)
+    (remove-environment-parameter ll)
+    (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
+      `(eval-when (:compile-toplevel :load-toplevel :execute)
+         (register-macro
+          ',name
+          (lambda (,whole ,environment)
+            (declare (ignorable ,environment))
+            (destructuring-bind ,(make-lambda-list ll) ,whole
+              ,@declarations
+              ,@body))
+          ',(first docstrings))
+         ',name))))
+
+#-(and)
+(cl:defmacro defmacro (&environment environment name lambda-list &body decl-doc-body)
+  (let* ((ll            (parse-lambda-list lambda-list :macro))
+         (whole         (if (lambda-list-whole-parameter-p ll)
+                            (parameter-specifier (lambda-list-whole-parameter ll))
+                            (gensym "whole")))
+         (env-parameter (if (lambda-list-environment-parameter-p ll)
+                            (parameter-specifier (lambda-list-environment-parameter ll))
+                            (gensym "environment"))))
+    (remove-whole-parameter ll)
+    (remove-environment-parameter ll)
+    (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
+      `(progn
+         (setf (env:macro-function ',name)
+               (coerce-to-function
+                ,(minimal-compile/lambda-expression
+                  environment
+                  `(lambda (,whole ,env-parameter)
+                     (declare (ignorable ,env-parameter))
+                     (block ,name
+                       (destructuring-bind ,lambda-list ,whole
+                         ,@declarations
+                           ,@body)))))
+               ,@(when docstrings
+                   `((documentation ',name 'function) ',(first docstrings))))
+         ',name))))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (register-macro 'defmacro
+                  (cl:lambda (whole environment)
+                    (declare (ignorable environment))
+                    (cl:destructuring-bind (name lambda-list &body decl-docs-body) whole
+                      (let* ((ll (parse-lambda-list lambda-list :macro))
+                             (whole
+                               (if (lambda-list-whole-parameter-p ll)
+                                   (parameter-specifier (lambda-list-whole-parameter ll))
+                                   (gensym "whole")))
+                             (environment
+                               (if (lambda-list-environment-parameter-p ll)
+                                   (parameter-specifier (lambda-list-environment-parameter ll))
+                                   (gensym "environment"))))
+                        (remove-whole-parameter ll)
+                        (remove-environment-parameter ll)
+                        (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
+                          (list* 'eval-when
+                                 (list* '(:compile-toplevel :load-toplevel :execute)
+                                        (list* (list* 'register-macro
+                                                      (list* (list* 'quote (list name))
+                                                             (list* (list* 'lambda
+                                                                           (list* (list* whole (list environment))
+                                                                                  (list* (list* 'declare (list (list* 'ignorable (list environment))))
+                                                                                         (list (list* 'destructuring-bind (list* (make-lambda-list ll)
+                                                                                                                                 (list* whole (append declarations body))))))))
+                                                                    (list (list* 'quote (list (first docstrings)))))))
+                                               (list (list* 'quote (list name))))))))))
+                  'nil)
+  'defmacro)
+
+
+(cl:defmacro defun (&environment environment name lambda-list &body decl-doc-body)
+  ;; TODO: instanciated global environment
+  (unless environment (setf environment *global-environment*))
+  (setf environment *global-environment*)
+  (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
+    `(progn
+       (setf (symbol-function ',name)
+             (coerce-to-function
+              ,(minimal-compile/lambda-expression
+                environment
+                `(lambda ,lambda-list
+                   ,@declarations
+                   (block ,name
+                     ,@body))))
+             ,@(when docstrings
+                 `((documentation ',name 'function) ',(first docstrings))))
+       ',name)))
+
+
+(cl:defmacro lambda (&whole whole (&rest lambda-list) &body decl-body)
+  (declare (ignore lambda-list decl-body))
+  `(function ,whole))
 
 ;;; ============================================================
 
@@ -136,66 +327,6 @@
      (register-symbol-macro ',symbol ',expansion)
      ',symbol))
 
-#-(and) ; Its macroexpansion follows.
-(cl:defmacro defmacro (name (&rest lambda-list) &body decl-docs-body)
-  (let* ((ll          (parse-lambda-list lambda-list :macro))
-         (whole       (if (lambda-list-whole-parameter-p ll)
-                          (parameter-specifier (lambda-list-whole-parameter ll))
-                          (gensym "whole")))
-         (environment (if (lambda-list-environment-parameter-p ll)
-                          (parameter-specifier (lambda-list-environment-parameter ll))
-                          (gensym "environment"))))
-    (remove-whole-parameter ll)
-    (remove-environment-parameter ll)
-    (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
-      `(eval-when (:compile-toplevel :load-toplevel :execute)
-         (register-macro
-          ',name
-          (lambda (,whole ,environment)
-            (declare (ignorable ,environment))
-            (destructuring-bind ,(make-lambda-list ll) ,whole
-              ,@declarations
-              ,@body))
-          ',(first docstrings))
-         ',name))))
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (register-macro 'defmacro
-                  (cl:lambda (whole environment)
-                    (declare (ignorable environment))
-                    (cl:destructuring-bind (name lambda-list &body decl-docs-body) whole
-                      (let* ((ll (parse-lambda-list lambda-list :macro))
-                             (whole
-                               (if (lambda-list-whole-parameter-p ll)
-                                   (parameter-specifier (lambda-list-whole-parameter ll))
-                                   (gensym "whole")))
-                             (environment
-                               (if (lambda-list-environment-parameter-p ll)
-                                   (parameter-specifier (lambda-list-environment-parameter ll))
-                                   (gensym "environment"))))
-                        (remove-whole-parameter ll)
-                        (remove-environment-parameter ll)
-                        (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
-                          (list* 'eval-when
-                                 (list* '(:compile-toplevel :load-toplevel :execute)
-                                        (list* (list* 'register-macro
-                                                      (list* (list* 'quote (list name))
-                                                             (list* (list* 'lambda
-                                                                           (list* (list* whole (list environment))
-                                                                                  (list* (list* 'declare (list (list* 'ignorable (list environment))))
-                                                                                         (list (list* 'destructuring-bind (list* (make-lambda-list ll)
-                                                                                                                                 (list* whole (append declarations body))))))))
-                                                                    (list (list* 'quote (list (first docstrings)))))))
-                                               (list (list* 'quote (list name))))))))))
-                  'nil)
-  'defmacro)
-
-
-;; Macro DEFUN                                                     05_Flow
-
-(cl:defmacro lambda (&whole whole (&rest lambda-list) &body decl-body)
-  (declare (ignore lambda-list decl-body))
-  `(function ,whole))
 
 (cl:defmacro deftype (name (&rest lambda-list) &body decl-docs-body)
   (cl:destructuring-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
@@ -302,7 +433,7 @@
     ;; OTHERWISE, if there's such a type…
     ;; On the other hand, for CCASE and ECASE, T and OTHERWISE are
     ;; forbidden as key values.
-    
+
     (cl:when (and clauses
                (or (eql operation 'case)
                    (eql operation 'typecase)))
@@ -329,9 +460,9 @@
 ;; Macro DESTRUCTURING-BIND                                        05_Flow
 
 
-(cl:defmacro multiple-value-setq (&environment environment (&rest var-places) values-form)
-  (let ((temps (mapcar (lambda (var-place) (declare (ignore var-place)) (gensym)) var-places)))
-    `(multiple-value-call (lambda (,@temps)
+(cl:defmacro multiple-value-setq ((&rest var-places) values-form)
+  (let ((temps (mapcar (cl:lambda (var-place) (declare (ignore var-place)) (gensym)) var-places)))
+    `(multiple-value-call (cl:lambda (,@temps)
                             (setf ,@(mapcan (function list) var-places temps))
                             (values ,@temps))
        ,values-form)))
@@ -349,7 +480,7 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (cl:defun generate-prog (letop bindings decl-tag-body)
-    (multiple-value-bind (docstrings declarations body) (parse-body :locally decl-tag-body)
+    (cl:multiple-value-bind (docstrings declarations body) (parse-body :locally decl-tag-body)
       (declare (ignore docstrings))
       `(block nil
          (,letop (,@bindings)
@@ -435,7 +566,7 @@
                          infos (cdr infos)))
          ;; the new-value:
          (setq ,@(apply (function append) vnew))
-         ,@(mapcar (function fourth) infos) ; setters        
+         ,@(mapcar (function fourth) infos) ; setters
          (values ,@(mapcar (function first) vresults))))))
 
 (cl:defmacro rotatef (&environment environment &rest places)
@@ -612,7 +743,7 @@
                  `((,vcount ,count-form)
                    (,ivar 0 (1+ ,ivar))
                    (,var ,ivar ,ivar))
-                 `(>= ,ivar ,vcount) 
+                 `(>= ,ivar ,vcount)
                  result-form
                  decs-and-tag-body)))
 
@@ -623,7 +754,7 @@
                  `((,vlist ,list-form (cdr ,vlist))
                    (,ivar (car ,vlist) (car ,vlist))
                    (,var ,ivar ,ivar))
-                 `(endp ,vlist) 
+                 `(endp ,vlist)
                  result-form
                  decs-and-tag-body)))
 
@@ -648,18 +779,6 @@
 ;; Macro DEFGENERIC                                                07_Object
 ;; Macro DEFINE-METHOD-COMBINATION                                 07_Object
 ;; Macro DEFMETHOD                                                 07_Object
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (cl:defun function-name-p (object)
-    (or (symbolp object)
-        (and (consp object)
-             (or (eql 'setf (car object))
-                 (cdr object)
-                 (symbolp (cadr object))
-                 (null (cddr object)))
-             (or (eql 'lambda (car object))
-                 (cdr object)
-                 (listp (cadr object)))))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (cl:defun generate-with (symbol-macros instance-var instance-form decl-and-body)
@@ -786,5 +905,3 @@
                    (/ (- ,ee ,se) internal-time-units-per-second)))))))
 
 ;;;; THE END ;;;;
-
-

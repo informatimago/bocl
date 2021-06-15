@@ -242,18 +242,22 @@ Ref set_env_global_special_variable_value(Ref par_new_value, Ref par_global_spec
 Ref LOCAL_SPECIAL_VARIABLE_Class;
 bool env_local_special_variable_p(Ref par_object){
     return typep(par_object,LOCAL_SPECIAL_VARIABLE_Class);}
-Ref env_make_local_special_variable(Ref par_name, Ref par_value){
+Ref env_make_local_special_variable(Ref par_name, Ref par_saved_boundp, Ref par_saved_value){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
-    add_to_live_pool(par_value);
+    add_to_live_pool(par_saved_boundp);
+    add_to_live_pool(par_saved_value);
     Ref instance = make_structure_instance(LOCAL_SPECIAL_VARIABLE_Class);
     Ref pos = structure_class_instance_slots(LOCAL_SPECIAL_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
         structure_set(par_name,instance,cdr(entry));}
-    {   Ref entry = assq(S(VALUE),pos);
-        if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
-        structure_set(par_value,instance,cdr(entry));}
+    {   Ref entry = assq(S(SAVED-BOUNDP),pos);
+        if(nullp(entry)){ FATAL("%s","SAVED-BOUNDP is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
+        structure_set(par_saved_boundp,instance,cdr(entry));}
+    {   Ref entry = assq(S(SAVED-VALUE),pos);
+        if(nullp(entry)){ FATAL("%s","SAVED-VALUE is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
+        structure_set(par_saved_value,instance,cdr(entry));}
     close_live_pool(pool);
     return instance;}
 Ref env_local_special_variable(Ref par_name){
@@ -297,27 +301,48 @@ Ref set_env_local_special_variable_name(Ref par_new_name, Ref par_local_special_
     structure_set(par_new_name,par_local_special_variable_instance,cdr(entry));
     close_live_pool(pool);
     return par_new_name;}
-Ref env_local_special_variable_value(Ref par_local_special_variable_instance){
+Ref env_local_special_variable_saved_boundp(Ref par_local_special_variable_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_local_special_variable_instance);
     check_type(par_local_special_variable_instance,LOCAL_SPECIAL_VARIABLE_Class);
     Ref pos = structure_class_instance_slots(LOCAL_SPECIAL_VARIABLE_Class);
-    Ref entry = assq(S(VALUE),pos);
-    if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
+    Ref entry = assq(S(SAVED-BOUNDP),pos);
+    if(nullp(entry)){ FATAL("%s","SAVED-BOUNDP is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
     Ref result=structure_get(par_local_special_variable_instance,cdr(entry));
     close_live_pool(pool);
     return result;}
-Ref set_env_local_special_variable_value(Ref par_new_value, Ref par_local_special_variable_instance){
+Ref set_env_local_special_variable_saved_boundp(Ref par_new_saved_boundp, Ref par_local_special_variable_instance){
     uword pool=open_live_pool();
-    add_to_live_pool(par_new_value);
+    add_to_live_pool(par_new_saved_boundp);
     add_to_live_pool(par_local_special_variable_instance);
     check_type(par_local_special_variable_instance,LOCAL_SPECIAL_VARIABLE_Class);
     Ref pos = structure_class_instance_slots(LOCAL_SPECIAL_VARIABLE_Class);
-    Ref entry = assq(S(VALUE),pos);
-    if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
-    structure_set(par_new_value,par_local_special_variable_instance,cdr(entry));
+    Ref entry = assq(S(SAVED-BOUNDP),pos);
+    if(nullp(entry)){ FATAL("%s","SAVED-BOUNDP is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
+    structure_set(par_new_saved_boundp,par_local_special_variable_instance,cdr(entry));
     close_live_pool(pool);
-    return par_new_value;}
+    return par_new_saved_boundp;}
+Ref env_local_special_variable_saved_value(Ref par_local_special_variable_instance){
+    uword pool=open_live_pool();
+    add_to_live_pool(par_local_special_variable_instance);
+    check_type(par_local_special_variable_instance,LOCAL_SPECIAL_VARIABLE_Class);
+    Ref pos = structure_class_instance_slots(LOCAL_SPECIAL_VARIABLE_Class);
+    Ref entry = assq(S(SAVED-VALUE),pos);
+    if(nullp(entry)){ FATAL("%s","SAVED-VALUE is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
+    Ref result=structure_get(par_local_special_variable_instance,cdr(entry));
+    close_live_pool(pool);
+    return result;}
+Ref set_env_local_special_variable_saved_value(Ref par_new_saved_value, Ref par_local_special_variable_instance){
+    uword pool=open_live_pool();
+    add_to_live_pool(par_new_saved_value);
+    add_to_live_pool(par_local_special_variable_instance);
+    check_type(par_local_special_variable_instance,LOCAL_SPECIAL_VARIABLE_Class);
+    Ref pos = structure_class_instance_slots(LOCAL_SPECIAL_VARIABLE_Class);
+    Ref entry = assq(S(SAVED-VALUE),pos);
+    if(nullp(entry)){ FATAL("%s","SAVED-VALUE is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
+    structure_set(par_new_saved_value,par_local_special_variable_instance,cdr(entry));
+    close_live_pool(pool);
+    return par_new_saved_value;}
 Ref GLOBAL_FUNCTION_Class;
 bool env_global_function_p(Ref par_object){
     return typep(par_object,GLOBAL_FUNCTION_Class);}
