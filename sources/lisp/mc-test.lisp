@@ -184,13 +184,25 @@
 (mctest *env* (function car) (function car))
 (mctest *env* (function (setf foo)) (function (setf foo)))
 (mctest *env* (function (setf car)) (function (setf car)))
-(assert (mc:lambda-expression-p '(lambda (x) (and x (+ 1 x)))))
-(mctest *env* (function (lambda (x) (and x (+ 1 x)))) (function (setf car)))
-(symbol-package 'lambda)
+(cl:assert (mc:lambda-expression-p '(lambda (x) (and x (+ 1 x)))))
+
+(mctest *env*
+        (function (lambda (x) (and x (+ 1 x))))
+        (bad (function (lambda (x) (and x (+ 1 x))))))
 
 
-(minimal-compile *env* '(function foo))
-#'foo
+(lambda-expression-p
+ '(lambda (x) (and x (+ 1 x))))
+
+(minimal-compile/lambda-expression
+ *env* '(lambda (x) (and x (+ 1 x))))
+
+(lambda (x) (and x (+ 1 x)))
+(lambda (x) (and x (+ 1 x)))
+(lambda (x) (and x (+ 1 x)))
+
+(lambda (x) ((and x (+ 1 x))))
+
 
 
 ;;;; THE END ;;;;

@@ -315,13 +315,13 @@
     "Mutates the lambda-list ll, replacing the initform expressions by their minimally compiled versions."
     (loop
       ;; Open a new environment frame for the lambda-list:
-    :with llenv := (env:make-environment :next env)
+      :with llenv := (env:make-environment :next env)
       :for parameter :in (lambda-list-parameters ll)
-      :do (when (parameter-initform-p parameter)
-            (cl:setf (parameter-initform parameter)
-                  (minimal-compile llenv (parameter-initform parameter))))
+      :do (if (parameter-initform-p parameter)
+              (cl:setf (parameter-initform parameter)
+                       (minimal-compile llenv (parameter-initform parameter))))
           ;; Add the new parameter variable bindings to the environment:
-          (dolist (name (parameter-parameter-list parameter))
+          (cl:dolist (name (parameter-parameter-list parameter))
             (env:push-variable-onto-environment
              (if (or (member name specials)
                      (let ((var (env:find-variable name env)))
@@ -332,23 +332,24 @@
       :finally (return (values ll env))))
 
   (defun minimal-compile/lambda-expression (env form)
-    (destructuring-bind (lambda (&rest lambda-list) &body decl-and-body) form
+    (cl:destructuring-bind (lambda (&rest lambda-list) &body decl-and-body) form
       (assert (eq lambda 'lambda))
-      (multiple-value-bind (declarations docstrings body) decl-and-body
+      (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
         (declare (ignore docstrings))
         (let ((ll           (parse-lambda-list lambda-list :ordinary))
               (new-specials (mapcan (cl:lambda (decl) (copy-list (rest decl)))
                                     (remove 'special declarations
                                             :key (function first)
                                             :test-not (function eql)))))
-          (multiple-value-bind (mc-ll mc-env) (minimal-compile/lambda-list env ll new-specials)
-            (let ((mc-env (env:extend-environment-with-declarations declarations mc-env)))
+          (cl:multiple-value-bind (mc-ll mc-env) (minimal-compile/lambda-list env ll new-specials)
+            (cl:let ((mc-env (env:extend-environment-with-declarations declarations mc-env)))
               `(lambda ,(make-lambda-list mc-ll)
                  ,@declarations
                  ,@(mapcar (cl:lambda (subform) (minimal-compile mc-env subform))
                            body))))))))
 
-  );;eval-when
+  ) ;;eval-when
+
 
 (defun minimal-compile/function (env form)
   (destructuring-bind (function fname) form
@@ -752,109 +753,5 @@
                                        mf form env)))
                (minimal-compile env expansion)))
             (t (minimal-compile/call env form)))))))))
-
-
-;; #-(and)
-;; (defun macroexpand-all (form &optional env)
-;;   "Recursivly expand all macros in FORM."
-;;   ;; TODO: instanciated global environment
-;;   (unless environment (setf environment *global-environment*))
-;;   (flet ((mexpand (forms env)
-;;            (mapcar (cl:lambda (form) (macroexpand-all form env)) forms)))
-;;     (macrolet ((destructuring-bind-body (binds form &body body)
-;;                  (if (eql '&body (first (last binds)))
-;;                      (let ((&body (gensym "&BODY")))
-;;                        `(destructuring-bind ,(append (butlast binds) (list '&body body)) ,form
-;;                           (multiple-value-bind (docstrings declarations body) (parse-body :locally body)
-;;                             ,@body)))
-;;                      `(destructuring-bind ,binds ,form ,@body))))
-;;       (multiple-value-bind (expansion win) (macroexpand-1 form env)
-;;         (if win
-;;             (macroexpand-all expansion env)
-;;             (if (atom form)
-;;                 form
-;;                 (case (first form)
-;;
-;;                   ((macrolet)
-;;                    (destructuring-bind-body (macros &body) (rest form)
-;;                                             (setf env (augment-environment env
-;;                                                                            :macro (mapcar (cl:lambda (macro)
-;;                                                                                             (destructuring-bind
-;;                                                                                                 (name arglist &body body)
-;;                                                                                                 macro
-;;                                                                                               (list name (enclose (parse-macro name arglist body env)))))
-;;                                                                                           macros)
-;;                                                                            :declare (decl-specs-from-declarations decls)))
-;;                                             (let ((body (mexpand body env)))
-;;                                               (if decls
-;;                                                   `(locally ,@decls ,@body)
-;;                                                   `(progn ,@body)))))
-;;
-;;                   ((symbol-macrolet)
-;;                    (destructuring-bind-body (symbol-macros &body) (rest form)
-;;                                             (setf env (augment-environment env :symbol-macro symbol-macros :declare (decl-specs-from-declarations decls)))
-;;                                             (let ((body (mexpand body env)))
-;;                                               (if decls
-;;                                                   `(locally ,@decls ,@body)
-;;                                                   `(progn ,@body)))))
-;;
-;;                   ((let let* compiler-let)
-;;                    (destructuring-bind-body (bindings &body) (rest form)
-;;                                             `(,(first form)
-;;                                                ,(mapcar (cl:lambda (binding)
-;;
-;;                                                           (if (listp binding)
-;;                                                               (list (first binding) (macroexpand-all (second binding) env))
-;;                                                               binding))
-;;                                                         bindings)
-;;                                                ,@decls
-;;                                                ,@(mexpand body env))))
-;;
-;;                   ((flet labels)
-;;                    (destructuring-bind-body (bindings &body) (rest form)
-;;                                             (let ((augmented-env
-;;                                                     (augment-environment env :function (mapcar #'car bindings))))
-;;                                               `(,(first form)
-;;                                                 ,(mapcar (cl:lambda (binding)
-;;                                                            (list* (first binding)
-;;                                                                   (cdr (macroexpand-all `(lambda ,@(rest binding))
-;;                                                                                         (if (eq (first form) 'labels)
-;;                                                                                             augmented-env
-;;                                                                                             env)))))
-;;                                                          bindings)
-;;                                                 ,@decls
-;;                                                 ,@(mexpand body augmented-env)))))
-;;                   (function
-;;                    (if (and (consp (second form))
-;;                             (eql 'lambda (first (second form))))
-;;                        (destructuring-bind (cl:lambda arglist &body body&decls)
-;;                            (second form)
-;;                          (declare (ignore lambda))
-;;                          (multiple-value-bind (body decls)
-;;                              (parse-body body&decls env)
-;;                            `(lambda ,arglist ,@decls ,@(mexpand body env))))
-;;                        form))
-;;
-;;                   ((eval-when the locally block return-from)
-;;                    (list* (first form) (second form) (mexpand (cddr form) env)))
-;;
-;;                   (setq
-;;                    `(setq ,@(loop for (name value) on (rest form) by #'cddr
-;;                                   collect name
-;;                                   collect (macroexpand-all value env))))
-;;
-;;                   ((go quote) form)
-;;
-;;                   ((fbind with-c-frame with-variable-c-frame ppc-lap-function)
-;;                    (error "Unable to macroexpand ~S." form))
-;;
-;;                   ((catch if load-time-value multiple-value-call multiple-value-prog1 progn
-;;                           progv tagbody throw unwind-protect)
-;;                    (cons (first form) (mexpand (rest form) env)))
-;;
-;;                   (t
-;;                    ;; need to check that (first form) is either fboundp or a local function...
-;;                    (cons (first form) (mexpand (rest form) env))))))))))
-
 
 ;;;; THE END ;;;;

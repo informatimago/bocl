@@ -37,7 +37,7 @@
   (:nicknames "COM.INFORMATIMAGO.BOCL.MACROS")
   (:use "COMMON-LISP")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP-SEXP.SOURCE-FORM")
-
+  (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.CT-REGISTER")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER")
   (:shadowing-import-from
    "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER"
@@ -46,7 +46,6 @@
          "MACROEXPAND" "MACROEXPAND-1"
          "LAMBDA" "SETF"))
   (:export . #1#)
-
   (:shadow
    . #9=(
          "AND" "ASSERT" "CALL-METHOD" "CASE" "CCASE" "CHECK-TYPE"
@@ -123,69 +122,10 @@
   ;;  "ENVIRONMENT-FIND-CATCH" "ENV-SPECIAL-VARIABLE-P")
 
   )
-(cl:in-package  "COM.INFORMATIMAGO.BOCL.MACROS")
-
-;;; ============================================================
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
-
-  (cl:defvar *environment* nil)
-
-  (cl:defun register-compiler-macro (name lambda-expression docstring
-                                     &optional (*environment* *environment*))
-    ;; TODO: Test for function in the global environment?
-    (cl:setf (compiler-macro-function name) lambda-expression)
-    (cl:when docstring
-      (cl:setf (documentation name 'compiler-macro) docstring)))
-
-  (cl:defun register-macro (name lambda-expression docstring
-                            &optional (*environment* *environment*))
-    ;; TODO: Test for function in the global environment?
-    (cl:setf (macro-function name) lambda-expression)
-    (cl:when docstring
-      (cl:setf (documentation name 'macro) docstring)))
-
-  (cl:defun register-symbol-macro (name expansion
-                                   &optional (*environment* *environment*))
-    ;; TODO: Check for global variable NAME and signal PROGRAM-ERROR.
-    (cl:when (env/find-variable name nil)
-      (error 'variable-name-collision-error
-             :name name :new-definition 'symbol-macro))
-    (cl:setf (symbol-macro-expansion name *environment*) expansion))
-
-  (cl:defun register-type (name lambda-expression docstring
-                           &optional (*environment* *environment*))
-    ;; TODO register a type.
-    (cl:setf (getf name 'kernel:$type) lambda-expression)
-    (cl:when docstring
-      (cl:setf (documentation name 'type) docstring)))
+(cl:in-package "COM.INFORMATIMAGO.COMMON-LISP.LISP.MACROS")
 
 
-  (cl:defun register-constant-variable (name initial-value docstring
-                                        &optional (*environment* *environment*))
-    (declare (ignore initial-value))
-    ;; TODO register a variable in the environment
-    (cl:when (getf name 'kernel:$special)
-      (error 'variable-name-collision-error
-             :name name :new-definition 'constant-variable))
-    (cl:setf (getf name 'kernel:$constant-variable) t)
-    (cl:when docstring
-      (cl:setf (documentation name 'variable) docstring)))
-
-  (cl:defun register-dynamic-variable (name initial-value docstring
-                                       &optional (*environment* *environment*))
-    ;; TODO register a variable in the environment
-    (cl:when (getf name 'kernel:$constant-variable)
-      (error 'variable-name-collision-error
-             :name name :new-definition 'dynamic-variable))
-    (cl:setf (getf name 'kernel:$special) t)
-    (cl:when docstring
-      (cl:setf (documentation name 'variable) docstring)))
-
-  );;eval-when
-
-;;; ============================================================
-
+;; We have no macros, since we are defining them.
 
 #-(and) ; Its macroexpansion follows.
 (cl:defmacro defmacro (name (&rest lambda-list) &body decl-docs-body)
@@ -221,7 +161,7 @@
                             (gensym "environment"))))
     (remove-whole-parameter ll)
     (remove-environment-parameter ll)
-    (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
+    (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
       `(progn
          (setf (env:macro-function ',name)
                (coerce-to-function
@@ -232,9 +172,9 @@
                      (block ,name
                        (destructuring-bind ,lambda-list ,whole
                          ,@declarations
-                           ,@body)))))
-               ,@(when docstrings
-                   `((documentation ',name 'function) ',(first docstrings))))
+                         ,@body)))))
+               ,@(if docstrings
+                     `((documentation ',name 'function) ',(first docstrings))))
          ',name))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -270,10 +210,7 @@
 
 
 (cl:defmacro defun (&environment environment name lambda-list &body decl-doc-body)
-  ;; TODO: instanciated global environment
-  (unless environment (setf environment *global-environment*))
-  (setf environment *global-environment*)
-  (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
+  (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
     `(progn
        (setf (symbol-function ',name)
              (coerce-to-function
@@ -283,8 +220,8 @@
                    ,@declarations
                    (block ,name
                      ,@body))))
-             ,@(when docstrings
-                 `((documentation ',name 'function) ',(first docstrings))))
+             ,@(if docstrings
+                   `((documentation ',name 'function) ',(first docstrings))))
        ',name)))
 
 
@@ -347,8 +284,8 @@
      (eval-when (:compile-toplevel)
        (register-constant-variable ',name ',initial-value ',documentation))
      (setf (symbol-value ',name) ,initial-value)
-     ,@(cl:when documentation
-         `((setf (documentation ',name 'variable) ',documentation)))))
+     ,@(if documentation
+           `((setf (documentation ',name 'variable) ',documentation)))))
 
 (cl:defmacro defparameter (name initial-value &optional documentation)
   `(progn
@@ -356,8 +293,8 @@
        (register-dynamic-variable ',name ',initial-value ',documentation))
      (declaim (special ,name))
      (setf (symbol-value ',name) ,initial-value)
-     ,@(cl:when documentation
-         `((setf (documentation ',name 'variable) ',documentation)))))
+     ,@(if documentation
+           `((setf (documentation ',name 'variable) ',documentation)))))
 
 (cl:defmacro defvar (name initial-value &optional documentation)
   `(progn
@@ -366,8 +303,8 @@
      (declaim (special ,name))
      (unless (boundp ',name)
        (setf (symbol-value ',name) ,initial-value))
-     ,@(cl:when documentation
-         `((setf (documentation ',name 'variable) ',documentation)))))
+     ,@(if documentation
+           `((setf (documentation ',name 'variable) ',documentation)))))
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -434,17 +371,17 @@
     ;; On the other hand, for CCASE and ECASE, T and OTHERWISE are
     ;; forbidden as key values.
 
-    (cl:when (and clauses
-               (or (eql operation 'case)
-                   (eql operation 'typecase)))
-      (let ((last-clause (first (last clauses))))
-        (cl:unless (consp last-clause)
-          (error "~A clause ~S should be a list" operation last-clause))
-        (if (or (eql (first last-clause) 't)
-                (eql (first last-clause) 'otherwise))
-            (cl:setf otherwise-clause last-clause
-                  normal-clauses (butlast clauses))
-            (cl:setf normal-clauses clauses))))
+    (if (and clauses
+             (or (eql operation 'case)
+                 (eql operation 'typecase)))
+        (let ((last-clause (first (last clauses))))
+          (cl:unless (consp last-clause)
+            (error "~A clause ~S should be a list" operation last-clause))
+          (if (or (eql (first last-clause) 't)
+                  (eql (first last-clause) 'otherwise))
+              (cl:setf otherwise-clause last-clause
+                       normal-clauses (butlast clauses))
+              (cl:setf normal-clauses clauses))))
 
     (error "Not implemented yet.")
     ))
@@ -677,61 +614,61 @@
       `(let* ((,velement ,element)
               ,@(mapcar (function list) vars vals)
               (,temp (adjoin ,velement ,getter
-                             ,@(when keyp       (list :key key))
-                             ,@(when testp      (list :test test))
-                             ,@(when test-not-p (list :test-not test-not)))))
+                             ,@(if keyp       (list :key key))
+                             ,@(if testp      (list :test test))
+                             ,@(if test-not-p (list :test-not test-not)))))
          ,setter
          ,temp))))
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
- (cl:defun generate-do (letop setop
-                     bindings-and-increments end-test-form
-                     result-form decl-and-tag-body)
-   (cl:multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-tag-body)
-     (declare (ignore docstrings))
-     (let* ((vtag       (gensym))
-            (bindings   (mapcar (cl:lambda (binding-and-increment)
-                                  (if (atom binding-and-increment)
-                                      binding-and-increment
-                                      `(,(first binding-and-increment)
-                                        ,(second binding-and-increment))))
-                                bindings-and-increments))
-            (increments (mapcan (cl:lambda (binding-and-increment)
-                                  (cl:when (and (consp binding-and-increment)
-                                             (cddr binding-and-increment))
-                                    (list (first binding-and-increment)
-                                          (third binding-and-increment))))
-                                bindings-and-increments))
-            (doblock    `(block nil
-                           (tagbody
-                              ,vtag
-                              ,@(cl:when end-test-form
-                                  (list `(if ,end-test-form
-                                             (return-from nil ,result-form))))
-                              ,@body
-                              ,@(cl:when increments
-                                  (list `(,setop ,@increments)))
-                              (go ,vtag)))))
-       (cl:cond
-         (bindings     `(,letop ,bindings
-                                ,@declarations
-                                ,doblock))
-         (declarations (if declarations
-                           `(locally ,@declarations ,doblock)
-                           doblock))
-         (t            doblock))))))
+  (cl:defun generate-do (letop setop
+                         bindings-and-increments end-test-form
+                         result-form decl-and-tag-body)
+    (cl:multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-tag-body)
+      (declare (ignore docstrings))
+      (let* ((vtag       (gensym))
+             (bindings   (mapcar (cl:lambda (binding-and-increment)
+                                   (if (atom binding-and-increment)
+                                       binding-and-increment
+                                       `(,(first binding-and-increment)
+                                         ,(second binding-and-increment))))
+                                 bindings-and-increments))
+             (increments (mapcan (cl:lambda (binding-and-increment)
+                                   (if (and (consp binding-and-increment)
+                                            (cddr binding-and-increment))
+                                       (list (first binding-and-increment)
+                                             (third binding-and-increment))))
+                                 bindings-and-increments))
+             (doblock    `(block nil
+                            (tagbody
+                               ,vtag
+                               ,@(if end-test-form
+                                     (list `(if ,end-test-form
+                                                (return-from nil ,result-form))))
+                               ,@body
+                               ,@(if increments
+                                     (list `(,setop ,@increments)))
+                               (go ,vtag)))))
+        (cl:cond
+          (bindings     `(,letop ,bindings
+                                 ,@declarations
+                                 ,doblock))
+          (declarations (if declarations
+                            `(locally ,@declarations ,doblock)
+                            doblock))
+          (t            doblock))))))
 
 (cl:defmacro do ((&rest bindings-and-increments)
-              (end-test-form &optional result-form)
-              &body decl-and-tag-body)
+                 (end-test-form &optional result-form)
+                 &body decl-and-tag-body)
   (generate-do 'let 'psetf
                bindings-and-increments end-test-form
                result-form decl-and-tag-body))
 
 (cl:defmacro do* ((&rest bindings-and-increments)
-              (end-test-form &optional result-form)
-              &body decl-and-tag-body)
+                  (end-test-form &optional result-form)
+                  &body decl-and-tag-body)
   (generate-do 'let* 'setq
                bindings-and-increments end-test-form
                result-form decl-and-tag-body))

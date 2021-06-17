@@ -12,11 +12,13 @@
                (:file "bocl"              :depends-on ())
 
                (:file "environment"       :depends-on ())
+               (:file "ct-register"       :depends-on ("bocl-packages"
+                                                       "environment"))
 
                (:file "minimal-compiler"  :depends-on ("bocl-packages"
                                                        "environment"))
 
-               (:file "macros"            :depends-on ("bocl-packages"
+               (:file "macros"            :depends-on ("ct-register"
                                                        "minimal-compiler"))
 
                (:file "mc-test"           :depends-on ("minimal-compiler"
