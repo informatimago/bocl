@@ -618,36 +618,50 @@ PRE: (>= a b)"
 ;;;
 ;;; TEST/ALL
 
+(defun terminal-stream-p (stream)
+  (let ((stream (com.informatimago.common-lisp.cesarum.stream:bare-stream stream)))
+    (typecase stream
+      ((or #+swank swank/gray::slime-output-stream
+           string-stream file-stream)
+       nil)
+      (t t))))
+
 
 (defun test/all ()
-  (dolist (test
-            '(
-              (test/sequence-left-trim)
-              (test/u%zero)
-              (test/u%decompose-base)
-              (test/operation (function +) (function u%plus))
-              (test/operation (function -) (function u%minus) :max (function identity))
-              (test/u%times-digit)
-              (test/operation (function *) (function u%times))
-              (TEST/U%NORMALIZE)
-              (TEST/U%NORMALIZE%reverse)
-              (test/u%<)
-              (test/u%divide)
-              (test/u%parse-integer)
-              (test/u%princ-to-string)))
-    (format t "~&~60A" test)
-    (format t "~A~%" (or (ignore-errors
-                           (block :test
-                             (with-output-to-string (out)
-                               (let ((*standard-output* out)
-                                     (*trace-output* out)
-                                     (*error-output* out))
-                                 (eval test)
-                                 (return-from :test "[32m SUCCESS [0m")))))
-                         "[31m FAILURE [0m"))))
+  (let* ((ansi   (terminal-stream-p *standard-output*))
+         (red    (if ansi "[31m" ""))
+         (green  (if ansi "[32m" ""))
+         (normal (if ansi "[0m"  "")))
+    (flet ((green (text) (format nil "~A~A~A" green text normal))
+           (red   (text) (format nil "~A~A~A" red   text normal)))
+      (dolist (test
+               '(
+                 (test/sequence-left-trim)
+                 (test/u%zero)
+                 (test/u%decompose-base)
+                 (test/operation (function +) (function u%plus))
+                 (test/operation (function -) (function u%minus) :max (function identity))
+                 (test/u%times-digit)
+                 (test/operation (function *) (function u%times))
+                 (TEST/U%NORMALIZE)
+                 (TEST/U%NORMALIZE%reverse)
+                 (test/u%<)
+                 (test/u%divide)
+                 (test/u%parse-integer)
+                 (test/u%princ-to-string)))
+        (format t "~&~60A" test)
+        (format t "~A~%" (or (ignore-errors
+                              (block :test
+                                (with-output-to-string (out)
+                                  (let ((*standard-output* out)
+                                        (*trace-output* out)
+                                        (*error-output* out))
+                                    (eval test)
+                                    (return-from :test (green "SUCCESS"))))))
+                             (red "FAILURE")))))))
 
-
-(print '(time (test/all)))
+(let ((*package* (find-package "CL-USER")))
+  (print '(time (test/all))))
 
 
 ;; (time (test/all))
