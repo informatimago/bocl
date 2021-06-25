@@ -109,6 +109,10 @@ lisp/kernel-package.lisp : generate-built-in-functions.lisp
 	@printf "# Generating %s from %s\n" "$@" "$^"
 	$(VERBOSE) $(LISP) $(LISP_NORC) \
 		$(LISP_LOAD) "$$HOME/quicklisp/setup.lisp" \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/cesarum/"   asdf:*central-registry*)' \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/lisp-sexp/" asdf:*central-registry*)' \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/"           asdf:*central-registry*)' \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/"                       asdf:*central-registry*)' \
 		$(LISP_EVAL) '(ql:quickload :com.informatimago.common-lisp.cesarum)' \
 		$(LISP_LOAD) generate-built-in-functions.lisp \
 		$(LISP_EVAL) '(com.informatimago.bocl.kernel.generate.kernel-functions:generate-built-in-functions)' \
@@ -121,6 +125,10 @@ lisp/kernel-package+structure.lisp : generate-built-in-functions.lisp generate-s
 	@printf "# Generating %s from %s\n" "$@" "$^"
 	$(VERBOSE) $(LISP) $(LISP_NORC) \
 		$(LISP_LOAD) "$$HOME/quicklisp/setup.lisp" \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/cesarum/"   asdf:*central-registry*)' \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/lisp-sexp/" asdf:*central-registry*)' \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/"           asdf:*central-registry*)' \
+		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/"                       asdf:*central-registry*)' \
 		$(LISP_EVAL) '(ql:quickload :com.informatimago.common-lisp.cesarum)' \
 		$(LISP_LOAD) generate-built-in-functions.lisp \
 		$(LISP_LOAD) generate-structures.lisp \

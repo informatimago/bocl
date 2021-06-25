@@ -134,6 +134,7 @@ typedef enum {
 typedef struct Frame {
     struct Frame* next;
     struct Frame* target;
+    VectorOfObject* frame; /* the local variables and local functions */
     frame_type type;
     union {
         struct {

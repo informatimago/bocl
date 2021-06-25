@@ -67,6 +67,8 @@ bool closurep(Ref par_object);
 bool functionp(Ref par_object);
 bool built_in_function_p(Ref par_object);
 Ref function_name(Ref par_function);
+Ref function_new(Ref par_name, Ref par_lambda_list, Ref par_lambda_expression);
+Ref closure_new(Ref par_function, Ref par_environment);
 Ref rplaca(Ref par_cell, Ref par_new_car);
 Ref rplacd(Ref par_cell, Ref par_new_car);
 Ref car(Ref par_cons);

@@ -22,7 +22,7 @@ static void push_frame(Frame* frame,Ref environment){
 static Frame* pop_frame(Frame* frame,Ref environment){
     check_class(environment,ENVIRONMENT_Class);
     /*
-    if frame!=NULL, then check if frame==current_frame(environment) 
+    if frame!=NULL, then check if frame==current_frame(environment)
     (if not, then signal a fatal error).
     pop the current frame and return it.
     */
@@ -87,7 +87,7 @@ static int check_non_local_exit(int exit){
     if((exit<non_local_exit_initial)||(non_local_exit_target<exit)){
         FATAL("bad non local exit code %d (should be in {0,1,2})",exit);}
     return exit;}
-                                                            
+
 static void check_arg_count(Ref arguments,uword min,uword max){
     uword length=list_length(arguments);
     if((length<min)||(max<length)){
@@ -144,7 +144,7 @@ if non_local_exit_target:
 4- pop_frame(&frame,environment);
 9- done
 */
-    
+
 static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
 
 // Example of usage:
@@ -172,7 +172,7 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
       case 5: unwind_next_frame(&frame);      break;                    \
       default:                                break;}                   \
     if(unwind_index==2)
-        
+
 #define UWCLEANUP                                                       \
     if(unwind_index==3)
 
@@ -254,7 +254,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
     Ref arguments=cdr(form);
 
     if(symbolp(operator)){
-        
+
         if(operator==QUOTE_Symbol){
             eval_counters.QUOTE++;
             check_arg_count(arguments,1,1);
@@ -289,17 +289,17 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref test_expr = car(arguments);
             Ref then_form = cadr(arguments);
             Ref else_form = caddr(arguments);
-        
+
             if(nullp(evale(test_expr,environment,results))){
                 evale(else_form,environment,results);}
             else{
                 evale(then_form,environment,results);}
-            PASS_VALUES();}        
+            PASS_VALUES();}
 
         if(operator==SETQ_Symbol){
             eval_counters.SETQ++;
             NOT_IMPLEMENTED_YET();}
-    
+
         if(operator==PROGN_Symbol){
             eval_counters.PROGN++;
             {dolist(subform,arguments){
@@ -331,8 +331,8 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                   && consp(car(body))
                   && eql(DECLARE_Symbol,caar(body))){
                 Ref decl=pop(&body);
-                if(eql(SPECIAL_Symbol,car(decl))){
-                    dolist(symbol,cdr(decl)){
+                if(eql(SPECIAL_Symbol,caadr(decl))){
+                    dolist(symbol,cdadr(decl)){
                         push(symbol,&specials);}}}
             /* evaluate the initial-values in environment, and */
             /* bind the symbols to the values in new_environment */
@@ -386,7 +386,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                      evale(subform,environment,results);}}
              environment=environment_next_environment(environment);
              PASS_VALUES();}
-    
+
         /* NO LET*, since it's minimal-compiled out into LET */
 
         if(operator==PROGV_Symbol){
@@ -422,7 +422,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                      {dolist(name,symbols){
                              Ref var=environment_find_variable(name,environment);
                              if(!env_local_special_variable_p(var)){
-                                 FATAL("Oops unwinding dynamic binding of a nonn local special variable! %s",
+                                 FATAL("Oops unwinding dynamic binding of a non local dynamic variable! %s",
                                        string_cstring(symbol_name(name)));}
                              if(is_true(env_local_special_variable_saved_boundp(var))){
                                  set_symbol_value(name,env_local_special_variable_saved_value(var));}
@@ -434,7 +434,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         if(operator==LABELS_Symbol){
             NOT_IMPLEMENTED_YET();
         }
-     
+
         if(operator==FLET_Symbol){
             NOT_IMPLEMENTED_YET();
             eval_counters.FLET++;
@@ -546,7 +546,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             eval_counters.THE++;
             check_arg_count(arguments,2,2);
             evale(cadr(arguments),environment,results);
-            PASS_VALUES();}    
+            PASS_VALUES();}
 
         if(operator==EVAL_WHEN_Symbol){
             eval_counters.EVAL_WHEN++;
@@ -583,7 +583,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                   PASS_VALUES();}
              else{
                  VALUES1(NIL_Symbol);}}
-    
+
         if(operator==UNWIND_PROTECT_Symbol){
             eval_counters.UNWIND_PROTECT++;
             Ref proform=car(arguments);
@@ -597,7 +597,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 UWCLEANUP{
                     dolist(subform,cleanup){
                         evale(subform,environment,results);}}}}
-            
+
         else if(operator==BLOCK_Symbol){
             eval_counters.BLOCK++;
             check_arg_count_min(arguments,1);
@@ -627,7 +627,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
 
 
         else if(operator==CATCH_Symbol){
-            eval_counters.CATCH++;        
+            eval_counters.CATCH++;
             check_arg_count_min(arguments,1);
             Ref tag=car(arguments);
             Ref body=cdr(arguments);
@@ -646,7 +646,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             return (results->count>0)?results->values[0]:NIL_Symbol;}
 
         else if(operator==THROW_Symbol){
-            eval_counters.THROW++;        
+            eval_counters.THROW++;
             check_arg_count(arguments,2,2);
             Ref object=car(arguments);
             Ref result=cadr(arguments);
@@ -657,7 +657,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             NON_LOCAL_EXIT(target_frame);}
 
         else if(operator==TAGBODY_Symbol){
-            eval_counters.TAGBODY++;        
+            eval_counters.TAGBODY++;
             if(nullp(arguments)){
                 VALUES1(NIL_Symbol);}
             Ref tags=tagbody_collect_tags(arguments);
@@ -679,9 +679,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 body=assq(frame.parameters.tagbody.target_tag,frame.parameters.tagbody.tags);
                 if(!body){
                     ERROR("No catch for tag %p",(void*)frame.parameters.tagbody.target_tag);}}}
-    
+
         else if(operator==GO_Symbol){
-            eval_counters.GO++;        
+            eval_counters.GO++;
             check_arg_count(arguments,1,1);
             Ref tag=car(arguments);
             Frame* target_frame=find_tagbody_frame(tag,environment);
@@ -744,8 +744,6 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         NOT_IMPLEMENTED_YET();
         eval_counters.lambda_function++;
     }
-    
+
     close_live_pool(pool);
     return NIL_Symbol;}
-
-

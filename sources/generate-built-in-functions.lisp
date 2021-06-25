@@ -437,6 +437,8 @@
              (generate-kernel-function 'functionp '(object) :values '(boolean))
              (generate-kernel-function 'built-in-function-p '(object) :values '(boolean))
              (generate-kernel-function 'function-name '(function))
+             (generate-kernel-function 'make-function '(name lambda-list lambda-expression) :cfun 'function-new)
+             (generate-kernel-function 'make-closure '(function environment) :cfun 'closure-new)
 
              ;; CONS ====================
 

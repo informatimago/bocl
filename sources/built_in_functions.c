@@ -822,6 +822,33 @@ void kernel_FUNCTION_NAME(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);
 }
 
+void kernel_MAKE_FUNCTION(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_name = pop_mandatory_argument(function,&current);
+    Ref par_lambda_list = pop_mandatory_argument(function,&current);
+    Ref par_lambda_expression = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = function_new(par_name, par_lambda_list, par_lambda_expression);
+    close_live_pool(pool);
+}
+
+void kernel_MAKE_CLOSURE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_function = pop_mandatory_argument(function,&current);
+    Ref par_environment = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = closure_new(par_function, par_environment);
+    close_live_pool(pool);
+}
+
 void kernel_RPLACA(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
@@ -2566,6 +2593,12 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(FUNCTION-NAME);
         Ref lambda_list=list(S(FUNCTION),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FUNCTION_NAME));}
+    {   Ref fname=S(MAKE-FUNCTION);
+        Ref lambda_list=list(S(NAME),S(LAMBDA-LIST),S(LAMBDA-EXPRESSION),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_FUNCTION));}
+    {   Ref fname=S(MAKE-CLOSURE);
+        Ref lambda_list=list(S(FUNCTION),S(ENVIRONMENT),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_CLOSURE));}
     {   Ref fname=S(RPLACA);
         Ref lambda_list=list(S(CELL),S(NEW-CAR),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_RPLACA));}

@@ -31,13 +31,15 @@ static Character*                Character_slots                    (Ref  name, 
 static Class*                    Class_slots                        (Ref  name,         Ref  superclasses);
 static Cons*                     Cons_slots                         (Ref  car,          Ref  cdr);
 static Float*                    Float_slots                        (floating value);
-static FuncallableStandardClass* FuncallableStandardClass_slots     (Ref  name,         Ref  superclasses) unused;
-static Integer*                  Integer_slots                      (word     value);
+static Closure*                  Closure_slots                      (Ref  function,     Ref environment);
+static Function*                 Function_slots                     (Ref  lisp_name,    Ref lambda_list, Ref body);
+static FuncallableStandardClass* FuncallableStandardClass_slots     (Ref  name ,        Ref superclasses) unused;
+static Integer*                  Integer_slots                      (word value);
 static OctetArray*               OctetArray_slots                   (Ref  element_type, halfword rank, halfword* dimensions);
 static OctetArray*               OctetArray_slots_cstring           (Ref  element_type, const char* initial_value);
 static OctetArray*               OctetArray_slots_vector_of_octets  (Ref  element_type, VectorOfOctet* octets);
 static StandardClass*            StandardClass_slots                (Ref  name,         Ref  superclasses) unused;
-static StructureClass*           StructureClass_slots               (Ref class_name,    Ref  direct_superclass, Ref offset, Ref slot_names);
+static StructureClass*           StructureClass_slots               (Ref  class_name,   Ref  direct_superclass, Ref offset, Ref slot_names);
 static Symbol*                   Symbol_slots                       (Ref  name,         Ref  package);
 static VectorOfObject*           VectorOfObject_slots               (halfword size);
 static VectorOfOctet*            VectorOfOctet_slots                (halfword length);
@@ -1470,19 +1472,32 @@ Ref environment_new(Ref next_environment,Ref toplevelp){
 
 /* FUNCTION */
 
+Closure* Closure_slots(Ref function,Ref environment){
+    check_type(function,FUNCTION_Class);
+    check_type(environment,ENVIRONMENT_Class);
+    Closure* that=allocate(sizeof(*that));
+    that->objcount=2;
+    that->function=function;
+    that->environment=environment;
+    return that;}
 
-// typedef struct Closure            {
-//     BLOCK_HEADER;
-//     Ref function;
-//     Ref environment;
-// } Closure;
-//
-// typedef struct Function            { /* both FunctionClass and CompiledFunctionClass objets */
-//     BLOCK_HEADER;
-//     Ref lisp_name;
-//     Ref lambda_list;
-//     Ref body;
-// } Function;
+Ref closure_new(Ref function,Ref environment){
+    return Object_new(CLOSURE_Class,(Slots*)Closure_slots(function,environment));}
+
+
+Function* Function_slots(Ref lisp_name,Ref lambda_list,Ref body){
+    check_type(lisp_name,SYMBOL_Class);
+    check_type(lambda_list,LIST_Class);
+    check_type(body,LIST_Class);
+    Function* that=allocate(sizeof(*that));
+    that->objcount=3;
+    that->lisp_name=lisp_name;
+    that->lambda_list=lambda_list;
+    that->body=body;
+    return that;}
+
+Ref function_new(Ref lisp_name,Ref lambda_list,Ref body){
+    return Object_new(FUNCTION_Class,(Slots*)Function_slots(lisp_name,lambda_list,body));}
 
 BuiltInFunction* BuiltInFunction_slots(Ref lisp_name,Ref lambda_list,KernelFunctionPtr kernel_function){
     check_type(lisp_name,SYMBOL_Class);

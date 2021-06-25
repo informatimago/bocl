@@ -70,6 +70,8 @@ void kernel_CLOSUREP(Ref function,Ref arguments,MultipleValues* results);
 void kernel_FUNCTIONP(Ref function,Ref arguments,MultipleValues* results);
 void kernel_BUILT_IN_FUNCTION_P(Ref function,Ref arguments,MultipleValues* results);
 void kernel_FUNCTION_NAME(Ref function,Ref arguments,MultipleValues* results);
+void kernel_MAKE_FUNCTION(Ref function,Ref arguments,MultipleValues* results);
+void kernel_MAKE_CLOSURE(Ref function,Ref arguments,MultipleValues* results);
 void kernel_RPLACA(Ref function,Ref arguments,MultipleValues* results);
 void kernel_RPLACD(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CAR(Ref function,Ref arguments,MultipleValues* results);
