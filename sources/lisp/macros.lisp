@@ -31,22 +31,30 @@
 ;;;;    You should have received a copy of the GNU Affero General Public License
 ;;;;    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ;;;;**************************************************************************
-;;;;
 
 (cl:defpackage "COM.INFORMATIMAGO.COMMON-LISP.LISP.MACROS"
   (:nicknames "COM.INFORMATIMAGO.BOCL.MACROS")
   (:use "COMMON-LISP")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP-SEXP.SOURCE-FORM")
+  (:import-from "COM.INFORMATIMAGO.BOCL.COMPILER"
+                "FUNCTION-NAME-P" "LAMBDA-EXPRESSION-P"
+                "COERCE-TO-FUNCTION"  "COERCE-TO-CLOSURE")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.CT-REGISTER")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER")
   (:shadowing-import-from
    "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER"
    . #1=(
          "COMPILER-MACRO-FUNCTION" "MACRO-FUNCTION"
-         "MACROEXPAND" "MACROEXPAND-1"
-         "LAMBDA" "SETF"))
+         "MACROEXPAND" "MACROEXPAND-1" "*MACROEXPAND-HOOK*"))
   (:export . #1#)
-  (:shadow
+  (:shadowing-import-from
+   "COM.INFORMATIMAGO.BOCL"
+   "FUNCALL" "APPLY"
+   "DECLARE" "PROCLAIM"
+   "DECLARATION" "IGNORE" "SPECIAL" "DYNAMIC-EXTENT" "INLINE" "TYPE"
+   "FTYPE" "NOTINLINE" "IGNORABLE" "OPTIMIZE" "SAFETY")
+  (:shadowing-import-from
+   "COM.INFORMATIMAGO.BOCL"
    . #9=(
          "AND" "ASSERT" "CALL-METHOD" "CASE" "CCASE" "CHECK-TYPE"
          "COND" "CTYPECASE" "DECF" "DECLAIM" "DEFCLASS" "DEFCONSTANT"
@@ -70,9 +78,7 @@
          "WITH-INPUT-FROM-STRING" "WITH-OPEN-FILE" "WITH-OPEN-STREAM"
          "WITH-OUTPUT-TO-STRING" "WITH-PACKAGE-ITERATOR"
          "WITH-SIMPLE-RESTART" "WITH-SLOTS" "WITH-STANDARD-IO-SYNTAX"
-
-         ;; "LAMBDA" "SETF"
-         ))
+         "LAMBDA" "SETF"))
   (:export . #9#)
 
   ;; (:use "KERNEL")
@@ -119,39 +125,19 @@
   ;;  "ENVIRONMENT-ADD-BLOCK" "ENVIRONMENT-ADD-CATCH"
   ;;  "ENVIRONMENT-ADD-DECLARATION" "ENVIRONMENT-FIND-VARIABLE"
   ;;  "ENVIRONMENT-FIND-FUNCTION" "ENVIRONMENT-FIND-BLOCK"
-  ;;  "ENVIRONMENT-FIND-CATCH" "ENV-SPECIAL-VARIABLE-P")
+  ;;  "ENVIRONMENT-FIND-CATCH" "ENV-DYNAMIC-VARIABLE-P")
 
   )
 (cl:in-package "COM.INFORMATIMAGO.COMMON-LISP.LISP.MACROS")
 
+;;; We have no macros, since we are defining them.
 
-;; We have no macros, since we are defining them.
+;;; =====================================================================
+;;; Bootstrapping defmacro
+;;;
 
 #-(and) ; Its macroexpansion follows.
-(cl:defmacro defmacro (name (&rest lambda-list) &body decl-docs-body)
-  (let* ((ll          (parse-lambda-list lambda-list :macro))
-         (whole       (if (lambda-list-whole-parameter-p ll)
-                          (parameter-specifier (lambda-list-whole-parameter ll))
-                          (gensym "whole")))
-         (environment (if (lambda-list-environment-parameter-p ll)
-                          (parameter-specifier (lambda-list-environment-parameter ll))
-                          (gensym "environment"))))
-    (remove-whole-parameter ll)
-    (remove-environment-parameter ll)
-    (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
-      `(eval-when (:compile-toplevel :load-toplevel :execute)
-         (register-macro
-          ',name
-          (lambda (,whole ,environment)
-            (declare (ignorable ,environment))
-            (destructuring-bind ,(make-lambda-list ll) ,whole
-              ,@declarations
-              ,@body))
-          ',(first docstrings))
-         ',name))))
-
-#-(and)
-(cl:defmacro defmacro (&environment environment name lambda-list &body decl-doc-body)
+(cl:defmacro defmacro (&environment environment name (&rest lambda-list) &body decl-docs-body)
   (let* ((ll            (parse-lambda-list lambda-list :macro))
          (whole         (if (lambda-list-whole-parameter-p ll)
                             (parameter-specifier (lambda-list-whole-parameter ll))
@@ -161,83 +147,198 @@
                             (gensym "environment"))))
     (remove-whole-parameter ll)
     (remove-environment-parameter ll)
-    (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
-      `(progn
-         (setf (env:macro-function ',name)
-               (coerce-to-function
-                ,(minimal-compile/lambda-expression
-                  environment
-                  `(lambda (,whole ,env-parameter)
-                     (declare (ignorable ,env-parameter))
-                     (block ,name
-                       (destructuring-bind ,lambda-list ,whole
-                         ,@declarations
-                         ,@body)))))
-               ,@(if docstrings
-                     `((documentation ',name 'function) ',(first docstrings))))
-         ',name))))
+    (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
+      (let ((mc-lambda-expression
+              (minimal-compile/lambda-expression
+               environment
+               `(lambda (,whole ,env-parameter)
+                  ;; TODO: we should split the declarations between those applying
+                  ;; to whole-parameter and env-parameter, and those applying to
+                  ;; the other parameters of the macro.
+                  (declare (ignorable ,env-parameter))
+                  (destructuring-bind ,(make-lambda-list ll) ,whole
+                    ,@declarations
+                    (block ,name
+                      ,@body))))))
+        `(progn
+           (eval-when (:compile-toplevel)
+             (register-macro ',name ',lambda-list
+                             (coerce-to-function ',mc-lambda-expression ',name)
+                             ',(first docstrings)))
+           (eval-when (:load-toplevel :execute)
+             (setf (macro-function ',name nil)
+                   (coerce-to-function ',mc-lambda-expression ',name)))
+           ',name)))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (register-macro 'defmacro
-                  (cl:lambda (whole environment)
-                    (declare (ignorable environment))
-                    (cl:destructuring-bind (name lambda-list &body decl-docs-body) whole
-                      (let* ((ll (parse-lambda-list lambda-list :macro))
-                             (whole
-                               (if (lambda-list-whole-parameter-p ll)
-                                   (parameter-specifier (lambda-list-whole-parameter ll))
-                                   (gensym "whole")))
-                             (environment
-                               (if (lambda-list-environment-parameter-p ll)
-                                   (parameter-specifier (lambda-list-environment-parameter ll))
-                                   (gensym "environment"))))
-                        (remove-whole-parameter ll)
-                        (remove-environment-parameter ll)
-                        (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
-                          (list* 'eval-when
-                                 (list* '(:compile-toplevel :load-toplevel :execute)
-                                        (list* (list* 'register-macro
-                                                      (list* (list* 'quote (list name))
-                                                             (list* (list* 'lambda
-                                                                           (list* (list* whole (list environment))
-                                                                                  (list* (list* 'declare (list (list* 'ignorable (list environment))))
-                                                                                         (list (list* 'destructuring-bind (list* (make-lambda-list ll)
-                                                                                                                                 (list* whole (append declarations body))))))))
-                                                                    (list (list* 'quote (list (first docstrings)))))))
-                                               (list (list* 'quote (list name))))))))))
-                  'nil)
-  'defmacro)
+  (cl:defun simple-parse-macro-lambda-list (lambda-list)
+    (let ((whole        nil)
+          (environment  nil))
+      (if (eql '&whole (car lambda-list))
+          (progn (cl:pop lambda-list)
+                 (cl:setf whole (cl:pop lambda-list))))
+      (let ((new-lambda-list '()))
+        (block nil
+          (tagbody
+             (go :test)
+           :again
+             (if (eql '&environment (car lambda-list))
+                 (progn (cl:pop lambda-list)
+                        (cl:setf environment (cl:pop lambda-list)))
+                 (cl:push (cl:pop lambda-list) new-lambda-list))
+           :test (if lambda-list
+                     (go :again))
+             (return-from nil (values whole environment (nreverse new-lambda-list)))))))))
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (register-macro
+   '#1=defmacro
+   '#2=(&environment environment name (&rest lambda-list) &body decl-docs-body)
+   #3=(coerce-to-function
+       '(lambda (name (&rest lambda-list) &body decl-docs-body)
+         (cl:multiple-value-bind (whole environment lambda-list) lambda-list
+           (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
+             (let ((mc-lambda-expression
+                     (minimal-compile/lambda-expression
+                      environment
+                      `(lambda (,whole ,env-parameter)
+                         ;; TODO: we should split the declarations between those applying
+                         ;; to whole-parameter and env-parameter, and those applying to
+                         ;; the other parameters of the macro.
+                         (declare (ignorable ,env-parameter))
+                         (destructuring-bind ,lambda-list ,whole
+                           ,@declarations
+                           (block ,name
+                             ,@body))))))
+               `(progn
+                  (eval-when (:compile-toplevel)
+                    (register-macro ',name ',lambda-list
+                                    (coerce-to-function ',mc-lambda-expression ',name)
+                                    ',(first docstrings)))
+                  (eval-when (:load-toplevel :execute)
+                    (setf (macro-function ',name nil)
+                          (coerce-to-function ',mc-lambda-expression ',name)))
+                  ',name)))))
+       '#1#)
+   nil))
 
-(cl:defmacro defun (&environment environment name lambda-list &body decl-doc-body)
+#-bocl
+(cl:defmacro defmacro (name (&rest lambda-list) &body decl-docs-body)
+  (let* ((ll            (parse-lambda-list lambda-list :macro))
+         (whole         (if (lambda-list-whole-parameter-p ll)
+                            (parameter-specifier (lambda-list-whole-parameter ll))
+                            (gensym "whole")))
+         (env-parameter (if (lambda-list-environment-parameter-p ll)
+                            (parameter-specifier (lambda-list-environment-parameter ll))
+                            (gensym "environment"))))
+    (remove-whole-parameter ll)
+    (remove-environment-parameter ll)
+    (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
+      (print '(cl:defmacro defmacro))
+      (let ((mc-lambda-expression
+              (minimal-compile/lambda-expression
+               ;; We assume defmacro is only called as toplevel form while bootstrapping.
+               (env:global-environment)
+               (print `(lambda (,whole ,env-parameter)
+                         ;; TODO: we should split the declarations between those applying
+                         ;; to whole-parameter and env-parameter, and those applying to
+                         ;; the other parameters of the macro.
+                         (declare (ignorable ,env-parameter))
+                         (destructuring-bind ,(make-lambda-list ll) ,whole
+                           ,@declarations
+                           (block ,name
+                             ,@body)))))))
+        `(progn
+           (eval-when (:compile-toplevel)
+             (register-macro ',name ',lambda-list
+                             (coerce-to-function ',mc-lambda-expression ',name)
+                             ',(first docstrings)))
+           (eval-when (:load-toplevel :execute)
+             (cl:setf (macro-function ',name nil)
+                      (coerce-to-function ',mc-lambda-expression ',name)))
+           ',name)))))
+
+;; (defun funcall (function &rest arguments)
+;;   (apply function arguments))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (register-function 'funcall '(function &rest arguments)
+                     (coerce-to-function '(lambda (function &rest arguments)
+                                           (apply function arguments))
+                                         'funcall)
+                     'nil))
+
+;;;
+;;; =====================================================================
+
+(defmacro destructuring-bind (&whole form)
+  "Bind the variables in LAMBDA-LIST to the contents of ARG-LIST."
+  (if (null (cddr form))
+      (error "Missing an expression in ~S" form))
+  (let ((lambda-list (cadr  form))
+        (expression  (caddr form))
+        (body        (cdddr form)))
+    (multiple-value-bind (docstrings declarations body) (parse-body :locally body)
+      (declare (ignore docstrings))
+      (generate-destructuring-list lambda-list expression body))))
+
+(env:macro-function (env:find-function 'destructuring-bind (env:global-environment)))
+
+(defmacro defun (&environment environment name lambda-list &body decl-doc-body)
   (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-doc-body)
     `(progn
-       (setf (symbol-function ',name)
-             (coerce-to-function
-              ,(minimal-compile/lambda-expression
-                environment
-                `(lambda ,lambda-list
-                   ,@declarations
-                   (block ,name
-                     ,@body))))
-             ,@(if docstrings
-                   `((documentation ',name 'function) ',(first docstrings))))
-       ',name)))
+       (eval-when (:compile-toplevel)
+         (register-function ',name ',lambda-list nil ',(first docstrings)))
+       (eval-when (:load-toplevel :execute)
+         (register-function ',name ',lambda-list (coerce-to-function
+                                                  ,(minimal-compile/lambda-expression
+                                                    environment
+                                                    `(lambda ,lambda-list
+                                                       ,@declarations
+                                                       (block ,name
+                                                         ,@body)))
+                                                  ',name)
+                            ',(first docstrings))))))
 
 
-(cl:defmacro lambda (&whole whole (&rest lambda-list) &body decl-body)
+
+(defmacro lambda (&whole whole (&rest lambda-list) &body decl-body)
   (declare (ignore lambda-list decl-body))
   `(function ,whole))
 
 ;;; ============================================================
 
-(cl:defmacro declaim (&rest declaration-specifiers)
+(defmacro let* ((&rest bindings) &body body)
+  ;; TODO: parse the declarations in the body, and spread them out to the LETs.
+  (if (null bindings)
+      `(let () ,@body)
+      (let ((bindings (reverse bindings)))
+        (let ((form `(let (,(car bindings)) ,@body))
+              (bindings (cdr bindings)))
+          (tagbody
+             (go :test)
+           :loop
+             (setq form `(let (,(car bindings)) ,form))
+             (setq bindings (cdr bindings))
+           :test
+             (if bindings
+                 (go :loop)))
+          form))))
+
+(defmacro declare (&whole form &rest declaration-specifiers)
+  (declare (ignore declaration-specifiers))
+  `(error "The DECLARE expression ~S is being treated as a form,
+possibly because it's the result of macroexpansion. DECLARE expressions
+can only appear in specified contexts and must be actual subexpressions
+of the containing forms." ',form))
+
+(defmacro declaim (&rest declaration-specifiers)
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      ,@(mapcar (cl:lambda (declaration-specifier)
                  `(proclaim ',declaration-specifier))
                declaration-specifiers)))
 
-(cl:defmacro define-compiler-macro (name lambda-list &body dec-doc-body)
+(defmacro define-compiler-macro (&environment environment name lambda-list &body dec-doc-body)
   (let* ((ll          (parse-lambda-list lambda-list :macro))
          (whole       (if (lambda-list-whole-parameter-p ll)
                           (parameter-specifier (lambda-list-whole-parameter ll))
@@ -248,24 +349,27 @@
     (remove-whole-parameter ll)
     (remove-environment-parameter ll)
     (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda dec-doc-body)
-      `(eval-when (:compile-toplevel :load-toplevel :execute)
-         (register-compiler-macro
-          ',name
-          (lambda (,whole ,environment)
-            (declare (ignorable ,environment))
-            (destructuring-bind ,(make-lambda-list ll) ,whole
-              ,@declarations
-              ,@body))
-          ',(first docstrings))
-         ',name))))
+      (let ((lambda-list (make-lambda-list ll)))
+        `(eval-when (:compile-toplevel :load-toplevel :execute)
+           (register-compiler-macro ',name ',lambda-list
+                                    (coerce-to-function
+                                     ,(minimal-compile/lambda-expression
+                                       environment
+                                       `(lambda (,whole ,environment)
+                                          (declare (ignorable ,environment))
+                                          (destructuring-bind ,lambda-list ,whole
+                                            ,@declarations
+                                            (block ,name
+                                              ,@body))))
+                                     ',name)
+                                    ',(first docstrings)))))))
 
-(cl:defmacro define-symbol-macro (symbol expansion)
+(defmacro define-symbol-macro (symbol expansion)
   `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (register-symbol-macro ',symbol ',expansion)
-     ',symbol))
+     (register-symbol-macro ',symbol ',expansion)))
 
 
-(cl:defmacro deftype (name (&rest lambda-list) &body decl-docs-body)
+(defmacro deftype (name (&rest lambda-list) &body decl-docs-body)
   (cl:destructuring-bind (docstrings declarations body) (parse-body :lambda decl-docs-body)
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        (register-type ',name (lambda ,lambda-list ,@declarations ,@body)
@@ -279,33 +383,17 @@
 ;; Macro DEFSETF                                                   05_Flow
 
 
-(cl:defmacro defconstant (name initial-value &optional documentation)
-  `(progn
-     (eval-when (:compile-toplevel)
-       (register-constant-variable ',name ',initial-value ',documentation))
-     (setf (symbol-value ',name) ,initial-value)
-     ,@(if documentation
-           `((setf (documentation ',name 'variable) ',documentation)))))
+(defmacro defconstant (name initial-value &optional documentation)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (register-constant-variable ',name ',initial-value ',documentation)))
 
-(cl:defmacro defparameter (name initial-value &optional documentation)
-  `(progn
-     (eval-when (:compile-toplevel)
-       (register-dynamic-variable ',name ',initial-value ',documentation))
-     (declaim (special ,name))
-     (setf (symbol-value ',name) ,initial-value)
-     ,@(if documentation
-           `((setf (documentation ',name 'variable) ',documentation)))))
+(defmacro defparameter (name initial-value &optional documentation)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (register-global-parameter ',name ,initial-value ',documentation)))
 
-(cl:defmacro defvar (name initial-value &optional documentation)
-  `(progn
-     (eval-when (:compile-toplevel)
-       (register-dynamic-variable ',name ',initial-value ',documentation))
-     (declaim (special ,name))
-     (unless (boundp ',name)
-       (setf (symbol-value ',name) ,initial-value))
-     ,@(if documentation
-           `((setf (documentation ',name 'variable) ',documentation)))))
-
+(defmacro defvar (name initial-value &optional documentation)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (register-global-variable ',name ,initial-value ',documentation)))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (cl:defun generate-short-circuit (operation expressions otherwise)
@@ -336,27 +424,27 @@
                           value)
                      ,otherwise)))))))))
 
-(cl:defmacro and (&rest forms)
+(defmacro and (&rest forms)
   (if (null forms)
       't
       (let ((exprs (reverse forms)))
         (generate-short-circuit 'and (rest exprs) (first exprs)))))
 
-(cl:defmacro or (&rest forms)
+(defmacro or (&rest forms)
   (if (null forms)
       'nil
       (let ((exprs (reverse forms)))
         (generate-short-circuit 'or (rest exprs) (first exprs)))))
 
-(cl:defmacro cond (&rest clauses)
+(defmacro cond (&rest clauses)
   (if (null clauses)
       'nil
       (generate-short-circuit 'cond (reverse clauses) nil)))
 
-(cl:defmacro when (test &body body)
+(defmacro when (test &body body)
   `(if ,test (progn ,@body) nil))
 
-(cl:defmacro unless (test &body body)
+(defmacro unless (test &body body)
   `(if ,test nil (progn ,@body)))
 
 
@@ -371,14 +459,14 @@
     ;; On the other hand, for CCASE and ECASE, T and OTHERWISE are
     ;; forbidden as key values.
 
-    (if (and clauses
-             (or (eql operation 'case)
-                 (eql operation 'typecase)))
+    (if (cl:and clauses
+                (cl:or (eql operation 'case)
+                       (eql operation 'typecase)))
         (let ((last-clause (first (last clauses))))
           (cl:unless (consp last-clause)
             (error "~A clause ~S should be a list" operation last-clause))
-          (if (or (eql (first last-clause) 't)
-                  (eql (first last-clause) 'otherwise))
+          (if (cl:or (eql (first last-clause) 't)
+                     (eql (first last-clause) 'otherwise))
               (cl:setf otherwise-clause last-clause
                        normal-clauses (butlast clauses))
               (cl:setf normal-clauses clauses))))
@@ -387,30 +475,29 @@
     ))
 
 
-(cl:defmacro case      (keyform  &rest clauses)  (generate-case 'case      keyform  clauses))
-(cl:defmacro ccase     (keyplace &rest clauses)  (generate-case 'ccase     keyplace clauses))
-(cl:defmacro ecase     (keyform  &rest clauses)  (generate-case 'ecase     keyform  clauses))
-(cl:defmacro typecase  (keyform  &rest clauses)  (generate-case 'typecase  keyform  clauses))
-(cl:defmacro ctypecase (keyplace &rest clauses)  (generate-case 'ctypecase keyplace clauses))
-(cl:defmacro etypecase (keyform  &rest clauses)  (generate-case 'etypecase keyform  clauses))
-
-;; Macro DESTRUCTURING-BIND                                        05_Flow
+(defmacro case      (keyform  &rest clauses)  (generate-case 'case      keyform  clauses))
+(defmacro ccase     (keyplace &rest clauses)  (generate-case 'ccase     keyplace clauses))
+(defmacro ecase     (keyform  &rest clauses)  (generate-case 'ecase     keyform  clauses))
+(defmacro typecase  (keyform  &rest clauses)  (generate-case 'typecase  keyform  clauses))
+(defmacro ctypecase (keyplace &rest clauses)  (generate-case 'ctypecase keyplace clauses))
+(defmacro etypecase (keyform  &rest clauses)  (generate-case 'etypecase keyform  clauses))
 
 
-(cl:defmacro multiple-value-setq ((&rest var-places) values-form)
+
+(defmacro multiple-value-setq ((&rest var-places) values-form)
   (let ((temps (mapcar (cl:lambda (var-place) (declare (ignore var-place)) (gensym)) var-places)))
     `(multiple-value-call (cl:lambda (,@temps)
                             (setf ,@(mapcan (function list) var-places temps))
                             (values ,@temps))
        ,values-form)))
 
-(cl:defmacro multiple-value-bind ((&rest vars) values-form &body decl-body)
+(defmacro multiple-value-bind ((&rest vars) values-form &body decl-body)
   `(multiple-value-call (lambda (,@vars) ,@decl-body) ,values-form))
 
-(cl:defmacro multiple-value-list (values-form)
+(defmacro multiple-value-list (values-form)
   `(multiple-values-call (function list) ,values-form))
 
-(cl:defmacro nth-value (n form)
+(defmacro nth-value (n form)
   `(nth ,n (multiple-value-list ,form)))
 
 
@@ -418,58 +505,56 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (cl:defun generate-prog (letop bindings decl-tag-body)
     (cl:multiple-value-bind (docstrings declarations body) (parse-body :locally decl-tag-body)
-      (declare (ignore docstrings))
+      (cl:declare (cl:ignore docstrings))
       `(block nil
          (,letop (,@bindings)
                  ,@declarations
                  (tagbody ,@body))))))
 
-(cl:defmacro prog ((&rest vars) &body decl-tag-body)
+(defmacro prog ((&rest vars) &body decl-tag-body)
   (generate-prog 'let vars decl-tag-body))
 
-(cl:defmacro prog* ((&rest vars) &body decl-tag-body)
+(defmacro prog* ((&rest vars) &body decl-tag-body)
   (generate-prog 'let* vars decl-tag-body))
 
-(cl:defmacro prog1 (first-form &rest forms)
+(defmacro prog1 (first-form &rest forms)
   (let ((vresult (gensym)))
     `(let ((,vresult ,first-form))
        ,@forms
        ,vresult)))
 
-(cl:defmacro prog2 (first-form second-form &rest forms)
+(defmacro prog2 (first-form second-form &rest forms)
   (let ((vresult (gensym)))
     `(let ((,vresult (progn ,first-form ,second-form)))
        ,@forms
        ,vresult)))
 
-(cl:defmacro return (&optional result) `(return-from nil ,result))
+(defmacro return (&optional result) `(return-from nil ,result))
 
 ;; Macro SETF                                                      05_Flow
 ;; Macro PSETF                                                     05_Flow
 
-(cl:defmacro psetq (&whole form &rest vars-vals)
+(defmacro psetq (&whole form &rest vars-vals)
   (let ((len (length vars-vals)))
-    (cond
-      ((oddp len)
-       (error "Missing a value in ~S" form))
-      ((zerop len)
-       'nil)
-      (t
-       (let ((temps nil)
-             (vars  nil)
-             (vals  nil))
-         (cl:do ((current vars-vals (cddr current)))
-                ((null current))
-           (setq temps (cons (gensym) temps))
-           (setq vars  (cons (car  current) vars))
-           (setq vals  (cons (cadr current) vals)))
-         (setq vars (nreverse vars))
-         (setq vals (nreverse vals))
-         `(let (,@(mapcar (function list) temps vals))
-            (setq ,@(mapcan (function list) vars temps))
-            nil))))))
+    (if (oddp len)
+        (error "Missing a value in ~S" form))
+    (if (zerop len)
+        'nil
+        (let ((temps nil)
+              (vars  nil)
+              (vals  nil))
+          (cl:do ((current vars-vals (cddr current)))
+                 ((null current))
+            (setq temps (cons (gensym) temps))
+            (setq vars  (cons (car  current) vars))
+            (setq vals  (cons (cadr current) vals)))
+          (setq vars (nreverse vars))
+          (setq vals (nreverse vals))
+          `(let (,@(mapcar (function list) temps vals))
+             (setq ,@(mapcan (function list) vars temps))
+             nil)))))
 
-(cl:defmacro shiftf (&environment environment place &rest places-and-new-value)
+(defmacro shiftf (&environment environment place &rest places-and-new-value)
   (let* ((places    (cons place (butlast places-and-new-value)))
          (new-value (first (last places-and-new-value)))
          (infos     (mapcar (cl:lambda (place)
@@ -506,7 +591,7 @@
          ,@(mapcar (function fourth) infos) ; setters
          (values ,@(mapcar (function first) vresults))))))
 
-(cl:defmacro rotatef (&environment environment &rest places)
+(defmacro rotatef (&environment environment &rest places)
   (if (null places)
       'nil
       (let* ((infos     (mapcar (cl:lambda (place)
@@ -562,7 +647,7 @@
        :end)
       (values (cdr plist) result))))
 
-(cl:defmacro remf (&environment environment place indicator)
+(defmacro remf (&environment environment place indicator)
   (cl:multiple-value-bind (vars vals store-vars setter getter)
       (get-setf-expansion place environment)
     (if (cdr store-vars) (error "Cannot ~S to a multiple-value place" 'push))
@@ -577,7 +662,7 @@
          ,setter
          ,vresult))))
 
-(cl:defmacro pop (&environment environment place)
+(defmacro pop (&environment environment place)
   (cl:multiple-value-bind (vars vals store-vars setter getter)
       (get-setf-expansion place environment)
     (if (cdr store-vars) (error "Cannot ~S to a multiple-value place" 'push))
@@ -591,7 +676,7 @@
          ,setter
          ,vresult))))
 
-(cl:defmacro push (&environment environment element place)
+(defmacro push (&environment environment element place)
   (cl:multiple-value-bind (vars vals store-vars setter getter)
       (get-setf-expansion place environment)
     (if (cdr store-vars) (error "Cannot ~S to a multiple-value place" 'push))
@@ -604,7 +689,7 @@
          ,setter
          ,temp))))
 
-(cl:defmacro pushnew (&environment environment element place
+(defmacro pushnew (&environment environment element place
                       &key (key nil keyp) (test nil testp) (test-not nil test-not-p))
   (cl:multiple-value-bind (vars vals store-vars setter getter)
       (get-setf-expansion place environment)
@@ -626,7 +711,7 @@
                          bindings-and-increments end-test-form
                          result-form decl-and-tag-body)
     (cl:multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-tag-body)
-      (declare (ignore docstrings))
+      (cl:declare (cl:ignore docstrings))
       (let* ((vtag       (gensym))
              (bindings   (mapcar (cl:lambda (binding-and-increment)
                                    (if (atom binding-and-increment)
@@ -635,10 +720,10 @@
                                          ,(second binding-and-increment))))
                                  bindings-and-increments))
              (increments (mapcan (cl:lambda (binding-and-increment)
-                                   (if (and (consp binding-and-increment)
-                                            (cddr binding-and-increment))
-                                       (list (first binding-and-increment)
-                                             (third binding-and-increment))))
+                                   (if (consp binding-and-increment)
+                                       (if (cddr binding-and-increment)
+                                           (list (first binding-and-increment)
+                                                 (third binding-and-increment)))))
                                  bindings-and-increments))
              (doblock    `(block nil
                             (tagbody
@@ -659,21 +744,21 @@
                             doblock))
           (t            doblock))))))
 
-(cl:defmacro do ((&rest bindings-and-increments)
+(defmacro do ((&rest bindings-and-increments)
                  (end-test-form &optional result-form)
                  &body decl-and-tag-body)
   (generate-do 'let 'psetf
                bindings-and-increments end-test-form
                result-form decl-and-tag-body))
 
-(cl:defmacro do* ((&rest bindings-and-increments)
+(defmacro do* ((&rest bindings-and-increments)
                   (end-test-form &optional result-form)
                   &body decl-and-tag-body)
   (generate-do 'let* 'setq
                bindings-and-increments end-test-form
                result-form decl-and-tag-body))
 
-(cl:defmacro dotimes ((var count-form &optional result-form) &body decs-and-tag-body)
+(defmacro dotimes ((var count-form &optional result-form) &body decs-and-tag-body)
   (let ((ivar   (gensym))
         (vcount (gensym)))
     (generate-do 'let* 'setq
@@ -684,7 +769,7 @@
                  result-form
                  decs-and-tag-body)))
 
-(cl:defmacro dolist ((var list-form &optional result-form) &body decs-and-tag-body)
+(defmacro dolist ((var list-form &optional result-form) &body decs-and-tag-body)
   (let ((ivar   (gensym))
         (vlist  (gensym)))
     (generate-do 'let* 'setq
@@ -703,7 +788,7 @@
   (cl:defun generate-extended-loop (body)
     (error "~S Not implemented yet ~S" 'generate-extended-loop body)))
 
-(cl:defmacro loop (&body body)
+(defmacro loop (&body body)
   (if (every (function consp) body)
       (generate-simple-loop body)
       (generate-extended-loop body)))
@@ -720,13 +805,13 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (cl:defun generate-with (symbol-macros instance-var instance-form decl-and-body)
     (cl:multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-body)
-      (declare (ignore docstrings))
+      (cl:declare (cl:ignore docstrings))
       `(let ((,instance-var ,instance-form))
          (symbol-macrolet (,@symbol-macros)
            ,@declarations
            ,@body)))))
 
-(cl:defmacro with-accessor ((&rest slot-entries) instance-form &body decl-and-body)
+(defmacro with-accessors ((&rest slot-entries) instance-form &body decl-and-body)
   (let ((vinstance (gensym)))
     (generate-with vinstance
                    (mapcar (cl:lambda (entry)
@@ -738,7 +823,7 @@
                    instance-form
                    decl-and-body)))
 
-(cl:defmacro with-slots ((&rest slot-entries) instance-form &body decl-and-body)
+(defmacro with-slots ((&rest slot-entries) instance-form &body decl-and-body)
   (let ((vinstance (gensym)))
     (generate-with vinstance (mapcar (cl:lambda (entry)
                                        (cl:destructuring-bind (var slot) (if (symbolp entry) (list entry entry) entry)
@@ -782,7 +867,7 @@
 ;; Macro PPRINT-LOGICAL-BLOCK                                      22_Printer
 ;; Macro PRINT-UNREADABLE-OBJECT                                   22_Printer
 
-(cl:defmacro with-standard-io-syntax (&body body)
+(defmacro with-standard-io-syntax (&body body)
   `(let ((*package*                    (find-package "COMMON-LISP-USER"))
          (*print-array*                t)
          (*print-base*                 10)
@@ -806,23 +891,23 @@
          (*readtable*                  (copy-readtable nil)))
      ,@body))
 
-(cl:defmacro with-compilation-unit ((&key (override nil)) &body body)
+(defmacro with-compilation-unit ((&key (override nil)) &body body)
   (warn "~S not implemened yet ~S" 'with-compilation-unit override)
   `(progn ,@body))
 
-(cl:defmacro step (form)
+(defmacro step (form)
   `(let ()
      ,form))
 
-(cl:defmacro trace   (&rest function-names)
+(defmacro trace   (&rest function-names)
   (declare (ignore function-names))
   nil)
 
-(cl:defmacro untrace (&rest function-names)
+(defmacro untrace (&rest function-names)
   (declare (ignore function-names))
   nil)
 
-(cl:defmacro time (&body body)
+(defmacro time (&body body)
   (let ((se (gensym))
         (ee (gensym))
         (sr (gensym))

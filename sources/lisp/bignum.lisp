@@ -334,8 +334,8 @@ PRE: (>= a b)"
 ;; (setf *print-circle* t)
 ;; (guess-quotient-digit 10 '(9 2 3) '(9 8) '(8 9))
 
-#-(and) (pushnew :u%divide/explain *features*)
-#-(and) (setf *features* (delete :u%divide/explain *features*))
+#-(and) (pushnew :u%divide/explain cl:*features*)
+#-(and) (setf *features* (delete :u%divide/explain cl:*features*))
 
 (defun u%divide (base a b)
   "Return quotient ; remainder"

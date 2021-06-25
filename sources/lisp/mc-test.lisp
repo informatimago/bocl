@@ -3,16 +3,14 @@
   (:use "COMMON-LISP"
         "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER"
         "COM.INFORMATIMAGO.COMMON-LISP.LISP.MACROS")
-
   (:shadowing-import-from
-   "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER"
+   "COM.INFORMATIMAGO.BOCL"
+   "FUNCALL")
+  (:shadowing-import-from
+   "COM.INFORMATIMAGO.BOCL"
 
    "COMPILER-MACRO-FUNCTION" "MACRO-FUNCTION"
-   "MACROEXPAND" "MACROEXPAND-1"
-   "LAMBDA" "SETF")
-
-  (:shadowing-import-from
-   "COM.INFORMATIMAGO.COMMON-LISP.LISP.MACROS"
+   "MACROEXPAND" "MACROEXPAND-1" "*MACROEXPAND-HOOK*"
 
    "DECLAIM" "DEFINE-COMPILER-MACRO"
    "DEFINE-SYMBOL-MACRO" "DEFMACRO" "DEFTYPE"
@@ -40,8 +38,13 @@
    "PPRINT-POP" "FORMATTER" "PPRINT-LOGICAL-BLOCK"
    "PRINT-UNREADABLE-OBJECT" "WITH-STANDARD-IO-SYNTAX"
    "WITH-COMPILATION-UNIT" "STEP" "TIME" "TRACE"
-   "UNTRACE"))
+   "UNTRACE" "LAMBDA" "SETF"))
 (cl:in-package "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER.TEST")
+
+(let ((*package* (find-package "COM.INFORMATIMAGO.BOCL"))
+      (*print-right-margin* 50))
+  (pprint (mapcar (function env::named-object-name)
+                  (env:environment-functions (env:global-environment)))))
 
 (cl:defun print-minimal-expansion (form)
   (cl:let ((*print-circle* nil)
@@ -60,7 +63,8 @@
     #+clisp (pprint (ext:expand-form form))
     (values)))
 
-(trace
+#-(and)
+(cl:trace
  MACROEXPAND MACROEXPAND-1
  com.informatimago.common-lisp.lisp.minimal-compiler::minimal-compile
  com.informatimago.common-lisp.lisp.minimal-compiler::minimal-compile/lambda-expression
@@ -98,7 +102,7 @@
 ;;                                `(,function ,fname))))
 
 (cl:defparameter *env* (env:global-environment))
-(cl:defparameter *env* nil) ; macros stored in host environment.
+;; (cl:defparameter *env* nil) ; macros stored in host environment.
 
 (cl:defun equalg (a b)
   "equal modulo the gensyms"
@@ -113,8 +117,8 @@
                                          (unify (cdr a) (cdr b) bindings)
                                          (values nil bindings))))
                               (values nil bindings)))
-                  (string (values (and (stringp b)
-                                       (string= a b))
+                  (string (values (cl:and (stringp b)
+                                          (string= a b))
                                   bindings))
                   (symbol (if (null (symbol-package a))
                               (cl:let ((entry (assoc a bindings)))
@@ -152,7 +156,7 @@
 (mcexp1 *env* (and)    (t t))
 (mcexp1 *env* (and a)  (a t))
 (mcexp1 *env* (and a b)  ((let ((va a)) (if va b nil)) t))
-(mcexp1 *env* (and (values 1 2) (values 2 3)(values 4 5))
+(mcexp1 *env* (and (values 1 2) (values 2 3) (values 4 5))
         ((let ((va (values 1 2)))
            (if va
                (let ((vb (values 2 3)))
@@ -162,13 +166,22 @@
 
 
 (mctest *env*  foo  foo)
-(mctest *env*  42   42)
+(mctest *env*  42   42)x
 
 (mctest *env*  (quote 42)        (quote 42))
 (mctest *env*  (quote foo)       (quote foo))
 (mctest *env*  (quote (foo bar)) (quote (foo bar)))
 
 (mctest *env*  (quote (foo bar)) (quote (foo bar)))
+
+
+(mctest *env* (bocl:let* ((a 1) (b (* 2 a)))  (+ a b))
+        (bocl:let ((a 1))
+          (bocl:let ((b (* 2 a)))
+            (+ a b))))
+
+
+
 
 (mctest *env* (and)      t)
 (mctest *env* (and a)    a)
@@ -197,13 +210,55 @@
 (minimal-compile/lambda-expression
  *env* '(lambda (x) (and x (+ 1 x))))
 
-(lambda (x) (and x (+ 1 x)))
-(lambda (x) (and x (+ 1 x)))
-(lambda (x) (and x (+ 1 x)))
-
-(lambda (x) ((and x (+ 1 x))))
 
 
+(minimal-compile/lambda-expression
+ (env:global-environment)
+ '(lambda (|whole4678| env)
+   (com.informatimago.bocl:declare (com.informatimago.bocl:ignorable env))
+   (destructuring-bind nil |whole4678|
+     (block de
+       (print env)
+       (com.informatimago.common-lisp.lisp.environment:dump-environment env)
+       (list* 'quote (list (com.informatimago.common-lisp.lisp.environment:describe-environment env)))))))
+
+(mc:minimal-compile (env:global-environment)
+                     '(bocl:let* ((a 1) (b (* 2 a)))
+                       (de)
+                       (+ a b)))
+
+
+(pprint
+ (minimal-compile/tagbody nil '(tagbody (setq val 1)
+                                (go point-a)
+                                (setq val (+ val 16))
+                                point-c (setq val (+ val 4))
+                                (go point-b)
+                                (setq val (+ val 32))
+                                point-a (setq val (+ val 2))
+                                (go point-c)
+                                (setq val (+ val 64))
+                                point-b (setq val (+ val 8)))))
+
+(minimal-compile/tagbody (env:global-environment)
+                         '(tagbody
+                           start
+                           (go end)
+                           (go start)
+                           end))
+
+(minimal-compile/tagbody (env:global-environment)
+                         '(tagbody
+                           start
+                           (go end)
+                           (tagbody
+                            loop
+                              (go loop)
+                              (go start)
+                              (go end)
+                            end)
+                           (go start)
+                           end))
 
 ;;;; THE END ;;;;
 

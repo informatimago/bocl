@@ -37,10 +37,12 @@
   (:nicknames "ENV")
   (:use "COMMON-LISP")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.CESARUM.SYMBOL")
-  (:shadow "FUNCTION" "FUNCTIONP"
-           "SPECIAL-OPERATOR-P"
-           "COMPILER-MACRO-FUNCTION" "MACRO-FUNCTION" "FIND-RESTART"
-           "BLOCK" "TAGBODY")
+  (:shadow . #9=(
+                 "FUNCTION" "FUNCTIONP"
+                 "SPECIAL-OPERATOR-P"
+                 "COMPILER-MACRO-FUNCTION" "MACRO-FUNCTION" "FIND-RESTART"
+                 "BLOCK" "TAGBODY"))
+  (:export . #9#)
   (:export
    "GLOBAL-ENVIRONMENT"
    "CURRENT-ENVIRONMENT"
@@ -54,6 +56,7 @@
    "ENVIRONMENT-DECLARATIONS"
    "ENVIRONMENT-BLOCKS"
    "ENVIRONMENT-TAGS"
+   "ENVIRONMENT-FRAME-INDEX"
    "ENVIRONMENT-NEXT"
 
    "EXTEND-ENVIRONMENT-WITH-VARIABLES"       "PUSH-VARIABLE-ONTO-ENVIRONMENT"       "POP-VARIABLE-FROM-ENVIRONMENT"       "FIND-VARIABLE"
@@ -63,38 +66,61 @@
    "EXTEND-ENVIRONMENT-WITH-BLOCKS"          "PUSH-BLOCK-ONTO-ENVIRONMENT"          "POP-BLOCK-FROM-ENVIRONMENT"          "FIND-BLOCK"
    "EXTEND-ENVIRONMENT-WITH-TAGS"            "PUSH-TAG-ONTO-ENVIRONMENT"            "POP-TAG-FROM-ENVIRONMENT"            "FIND-TAG"
 
+   "ENVIRONMENT-CURRENT-FRAME-INDEX")
 
-   "AUTHENTIC-FUNCTION" "AUTHENTIC-FUNCTION-P" "AUTHENTIC-VARIABLE"
-   "AUTHENTIC-VARIABLE-P" "BLOCK" "BLOCK-NAME" "BLOCKP" "COMPILER-MACRO"
-   "COMPILER-MACRO-BODY" "COMPILER-MACRO-FUNCTION" "COMPILER-MACRO-P"
-   "CONSTANT-VARIABLE" "CONSTANT-VARIABLE-P" "COPY-BLOCK"
+  (:export
+
+   "AUTHENTIC-FUNCTION-P" "AUTHENTIC-VARIABLE-P" "BLOCK" "BLOCK-NAME"
+   "BLOCKP" "COMPILER-MACRO" "COMPILER-MACRO-FUNCTION"
+   "COMPILER-MACRO-LAMBDA-LIST" "COMPILER-MACRO-NAME"
+   "COMPILER-MACRO-P" "CONSTANT-VARIABLE" "CONSTANT-VARIABLE-NAME"
+   "CONSTANT-VARIABLE-P" "CONSTANT-VARIABLE-VALUE" "COPY-BLOCK"
    "COPY-COMPILER-MACRO" "COPY-CONSTANT-VARIABLE" "COPY-DECLARATION"
-   "COPY-GLOBAL-FUNCTION" "COPY-GLOBAL-MACRO" "COPY-GLOBAL-SPECIAL-VARIABLE"
-   "COPY-GLOBAL-SYMBOL-MACRO" "COPY-LEXICAL-VARIABLE" "COPY-LOCAL-FUNCTION"
-   "COPY-LOCAL-MACRO" "COPY-LOCAL-SPECIAL-VARIABLE" "COPY-LOCAL-SYMBOL-MACRO"
+   "COPY-GLOBAL-DYNAMIC-VARIABLE" "COPY-GLOBAL-FUNCTION"
+   "COPY-GLOBAL-MACRO" "COPY-GLOBAL-SYMBOL-MACRO"
+   "COPY-LEXICAL-VARIABLE" "COPY-LOCAL-DYNAMIC-VARIABLE"
+   "COPY-LOCAL-FUNCTION" "COPY-LOCAL-MACRO" "COPY-LOCAL-SYMBOL-MACRO"
    "COPY-SPECIAL-OPERATOR" "COPY-TAG" "COPY-TAGBODY" "DECLARATION"
-   "DECLARATION-ARGUMENTS" "DECLARATION-NAME" "DECLARATIONP" "FUNCTION"
-   "FUNCTION-BODY" "FUNCTION-FUNCTION" "FUNCTION-LAMBDA-LIST"
-   "FUNCTION-NAME" "FUNCTIONP" "GLOBAL-FUNCTION" "GLOBAL-FUNCTION-P"
-   "GLOBAL-MACRO" "GLOBAL-MACRO-P" "GLOBAL-SPECIAL-VARIABLE"
-   "GLOBAL-SPECIAL-VARIABLE-P" "GLOBAL-SYMBOL-MACRO" "GLOBAL-SYMBOL-MACRO-P"
-   "LEXICAL-VARIABLE" "LEXICAL-VARIABLE-P" "LOCAL-FUNCTION"
-   "LOCAL-FUNCTION-ENVIRONMENT" "LOCAL-FUNCTION-P" "LOCAL-MACRO"
-   "LOCAL-MACRO-ENVIRONMENT" "LOCAL-MACRO-P" "LOCAL-SPECIAL-VARIABLE"
-   "LOCAL-SPECIAL-VARIABLE-P" "LOCAL-SYMBOL-MACRO" "LOCAL-SYMBOL-MACRO-P"
-   "MACRO" "MACRO-BODY" "MACRO-FUNCTION" "MACROP" "MAKE-BLOCK"
+   "DECLARATION-ARGUMENTS" "DECLARATION-NAME" "DECLARATIONP"
+   "FUNCTION-FUNCTION" "FUNCTION-LAMBDA-LIST" "FUNCTION-NAME"
+   "FUNCTIONP" "GLOBAL-DYNAMIC-VARIABLE"
+   "GLOBAL-DYNAMIC-VARIABLE-NAME" "GLOBAL-DYNAMIC-VARIABLE-P"
+   "GLOBAL-DYNAMIC-VARIABLE-VALUE" "GLOBAL-FUNCTION"
+   "GLOBAL-FUNCTION-FUNCTION" "GLOBAL-FUNCTION-LAMBDA-LIST"
+   "GLOBAL-FUNCTION-NAME" "GLOBAL-FUNCTION-P" "GLOBAL-MACRO"
+   "GLOBAL-MACRO-FUNCTION" "GLOBAL-MACRO-LAMBDA-LIST"
+   "GLOBAL-MACRO-NAME" "GLOBAL-MACRO-P" "GLOBAL-SYMBOL-MACRO"
+   "GLOBAL-SYMBOL-MACRO-EXPANSION" "GLOBAL-SYMBOL-MACRO-NAME"
+   "GLOBAL-SYMBOL-MACRO-P" "LEXICAL-VARIABLE" "LEXICAL-VARIABLE-INDEX"
+   "LEXICAL-VARIABLE-NAME" "LEXICAL-VARIABLE-P"
+   "LEXICAL-VARIABLE-VALUE" "LOCAL-DYNAMIC-VARIABLE"
+   "LOCAL-DYNAMIC-VARIABLE-INDEX" "LOCAL-DYNAMIC-VARIABLE-NAME"
+   "LOCAL-DYNAMIC-VARIABLE-P" "LOCAL-DYNAMIC-VARIABLE-VALUE"
+   "LOCAL-FUNCTION" "LOCAL-FUNCTION-ENVIRONMENT"
+   "LOCAL-FUNCTION-FUNCTION" "LOCAL-FUNCTION-LAMBDA-LIST"
+   "LOCAL-FUNCTION-NAME" "LOCAL-FUNCTION-INDEX"
+   "LOCAL-FUNCTION-P" "LOCAL-MACRO"
+   "LOCAL-MACRO-ENVIRONMENT" "LOCAL-MACRO-FUNCTION"
+   "LOCAL-MACRO-LAMBDA-LIST" "LOCAL-MACRO-NAME" "LOCAL-MACRO-P"
+   "LOCAL-SYMBOL-MACRO" "LOCAL-SYMBOL-MACRO-EXPANSION"
+   "LOCAL-SYMBOL-MACRO-NAME" "LOCAL-SYMBOL-MACRO-P" "MACRO-FUNCTION"
+   "MACRO-LAMBDA-LIST" "MACRO-NAME" "MACROP" "MAKE-BLOCK"
    "MAKE-COMPILER-MACRO" "MAKE-CONSTANT-VARIABLE" "MAKE-DECLARATION"
-   "MAKE-GLOBAL-FUNCTION" "MAKE-GLOBAL-MACRO" "MAKE-GLOBAL-SPECIAL-VARIABLE"
-   "MAKE-GLOBAL-SYMBOL-MACRO" "MAKE-LEXICAL-VARIABLE" "MAKE-LOCAL-FUNCTION"
-   "MAKE-LOCAL-MACRO" "MAKE-LOCAL-SPECIAL-VARIABLE" "MAKE-LOCAL-SYMBOL-MACRO"
-   "MAKE-SPECIAL-OPERATOR" "MAKE-TAG" "MAKE-TAGBODY" "SPECIAL-OPERATOR"
-   "SPECIAL-OPERATOR-P" "SYMBOL-MACRO" "SYMBOL-MACRO-EXPANSION"
-   "SYMBOL-MACRO-P" "TAG" "TAG-INDEX" "TAG-NAME" "TAG-TAGBODY" "TAGBODY"
-   "TAGBODY-TAGS" "TAGBODYP" "TAGP" "VARIABLE" "VARIABLE-NAME"
-   "VARIABLE-VALUE" "VARIABLEP"
+   "MAKE-GLOBAL-DYNAMIC-VARIABLE" "MAKE-GLOBAL-FUNCTION"
+   "MAKE-GLOBAL-MACRO" "MAKE-GLOBAL-SYMBOL-MACRO"
+   "MAKE-LEXICAL-VARIABLE" "MAKE-LOCAL-DYNAMIC-VARIABLE"
+   "MAKE-LOCAL-FUNCTION" "MAKE-LOCAL-MACRO" "MAKE-LOCAL-SYMBOL-MACRO"
+   "MAKE-SPECIAL-OPERATOR" "MAKE-TAG" "MAKE-TAGBODY"
+   "SPECIAL-OPERATOR" "SPECIAL-OPERATOR-LAMBDA-LIST"
+   "SPECIAL-OPERATOR-NAME" "SPECIAL-OPERATOR-P"
+   "SYMBOL-MACRO-EXPANSION" "SYMBOL-MACRO-NAME" "SYMBOL-MACRO-P" "TAG"
+   "TAG-INDEX" "TAG-NAME" "TAG-TAGBODY" "TAGBODY-TAGS" "TAGBODYP"
+   "TAGP" "VARIABLE-INDEX" "VARIABLE-NAME" "VARIABLE-VALUE"
+   "VARIABLEP"
 
-   ))
-(in-package "COM.INFORMATIMAGO.BOCL.ENVIRONMENT")
+   )
+  (:export "DESCRIBE-ENVIRONMENT" "DUMP-ENVIRONMENT"))
+(in-package "COM.INFORMATIMAGO.COMMON-LISP.LISP.ENVIRONMENT")
 
 ;;;
 ;;; Compilation-Time Environment
@@ -107,6 +133,7 @@
   declarations
   blocks
   tags                 ; tagbody tags
+  frame-index
   next)
 
 (defparameter *global-environment* (make-environment)
@@ -126,6 +153,7 @@
       declaration
       block
       tag)))
+
 
 (defmacro %extend-environment (slot objects env)
   `(progn
@@ -191,12 +219,24 @@
 ;;  (extend-environment-with-blocks          push-block-onto-environment          pop-block-from-environment          find-block)
 ;;  (extend-environment-with-tags            push-tag-onto-environment            pop-tag-from-environment            find-tag))
 
+(defun environment-current-frame-index (environment)
+  (if (null environment)
+      nil
+      (let ((frame-index (environment-frame-index environment)))
+        (if (null frame-index)
+            (environment-current-frame-index (environment-next environment))
+            frame-index))))
+
+(defstruct (named-object
+            (:constructor nil)
+            (:copier nil))
+  name)
 
 (defstruct (variable
+            (:include named-object)
             (:constructor nil)
             (:copier nil)
-            (:predicate variablep))
-  name)
+            (:predicate variablep)))
 
 (defstruct (symbol-macro
             (:include variable)
@@ -219,22 +259,23 @@
             (:constructor nil)
             (:copier nil)
             (:conc-name variable-))
+  index
   value)
 
 (defstruct (lexical-variable
             (:include authentic-variable)
             (:constructor make-lexical-variable)
-            (:constructor lexical-variable (name &optional value))))
+            (:constructor lexical-variable (name &optional index))))
 
-(defstruct (local-special-variable
+(defstruct (local-dynamic-variable
             (:include authentic-variable)
-            (:constructor make-local-special-variable)
-            (:constructor local-special-variable (name &optional value))))
+            (:constructor make-local-dynamic-variable)
+            (:constructor local-dynamic-variable (name &optional index))))
 
-(defstruct (global-special-variable
+(defstruct (global-dynamic-variable
             (:include authentic-variable)
-            (:constructor make-global-special-variable)
-            (:constructor global-special-variable (name &optional value))))
+            (:constructor make-global-dynamic-variable)
+            (:constructor global-dynamic-variable (name &optional value))))
 
 (defstruct (constant-variable
             (:include authentic-variable)
@@ -242,10 +283,10 @@
             (:constructor constant-variable (name &optional value))))
 
 (defstruct (function
+            (:include named-object)
             (:predicate functionp)
             (:constructor nil)
             (:copier nil))
-  name
   lambda-list)
 
 (defstruct (authentic-function
@@ -253,44 +294,42 @@
             (:constructor nil)
             (:copier nil)
             (:conc-name function-))
-  function                          ; the function object
-  body) ; the body form to be interpreted.
+  function)
 
 (defstruct (global-function
             (:include authentic-function)
             (:constructor make-global-function)
-            (:constructor global-function (name &optional lambda-list function body))))
+            (:constructor global-function (name &optional lambda-list function))))
 
 (defstruct (local-function
             (:include authentic-function)
             (:constructor make-local-function)
-            (:constructor local-function (name &optional lambda-list function body environment)))
+            (:constructor local-function (name &optional lambda-list function environment)))
+  index
   environment)
 
 (defstruct (compiler-macro
             (:include function)
             (:constructor make-compiler-macro)
-            (:constructor compiler-macro (name &optional lambda-list function body)))
-  function ; the function object
-  body) ; the body form to be interpreted.
+            (:constructor compiler-macro (name &optional lambda-list function)))
+  function)
 
 (defstruct (macro
             (:include function)
             (:predicate macrop)
             (:constructor nil)
             (:copier nil))
-  function ; the function object
-  body) ; the body form to be interpreted.
+  function)
 
 (defstruct (global-macro
             (:include macro)
             (:constructor make-global-macro)
-            (:constructor global-macro (name &optional lambda-list function body))))
+            (:constructor global-macro (name &optional lambda-list function))))
 
 (defstruct (local-macro
             (:include macro)
             (:constructor make-local-macro)
-            (:constructor local-macro (name &optional lambda-list function body environment)))
+            (:constructor local-macro (name &optional lambda-list function environment)))
   environment)
 
 (defstruct (special-operator
@@ -299,17 +338,17 @@
             (:constructor special-operator)))
 
 (defstruct (declaration
+            (:include named-object)
             (:predicate declarationp)
             (:constructor make-declaration)
             (:constructor declaration (name &optional arguments)))
-  name
   arguments)
 
 (defstruct (block
-            (:predicate blockp)
-            (:constructor make-block)
-            (:constructor block (name)))
-  name)
+               (:include named-object)
+             (:predicate blockp)
+             (:constructor make-block)
+             (:constructor block (name))))
 
 (defstruct (tagbody
               (:predicate tagbodyp)
@@ -317,33 +356,76 @@
   tags)
 
 (defstruct (tag
+            (:include named-object)
             (:predicate tagp)
             (:constructor make-tag)
             (:constructor tag (name &optional index tagbody)))
-  name                                  ; symbol or integer
   index
   tagbody)
 
+#-(and)
+(cl-user::export-symbols
+ (mapcan (cl:function cl-user::defined-symbols)
+         '()))
 
+
+(defun describe-environment (&optional (env *global-environment*))
+  (append
+   (when (environment-variables env)
+     (list (cons :variables
+                 (mapcar (lambda (var)
+                           (cond
+                             ((global-symbol-macro-p     var) (list :global-symbol-macro     (variable-name var)))
+                             ((local-symbol-macro-p      var) (list :local-symbol-macro      (variable-name var)))
+                             ((lexical-variable-p        var) (list :lexical-variable        (variable-name var)))
+                             ((local-dynamic-variable-p  var) (list :local-dynamic-variable  (variable-name var)))
+                             ((global-dynamic-variable-p var) (list :global-dynamic-variable (variable-name var)))
+                             ((constant-variable-p       var) (list :constant-variable       (variable-name var)))
+                             (t (error "Unexpected variable ~S type ~S" (named-object-name var) (type-of var)))))
+                         (environment-variables env)))))
+   (when (environment-functions env)
+     (list (cons :functions
+                 (mapcar (lambda (fun)
+                           (cond
+                             ((global-function-p fun) (list :global-function (function-name fun)))
+                             ((local-function-p  fun) (list :local-function  (function-name fun)))
+                             ((macrop            fun) (list :macro           (function-name fun)))
+                             ((global-macro-p    fun) (list :global-macro    (function-name fun)))
+                             ((local-macro-p     fun) (list :local-macro     (function-name fun)))
+                             (t (error "Unexpected function ~S type ~S" (named-object-name fun) (type-of fun)))))
+                         (environment-functions env)))))
+   (when (environment-compiler-macros env)
+     (list (cons :compiler-macros
+                 (mapcar (lambda (cm)
+                           (list :compiler-macro (compiler-macro-name cm)))
+                         (environment-compiler-macros env)))))
+   (when (environment-declarations env)
+     (list (cons :declarations
+                 (environment-declarations env))))
+   (when (environment-blocks env)
+     (list (cons :blocks
+                 (mapcar (lambda (block)
+                           (block-name block))
+                         (environment-blocks env)))))
+   (when (environment-tags env)
+     (list (cons :tags
+                 (mapcar (lambda (tag)
+                           (list (tag-name tag) (tag-index tag)))
+                         (environment-tags env)))))
+   (when (environment-next env)
+     (list (list :next (describe-environment (environment-next env)))))))
+
+
+(defun dump-environment (&optional (env (env:global-environment)))
+  (let ((*package* (find-package :com.informatimago.bocl))
+        (*print-right-margin* 40))
+    (pprint (env:describe-environment env))))
 
 ;;;
 ;;; Run-Time Environment
 ;;;
 
-(defstruct runtime-environment
-  next-environments          ; a list of environments in outer scopes.
-
-  ;; The NEXT-ENVIRONMENTS contains the runtime-environments that are
-  ;; used by the closures using this runtime-environment, for direct
-  ;; access to their records. (It'll be stored as the first slots in
-  ;; this environment record).
-  ;;
-  ;; Both variables and functions are a-list mapping names to offset
-  ;; in the runtime environment record, counting after the
-  ;; NEXT-ENVIRONMENTS.
-
-  variables
-  functions)
+(deftype frame () 'vector)
 
 (defun build-runtime-environment (environment free-variables free-functions)
   (let* ((envs (coerce (loop :for env := environment :then (environment-next env)

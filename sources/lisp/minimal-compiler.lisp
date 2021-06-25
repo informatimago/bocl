@@ -41,15 +41,19 @@
   (:use "COMMON-LISP")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.CESARUM.SYMBOL")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP-SEXP.SOURCE-FORM")
-  (:shadow
+  (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.CT-REGISTER")
+  (:import-from "COM.INFORMATIMAGO.BOCL.COMPILER"
+                "FUNCTION-NAME-P" "LAMBDA-EXPRESSION-P"
+                "COERCE-TO-FUNCTION"  "COERCE-TO-CLOSURE")
+  (:shadowing-import-from
+   "COM.INFORMATIMAGO.BOCL"
    . #1=(
          "COMPILER-MACRO-FUNCTION" "MACRO-FUNCTION"
-         "MACROEXPAND" "MACROEXPAND-1"
-         "LAMBDA" "SETF"))
+         "MACROEXPAND" "MACROEXPAND-1" "*MACROEXPAND-HOOK*"
+         "LAMBDA" "SETF" "FUNCALL"))
   (:export . #1#)
   (:export "FUNCTION-NAME-P" "LAMBDA-EXPRESSION-P" "GO-TAG-P"
-           "SYMBOL-MACRO-P" "SYMBOL-MACRO-EXPANSION"
-
+           "COERCE-TO-FUNCTION"
            "MINIMAL-COMPILE/LAMBDA-EXPRESSION"
            "MINIMAL-COMPILE"))
 (cl:in-package "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER")
@@ -71,176 +75,66 @@
 ;; It will be (coerce *macroexpand-hook* 'function)
 
 
-;; symbol-plist keys:
-(defconstant +key/compiler-macro-function+ 'compiler-macro-function)
-
-
 ;;;
 ;;; Utilities
 ;;;
 
-(defun function-name-p (object)
-  (or (symbolp object)
-      (and (consp object)
-           (or (eql 'setf (car object))
-               (cdr object)
-               (symbolp (cadr object))
-               (null (cddr object))))))
-
-(defun lambda-expression-p (form)
-  (and (consp form)
-       (eql 'lambda (first form))
-       (cdr form)
-       (listp (cadr form))))
-
 (defun go-tag-p (form)
   (or (integerp form) (symbolp form)))
 
-(defun coerce-to-function (form)
-  (cond
-    ((function-name-p form)
+(defun compute-variable-indices (var venv env)
+  (declare (ignore env))
+  (values (env:variable-index var)
+          (env:environment-current-frame-index venv)))
 
-     ;; (eval `(function ,form))
-     ;; (compile nil form)
-     (coerce form 'function))
+(defun generate-variable-reader (env name)
+  (multiple-value-bind (var venv) (env:find-variable name env)
+    (if var
+        (if (env:lexical-variable-p var)
+            (multiple-value-bind (vindex findex) (compute-variable-indices var venv env)
+              `(kernel:variable-value ,vindex ,findex))
+            `(kernel:symbol-value ',name))
+        (progn
+          (cerror "Assume a global dynamic variable"
+                  "Undefined variable ~S" name)
+          `(kernel:symbol-value ',name)))))
 
-    ((lambda-expression-p form)
-
-     ;; (eval form)
-     ;; (compile nil form)
-     (coerce form 'function))
-
-    (t
-     (warn "Is that a function? ~S" form)
-     (coerce form 'function))))
-
-
-;;;
-;;; Compiler macros
-;;;
-
-(defun compiler-macro-function (name &optional environment)
-  (if (null environment)
-      (get name 'kernel:$compiler-macro-function)
-      (env:find-compiler-macro name environment)))
-
-(defun (cl:setf compiler-macro-function) (new-function name &optional environment)
-  (if (null environment)
-      (cl:setf (get name 'kernel:$compiler-macro-function) new-function)
-      (let ((cm (env:find-compiler-macro name environment)))
-        (cond
-          ((env:compiler-macro-p cm)
-           (cl:setf (env:compiler-macro-function cm) new-function))
-          ((eql environment (env:global-environment))
-           (env:push-function-onto-environment
-            (env:make-compiler-macro :name name :function new-function)
-            (env:global-environment)))
-          (t
-           (error "Compiler macros can be stored only in the global environment.")))))
-  new-function)
+(defun generate-variable-writer (env name new-value-form)
+  (multiple-value-bind (var venv) (env:find-variable name env)
+    (if var
+        (if (env:lexical-variable-p var)
+            (multiple-value-bind (vindex findex) (compute-variable-indices var venv env)
+              `(kernel:set-variable-value ,new-value-form ,vindex ,findex))
+            `(kernel:set-symbol-value ,new-value-form ',name))
+        (progn
+          (cerror "Assume a global dynamic variable"
+                  "Undefined variable ~S" name )
+          `(kernel:set-symbol-value ,new-value-form ',name)))))
 
 
 ;;;
 ;;; Symbol macros
 ;;;
 
-(defun symbol-macro-p (symbol environment)
-  (if (null environment)
-      (let ((not-there (cons nil nil)))
-        (not (eql not-there (get symbol 'kernel:$symbol-macro-expansion not-there))))
-      (env:symbol-macro-p (env:find-variable symbol environment))))
-
-(defun symbol-macro-expansion (symbol &optional environment)
-  (if (null environment)
-      (get symbol 'kernel:$symbol-macro-expansion)
-      (let ((sm (env:find-variable symbol environment)))
-        (when (env:symbol-macro-p sm)
-          (env:symbol-macro-expansion sm)))))
-
-(defun (cl:setf symbol-macro-expansion) (new-expansion symbol &optional environment)
-  (if (null environment)
-      (cl:setf (get symbol 'kernel:$symbol-macro-expansion) new-expansion)
-      (let ((sm (env:find-variable symbol environment)))
-        (cond
-          ((null sm)
-           (env:push-variable-onto-environment
-            (if (eql environment (env:global-environment))
-                (env:global-symbol-macro symbol new-expansion)
-                (env:local-symbol-macro  symbol new-expansion))
-            environment))
-          ((env:symbol-macro-p sm)
-           (cl:setf (env:symbol-macro-expansion sm) new-expansion))
-          (t (error "There's already a ~A named ~S" (type-of sm) symbol)))))
-  new-expansion)
-
-(defun so/symbol-macrolet (symbol expansion environment)
-  (check-type symbol symbol)
-  (cl:setf (symbol-macro-expansion symbol environment) expansion))
 
 (defun minimal-compile/symbol-macrolet (env form)
-  ;; TODO: check environment management
   (destructuring-bind (symbol-macrolet (&rest bindings) &body decl-and-body) form
     (declare (ignore symbol-macrolet))
-    (let ((env (env:extend-environment-with-functions '() env)))
+    (let ((env (env:extend-environment-with-variables '() env)))
       (dolist (binding bindings)
         (destructuring-bind (name expansion) binding
-          ;; add the symbol-macrolet to the environment
-          (so/symbol-macrolet name expansion env)))
+          (register-symbol-macro name expansion env)))
       (multiple-value-bind (docstrings declarations body) decl-and-body
         (declare (ignore docstrings)
                  (ignore declarations)) ; TODO: where to use it?
         `(progn
-           ,@(mapcar (cl:lambda (subform) (MINIMAL-COMPILE env subform)) body))))))
+           ,@(minimal-compile/body env body))))))
 
 
 ;;;
 ;;; Normal macros
 ;;;
 
-(defun macro-function (symbol &optional environment)
-  (if (null environment)
-      (cl:macro-function symbol nil)
-      (let ((mac (env:find-function symbol environment)))
-        (if (env:macrop mac)
-            (env:macro-function mac)
-            nil))))
-
-(defun (cl:setf macro-function) (new-function symbol &optional environment)
-  (if (null environment)
-      (cl:setf (cl:macro-function symbol nil) new-function)
-      (let ((mac (env:find-function symbol environment)))
-        (cond
-          ((null mac)
-           (env:push-function-onto-environment
-            (if (eql environment (env:global-environment))
-                (env:make-global-macro :name symbol :function new-function)
-                (env:make-local-macro  :name symbol :function new-function))
-            environment))
-          ((env:macrop mac)
-           (cl:setf (env:macro-function mac) new-function))
-          (t (error "There's already a ~A named ~S" (type-of mac) symbol)))))
-  new-function)
-
-(defun so/macrolet (name lambda-list decl-and-body environment)
-  (let* ((ll            (parse-lambda-list lambda-list :macro))
-         (whole         (if (lambda-list-whole-parameter-p ll)
-                            (parameter-specifier (lambda-list-whole-parameter ll))
-                            (gensym "whole")))
-         (env-parameter (if (lambda-list-environment-parameter-p ll)
-                            (parameter-specifier (lambda-list-environment-parameter ll))
-                            (gensym "environment"))))
-    (remove-whole-parameter ll)
-    (remove-environment-parameter ll)
-    (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
-      (declare (ignore docstrings))
-      ;; TODO: what about the other slots of the environment object?
-      ;; TODO: minimal-compilation of the macro function.
-      (cl:setf (macro-function name environment)
-            (coerce-to-function `(lambda (,whole ,env-parameter)
-                                   (declare (ignorable ,env-parameter))
-                                   (destructuring-bind ,lambda-list ,whole
-                                     ,@declarations
-                                     ,@body)))))))
 
 (defun minimal-compile/macrolet (env form)
   ;; TODO: check environment management
@@ -249,13 +143,34 @@
     (let ((env (env:extend-environment-with-functions '() env)))
       (dolist (binding bindings)
         (destructuring-bind (name lambda-list &body decl-and-body) binding
-          ;; add the macrolet to the environment
-          (so/macrolet name lambda-list decl-and-body env)))
-      (multiple-value-bind (docstrings declarations body) decl-and-body
-           (declare (ignore docstrings)
+          (let* ((ll            (parse-lambda-list lambda-list :macro))
+                 (whole         (if (lambda-list-whole-parameter-p ll)
+                                    (parameter-specifier (lambda-list-whole-parameter ll))
+                                    (gensym "whole")))
+                 (env-parameter (if (lambda-list-environment-parameter-p ll)
+                                    (parameter-specifier (lambda-list-environment-parameter ll))
+                                    (gensym "environment"))))
+            (remove-whole-parameter ll)
+            (remove-environment-parameter ll)
+            (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
+              (register-macrolet name lambda-list
+                                 (coerce-to-function
+                                  (minimal-compile/lambda-expression
+                                   env
+                                   `(lambda (,whole ,env-parameter)
+                                      (declare (ignorable ,env-parameter))
+                                      (destructuring-bind ,lambda-list ,whole
+                                        ,@declarations
+                                        (block ,name
+                                          ,@body))))
+                                   name)
+                                 (when docstrings (first docstrings))
+                                 env)))))
+      (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
+        (declare (ignore docstrings)
                  (ignore declarations)) ; TODO: where to use it?
         `(progn
-           ,@(mapcar (cl:lambda (subform) (MINIMAL-COMPILE env subform)) body))))))
+           ,@(minimal-compile/body env body))))))
 
 
 (defun macroformp (form environment)
@@ -301,7 +216,7 @@
 (defun minimal-compile/symbol (env form)
   (let ((expansion (macroexpand form env)))
     (if (eql expansion form)
-        form
+        (generate-variable-reader env form)
         (minimal-compile env expansion))))
 
 (defun minimal-compile/quote (env form)
@@ -311,61 +226,88 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
 
-  (defun minimal-compile/lambda-list (env ll specials)
+  (defun add-local-variable (name specials env )
+    (let ((index (length (env:environment-variables env))))
+      (env:push-variable-onto-environment
+       (let ((var (env:find-variable name env)))
+         (if (env:constant-variable-p var)
+             (error "Binding a constant variable ~S" name))
+         (if (or (member name specials)
+                 (env:global-dynamic-variable-p var))
+             (env:local-dynamic-variable name index)
+             (env:lexical-variable       name index)))
+       env)))
+
+  (defun minimal-compile/lambda-list (env ll declarations)
     "Mutates the lambda-list ll, replacing the initform expressions by their minimally compiled versions."
     (loop
+      ;; List of new special variables:
+      :with specials := (mapcan (cl:lambda (decl) (copy-list (rest decl)))
+                                (remove 'special declarations
+                                        :key (function first)
+                                        :test-not (function eql)))
       ;; Open a new environment frame for the lambda-list:
-      :with llenv := (env:make-environment :next env)
+      :with llenv := (env:make-environment
+                      :next env
+                      :frame-index (let ((cfi (env:environment-current-frame-index env)))
+                                     (if cfi (1+ cfi) 0)))
       :for parameter :in (lambda-list-parameters ll)
+        :initially (dolist (declaration declarations)
+                     (env:push-declaration-onto-environment declaration llenv))
       :do (if (parameter-initform-p parameter)
               (cl:setf (parameter-initform parameter)
                        (minimal-compile llenv (parameter-initform parameter))))
+          (if (typep parameter 'optional-parameter)
+              (if (not (parameter-indicator-p parameter))
+                  (cl:setf (parameter-indicator parameter) (gensym))))
           ;; Add the new parameter variable bindings to the environment:
-          (cl:dolist (name (parameter-parameter-list parameter))
-            (env:push-variable-onto-environment
-             (if (or (member name specials)
-                     (let ((var (env:find-variable name env)))
-                       (and var (env:global-special-variable-p var))))
-                 (env:local-special-variable name)
-                 (env:lexical-variable name))
-             llenv))
-      :finally (return (values ll env))))
+          (add-local-variable (parameter-name parameter) specials llenv)
+      :finally (return (values ll llenv))))
+
+  (defun minimal-compile/body (env body)
+    (mapcar (cl:lambda (subform) (minimal-compile env subform)) body))
 
   (defun minimal-compile/lambda-expression (env form)
     (cl:destructuring-bind (lambda (&rest lambda-list) &body decl-and-body) form
       (assert (eq lambda 'lambda))
-      (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
-        (declare (ignore docstrings))
-        (let ((ll           (parse-lambda-list lambda-list :ordinary))
-              (new-specials (mapcan (cl:lambda (decl) (copy-list (rest decl)))
-                                    (remove 'special declarations
-                                            :key (function first)
-                                            :test-not (function eql)))))
-          (cl:multiple-value-bind (mc-ll mc-env) (minimal-compile/lambda-list env ll new-specials)
-            (cl:let ((mc-env (env:extend-environment-with-declarations declarations mc-env)))
-              `(lambda ,(make-lambda-list mc-ll)
-                 ,@declarations
-                 ,@(mapcar (cl:lambda (subform) (minimal-compile mc-env subform))
-                           body))))))))
+      (let ((ll (parse-lambda-list lambda-list :ordinary)))
+        (cl:multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
+          (declare (ignore docstrings))
+          (cl:multiple-value-bind (mc-ll mc-llenv) (minimal-compile/lambda-list env ll declarations)
+            `(lambda ,(make-lambda-list mc-ll)
+               ,@declarations
+               ,@(minimal-compile/body mc-llenv body)))))))
 
   ) ;;eval-when
 
-
 (defun minimal-compile/function (env form)
+  ;; Local functions and lambda expressions can be resolved now.
+  ;; Global functions may change at run-time, or may be not defined yet,
+  ;; so they have to be defered.
+  ;; Only (function global-fun) or (function (setf global-fun)) are left for the interpreter.
   (destructuring-bind (function fname) form
     (if (lambda-expression-p fname)
-        ;; TODO: generate a closure? coerce-to-closure env le ?
-        ;; TODO: return a function object? coerce-to-function ?
-        `(,function ,(minimal-compile/lambda-expression env fname))
-        `(,function ,fname))))
+        (coerce-to-closure (minimal-compile/lambda-expression env fname)
+                           env)
+        (let ((fun (env:find-function fname env)))
+          (if (env:local-function-p fun)
+              (coerce-to-closure (env:local-function-function fun)
+                                 (env:local-function-environment fun)
+                                 (env:local-function-name fun))
+              `(,function ,fname))))))
 
 (defun minimal-compile/call (env form)
   (destructuring-bind (function &rest arguments) form
     `(,(if (lambda-expression-p function)
-           ;; TODO: generate a closure?
-           (minimal-compile/lambda-expression env function)
-           function)
-      ,@(mapcar (cl:lambda (expr) (minimal-compile env expr)) arguments))))
+           (coerce-to-closure (minimal-compile/lambda-expression env function)
+                              env)
+           (let ((fun (env:find-function function env)))
+             (if (env:local-function-p fun)
+                 (coerce-to-closure (env:local-function-function fun)
+                                    (env:local-function-environment fun)
+                                    (env:local-function-name fun))
+                 form)))
+      ,@(minimal-compile/body env arguments))))
 
 (defun minimal-compile/if (env form)
   (destructuring-bind (if test then &optional else) form
@@ -377,9 +319,7 @@
   (destructuring-bind (block name &body body) form
     (let ((env (env:extend-environment-with-blocks (list (env:block name)) env)))
       `(,block ,name
-         ,@(mapcar
-            (cl:lambda (subform) (minimal-compile env subform))
-            body)))))
+         ,@(minimal-compile/body env body)))))
 
 (defun minimal-compile/return-from (env form)
   (destructuring-bind (return-from name &optional value) form
@@ -391,7 +331,7 @@
 (defun minimal-compile/catch (env form)
   (destructuring-bind (catch object &body body) form
     `(,catch ,(minimal-compile env object)
-       ,@(mapcar (cl:lambda (subform) (minimal-compile env subform)) body))))
+       ,@(minimal-compile/body env body))))
 
 (defun minimal-compile/throw (env form)
   (destructuring-bind (throw object &optional value) form
@@ -400,7 +340,7 @@
 (defun minimal-compile/unwind-protect (env form)
   (destructuring-bind (unwind-protect expression &body cleanup-body) form
     `(,unwind-protect ,(minimal-compile env expression)
-       ,@(mapcar (cl:lambda (subform) (minimal-compile env subform)) cleanup-body))))
+       ,@(minimal-compile/body env cleanup-body))))
 
 (defconstant +TAG-BITS+         (byte 32 0))
 (defconstant +TAGBODY-BITS+     (byte 30 32))
@@ -453,41 +393,6 @@
           (dotimes (i (length tagtable))
             (cl:setf (car (aref tagtable i)) (compute-tag-index env (aref tagtable i)))))))))
 
-#|
-(pprint
- (minimal-compile/tagbody nil '(tagbody (setq val 1)
-                                (go point-a)
-                                (setq val (+ val 16))
-                                point-c (setq val (+ val 4))
-                                (go point-b)
-                                (setq val (+ val 32))
-                                point-a (setq val (+ val 2))
-                                (go point-c)
-                                (setq val (+ val 64))
-                                point-b (setq val (+ val 8)))))
-
-(minimal-compile/tagbody (env:global-environment)
-                         '(tagbody
-                           start
-                           (go end)
-                           (go start)
-                           end))
-
-(minimal-compile/tagbody (env:global-environment)
-                         '(tagbody
-                           start
-                           (go end)
-                           (tagbody
-                            loop
-                              (go loop)
-                              (go start)
-                              (go end)
-                            end)
-                           (go start)
-                           end))
-
-|#
-
 (defun minimal-compile/go (env form)
   (destructuring-bind (go tagname) form
     (let ((tag-index (compute-tag-index env tagname)))
@@ -502,37 +407,34 @@
                    ;; Return a cons: ( mc-fun-clause  . fun-object )
                    (destructuring-bind (fname lambda-list &body decl-and-body) fun
                      (let ((ll (parse-lambda-list lambda-list :ordinary)))
-                       (multiple-value-bind (declarations docstrings body) decl-and-body
+                       (multiple-value-bind (docstrings declarations body) (parse-body :lambda decl-and-body)
                          (declare (ignore docstrings))
-                         (let* ((new-specials (mapcan (cl:lambda (decl) (copy-list (rest decl)))
-                                                      (remove 'special declarations
-                                                              :key (function first)
-                                                              :test-not (function eql))))
-                                (env (env:extend-environment-with-variables
-                                      (mapcar (cl:lambda (parameter)
-                                                (if (or (member parameter new-specials)
-                                                        (let ((var (env:find-variable parameter env)))
-                                                          (and var (env:global-special-variable-p var))))
-                                                    (env:local-special-variable parameter)
-                                                    (env:lexical-variable parameter)))
-                                              (lambda-list-parameters ll))
-                                      env))
-                                (env (env:extend-environment-with-declarations declarations env))
-                                (mc-body (mapcar (cl:lambda (form) (minimal-compile env form))
-                                                 body)))
-                           (cons
-                            `(,fname ,lambda-list ,@mc-body)
-                            (env:make-local-function :name fname
-                                                     :lambda-list ll
-                                                     :body `(lambda ,lambda-list
-                                                              ,@declarations
-                                                              (block ,fname ,@mc-body))
-                                                     :environment env)))))))
+                         (multiple-value-bind (mc-ll mc-llenv) (minimal-compile/lambda-list env ll declarations)
+                           (let ((mc-lambda-list (make-lambda-list mc-ll))
+                                 (mc-body        (minimal-compile/body mc-ll body)))
+                             (cons `(,fname ,mc-lambda-list ,@declarations ,@mc-body)
+                                   (env:make-local-function :name fname
+                                                            :lambda-list mc-ll
+                                                            :function (coerce-to-closure
+                                                                       `(lambda ,mc-lambda-list
+                                                                          ,@declarations
+                                                                          (block ,fname ,@mc-body))
+                                                                       mc-llenv
+                                                                       fname)
+                                                            :environment env))))))))
                  bindings)))
       `(,flet ,(mapcar (function car) funs)
-         ,@(let ((env (env:extend-environment-with-functions (mapcar (function cdr) funs) env)))
-             (mapcar (cl:lambda (subform) (minimal-compile env subform)) body))))))
-
+         ,@(let ((env  (env:make-environment
+                        :next env
+                        :frame-index (let ((cfi (env:environment-current-frame-index env)))
+                                       (if cfi (1+ cfi) 0)))))
+             (loop
+               :for index :from 0
+               :for funinfo :in funs
+               :for fun := (cdr funinfo)
+               :do (cl:setf (env:local-function-index fun) index)
+                   (env:push-function-onto-environment fun env))
+             (minimal-compile/body env body))))))
 
 (defun minimal-compile/labels (env form)
   (destructuring-bind (labels bindings &body body) form
@@ -560,8 +462,8 @@
                                     (mapcar (cl:lambda (parameter)
                                               (if (or (member parameter new-specials)
                                                       (let ((var (env:find-variable parameter env)))
-                                                        (and var (env:global-special-variable-p var))))
-                                                  (env:local-special-variable parameter)
+                                                        (and var (env:global-dynamic-variable-p var))))
+                                                  (env:local-dynamic-variable parameter)
                                                   (env:lexical-variable parameter)))
                                             (lambda-list-parameters ll))
                                     env))
@@ -569,139 +471,158 @@
                              (mc-body (mapcar (cl:lambda (form) (minimal-compile benv form))
                                               body)))
                         (cl:setf (env:local-function-environment funobj) env
-                                 (env:function-body funobj) `(lambda ,lambda-list
-                                                               ,@declarations
-                                                               (block ,fname
-                                                                 ,@mc-body)))
+                                 (env:function-function funobj) (coerce-to-closure `(lambda ,lambda-list
+                                                                                      ,@declarations
+                                                                                      (block ,fname
+                                                                                        ,@mc-body))
+                                                                                   env))
                         `(,fname ,lambda-list ,@mc-body))))
                   funinfos)))
       `(,labels ,funs
-         ,@(mapcar (cl:lambda (subform) (minimal-compile env subform))
-                   body)))))
+         ,@(minimal-compile/body env body)))))
 
 (defun minimal-compile/setq (env form)
   (destructuring-bind (setq &rest var-val-pairs) form
     (declare (ignore setq))
     (if var-val-pairs
         (loop
-           :with has-symbol-macros = nil
-           :with has-normal-variables = nil
-           :for (var nil) :on var-val-pairs :by (function cddr)
-           :until (and has-symbol-macros has-normal-variables)
-           :do (if (symbol-macro-p var env)
-                   (cl:setf has-symbol-macros t)
-                   (cl:setf has-normal-variables t))
-           :finally (return
-                      (cond
-                        ((and has-symbol-macros has-normal-variables)
-                         (minimal-compile env
-                                          `(progn
-                                             ,@(loop
-                                                  :for (var val) :on var-val-pairs :by (function cddr)
-                                                  :collect (if (symbol-macro-p var env)
-                                                               `(setq ,var ,val)
-                                                               `(setf ,var ,val))))))
-                        (has-symbol-macros ; only symbol-macros
-                         (minimal-compile env `(setf ,@var-val-pairs)))
-                        ;; only variables
-                        ((null (cddr var-val-pairs))
-                         `(setq ,(first var-val-pairs) ,(minimal-compile env (second var-val-pairs))))
-                        (t
-                         `(progn
-                            ,@(loop
-                                 :for (var val) :on var-val-pairs :by (function cddr)
-                                 :collect `(setq ,var ,(minimal-compile env val))))))))
+          :with has-symbol-macros = nil
+          :with has-normal-variables = nil
+          :for (var nil) :on var-val-pairs :by (function cddr)
+          :until (and has-symbol-macros has-normal-variables)
+          :do (if (symbol-macro-p var env)
+                  (cl:setf has-symbol-macros t)
+                  (cl:setf has-normal-variables t))
+          :finally (return
+                     (cond
+                       ((and has-symbol-macros has-normal-variables)
+                        (minimal-compile env
+                                         `(progn
+                                            ,@(loop
+                                                :for (var val) :on var-val-pairs :by (function cddr)
+                                                :collect (if (symbol-macro-p var env)
+                                                             `(setf ,var ,val)
+                                                             `(setq ,var ,val))))))
+                       (has-symbol-macros ; only symbol-macros
+                        (minimal-compile env `(setf ,@var-val-pairs)))
+                       ;; only variables
+                       ((null (cddr var-val-pairs))
+                        (generate-variable-writer env (first var-val-pairs) (minimal-compile env (second var-val-pairs))))
+                       (t
+                        `(progn
+                           ,@(loop
+                               :for (var val) :on var-val-pairs :by (function cddr)
+                               :collect (generate-variable-writer env var (minimal-compile env val))))))))
         'nil)))
-
 
 (defun minimal-compile/let (env form)
   (destructuring-bind (let bindings &body decl-and-body) form
     (multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-body)
       (declare (ignore docstrings))
-      (let* ((new-specials (mapcan (cl:lambda (decl) (copy-list (rest decl)))
-                                   (remove 'special declarations
-                                           :key (function first)
-                                           :test-not (function eql))))
-             (lenv (env:extend-environment-with-variables
-                    (mapcar (cl:lambda (binding)
-                              (let ((name (if (atom binding)
-                                              binding
-                                              (first binding))))
-                                (if (or (member name new-specials)
-                                        (let ((var (env:find-variable name env)))
-                                          (and var (env:global-special-variable-p var))))
-                                    (env:local-special-variable name)
-                                    (env:lexical-variable name))))
-                            bindings)
-                    env))
-             (lenv (env:extend-environment-with-declarations declarations lenv)))
+      (let* ((specials (mapcan (cl:lambda (decl) (copy-list (rest decl)))
+                               (remove 'special declarations
+                                       :key (function first)
+                                       :test-not (function eql))))
+             (lenv      (env:make-environment
+                         :next env
+                         :frame-index (let ((cfi (env:environment-current-frame-index env)))
+                                        (if cfi (1+ cfi) 0)))))
+        (dolist (declaration declarations)
+          (env:push-declaration-onto-environment declaration lenv))
+        (dolist (binding bindings)
+          (let ((name (if (atom binding)
+                          binding
+                          (progn
+                            (if (< 2 (length binding))
+                                (error "Too many elements in the binding list ~S" binding))
+                            (first binding)))))
+            (add-local-variable name specials lenv)))
+
         `(,let ,(mapcar (cl:lambda (binding)
                           (if (atom binding)
                               `binding
                               `(,(first binding) ,(minimal-compile env (second binding)))))
                  bindings)
            ,@declarations
-           ,@(mapcar (cl:lambda (subform) (minimal-compile lenv subform))
-                     body))))))
-
+           ,@(minimal-compile/body lenv body))))))
 
 (defun minimal-compile/let* (env form)
-  (destructuring-bind (let* bindings &body body) form
+  (destructuring-bind (let* bindings &body decl-and-body) form
     (declare (ignore let*))
-    (minimal-compile
-     env (labels ((wrap (bindings expr)
-                    (if (null bindings)
-                        expr
-                        (wrap (cdr bindings) `(let (,(car bindings)) ,expr)))))
-           (let ((bindings (reverse bindings)))
-             (wrap (rest bindings) `(let (,(first bindings)) ,@body)))))))
-
+    (multiple-value-bind (docstrings declarations body) (parse-body :locally decl-and-body)
+      (declare (ignore docstrings))
+      (let* ((specials (mapcan (cl:lambda (decl) (copy-list (rest decl)))
+                               (remove 'special declarations
+                                       :key (function first)
+                                       :test-not (function eql))))
+             (lenv     (env:make-environment
+                        :next env
+                        :frame-index (let ((cfi (env:environment-current-frame-index env)))
+                                       (if cfi (1+ cfi) 0)))))
+        (dolist (declaration declarations)
+          (env:push-declaration-onto-environment declaration lenv))
+        `(bocl:let ,(mapcar (cl:lambda (binding)
+                              (let ((name (if (atom binding)
+                                              binding
+                                              (progn
+                                                (if (< 2 (length binding))
+                                                    (error "Too many elements in the binding list ~S" binding))
+                                                (first binding))))
+                                    (init-form (if (atom binding)
+                                                   'nil
+                                                   ;; We minimal-compile the init-form in the lenv before adding the variable.
+                                                   (minimal-compile lenv (second binding)))))
+                                (add-local-variable name specials lenv)
+                                `(,name ,init-form)))
+                     bindings)
+           ,@declarations
+           ,@(minimal-compile/body lenv body))))))
 
 (defun minimal-compile/multiple-value-call (env form)
   (destructuring-bind (multiple-value-call function-form &rest forms) form
     `(,multiple-value-call
-         ,@(mapcar (cl:lambda (expr) (minimal-compile env expr))
-                   (cons function-form forms)))))
-
+         ,@(minimal-compile/body env (cons function-form forms)))))
 
 (defun minimal-compile/multiple-value-prog1 (env form)
   (destructuring-bind (multiple-value-prog1 first-form &body body) form
     `(,multiple-value-prog1
-         ,@(mapcar (cl:lambda (expr) (minimal-compile env expr))
-                   (cons first-form body)))))
-
+         ,@(minimal-compile/body env (cons first-form body)))))
 
 (defun minimal-compile/progn (env form)
   (destructuring-bind (progn &body body) form
     `(,progn
-       ,@(mapcar (cl:lambda (expr) (minimal-compile env expr)) body))))
-
+       ,@(minimal-compile/body env body))))
 
 (defun minimal-compile/progv (env form)
   (destructuring-bind (progv symbols values forms) form
     `(,progv
-       ,@(mapcar (cl:lambda (expr) (minimal-compile env expr))
-                 (list* symbols values forms)))))
-
+         ,(minimal-compile env symbols)
+         ,(minimal-compile env values)
+       ,@(minimal-compile/body env forms))))
 
 (defun minimal-compile/locally (env form)
+  ;; LOCALLY processes the declarations now, and generates a PROGN form.
+  ;; If some declaration needs run-time effects, they'd be generated in the PROGN.
   (destructuring-bind (locally &body body) form
+    (declare (ignore locally))
     (multiple-value-bind (docstrings declarations forms) (parse-body :locally body)
       (declare (ignore docstrings))
       (let ((env (env:extend-environment-with-declarations declarations env)))
-        `(,locally ,declarations
-           ,@(mapcar (cl:lambda (expr) (minimal-compile env expr)) forms))))))
-
+        `(bocl:progn
+           ,@(minimal-compile/body env forms))))))
 
 (defun minimal-compile/the (env form)
   (destructuring-bind (the value-type expr) form
     `(,the ,value-type ,(minimal-compile env expr))))
 
-
 (defun minimal-compile/eval-when (env form)
   (destructuring-bind (eval-when situations &rest forms) form
     `(,eval-when ,situations
-       ,@(mapcar (cl:lambda (expr) (minimal-compile env expr)) forms))))
+       ,@(minimal-compile/body env forms))))
+
+(defun minimal-compile/load-time-value (env form)
+  (destructuring-bind (load-time-value form &optional read-only-p) form
+    `(,load-time-value ,@(minimal-compile env form) ,read-only-p)))
 
 
 (defun minimal-compile (env form)
@@ -713,33 +634,31 @@
     (t
      (case (operator form)
        ;; First we check the special operators:
-       ((FUNCTION)             (minimal-compile/function             env form))
-       ((QUOTE)                (minimal-compile/quote                env form)) ;
-       ((SETQ)                 (minimal-compile/setq                 env form))
-       ((IF)                   (minimal-compile/if                   env form)) ;
-       ((BLOCK)                (minimal-compile/block                env form)) ;
-       ((RETURN-FROM)          (minimal-compile/return-from          env form)) ;
-       ((CATCH)                (minimal-compile/catch                env form)) ;
-       ((THROW)                (minimal-compile/throw                env form)) ;
-       ((UNWIND-PROTECT)       (minimal-compile/unwind-protect       env form)) ;
-       ((TAGBODY)              (minimal-compile/tagbody              env form)) ;
-       ((GO)                   (minimal-compile/go                   env form)) ;
-       ((LET)                  (minimal-compile/let                  env form))
-       ((LET*)                 (minimal-compile/let*                 env form))
-       ((FLET)                 (minimal-compile/flet                 env form))
-       ((LABELS)               (minimal-compile/labels               env form))
-       ((SYMBOL-MACROLET)      (minimal-compile/symbol-macrolet      env form))
-       ((MACROLET)             (minimal-compile/macrolet             env form))
-       ((MULTIPLE-VALUE-CALL)  (minimal-compile/multiple-value-call  env form))
-       ((MULTIPLE-VALUE-PROG1) (minimal-compile/multiple-value-prog1 env form))
-       ((PROGN)                (minimal-compile/progn                env form)) ;
-       ((PROGV)                (minimal-compile/progv                env form))
-       ((LOCALLY)              (minimal-compile/locally              env form)) ;
-       ((THE)                  (minimal-compile/the                  env form)) ;
-       ((EVAL-WHEN)            (minimal-compile/eval-when            env form)) ;
-       ((LOAD-TIME-VALUE)
-        ;; do...
-        )
+       ((bocl:FUNCTION)             (minimal-compile/function             env form))
+       ((bocl:QUOTE)                (minimal-compile/quote                env form)) ;
+       ((bocl:SETQ)                 (minimal-compile/setq                 env form))
+       ((bocl:IF)                   (minimal-compile/if                   env form)) ;
+       ((bocl:BLOCK)                (minimal-compile/block                env form)) ;
+       ((bocl:RETURN-FROM)          (minimal-compile/return-from          env form)) ;
+       ((bocl:CATCH)                (minimal-compile/catch                env form)) ;
+       ((bocl:THROW)                (minimal-compile/throw                env form)) ;
+       ((bocl:UNWIND-PROTECT)       (minimal-compile/unwind-protect       env form)) ;
+       ((bocl:TAGBODY)              (minimal-compile/tagbody              env form)) ;
+       ((bocl:GO)                   (minimal-compile/go                   env form)) ;
+       ((bocl:LET)                  (minimal-compile/let                  env form))
+       ((bocl:LET*)                 (minimal-compile/let*                 env form))
+       ((bocl:FLET)                 (minimal-compile/flet                 env form))
+       ((bocl:LABELS)               (minimal-compile/labels               env form))
+       ((bocl:SYMBOL-MACROLET)      (minimal-compile/symbol-macrolet      env form))
+       ((bocl:MACROLET)             (minimal-compile/macrolet             env form))
+       ((bocl:MULTIPLE-VALUE-CALL)  (minimal-compile/multiple-value-call  env form))
+       ((bocl:MULTIPLE-VALUE-PROG1) (minimal-compile/multiple-value-prog1 env form))
+       ((bocl:PROGN)                (minimal-compile/progn                env form)) ;
+       ((bocl:PROGV)                (minimal-compile/progv                env form))
+       ((bocl:LOCALLY)              (minimal-compile/locally              env form)) ;
+       ((bocl:THE)                  (minimal-compile/the                  env form)) ;
+       ((bocl:EVAL-WHEN)            (minimal-compile/eval-when            env form)) ;
+       ((bocl:LOAD-TIME-VALUE)      (minimal-compile/load-time-value      env form))
        (otherwise
         (let ((cmf (compiler-macro-function (operator form) env))
               (mf  (macro-function (operator form) env)))
@@ -752,6 +671,7 @@
              (let ((expansion (funcall (coerce-to-function *macroexpand-hook*)
                                        mf form env)))
                (minimal-compile env expansion)))
-            (t (minimal-compile/call env form)))))))))
+            (t
+             (minimal-compile/call env form)))))))))
 
 ;;;; THE END ;;;;

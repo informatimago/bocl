@@ -1,43 +1,43 @@
 (in-package "COM.INFORMATIMAGO.BOCL.COMPILER")
 
-;; reqvars::= var* 
-;; 
-;; optvars::= [&optional {var | (var [init-form [supplied-p-parameter]])}*] 
-;; 
-;; restvar::= [{&rest | &body} var] 
-;; 
-;; keyvars::= [&key {var | ({var | (keyword-name var)} [init-form [supplied-p-parameter]])}* 
-;;             [&allow-other-keys]] 
-;; 
-;; auxvars::= [&aux {var | (var [init-form])}*] 
-;; 
-;; wholevar::= [&whole var] 
-;; 
-;; lambda-list::= (wholevar reqvars optvars restvar keyvars auxvars) | 
-;;                (wholevar reqvars optvars . var) 
+;; reqvars::= var*
+;;
+;; optvars::= [&optional {var | (var [init-form [supplied-p-parameter]])}*]
+;;
+;; restvar::= [{&rest | &body} var]
+;;
+;; keyvars::= [&key {var | ({var | (keyword-name var)} [init-form [supplied-p-parameter]])}*
+;;             [&allow-other-keys]]
+;;
+;; auxvars::= [&aux {var | (var [init-form])}*]
+;;
+;; wholevar::= [&whole var]
+;;
+;; lambda-list::= (wholevar reqvars optvars restvar keyvars auxvars) |
+;;                (wholevar reqvars optvars . var)
 
 
 
 ;; A DECLARATION declaration must suppress warnings about unrecognized
 ;; declarations of the kind that it declares. If an implementation does
 ;; not produce warnings about unrecognized declarations, it may safely
-;; ignore this declaration. 
-;; 
+;; ignore this declaration.
+;;
 ;; A NOTINLINE declaration must be recognized by any implementation that
 ;; supports inline functions or compiler macros in order to disable those
 ;; facilities. An implementation that does not use inline functions or
-;; compiler macros may safely ignore this declaration. 
-;; 
+;; compiler macros may safely ignore this declaration.
+;;
 ;; A SAFETY declaration that increases the current safety level must
 ;; always be recognized. An implementation that always processes code as
-;; if safety were high may safely ignore this declaration. 
-;; 
-;; A SPECIAL declaration must be processed by all implementations. 
+;; if safety were high may safely ignore this declaration.
+;;
+;; A SPECIAL declaration must be processed by all implementations.
 
-;; DECLARATION     IGNORE     SPECIAL  
-;; DYNAMIC-EXTENT  INLINE     TYPE     
-;; FTYPE           NOTINLINE           
-;; IGNORABLE       OPTIMIZE            
+;; DECLARATION     IGNORE     SPECIAL
+;; DYNAMIC-EXTENT  INLINE     TYPE
+;; FTYPE           NOTINLINE
+;; IGNORABLE       OPTIMIZE
 
 
 (defun extract-declarations-for (variable decl)
@@ -45,7 +45,7 @@
 the list in DECL (which is mutated).
 The declarations that are extracted are:
 DYNAMIC-EXTEND, IGNORE, IGNORABLE, TYPE, SPECIAL
-A type specifier can be used as a declaration identifier. (type-specifier var*) is taken as shorthand for (type type-specifier var*). 
+A type specifier can be used as a declaration identifier. (type-specifier var*) is taken as shorthand for (type type-specifier var*).
 "
   (let ((extracted '())
         (decls     '()))
@@ -137,7 +137,69 @@ A type specifier can be used as a declaration identifier. (type-specifier var*) 
                       (t                              nil))))
     result))
 
-(defun extract-keyword-argument (arguments key default)
+(defun count-parameters (ordinary-lambda-list)
+  (let ((nmandatory 0)
+        (noptional  0)
+        (ioptional  '())
+        (nrest      0)
+        (nkey       0)
+        (ikey       '())
+        (kkey       '())
+        (naux       0)
+        (iaux       '())
+        (state      '&mandatory))
+    (dolist (parameter ordinary-lambda-list)
+      (case parameter
+        ((&optional)         (setf state parameter))
+        ((&rest)             (setf state parameter))
+        ((&body)             (setf state '&rest))
+        ((&key)              (setf state parameter))
+        ((&aux)              (setf state parameter))
+        ((&allow-other-keys))
+        (otherwise
+         (ecase state
+           ((&mandatory)
+            (incf nmandatory))
+           ((&optional)
+            (incf noptional (if (and (consp parameter) (= 3 (length parameter)))
+                                2
+                                1))
+            (push (if (symbolp parameter)
+                      nil
+                      (second parameter))
+                  ioptional))
+           ((&rest)
+            (incf nrest))
+           ((&key)
+            (incf nkey)
+            ;; We just allocate an indicator with each key parameter
+            ;; so we don't have to transmit then following test.
+            ;; (if (and (consp parameter) (= 3 (length parameter)))
+            ;;                2
+            ;;                1)
+            (push (if (symbolp parameter)
+                      nil
+                      (second parameter))
+                  ikey)
+            (push (if (symbolp parameter)
+                      (intern (string parameter) "KEYWORD")
+                      (if (symbop (car parameter))
+                          (intern (string (car parameter)) "KEYWORD")
+                          (caar parameter)))
+                  kkey))
+           ((&aux)
+            (incf naux)
+            (push (if (symbolp parameter)
+                      nil
+                      (second parameter))
+                  iaux))))))
+    (values nmandatory
+            noptional (nreverse ioptional)
+            nrest
+            nkey (nreverse ikey) (nreverse kkey)
+            naux (nreverse iaux))))
+
+(defun extract-keyword-parameter (arguments key default)
   (let ((result default)
         (foundp nil)
         (new-args '())
@@ -256,7 +318,7 @@ A type specifier can be used as a declaration identifier. (type-specifier var*) 
        (let ((keydecl  (extract-declarations-for keyvar decl))
              (keydeclp (when keyvarp (extract-declarations-for keyvarp decl)))
              (temp     (gensym)))
-         `(let ((,temp (extract-keyword-argument ,var ',keykey ,keydef)))
+         `(let ((,temp (extract-keyword-parameter ,var ',keykey ,keydef)))
             (let ((,keyvar  (car ,temp))
                   ,@(when keyvarp `((,keyvarp (cadr ,temp))))
                   (,var  (caddr ,temp)))
@@ -268,7 +330,7 @@ A type specifier can be used as a declaration identifier. (type-specifier var*) 
            (keyvar  (car ll))
            (keydecl (extract-declarations-for (car ll) decl))
            (temp    (gensym)))
-       `(let ((,temp (extract-keyword-argument ,var ',keykey nil)))
+       `(let ((,temp (extract-keyword-parameter ,var ',keykey nil)))
           (let ((,keyvar  (car ,temp))
                 (,var  (caddr ,temp)))
             ,@(when keydecl
@@ -321,7 +383,7 @@ A type specifier can be used as a declaration identifier. (type-specifier var*) 
   ;; and returns a destructuring-bind form expansion.
   (cond
     ((null ll)                 (desgen/null        ll var decl body))
-    ((symbolp ll)              (desgen/rest-symbol ll var decl body)) 
+    ((symbolp ll)              (desgen/rest-symbol ll var decl body))
     ((atom ll)                 (error-ll-expect-list ll))
     ((eql (car ll) '&optional) (error-ll-duplicate-key ll '&optional))
     ((eql (car ll) '&rest)     (desgen/rka (cdr ll) var decl body))
@@ -371,7 +433,7 @@ A type specifier can be used as a declaration identifier. (type-specifier var*) 
   ;; and returns a destructuring-bind form expansion.
   (cond
     ((null ll)                 (desgen/null        ll var decl body))
-    ((symbolp ll)              (desgen/rest-symbol ll var decl body)) 
+    ((symbolp ll)              (desgen/rest-symbol ll var decl body))
     ((atom ll)                 (error-ll-expect-list ll))
     ((eql (car ll) '&optional) (desgen/or    (cdr ll) var decl body))
     ((eql (car ll) '&rest)     (desgen/rka   (cdr ll) var decl body))
@@ -432,4 +494,3 @@ A type specifier can be used as a declaration identifier. (type-specifier var*) 
       (t
        `(let ((,var ,expression))
           ,(desgen/opt-wror ll var decl body))))))
-

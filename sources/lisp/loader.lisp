@@ -1,4 +1,4 @@
-(in-package "COMMON-LISP-USER")
+(cl:in-package "COMMON-LISP-USER")
 
 (eval-when (:compile-toplevel :load-toplevel)
   (error "This file should be loaded as source, not compiled"))
@@ -55,5 +55,40 @@ the dependencies.")
 
 ;;;----------------------------------------
 (pushnew *source-directory* asdf:*central-registry* :test (function equal))
-(ql:quickload "com.informatimago.bocl")
+
+(defun lls ()
+  (dolist (source
+           '("bocl-packages" "bocl" "kernel" "kernel-sim"
+             "environment" "ct-register" "bocl-compiler"
+             "minimal-compiler"
+             "destructuring-bind"
+             "eval"
+             "macros"
+             ;; "variables" "structures" "bignum"
+
+             ;; "mc-test"
+             ))
+    (load (merge-pathnames ".lisp" source nil) :verbose t :print t)))
+
+;; (ql:quickload "com.informatimago.bocl" :verbose t :explain t)
+(lls)
+
+;; (block abort
+;;   (handler-bind
+;;       ((condition
+;;          #1=(lambda (condition)
+;;               (let ((backtrace (ccl:backtrace-as-list)))
+;;                 (format *error-output* "~S (~{~%  ~S~}~%  …~{~%  ~S~})~%"
+;;                         (class-name (class-of condition))
+;;                         (subseq backtrace 0 30)
+;;                         ;; (mapcar (function first) (subseq backtrace 0 30))
+;;                         (let ((len (length backtrace)))
+;;                           (mapcar (function first) (subseq backtrace (- len 30)))))
+;;                 (let ((signal (assoc 'signal backtrace)))
+;;                   (format *error-output* "~S~%" signal)
+;;                   ;; (inspect (second signal))
+;;                   ))
+;;               (return-from abort)))
+;;        (ccl::stack-overflow-condition #1#))
+;;     (load "macros.lisp" :verbose t :print t)))
 
