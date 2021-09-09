@@ -38,7 +38,8 @@
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP-SEXP.SOURCE-FORM")
   (:import-from "COM.INFORMATIMAGO.BOCL.COMPILER"
                 "FUNCTION-NAME-P" "LAMBDA-EXPRESSION-P"
-                "COERCE-TO-FUNCTION"  "COERCE-TO-CLOSURE")
+                "COERCE-TO-FUNCTION"  "COERCE-TO-CLOSURE"
+                "GENERATE-DESTRUCTURING-LIST")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.CT-REGISTER")
   (:use "COM.INFORMATIMAGO.COMMON-LISP.LISP.MINIMAL-COMPILER")
   (:shadowing-import-from
@@ -263,24 +264,38 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (register-function 'funcall '(function &rest arguments)
-                     (coerce-to-function '(lambda (function &rest arguments)
-                                           (apply function arguments))
-                                         'funcall)
+                     (coerce-to-function
+                      (minimal-compile/lambda-expression
+                       (env:global-environment)
+                       '(lambda (function &rest arguments)
+                         (apply function arguments)))
+                      'funcall)
                      'nil))
 
 ;;;
 ;;; =====================================================================
-
-(defmacro destructuring-bind (&whole form)
+#-(and)
+(defmacro destructuring-bind ((&rest lambda-list) expression &rest body)
   "Bind the variables in LAMBDA-LIST to the contents of ARG-LIST."
-  (if (null (cddr form))
-      (error "Missing an expression in ~S" form))
-  (let ((lambda-list (cadr  form))
-        (expression  (caddr form))
-        (body        (cdddr form)))
-    (multiple-value-bind (docstrings declarations body) (parse-body :locally body)
-      (declare (ignore docstrings))
-      (generate-destructuring-list lambda-list expression body))))
+  (multiple-value-bind (docstrings declarations body) (parse-body :locally body)
+    (declare (ignore docstrings))
+    (generate-destructuring-list lambda-list expression body)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (register-macro
+   'destructuring-bind
+   '((&rest lambda-list) expression &body body)
+   (coerce-to-function
+    (minimal-compile/lambda-expression
+     (env:global-environment)
+     '(lambda (whole environment)
+       (declare (ignore environment))
+       (if (not (listp (cadr whole)))
+           (error "The lambda-list in ~S must be a list, not ~S"
+                  (bocl:quote destructuring-bind) (cadr whole)))
+       (generate-destructuring-list (cadr whole) (caddr whole) (cdddr whole))))
+    'destructuring-bind)
+   nil))
 
 (env:macro-function (env:find-function 'destructuring-bind (env:global-environment)))
 
@@ -299,8 +314,6 @@
                                                          ,@body)))
                                                   ',name)
                             ',(first docstrings))))))
-
-
 
 (defmacro lambda (&whole whole (&rest lambda-list) &body decl-body)
   (declare (ignore lambda-list decl-body))

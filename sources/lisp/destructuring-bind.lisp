@@ -480,17 +480,29 @@ A type specifier can be used as a declaration identifier. (type-specifier var*) 
     ((eql (car ll) '&whole) (desgen/wror (cdr ll) var decl body))
     (t                      (desgen/ror  ll       var decl body))))
 
-(defun generate-destructuring-list (ll expression declarations body)
-  ;; DECLARATIONS is a list of declarations ((special foo) (type integer bar) …)
-  (let ((*current-destructuring-lambda-list* ll)
-        (var  (gensym))
-        (decl (list declarations)))
-    (cond
-      ((null ll)
-       `(let ((,var ,expression))
-          ,(desgen/null ll var decl body)))
-      ((atom ll)
-       (error-ll-expect-list ll))
-      (t
-       `(let ((,var ,expression))
-          ,(desgen/opt-wror ll var decl body))))))
+(defun generate-destructuring-list (ll expression body)
+  (let ((declarations '()))
+    (tagbody
+       (go :test)
+     :loop
+       (setq declarations (append (cdar body) declarations))
+       (setq body (cdr body))
+     :test
+       (if (and (consp (car body))
+                (eql 'bocl:declare (caar body)))
+           (go :loop)))
+    ;; DECLARATIONS is a list of declarations ((special foo) (type integer bar) …)
+    (values declarations body)
+    #-(and)
+    (let ((*current-destructuring-lambda-list* ll)
+          (var  (gensym))
+          (decl (list declarations)))
+      (cond
+        ((null ll)
+         `(let ((,var ,expression))
+            ,(desgen/null ll var decl body)))
+        ((atom ll)
+         (error-ll-expect-list ll))
+        (t
+         `(let ((,var ,expression))
+            ,(desgen/opt-wror ll var decl body)))))))

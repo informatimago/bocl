@@ -64,14 +64,14 @@ the dependencies.")
              "destructuring-bind"
              "eval"
              "macros"
-             ;; "variables" "structures" "bignum"
+             "variables" "structures" "bignum"
 
              ;; "mc-test"
              ))
     (load (merge-pathnames ".lisp" source nil) :verbose t :print t)))
 
-;; (ql:quickload "com.informatimago.bocl" :verbose t :explain t)
-(lls)
+(ql:quickload "com.informatimago.bocl" :verbose t :explain t)
+;; (lls)
 
 ;; (block abort
 ;;   (handler-bind
