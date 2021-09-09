@@ -59,7 +59,7 @@ static Frame* find_tagbody_frame(Ref tag,Ref environment){
         frame=frame->next;}
     return frame;}
 
-static Frame* find_handler_frame(Ref condition,Ref environment){
+unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
     check_class(environment,ENVIRONMENT_Class);
     Environment* env=&(environment->slots->environment);
     Frame* frame=env->frames;
@@ -71,7 +71,7 @@ static Frame* find_handler_frame(Ref condition,Ref environment){
         frame=frame->next;}
     return frame;}
 
-static Frame* find_restart_frame(Ref restart,Ref environment){
+unused static Frame* find_restart_frame(unused Ref restart,unused Ref environment){
     NOT_IMPLEMENTED_YET();
     return NULL;}
 
@@ -98,7 +98,7 @@ static void check_arg_count_min(Ref arguments,uword min){
     if((length<min)){
         ERROR("Expected at least %"UWORD_FORMAT" arguments, but got %"UWORD_FORMAT"",min,length);}}
 
-static void check_arg_count_even(Ref arguments){
+unused static void check_arg_count_even(Ref arguments){
     uword length=list_length(arguments);
     if((1&length)!=0){
         ERROR("Expected an even number of arguments but got %"UWORD_FORMAT"",length);}}
@@ -229,7 +229,7 @@ Ref get_eval_counters(void){
     push(cons(S(VARIABLE),              integer_from_word(eval_counters.variable)),             &result);
     return result;}
 
-
+static Ref f(unused Ref thing){ /* TODO: Placeholder */ return NULL;}
 Ref evale(Ref form,Ref environment,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(form);
@@ -703,7 +703,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             if(nullp(compiler_macro)){
                 eval_counters.global_function++;
                 /* call the function */
-                fun = f();}
+                fun = f(function);}
             else{
                 eval_counters.compiler_macro++;
                 /* expand the compiler macro and evaluate the result */
@@ -711,15 +711,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         else if(env_local_function_p(function)){
             eval_counters.local_function++;
             /* call the function */
-            fun = f();}
+            fun = f(function);}
         else if(env_global_macro_p(function)){
             eval_counters.global_macro++;
             /* expand the macro and evaluate the result */
-            mac = f();}
+            mac = f(function);}
         else if(env_local_macro_p(function)){
             eval_counters.local_macro++;
             /* expand the macro and evaluate the result */
-            mac = f();}
+            mac = f(function);}
         else{
             FATAL("Got a function that is none of the expected types %p",(void*)function);}
 
