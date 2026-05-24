@@ -166,13 +166,70 @@ rounding ties-to-even, bitwise `ASH` shift-by-zero/large/negative,
 `INTEGER-LENGTH` on negatives, variadic forms including identities,
 fixnum constants, `(lisp-implementation-{type,version})`). All green.
 
-### Phase 3 — file load + packages (1 week)
+### Phase 3 — file load + packages ✅ DONE
 
-- File-stream open/read/close in [sources/stream.c](sources/stream.c). Buffered char-by-char read suffices.
-- Rewrite `bocl_load_cstring` ([sources/bocl.c:58](sources/bocl.c:58)): open → loop `read` then `eval` → close. Honour `*LOAD-VERBOSE*` / `*LOAD-PRINT*`.
-- Minimal package system in the kernel: global registry, internal/external symbol tables per package, `INTERN`, `FIND-PACKAGE`, `IN-PACKAGE`, `EXPORT`, `IMPORT`, `USE-PACKAGE`, `*PACKAGE*`. Full semantics (shadowing, name-conflict restarts) move to the Lisp side.
+Two halves, both landed.
 
-Tests: load a known file and verify side effects; intern + symbol identity across packages.
+**Half 1 — file LOAD (v0.0.12)**:
+
+- `stream_open` in [sources/stream.c](sources/stream.c) now supports `:input`,
+  `:output`, `:io`, `:probe` with the standard `:if-exists` /
+  `:if-does-not-exist` combinations. Added `stream_close`.
+- `bocl_load_cstring` rewritten to actually open the file, read forms until
+  EOF, eval each through `bocl_eval`, close, return `T`. Honours
+  `*LOAD-VERBOSE*` and `*LOAD-PRINT*` (now initialised in the kernel, not
+  main.c, so tests work too).
+- New kernel built-in `(LOAD filespec)`, registered at startup by
+  `bocl_register_load()`.
+- Incidental fixes:
+  - `physical_pathname(string)` was aliasing the string's `OctetArray` as a
+    `VectorOfOctet` — pathname round-trip produced garbage.
+  - `kernel_read` on empty input fed the `EOF` byte (0xFF) into
+    `parse_token`, which interned an empty-named symbol; now bail right
+    after `skip_spaces` if at EOF.
+
+**Half 2 — minimal package system (v0.0.13)**:
+
+- New [sources/packages.{c,h}](sources/packages.c) defines a `Package`
+  struct (name / nicknames / symbols / exported / used) added to the
+  `Slots` union; three packages pre-built at startup:
+  `COMMON-LISP` (nickname `CL`), `COMMON-LISP-USER` (nickname `CL-USER`,
+  uses `COMMON-LISP`), `KEYWORD`.
+- `*PACKAGE*` defined; defaults to `CL-USER`.
+- Built-ins: `FIND-PACKAGE`, `PACKAGE-NAME`, `PACKAGE-NICKNAMES`,
+  `MAKE-PACKAGE`, `USE-PACKAGE`, `EXPORT`, `INTERN`, `FIND-SYMBOL`,
+  `PACKAGEP`, `LIST-ALL-PACKAGES`. (The auto-generated `kernel_INTERN`
+  / `kernel_FIND_SYMBOL` are still defined but the package-aware
+  versions override them at startup.)
+- `(IN-PACKAGE designator)` is recognised by `evale` as a
+  pseudo-special-operator (CL spec makes it a macro) — actually switches
+  `*PACKAGE*`.
+- `bocl_in_package` C entry point is wired through to set `*PACKAGE*`;
+  the old "Assume a package system is implemented" stub message is gone.
+
+**Known limitation, by design**: all symbols still live in the single
+global `KERNEL_obarray`. Two packages can't currently hold distinct
+symbols with the same name — they share one symbol per name. The PLAN's
+"internal/external symbol tables per package" is therefore a partial
+implementation that does the bookkeeping but not the isolation. Real
+isolation is queued for the bignum/CLOS phase; ansi-test's package
+identity tests will fail until then.
+
+**Milestone met**:
+```lisp
+;; demo.lisp
+(in-package :common-lisp-user)
+(defparameter *x* 42)
+(defun double (n) (* n 2))
+```
+```
+$ echo '(load "demo.lisp") (print (double *x*))' | bocl --batch -q
+=> 84
+```
+
+Tests:
+- [tests/test_load.c](tests/test_load.c) — 6 cases, all green.
+- [tests/test_packages.c](tests/test_packages.c) — 8 cases, all green.
 
 ### Phase 4 — hash tables, conditions, full reader (2 weeks)
 

@@ -4,8 +4,8 @@ include ../sources/common.mk
 
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
-# PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load
-PROGRAMS    = test_reader test_eval test_arithmetic test_load
+# PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages
+PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
@@ -21,6 +21,9 @@ test_arithmetic_LIBS = -L../sources -lbocl
 test_load_SRCS = test_load.c simple_test.c
 test_load_LIBS = -L../sources -lbocl
 
+test_packages_SRCS = test_packages.c simple_test.c
+test_packages_LIBS = -L../sources -lbocl
+
 test_ci_SRCS = test_ci.c
 test_ci_LIBS =
 # $(test_ci_SRCS) \
@@ -30,7 +33,8 @@ all_SRCS = \
 	$(test_reader_SRCS) \
 	test_eval.c \
 	test_arithmetic.c \
-	test_load.c
+	test_load.c \
+	test_packages.c
 
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
@@ -99,6 +103,14 @@ test_load: $(test_load_SRCS:%.c=%.d) $(test_load_SRCS:%.c=%.o) $(LIBBOCL)
 run_test_load:test_load
 	@printf "# Testing %s\n" $^
 	$(VERBOSE) $(RUN) ./test_load ;echo status=$$?
+
+test_packages: $(test_packages_SRCS:%.c=%.d) $(test_packages_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_packages_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_packages_SRCS:%.c=%.o) $(test_packages_LIBS)
+
+run_test_packages:test_packages
+	@printf "# Testing %s\n" $^
+	$(VERBOSE) $(RUN) ./test_packages ;echo status=$$?
 
 run_test_bocl: $(BOCL)
 	@printf "# Testing bocl\n"

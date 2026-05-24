@@ -8,6 +8,7 @@
 #include "variable.h"
 #include "macros.h"
 #include "eval.h"
+#include "packages.h"
 
 
 Ref bocl_eval(Ref sexp){
@@ -44,12 +45,12 @@ Ref bocl_read_eval_loop_cstring(const char* text){
     return bocl_repl(inp,out);}
 
 Ref bocl_in_package(Ref package_designator){
-    Ref out=variable_value(S(*STANDARD-OUTPUT*));
-    princ(T(";; Assume a package system is implemented and that we're in-package "),out);
-    princ(package_designator,out);
-    terpri(out);
-    stream_finish_output(out);
-    return S(NIL);}
+    Ref pkg = package_find(package_designator);
+    if(nullp(pkg)){
+        ERROR("IN-PACKAGE: no such package %s",
+              string_cstring(prin1_to_string(package_designator)));}
+    set_symbol_value(S(*PACKAGE*), pkg);
+    return pkg;}
 
 Ref bocl_load_cstring(const char* path){
     Ref out = variable_value(S(*STANDARD-OUTPUT*));

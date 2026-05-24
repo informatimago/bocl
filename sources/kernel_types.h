@@ -331,6 +331,18 @@ typedef struct FuncallableStandardObject {
     KernelFunctionPtr apply;  /* The entry point of to the Funcallable Standard Object. */
 } FuncallableStandardObject;
 
+/* CL Package. Phase 3 minimum: every symbol lives in KERNEL_obarray
+   (one global pool), and each package keeps a list of the symbols that
+   are "in" it. Real per-package symbol isolation will come later. */
+typedef struct Package {
+    BLOCK_HEADER;
+    Ref name;        /* STRING — the package's primary name */
+    Ref nicknames;   /* list of STRING */
+    Ref symbols;     /* list of symbol — interned in this package */
+    Ref exported;    /* list of symbol — visible via pkg:sym syntax */
+    Ref used;        /* list of Package — used-package list */
+} Package;
+
 
 /* Slots */
 
@@ -353,6 +365,7 @@ typedef union Slots {
     Function                    function;
     BuiltInFunction             built_in_function;
     FuncallableStandardObject	funcallable_function;
+    Package                     package;
     /*                          Classes: */
     Class                       class;
     StandardClass               standard_class;

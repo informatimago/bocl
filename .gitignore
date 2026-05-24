@@ -17,6 +17,7 @@ tests/test_reader
 tests/test_eval
 tests/test_arithmetic
 tests/test_load
+tests/test_packages
 
 *-Listing.xml
 *-Results.xml

@@ -23,10 +23,11 @@
 #include "arithmetic.h"
 #include "version.h"
 #include "bocl.h"
+#include "packages.h"
 
 /* Internal Object Structure */
 
-static Ref                       Object_new                         (Ref  class,        Slots*   slots);
+Ref                              Object_new                         (Ref  class,        Slots*   slots);
 
 static Array*                    Array_slots                        (Ref  element_type, halfword rank, halfword* dimensions);
 static BuiltInClass*             BuiltInClass_slots                 (Ref  name,         Ref  superclasses);
@@ -1718,6 +1719,7 @@ void kernel_initialize(void){
 
     reader_initialize();
     stream_initialize();
+    kernel_initialize_packages();
     bocl_register_load();
 
     kernel_initialize_rootset();

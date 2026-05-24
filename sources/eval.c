@@ -5,6 +5,7 @@
 #include "cons.h"
 #include "environment.h"
 #include "variable.h"
+#include "bocl.h"
 
 /* Forward decls for the apply helpers implemented later in this file. */
 void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
@@ -366,6 +367,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref value=evale(cadr(arguments),environment,results);
             define_constant(name,value);
             VALUES1(name);}
+
+        /* IN-PACKAGE is a macro in CL (it expands to (eval-when ...)). We
+           treat it as a pseudo-special-op here so files can use it without
+           the Lisp-side macro system loaded. The arg is NOT evaluated; it's
+           used as a literal package designator. */
+        if(operator==S(IN-PACKAGE)){
+            check_arg_count(arguments,1,1);
+            Ref designator=car(arguments);
+            VALUES1(bocl_in_package(designator));}
 
         if(operator==IF_Symbol){
             eval_counters.IF++;
