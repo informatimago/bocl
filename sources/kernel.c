@@ -26,6 +26,7 @@
 #include "packages.h"
 #include "hash_table.h"
 #include "conditions.h"
+#include "sequences.h"
 
 /* Internal Object Structure */
 
@@ -1724,6 +1725,7 @@ void kernel_initialize(void){
     kernel_initialize_packages();
     kernel_initialize_hash_tables();
     kernel_initialize_conditions();
+    kernel_initialize_sequences();
     bocl_register_load();
 
     kernel_initialize_rootset();

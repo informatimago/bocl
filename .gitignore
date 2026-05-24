@@ -22,6 +22,7 @@ tests/test_hash_table
 tests/test_conditions
 tests/test_reader_macros
 tests/test_macros
+tests/test_sequences
 
 *-Listing.xml
 *-Results.xml
