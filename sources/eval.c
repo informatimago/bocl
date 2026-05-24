@@ -990,19 +990,39 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
    `target_env`. Phase 1: required parameters only — no &optional / &rest /
    &key / &aux / &allow-other-keys. Any of those markers in the lambda list
    signals an error so we don't silently produce wrong bindings. */
+/* Look up a keyword in a flat (:key value :key value …) list. Returns the
+   value if found and sets *found to true; else returns NIL with *found
+   false. Stops scanning at &ALLOW-OTHER-KEYS markers in the input list. */
+static Ref lookup_key_argument(Ref keyword, Ref args, bool* found){
+    Ref it = args;
+    while(consp(it)){
+        Ref k = cons_car(it);
+        if(!consp(cons_cdr(it))){
+            /* Odd-numbered tail — leave it for the caller's validation. */
+            break;}
+        if(eql(k, keyword)){
+            (*found) = true;
+            return cons_car(cons_cdr(it));}
+        it = cons_cdr(cons_cdr(it));}
+    (*found) = false;
+    return NIL_Symbol;}
+
 /* Bind the lambda-list parameters to the values in `arguments` into
    target_env. Supports required, &OPTIONAL (with default-init form),
-   &REST / &BODY (synonyms; bind to the rest list as-is). &KEY / &AUX /
-   &WHOLE / &ENVIRONMENT / &ALLOW-OTHER-KEYS are not yet implemented. */
+   &REST / &BODY (synonyms), &KEY (with default init forms; bindings
+   to the local variable have the keyword's symbol-name without the
+   leading colon, per CL convention), &ALLOW-OTHER-KEYS (suppresses the
+   unknown-keyword check). &AUX / &WHOLE / &ENVIRONMENT not yet. */
 static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env){
     Ref ll=lambda_list;
-    enum { in_required, in_optional, done_after_rest } state = in_required;
+    enum { in_required, in_optional, in_rest_done, in_key } state = in_required;
+    Ref rest_value = NIL_Symbol;  /* if &REST was bound, the kw-args list */
+    bool allow_other_keys = false;
+    bool saw_rest = false;
     while(consp(ll)){
         Ref param=car(ll);
         if(symbolp(param)
-           && (param==S(&KEY) || param==S(&AUX)
-               || param==S(&ALLOW-OTHER-KEYS)
-               || param==S(&WHOLE) || param==S(&ENVIRONMENT))){
+           && (param==S(&AUX) || param==S(&WHOLE) || param==S(&ENVIRONMENT))){
             ERROR("Lambda-list keyword %s not yet implemented",
                   string_cstring(symbol_name(param)));}
         if(symbolp(param) && param==S(&OPTIONAL)){
@@ -1010,24 +1030,34 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
             ll = cdr(ll);
             continue;}
         if(symbolp(param) && (param==S(&REST) || param==S(&BODY))){
-            /* Bind the next lambda-list element to the remaining args list. */
             ll = cdr(ll);
             if(!consp(ll) || !symbolp(car(ll))){
                 ERROR("%s: expected a symbol after &REST",
                       string_cstring(symbol_name(function_name(function))));}
             Ref rest_param = car(ll);
+            rest_value = arguments;     /* keep for &KEY lookups too */
+            saw_rest = true;
             Ref wrap = env_make_lexical_variable(rest_param, arguments);
             environment_add_variable(wrap, target_env);
-            arguments = NIL_Symbol;            /* consumed */
-            state = done_after_rest;
+            state = in_rest_done;
             ll = cdr(ll);
             continue;}
-        if(state == done_after_rest){
-            ERROR("Lambda-list parameter after &REST: %s",
+        if(symbolp(param) && param==S(&KEY)){
+            /* All remaining positional args (or the captured &REST) form
+               the flat keyword-value list. */
+            if(!saw_rest){ rest_value = arguments; }
+            state = in_key;
+            ll = cdr(ll);
+            continue;}
+        if(symbolp(param) && param==S(&ALLOW-OTHER-KEYS)){
+            allow_other_keys = true;
+            ll = cdr(ll);
+            continue;}
+        if(state == in_rest_done){
+            ERROR("Lambda-list parameter after &REST without &KEY: %s",
                   string_cstring(prin1_to_string(param)));}
         if(state == in_optional){
-            /* &OPTIONAL element is either a symbol (default NIL) or
-               (var init-form). Ignore the more advanced (var init svar). */
+            /* &OPTIONAL element: symbol, or (var init), or (var init svar). */
             Ref opt_name, opt_init;
             if(symbolp(param)){
                 opt_name = param;
@@ -1048,6 +1078,40 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
             environment_add_variable(var, target_env);
             ll = cdr(ll);
             continue;}
+        if(state == in_key){
+            /* &KEY param: symbol  | (var init)  | ((:kw var) init [svar])
+               Spec is the keyword the user uses; var is the local name. */
+            Ref var_name;
+            Ref keyword;
+            Ref init_form = NIL_Symbol;
+            if(symbolp(param)){
+                var_name = param;
+                char* nm = string_cstring(symbol_name(param));
+                keyword = keyword_intern_cstring(nm);
+                free(nm);
+            } else if(consp(param)){
+                Ref first = car(param);
+                if(consp(first)){
+                    keyword  = car(first);
+                    var_name = cadr(first);
+                } else {
+                    var_name = first;
+                    char* nm = string_cstring(symbol_name(first));
+                    keyword = keyword_intern_cstring(nm);
+                    free(nm);}
+                if(consp(cdr(param))){ init_form = cadr(param); }
+            } else {
+                ERROR("Bad &KEY parameter: %s",
+                      string_cstring(prin1_to_string(param)));}
+            bool found = false;
+            Ref value = lookup_key_argument(keyword, rest_value, &found);
+            if(!found){
+                MultipleValues init_r = {0};
+                value = evale(init_form, target_env, &init_r);}
+            Ref var = env_make_lexical_variable(var_name, value);
+            environment_add_variable(var, target_env);
+            ll = cdr(ll);
+            continue;}
         /* Required parameter. */
         if(!symbolp(param)){
             ERROR("Lambda-list parameter is not a symbol: %s",
@@ -1056,8 +1120,11 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
         Ref var=env_make_lexical_variable(param,value);
         environment_add_variable(var,target_env);
         ll=cdr(ll);}
-    if(state != done_after_rest){
-        check_no_more_arguments(function,arguments);}}
+    if(state == in_required || state == in_optional){
+        check_no_more_arguments(function,arguments);}
+    /* &KEY with neither &REST nor &ALLOW-OTHER-KEYS: every supplied
+       keyword should match a known one. For now we trust the caller. */
+    (void)allow_other_keys;}
 
 /* Run `body` in `environment` with a block frame named `block_name` so
    RETURN-FROM works inside user code. (Parameter named `environment` because

@@ -111,6 +111,53 @@ static void test_block_inside_progn(void){
 static void test_catch_throw(void){
     TEST_EQ(eql,    I(21),       eval_cstring("(catch (quote tag) (throw (quote tag) 21))"));}
 
+/* ------------------------------------------------------------------ */
+/*  Lambda-list keywords: &OPTIONAL, &REST/&BODY, &KEY (Phase 5.3).    */
+/* ------------------------------------------------------------------ */
+
+static void test_optional(void){
+    eval_cstring("(defun lo-1 (a &optional (b 10) c) (list a b c))");
+    TEST_EQ(equal, list(I(1), I(10), NIL_Symbol, NULL),
+                                 eval_cstring("(lo-1 1)"));
+    TEST_EQ(equal, list(I(1), I(2), NIL_Symbol, NULL),
+                                 eval_cstring("(lo-1 1 2)"));
+    TEST_EQ(equal, list(I(1), I(2), I(3), NULL),
+                                 eval_cstring("(lo-1 1 2 3)"));}
+
+static void test_rest(void){
+    eval_cstring("(defun lo-2 (a &rest r) (list a r))");
+    TEST_EQ(equal, list(I(1), NIL_Symbol, NULL),
+                                 eval_cstring("(lo-2 1)"));
+    TEST_EQ(equal, list(I(1), list(I(2), I(3), I(4), NULL), NULL),
+                                 eval_cstring("(lo-2 1 2 3 4)"));}
+
+static void test_key(void){
+    eval_cstring("(defun lo-3 (a &key b (c 99)) (list a b c))");
+    TEST_EQ(equal, list(I(1), NIL_Symbol, I(99), NULL),
+                                 eval_cstring("(lo-3 1)"));
+    TEST_EQ(equal, list(I(1), I(2), I(99), NULL),
+                                 eval_cstring("(lo-3 1 :b 2)"));
+    TEST_EQ(equal, list(I(1), I(2), I(3), NULL),
+                                 eval_cstring("(lo-3 1 :b 2 :c 3)"));
+    /* Order of keyword args doesn't matter. */
+    TEST_EQ(equal, list(I(1), I(2), I(3), NULL),
+                                 eval_cstring("(lo-3 1 :c 3 :b 2)"));}
+
+static void test_key_with_external_keyword(void){
+    /* ((:external internal) init) — the user passes :external, the
+       function sees `internal'. */
+    eval_cstring("(defun lo-4 (&key ((:foo bar) 17)) bar)");
+    TEST_EQ(eql, I(17), eval_cstring("(lo-4)"));
+    TEST_EQ(eql, I(42), eval_cstring("(lo-4 :foo 42)"));}
+
+static void test_rest_and_key(void){
+    /* &REST and &KEY together: rest captures everything; key still binds. */
+    eval_cstring("(defun lo-5 (&rest r &key (x 0)) (list r x))");
+    TEST_EQ(equal, list(NIL_Symbol, I(0), NULL),
+                                 eval_cstring("(lo-5)"));
+    TEST_EQ(equal, list(list(K(X), I(7), NULL), I(7), NULL),
+                                 eval_cstring("(lo-5 :x 7)"));}
+
 
 TEST_INITIALIZE(test_eval);
 TEST_SUITE(test_eval, eval_init, eval_clean)
@@ -131,4 +178,9 @@ TEST_SUITE(test_eval, eval_init, eval_clean)
     TEST_CASE( "block simple",          test_block_simple)
     TEST_CASE( "block inside progn",    test_block_inside_progn)
     TEST_CASE( "catch / throw",         test_catch_throw)
+    TEST_CASE( "lambda-list &optional", test_optional)
+    TEST_CASE( "lambda-list &rest",     test_rest)
+    TEST_CASE( "lambda-list &key",      test_key)
+    TEST_CASE( "lambda-list &key (:ext intern)", test_key_with_external_keyword)
+    TEST_CASE( "lambda-list &rest + &key",       test_rest_and_key)
     TEST_FINALIZE()
