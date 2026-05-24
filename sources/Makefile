@@ -91,11 +91,39 @@ bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 #	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)  $(bocl_LIBS)
 
 
-LISP=ccl
-LISP_NORC=--no-init
-LISP_LOAD=--load
-LISP_EVAL=--eval
-LISP_QUIT=--eval '(ccl:quit 0)'
+# Host CL used to (re)generate kernel_objects.* / built_in_functions.* /
+# structure_functions.* etc. The generated outputs are committed, so the host
+# CL is only needed for `make regenerate`, not for an ordinary build.
+#
+# Auto-detect ccl, sbcl, or clisp on PATH. Override with `make LISP=<impl>`.
+LISP ?= $(firstword $(shell command -v ccl 2>/dev/null) \
+                    $(shell command -v sbcl 2>/dev/null) \
+                    $(shell command -v clisp 2>/dev/null))
+
+LISP_BASENAME = $(notdir $(LISP))
+
+ifeq ($(LISP_BASENAME),ccl)
+LISP_NORC = --no-init
+LISP_LOAD = --load
+LISP_EVAL = --eval
+LISP_QUIT = --eval '(ccl:quit 0)'
+else ifeq ($(LISP_BASENAME),sbcl)
+LISP_NORC = --no-userinit --no-sysinit
+LISP_LOAD = --load
+LISP_EVAL = --eval
+LISP_QUIT = --quit
+else ifeq ($(LISP_BASENAME),clisp)
+LISP_NORC = -norc
+LISP_LOAD = -i
+LISP_EVAL = -x
+LISP_QUIT = -x '(ext:quit 0)'
+else
+LISP      = $(error No host Common Lisp found on PATH; install ccl, sbcl, or clisp, or set LISP=<impl> on the make command line)
+LISP_NORC =
+LISP_LOAD =
+LISP_EVAL =
+LISP_QUIT =
+endif
 
 kernel_objects.h kernel_objects.c : generate-kernel-objects.lisp
 	@printf "# Generating %s from %s\n" "$@" "$^"

@@ -2,7 +2,11 @@
 
 VERBOSE=@
 #VERBOSE=
-SANITIZE=
+
+# SANITIZE controls AddressSanitizer + the wider -fsanitize=* set below.
+# Default: off, so the produced binary has no dependency on libclang_rt.asan_*.
+# Enable with: make SANITIZE=yes
+SANITIZE ?= no
 
 ifdef DEBUG
 DEFINES    += -DDEBUG=yes
@@ -13,6 +17,7 @@ DEBUG_SRCS +=
 endif
 
 
+ifeq ($(SANITIZE),yes)
 CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                              \
             -fsanitize=bounds -fsanitize=vla-bound                                  \
             -fsanitize=unreachable -fsanitize=return -fsanitize=shift               \
@@ -23,10 +28,14 @@ CC_SANITIZE_FLAGS = -fsanitize=address -fsanitize=null                          
             -fsanitize=bool -fsanitize=enum -fsanitize-address-use-after-scope      \
             -fsanitize-undefined-trap-on-error -fstack-protector-all                \
             -fstack-check
+NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
+else
+CC_SANITIZE_FLAGS =
+NODEBUG_FLAGS     =
+endif
 
 # LD_SANITIZE_FLAGS = -fsanitize=leak
 LD_SANITIZE_FLAGS =
-NODEBUG_FLAGS     = -fsanitize=object-size # incompatible with -O0
 
 WARN_NONE= \
 	-Warith-conversion \
@@ -99,31 +108,38 @@ UNAME=$(shell uname)
 ifeq ($(UNAME),Darwin)
 
 SDKPATH      = /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
-XCODE_DEV    = $(shell xcode-select --print-path)
-ASAN_LIB_DIR = $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.5/lib/darwin
 
 CFLAGS       += $(WARN_FLAGS) $(WARN_CLANG) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=iso9899:2018  -D_POSIX_C_SOURCE=200809L
 LDFLAGS      += $(LD_SANITIZE_FLAGS)
-RUNLIBS      += $(ASAN_LIB_DIR)
 INCLUDES     +=
-LIBRARIES    +=  \
-	-L$(SDKPATH)/usr/lib \
-	-L$(ASAN_LIB_DIR) \
-	-lclang_rt.asan_osx_dynamic \
-	-lgmalloc -lSystem
+LIBRARIES    += -L$(SDKPATH)/usr/lib -lSystem
 SO           = dylib
 SHARED       = -dylib
+
+ifeq ($(SANITIZE),yes)
+XCODE_DEV    = $(shell xcode-select --print-path)
+# The clang version dir varies between Xcode releases; pick the first match.
+ASAN_LIB_DIR = $(firstword $(wildcard $(XCODE_DEV)/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/*/lib/darwin))
+RUNLIBS      += $(ASAN_LIB_DIR)
+LIBRARIES    += -L$(ASAN_LIB_DIR) -lclang_rt.asan_osx_dynamic -lgmalloc
+# Embed an rpath so the sanitised binary can find libclang_rt.asan_*.dylib without
+# DYLD_LIBRARY_PATH set externally. Only needed in the sanitised build.
+LDFLAGS      += -rpath $(ASAN_LIB_DIR)
+endif
 
 else
 
 CC        = gcc
-CFLAGS    += $(WARN_FLAGS) $(WARN_GCC) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17 -D_POSIX_C_SOURCE=200809L
-LDFLAGS   +=
-RUNLIBS   +=
+CFLAGS    += $(WARN_FLAGS) $(WARN_GCC) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17 -D_POSIX_C_SOURCE=200809L
+LDFLAGS   += $(LD_SANITIZE_FLAGS)
 INCLUDES  +=
 LIBRARIES +=
 SO        = so
 SHARED    = -shared
+
+ifeq ($(SANITIZE),yes)
+LIBRARIES += -lasan -lubsan
+endif
 
 endif
 

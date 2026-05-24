@@ -3,17 +3,37 @@ image: gcc:11
 stages:
   - build-and-test
 
-bat-job:
+# Default build — no sanitiser, matches the produced binary that ships.
+build-default:
   stage: build-and-test
   script:
-    - echo "Install CUnit"
-    - apt-get update  &&  apt-get install -y --no-install-recommends  libcunit1 libcunit1-dev  &&  rm -rf /var/lib/apt/lists/*
-    - dpkg-query -L libcunit1 libcunit1-dev
-    - echo "Compile the bocl executable:"
-    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k build # VERBOSE= # DEFINES=${DEFINES}
-    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test  # VERBOSE= # DEFINES=${DEFINES}
+    - apt-get update
+    - apt-get install -y --no-install-recommends libcunit1 libcunit1-dev
+    - rm -rf /var/lib/apt/lists/*
+    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k build
+    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test
   artifacts:
     when: on_success
+    paths:
+      - sources/bocl
+      - tests/test_reader
     reports:
-      junit: test_reader-Results.xml
+      junit: tests/test_reader-Results.xml
+    expire_in: 3 days
 
+# Sanitiser build — exercises ASan + the rest of the -fsanitize=* set.
+# Kept separate so a default failure is distinguishable from a sanitiser hit.
+build-sanitised:
+  stage: build-and-test
+  allow_failure: false
+  script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends libcunit1 libcunit1-dev libasan6 libubsan1
+    - rm -rf /var/lib/apt/lists/*
+    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k build SANITIZE=yes
+    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test  SANITIZE=yes
+  artifacts:
+    when: always
+    reports:
+      junit: tests/test_reader-Results.xml
+    expire_in: 3 days
