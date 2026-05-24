@@ -110,9 +110,22 @@ static void kernel_LOAD(unused Ref function, Ref arguments, MultipleValues* resu
     results->values[0]=result;
     close_live_pool(pool);}
 
+/* APPEND is needed by backquote-expanded code; the kernel previously only
+   shipped NCONC. */
+extern Ref bocl_append(Ref lists);
+
+static void kernel_APPEND(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    results->count=1;
+    results->values[0]=bocl_append(arguments);
+    close_live_pool(pool);}
+
 void bocl_register_load(void){
     Ref fname=S(LOAD);
-    set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));}
+    set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
+    Ref af=S(APPEND);
+    set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));}
 
 void bocl_call(Ref fname,Ref arguments){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));

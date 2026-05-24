@@ -123,6 +123,30 @@ Ref nconc(Ref list,Ref tail){
         rplacd(last_cell,tail);
         return list;}}
 
+/* APPEND lists non-destructively: copies all but the last, then shares the
+   last list's structure. Used by backquote expansion. */
+Ref bocl_append(Ref lists){
+    uword pool=open_live_pool();
+    add_to_live_pool(lists);
+    if(nullp(lists)){ close_live_pool(pool); return NIL_Symbol; }
+    if(nullp(cons_cdr(lists))){
+        Ref r=cons_car(lists);
+        close_live_pool(pool);
+        return r;}
+    /* head = first list (copied), tail = result of appending the rest. */
+    Ref head_list=cons_car(lists);
+    Ref rest=bocl_append(cons_cdr(lists));
+    Ref result;
+    if(nullp(head_list)){
+        result=rest;
+    } else {
+        result=copy_list(head_list);
+        /* Splice rest at the end. */
+        Ref last_cell=last(result);
+        rplacd(last_cell,rest);}
+    close_live_pool(pool);
+    return result;}
+
 Ref list(Ref first_element,...){
     uword pool=open_live_pool();
     /* save the arguments to the rootset before allocating anything: */

@@ -368,6 +368,22 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             define_constant(name,value);
             VALUES1(name);}
 
+        /* DEFMACRO: store the macro function on the symbol's plist under
+           $MACRO. evale's call dispatch checks this before falling through
+           to the function cell. */
+        if(operator==S(DEFMACRO)){
+            check_arg_count_min(arguments,2);
+            Ref name=car(arguments);
+            Ref params=cadr(arguments);
+            Ref body=cddr(arguments);
+            if(!symbolp(name)){
+                ERROR("DEFMACRO: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+            Ref fn=function_new(name,params,body);
+            Ref plist=symbol_plist(name);
+            plist=putf(plist,S($MACRO),fn);
+            set_symbol_plist(name,plist);
+            VALUES1(name);}
+
         /* IN-PACKAGE is a macro in CL (it expands to (eval-when ...)). We
            treat it as a pseudo-special-op here so files can use it without
            the Lisp-side macro system loaded. The arg is NOT evaluated; it's
@@ -861,7 +877,22 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 ERROR("No active catch for tag %p",(void*)tag);}
             NON_LOCAL_EXIT(target_frame);}
 
-        /* operator is not a special operator, let's try functions and macros. */
+        /* operator is not a special operator. Check for a globally defined
+           DEFMACRO first — the macro function is stashed in the symbol's
+           plist under $MACRO. */
+        {
+            Ref macro_fn = getf(symbol_plist(operator), S($MACRO), NIL_Symbol);
+            if(!nullp(macro_fn)){
+                eval_counters.global_macro++;
+                /* Apply the macro function to the unevaluated argument
+                   list, then eval the expansion in the SAME environment. */
+                MultipleValues mac_results = {0};
+                kernel_apply(macro_fn, arguments, &mac_results);
+                Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
+                evale(expansion, environment, results);
+                PASS_VALUES();}
+        }
+
         Ref function = NIL_Symbol;
         Ref macro    = NIL_Symbol;            /* env_local_macro / env_global_macro wrapper */
 
@@ -959,17 +990,65 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
    `target_env`. Phase 1: required parameters only — no &optional / &rest /
    &key / &aux / &allow-other-keys. Any of those markers in the lambda list
    signals an error so we don't silently produce wrong bindings. */
+/* Bind the lambda-list parameters to the values in `arguments` into
+   target_env. Supports required, &OPTIONAL (with default-init form),
+   &REST / &BODY (synonyms; bind to the rest list as-is). &KEY / &AUX /
+   &WHOLE / &ENVIRONMENT / &ALLOW-OTHER-KEYS are not yet implemented. */
 static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env){
     Ref ll=lambda_list;
+    enum { in_required, in_optional, done_after_rest } state = in_required;
     while(consp(ll)){
         Ref param=car(ll);
         if(symbolp(param)
-           && (param==S(&OPTIONAL) || param==S(&REST)
-               || param==S(&KEY)   || param==S(&AUX)
-               || param==S(&ALLOW-OTHER-KEYS) || param==S(&BODY)
+           && (param==S(&KEY) || param==S(&AUX)
+               || param==S(&ALLOW-OTHER-KEYS)
                || param==S(&WHOLE) || param==S(&ENVIRONMENT))){
             ERROR("Lambda-list keyword %s not yet implemented",
                   string_cstring(symbol_name(param)));}
+        if(symbolp(param) && param==S(&OPTIONAL)){
+            state = in_optional;
+            ll = cdr(ll);
+            continue;}
+        if(symbolp(param) && (param==S(&REST) || param==S(&BODY))){
+            /* Bind the next lambda-list element to the remaining args list. */
+            ll = cdr(ll);
+            if(!consp(ll) || !symbolp(car(ll))){
+                ERROR("%s: expected a symbol after &REST",
+                      string_cstring(symbol_name(function_name(function))));}
+            Ref rest_param = car(ll);
+            Ref wrap = env_make_lexical_variable(rest_param, arguments);
+            environment_add_variable(wrap, target_env);
+            arguments = NIL_Symbol;            /* consumed */
+            state = done_after_rest;
+            ll = cdr(ll);
+            continue;}
+        if(state == done_after_rest){
+            ERROR("Lambda-list parameter after &REST: %s",
+                  string_cstring(prin1_to_string(param)));}
+        if(state == in_optional){
+            /* &OPTIONAL element is either a symbol (default NIL) or
+               (var init-form). Ignore the more advanced (var init svar). */
+            Ref opt_name, opt_init;
+            if(symbolp(param)){
+                opt_name = param;
+                opt_init = NIL_Symbol;
+            } else if(consp(param)){
+                opt_name = car(param);
+                opt_init = consp(cdr(param)) ? cadr(param) : NIL_Symbol;
+            } else {
+                ERROR("Bad &OPTIONAL parameter: %s",
+                      string_cstring(prin1_to_string(param)));}
+            Ref value;
+            if(consp(arguments)){
+                value = pop(&arguments);
+            } else {
+                MultipleValues init_results = {0};
+                value = evale(opt_init, target_env, &init_results);}
+            Ref var = env_make_lexical_variable(opt_name, value);
+            environment_add_variable(var, target_env);
+            ll = cdr(ll);
+            continue;}
+        /* Required parameter. */
         if(!symbolp(param)){
             ERROR("Lambda-list parameter is not a symbol: %s",
                   string_cstring(prin1_to_string(param)));}
@@ -977,7 +1056,8 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
         Ref var=env_make_lexical_variable(param,value);
         environment_add_variable(var,target_env);
         ll=cdr(ll);}
-    check_no_more_arguments(function,arguments);}
+    if(state != done_after_rest){
+        check_no_more_arguments(function,arguments);}}
 
 /* Run `body` in `environment` with a block frame named `block_name` so
    RETURN-FROM works inside user code. (Parameter named `environment` because

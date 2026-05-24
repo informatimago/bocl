@@ -252,6 +252,53 @@ static Ref parse_string(parser_state* parser){
 
 static Ref parse_object(parser_state* parser);
 
+/* Recursively expand a backquoted form into LIST / APPEND / CONS / QUOTE
+   nodes. The reader uses tagged conses (UNQUOTE x) and (UNQUOTE-SPLICING x)
+   for `,x` and `,@x`; this function eliminates them. Only one level of
+   backquote is supported — nested ``…`x…`` is not. */
+static Ref backquote_expand(Ref form);
+
+static Ref backquote_element(Ref element){
+    if(consp(element)){
+        Ref head = car(element);
+        if(head == S(UNQUOTE)){
+            /* `,x` inside a list → (LIST x) at that position. */
+            return list(S(LIST), cadr(element), NULL);}
+        if(head == S(UNQUOTE-SPLICING)){
+            /* `,@x` inside a list → x itself, to be spliced via APPEND. */
+            return cadr(element);}}
+    return list(S(LIST), backquote_expand(element), NULL);}
+
+static Ref backquote_expand(Ref form){
+    if(nullp(form)){
+        return list(S(QUOTE), NIL_Symbol, NULL);}
+    if(!consp(form)){
+        return list(S(QUOTE), form, NULL);}
+    Ref head = car(form);
+    if(head == S(UNQUOTE)){
+        /* `,x` at the top of the backquote — produce x directly. */
+        return cadr(form);}
+    if(head == S(UNQUOTE-SPLICING)){
+        /* `,@x` at top-level is illegal in CL — flag at eval time. */
+        return list(S(QUOTE), form, NULL);}
+    /* Otherwise: iterate. Each element becomes either (LIST elt-expansion)
+       or (LIST x) for ,x or x for ,@x. Combine with APPEND. */
+    Ref parts = NIL_Symbol;
+    Ref tail = form;
+    while(consp(tail)){
+        push(backquote_element(car(tail)), &parts);
+        tail = cdr(tail);}
+    parts = nreverse(parts);
+    if(!nullp(tail)){
+        /* Dotted tail: backquote it and append. */
+        Ref tail_expansion = backquote_expand(tail);
+        Ref new_parts = NIL_Symbol;
+        Ref p = parts;
+        while(consp(p)){ push(cons_car(p), &new_parts); p = cons_cdr(p); }
+        push(tail_expansion, &new_parts);
+        parts = nreverse(new_parts);}
+    return cons(S(APPEND), parts);}
+
 /* Unique sentinel returned by #+/#- when the feature test says skip.
    parse_list, parse_vector and kernel_read filter it out and keep
    reading. Allocated lazily on first use; not in any package, not
@@ -515,6 +562,25 @@ static Ref parse_object(parser_state* parser){
               return (parser->eof)
                       ? NIL_Symbol
                       : list(S(QUOTE),literal,NULL);}
+      case '`':
+          {
+              advance_character(parser);
+              skip_spaces(parser);
+              if(parser->eof){ return NIL_Symbol; }
+              Ref inner = parse_object(parser);
+              return backquote_expand(inner);}
+      case ',':
+          {
+              advance_character(parser);
+              bool splicing = false;
+              if(parser->ch == '@'){
+                  splicing = true;
+                  advance_character(parser);}
+              skip_spaces(parser);
+              if(parser->eof){ return NIL_Symbol; }
+              Ref inner = parse_object(parser);
+              return list(splicing ? S(UNQUOTE-SPLICING) : S(UNQUOTE),
+                          inner, NULL);}
       case '"':
           return parse_string(parser);
       case '(':
