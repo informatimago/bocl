@@ -1655,7 +1655,7 @@ static void kernel_LISP_IMPLEMENTATION_VERSION(unused Ref function,Ref arguments
     results->values[0]=T(BOCL_VERSION);}
 
 static void kernel_initialize_features(void){
-    Ref features=S("*FEATURES*");
+    Ref features=S(*FEATURES*);
     Ref list=NIL_Symbol;
 
     push(K(COMMON-LISP),&list);

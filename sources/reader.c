@@ -209,7 +209,13 @@ static Ref parse_character(parser_state* parser){
     else{
         /* 1-non-alpha char */
         if(printablep(parser->ch)){
-            return octet_character(parser->ch);}
+            Ref ch_obj=octet_character(parser->ch);
+            /* Consume the character so the caller's parse_list / parse_token
+               doesn't see #\( as an open paren etc. (Pre-fix, #\( inside a
+               list was read as #\ plus an unmatched paren.) */
+            advance_character(parser);
+            parser->eof=false;
+            return ch_obj;}
         else{
             READER_ERROR(parser->input_stream,"Invalid character after #\\ -- code 0x%02x (%d)",
                          parser->ch,parser->ch);}}}
@@ -246,6 +252,64 @@ static Ref parse_string(parser_state* parser){
 
 static Ref parse_object(parser_state* parser);
 
+/* Unique sentinel returned by #+/#- when the feature test says skip.
+   parse_list, parse_vector and kernel_read filter it out and keep
+   reading. Allocated lazily on first use; not in any package, not
+   reachable from user code. */
+static Ref reader_skip_marker = NULL;
+static Ref get_skip_marker(void){
+    if(reader_skip_marker == NULL){
+        reader_skip_marker = cons(NIL_Symbol, NIL_Symbol);
+        push_to_rootset(reader_skip_marker);}
+    return reader_skip_marker;}
+
+/* CL reads the feature expression with *PACKAGE* bound to KEYWORD, so a
+   bare `bocl` in `#+bocl` means `:bocl`. We don't switch packages while
+   reading; instead, we recursively coerce non-operator symbols to keywords
+   before testing. AND/OR/NOT stay as ordinary symbols. */
+static Ref coerce_feature_expr(Ref expr){
+    if(symbolp(expr)){
+        if(expr == S(AND) || expr == S(OR) || expr == S(NOT)){ return expr; }
+        if(keywordp(expr)){ return expr; }
+        char* name = string_cstring(symbol_name(expr));
+        Ref kw = keyword_intern_cstring(name);
+        free(name);
+        return kw;}
+    if(consp(expr)){
+        Ref head = coerce_feature_expr(car(expr));
+        Ref tail_new = NIL_Symbol;
+        Ref it = cdr(expr);
+        while(consp(it)){
+            push(coerce_feature_expr(car(it)), &tail_new);
+            it = cdr(it);}
+        tail_new = nreverse(tail_new);
+        return cons(head, tail_new);}
+    return expr;}
+
+/* Check whether a feature expression is satisfied against *FEATURES*.
+   The expression is either a keyword/symbol (member of *FEATURES*), or
+   (AND e1 e2 …), (OR e1 e2 …), (NOT e). */
+static bool feature_present_p(Ref expr){
+    if(symbolp(expr)){
+        Ref feats = variable_value(S(*FEATURES*));
+        return !nullp(memq(expr, feats));}
+    if(consp(expr)){
+        Ref head = car(expr);
+        Ref tail = cdr(expr);
+        if(head == S(AND)){
+            while(consp(tail)){
+                if(!feature_present_p(car(tail))){ return false; }
+                tail = cdr(tail);}
+            return true;}
+        if(head == S(OR)){
+            while(consp(tail)){
+                if(feature_present_p(car(tail))){ return true; }
+                tail = cdr(tail);}
+            return false;}
+        if(head == S(NOT)){
+            return !feature_present_p(car(tail));}}
+    return false;}
+
 static Ref parse_list(parser_state* parser){
     /* We've read opening (  we need to read objects util closing ) */
     Ref result=NIL_Symbol;
@@ -255,7 +319,8 @@ static Ref parse_list(parser_state* parser){
         return NIL_Symbol;}
     while(parser->ch!=')'){
         Ref element=parse_object(parser);
-        push(element,&result);
+        if(element != reader_skip_marker){
+            push(element,&result);}
         skip_spaces(parser);
         if(parser->eof){
             return NIL_Symbol;}}
@@ -380,18 +445,43 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
     const char* token=(const char*)octet_upcase(parser->token);
     const char* colon=strchr(token,':');
     (*valid)=false;
+    /* No colon: a plain symbol in the current package. */
     if(!colon){
         (*valid)=true;
         return symbol_intern_cstring(token);}
+    /* Leading colon: a keyword (:foo). */
     if(colon==token){
-        colon=strchr(token+1,':');
-        if(!colon){
-            (*valid)=true;
-            return keyword_intern_cstring(token+1);}
-        /* two or more colons */
+        if(token[1]==':'){
+            /* "::foo" is invalid (empty package). */
+            return NIL_Symbol;}
+        (*valid)=true;
+        return keyword_intern_cstring(token+1);}
+    /* Mid-token colon: pkg:sym (one colon, external only) or pkg::sym
+       (two colons, internal allowed). Phase 3 doesn't actually isolate
+       symbols per package — all live in KERNEL_obarray — so both forms
+       collapse to symbol_intern_cstring on the local name. The package
+       designator is parsed and validated but otherwise ignored. */
+    size_t pkg_len = (size_t)(colon - token);
+    char pkg_buf[256];
+    if(pkg_len >= sizeof(pkg_buf)){
         return NIL_Symbol;}
-    /* colon in the middle -- no package yet */
-    return NIL_Symbol;}
+    for(size_t i=0;i<pkg_len;i++){ pkg_buf[i]=token[i]; }
+    pkg_buf[pkg_len]='\0';
+    const char* name_part;
+    if(colon[1]==':'){
+        name_part = colon+2;
+    } else {
+        name_part = colon+1;}
+    if(*name_part=='\0' || strchr(name_part,':')){
+        return NIL_Symbol;}
+    (*valid)=true;
+    /* KEYWORD:foo and :foo are equivalent. */
+    if(pkg_len==7
+       && pkg_buf[0]=='K' && pkg_buf[1]=='E' && pkg_buf[2]=='Y'
+       && pkg_buf[3]=='W' && pkg_buf[4]=='O' && pkg_buf[5]=='R'
+       && pkg_buf[6]=='D'){
+        return keyword_intern_cstring(name_part);}
+    return symbol_intern_cstring(name_part);}
 
 static Ref parse_token(parser_state* parser){
     parser->length=0;
@@ -438,6 +528,43 @@ static Ref parse_object(parser_state* parser){
             case '\\': return parse_character(parser);
             case '(':  return parse_vector(parser);
             case '*':  return parse_bit_vector(parser);
+            case '\'': {  /* #'name => (FUNCTION name) */
+                advance_character(parser);
+                skip_spaces(parser);
+                Ref form=parse_object(parser);
+                return list(FUNCTION_Symbol, form, NULL); }
+            case '|': {  /* #|...|# — nestable block comment. */
+                int depth=1;
+                octet prev=0;
+                while(depth>0){
+                    advance_character(parser);
+                    if(parser->eof){
+                        READER_ERROR(parser->input_stream,"Unterminated #| block comment%s","");}
+                    if(prev=='#' && parser->ch=='|'){ depth++; prev=0; }
+                    else if(prev=='|' && parser->ch=='#'){ depth--; prev=0; }
+                    else { prev=parser->ch; }}
+                advance_character(parser);    /* past the closing # */
+                skip_spaces(parser);
+                /* Return the next object — block comments are whitespace. */
+                if(parser->eof){ return NIL_Symbol; }
+                return parse_object(parser); }
+            case '+':
+            case '-': {  /* #+feature form / #-feature form */
+                bool negate = (parser->ch == '-');
+                advance_character(parser);
+                skip_spaces(parser);
+                Ref feature_expr = parse_object(parser);
+                feature_expr = coerce_feature_expr(feature_expr);
+                bool present = feature_present_p(feature_expr);
+                skip_spaces(parser);
+                if(parser->eof){ return get_skip_marker(); }
+                if(present ^ negate){
+                    return parse_object(parser);
+                } else {
+                    /* Skip the next form silently; callers (parse_list /
+                       kernel_read) recognise reader_skip_marker. */
+                    parse_object(parser);
+                    return get_skip_marker();}}
             default:
                 READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}
           break;
@@ -523,7 +650,15 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
         if(nullp(eof_error_p)){
             return eof_value;}
         END_OF_FILE(input_stream);}
-    Ref object=parse_object(&parser);
+    Ref object;
+    /* Loop while we keep getting reader_skip_marker (from #+/#- that skipped). */
+    while(true){
+        object = parse_object(&parser);
+        if(object != reader_skip_marker){ break; }
+        skip_spaces(&parser);
+        if(parser.eof){
+            if(nullp(eof_error_p)){ return eof_value; }
+            END_OF_FILE(input_stream);}}
     if(parser.eof){
         if(nullp(eof_error_p)){
             return eof_value;}

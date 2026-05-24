@@ -231,11 +231,72 @@ Tests:
 - [tests/test_load.c](tests/test_load.c) — 6 cases, all green.
 - [tests/test_packages.c](tests/test_packages.c) — 8 cases, all green.
 
-### Phase 4 — hash tables, conditions, full reader (2 weeks)
+### Phase 4 — hash tables, conditions, full reader ✅ DONE
 
-- Hash tables as alists internally (per design), exposing `MAKE-HASH-TABLE GETHASH (SETF GETHASH) REMHASH MAPHASH HASH-TABLE-COUNT HASH-TABLE-TEST CLRHASH`.
-- Condition system: `SIGNAL ERROR CERROR WARN HANDLER-CASE HANDLER-BIND RESTART-CASE RESTART-BIND FIND-RESTART INVOKE-RESTART`. Reuse `frame_handler`.
-- Reader: `#=`, `#.`, `#+`/`#-`, `set-macro-character`, `set-dispatch-macro-character`, case modes.
+Landed in three slices.
+
+**4.1 — hash tables (v0.0.14)**: Alist-backed `HashTable` (per design),
+new [sources/hash_table.c](sources/hash_table.c). Built-ins:
+`MAKE-HASH-TABLE`, `HASH-TABLE-P`, `HASH-TABLE-COUNT`, `HASH-TABLE-TEST`,
+`GETHASH` (returns two values), `SETHASH` (the `(setf gethash)` primitive
+— SETF macros not yet loaded), `REMHASH`, `CLRHASH`, `MAPHASH`. The four
+test functions `EQ / EQL / EQUAL / EQUALP` all work; the new `EQ` and
+`EQUALP` built-ins were missing from the kernel before this slice.
+
+Incidental: `EQUAL` on strings was case-insensitive (using
+`string_equal`); fixed to be case-sensitive per CL spec.
+
+**4.2 — condition system (v0.0.15)**: New [sources/conditions.c](sources/conditions.c)
+with a `Condition` slot type. `HANDLER-CASE` special-operator in
+[eval.c](sources/eval.c), `SIGNAL` / `ERROR` / `WARN` / `MAKE-CONDITION`
+/ `CONDITIONP` / `SIMPLE-CONDITION-FORMAT-CONTROL` / `-FORMAT-ARGUMENTS`
+built-ins. Frames carry the firing clause + condition so the handler
+body can bind a variable to the condition. `HANDLER-BIND`, restarts,
+and `CERROR` are deferred (the dynamic-context machinery they need is
+more involved than HANDLER-CASE's unwind).
+
+Incidental: `copy_list` in [cons.c](sources/cons.c) had a missing
+`tail = new_cell` advance and a trailing `rplacd` that clobbered the
+result — `(list 'a 'b 'c)` returned `(a)`. Symptom hidden because the
+kernel uses the C variadic `list()` helper internally. Now fixed.
+
+**4.3 — full reader (v0.0.16)**: New dispatch macros in
+[reader.c](sources/reader.c):
+- `#\(`, `#\)`, `#\"` and other punctuation character literals (pre-
+  existing bug: `parse_character` didn't advance past the literal char,
+  so the outer `parse_list` saw it as a syntactic close-paren).
+- `#'name` → `(FUNCTION name)`.
+- `#|…|#` nestable block comments.
+- `#+feature` / `#-feature` with `AND` / `OR` / `NOT` compound
+  feature expressions. Symbols in the feature expression are coerced to
+  keywords (CL spec reads them with `*PACKAGE*` bound to KEYWORD).
+- `pkg:sym` and `pkg::sym` package-qualified symbol syntax. Since
+  Phase 3's package isolation isn't real yet, both forms intern in the
+  shared `KERNEL_obarray` and return the bare-name symbol; the package
+  designator is validated but otherwise ignored. `KEYWORD:foo` reads
+  as `:foo`.
+
+Skip semantics for `#+/#-` use an internal `reader_skip_marker`
+sentinel that `parse_list` and `kernel_read` filter out.
+
+Incidental: `kernel_initialize_features` was interning the
+`*FEATURES*` symbol via `S("*FEATURES*")` (quoted), which stringifies
+to the literal `"*FEATURES*"` (with the quotes in the name). Bug
+existed since Phase 0 but didn't bite until the reader looked up
+`*FEATURES*` directly. Fixed.
+
+Tests: [tests/test_hash_table.c](tests/test_hash_table.c) (11),
+[tests/test_conditions.c](tests/test_conditions.c) (8),
+[tests/test_reader_macros.c](tests/test_reader_macros.c) (8). Plus
+[tests/test_reader.c](tests/test_reader.c) is now 100% green — the
+last pre-existing `#\(` failure is gone.
+
+Still deferred to a later phase:
+- `HANDLER-BIND` and restarts (`RESTART-CASE / -BIND`, `FIND-RESTART`,
+  `INVOKE-RESTART`, `CERROR`).
+- Reader: `#=` / `##` (circular structures), `#.` (eval at read time),
+  `set-macro-character`, `set-dispatch-macro-character`, custom
+  readtables.
 
 ### Phase 5 — load the Lisp library (2–3 weeks)
 
