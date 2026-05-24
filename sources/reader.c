@@ -516,6 +516,13 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
     advance_character(&parser);
     skip_spaces(&parser);
     check_parser_error(&parser);
+    /* Empty/whitespace-only input: don't call parse_object, which would mis-
+       interpret the EOF byte (0xFF) as a constituent and intern an empty
+       symbol. Return the eof-value (or signal) right here. */
+    if(parser.eof){
+        if(nullp(eof_error_p)){
+            return eof_value;}
+        END_OF_FILE(input_stream);}
     Ref object=parse_object(&parser);
     if(parser.eof){
         if(nullp(eof_error_p)){

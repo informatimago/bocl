@@ -54,36 +54,64 @@ Ref bocl_in_package(Ref package_designator){
 Ref bocl_load_cstring(const char* path){
     Ref out = variable_value(S(*STANDARD-OUTPUT*));
 
-    princ(T("STREAM-OPEN not implemented yet."),out);
-    terpri(out);
-    return NIL_Symbol;
-
     bool do_verbose = is_true(variable_value(S(*LOAD-VERBOSE*)));
     bool do_print   = is_true(variable_value(S(*LOAD-PRINT*)));
     Ref inp = stream_open(physical_pathname_new_cstring(path),
                              K(INPUT),
                              S(CHARACTER),
-                             K(CREATE),
-                             K(CREATE),
+                             NIL_Symbol,        /* if-exists: irrelevant for :input */
+                             K(ERROR),          /* if-does-not-exist */
                              K(DEFAULT));
     if(do_verbose){
         princ(T(";; Loading "),out);
         princ(pathname(inp),out);
-        terpri(out);}
+        terpri(out);
+        stream_finish_output(out);}
+    /* kernel_read on EOF returns the stream itself (we pass `inp` as the
+       eof-value), so the loop test `sexp != inp` terminates at EOF. */
     Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
     while(sexp!=inp){
         if(do_print){
             prin1(sexp,out);
-            terpri(out);}
+            terpri(out);
+            stream_finish_output(out);}
         bocl_eval(sexp);
         sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);}
+    stream_close(inp);
     if(do_verbose){
         princ(T(";; Loaded "),out);
         princ(pathname(inp),out);
-        terpri(out);}
+        terpri(out);
+        stream_finish_output(out);}
 
-    return S(NIL);}
+    return T_Symbol;}
 
+
+/* Kernel-visible (LOAD filespec) — minimal: no &key :verbose / :print /
+   :if-does-not-exist yet. Those go on the Lisp side. */
+static void kernel_LOAD(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref filespec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    /* Accept a STRING (treat as namestring) or a PHYSICAL-PATHNAME. */
+    char* path;
+    if(typep(filespec,STRING_Class)){
+        path=string_cstring(filespec);
+    } else if(typep(filespec,PHYSICAL_PATHNAME_Class)){
+        path=string_cstring(namestring(filespec));
+    } else {
+        TYPE_ERROR(filespec,STRING_Class);}
+    Ref result=bocl_load_cstring(path);
+    free(path);
+    results->count=1;
+    results->values[0]=result;
+    close_live_pool(pool);}
+
+void bocl_register_load(void){
+    Ref fname=S(LOAD);
+    set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));}
 
 void bocl_call(Ref fname,Ref arguments){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));

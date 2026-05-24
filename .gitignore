@@ -16,6 +16,7 @@ sources/print_types
 tests/test_reader
 tests/test_eval
 tests/test_arithmetic
+tests/test_load
 
 *-Listing.xml
 *-Results.xml

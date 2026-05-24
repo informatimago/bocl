@@ -22,6 +22,7 @@
 #include "structure_functions.h"
 #include "arithmetic.h"
 #include "version.h"
+#include "bocl.h"
 
 /* Internal Object Structure */
 
@@ -1118,7 +1119,20 @@ Ref physical_pathname_new_cstring(const char* path){
 
 Ref physical_pathname(Ref namestring){
     check_class(namestring,STRING_Class);
-    return physical_pathname_new(&namestring->slots->vector_of_octet);}
+    /* Copy the string's bytes into a fresh VectorOfOctet so the pathname has
+       its own backing store. We cannot share the string's slots directly:
+       STRING is laid out as an OctetArray (element_type, elements*,
+       dimensions[]) while PHYSICAL-PATHNAME is laid out as a VectorOfOctet
+       (length, elements[]). Same union, different members — reinterpreting
+       the address picks up garbage (e.g. element_type is read as length). */
+    OctetArray* oa = &namestring->slots->octet_array;
+    halfword len = (halfword)oa->dimensions[0];
+    VectorOfOctet* vof = allocate(offsetof(VectorOfOctet,elements)
+                                  + sizeof(vof->elements[0]) * VARRAY_MIN(len));
+    vof->length = len;
+    for(halfword i = 0; i < len; i++){
+        vof->elements[i] = oa->elements->elements[i];}
+    return physical_pathname_new(vof);}
 
 bool physical_pathname_p(Ref object){
     return typep(object,PATHNAME_Class);}
@@ -1678,6 +1692,14 @@ static void kernel_initialize_features(void){
                                                         kernel_LISP_IMPLEMENTATION_VERSION)); }
 
     define_variable(S(*LOADING-FASL-FILE*),     S(NIL));
+
+    /* LOAD honours *LOAD-VERBOSE* and *LOAD-PRINT*; initialise them so the
+       kernel can call bocl_load_cstring without main.c having run first
+       (e.g. from a test harness). */
+    define_parameter(S(*LOAD-VERBOSE*),          S(NIL));
+    define_parameter(S(*LOAD-PRINT*),            S(NIL));
+    define_parameter(S(*COMPILE-VERBOSE*),       S(NIL));
+    define_parameter(S(*COMPILE-PRINT*),         S(NIL));
 }
 
 void kernel_initialize(void){
@@ -1696,6 +1718,7 @@ void kernel_initialize(void){
 
     reader_initialize();
     stream_initialize();
+    bocl_register_load();
 
     kernel_initialize_rootset();
     set_rootset((Block*)kernel_rootset());
