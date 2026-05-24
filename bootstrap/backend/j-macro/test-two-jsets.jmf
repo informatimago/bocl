@@ -1,0 +1,66 @@
+
+// FUNCTION: funDate
+String funDate=" spawnProcess(~"date~", /*withConsole=*/false, /*withShell=*/true, /*wait=*/true, status); ";
+// PARAMETERS:
+int              status;                                     // output   
+// END FUNCTION
+
+int n=10000;
+int i;
+int[] tags;
+int[] slots;
+
+
+StdOut.write("Starting tests.",NL);
+eval(funDate);
+StdOut.write("========================================",NL);
+
+
+
+StdOut.write("allocate ",n," slots in two sets.",NL);
+eval(funDate);
+for(i=0;i<n;i=i+1){
+    tags.addElement(2);
+    slots.addElement(i);
+}
+eval(funDate);
+
+
+StdOut.write("scan ",n," slots from two sets.",NL);
+eval(funDate);
+for(i=0;i<n;i=i+1){
+    int tag;
+    int val;
+    getItemSet(tags,i,tag);
+    getItemSet(slots,i,val);
+}
+eval(funDate);
+
+
+
+slots.clear();
+
+StdOut.write("allocate ",n," slots in one sets.",NL);
+eval(funDate);
+for(i=0;i<n;i=i+1){
+    slots.addElement(i*8+2);
+}
+eval(funDate);
+
+
+StdOut.write("scan ",n," slots from one sets.",NL);
+eval(funDate);
+for(i=0;i<n;i=i+1){
+    int tag;
+    int val;
+    int slot;
+    getItemSet(slots,i,slot);
+    tag=slot%8;
+    val=slot/8;
+}
+eval(funDate);
+
+
+StdOut.write("========================================",NL);
+StdOut.write("Tests complete.",NL);
+eval(funDate);

@@ -1,0 +1,51 @@
+http://llvm.cs.uiuc.edu/
+
+
+    The Palm OS divides the total available RAM store into two logical
+    areas: dynamic RAM and storage RAM. Dynamic RAM is used as working
+    space for temporary allocations, and is analogous to the RAM
+    installed in a typical desktop system. The remainder of the
+    available RAM on the card is designated as storage RAM and is
+    analogous to disk storage on a typical desktop system.
+
+    Because power is always applied to the memory system, both areas
+    of RAM preserve their contents when the handheld is turned "off"
+    (i.e., is in low-power sleep mode). See "Palm OS Power Modes" in
+    the chapter "Palm System Support" in this book. All of storage
+    memory is preserved even when the handheld is reset explicitly. As
+    part of the boot sequence, the system software reinitializes the
+    dynamic area, and leaves the storage area intact.
+
+
+A lisp image should be stored and stay in the storage area.
+
+
+
+   Under all versions of Palm OS, system overhead limits the maximum
+   usable data storage available in a single chunk  to slightly less
+   than 64 KB.
+
+"Allocation block", ie. a record, 64KB - epsilon.
+
+
+     | Dynamic RAM  -- Memory Manager   (dynamic allocation, heap, stack)
+RAM  |
+     | Storage RAM  -- Data Manager     ("files")
+
+
+    Each memory card in the Palm Powered handheld has 256 MB of
+    address space reserved for it. Memory card 0 starts at address
+    $1000000, memory card 1 starts at address $2000000, and so on.
+
+    ...but all records belonging to a particular database must reside
+    on the same card.
+
+
+So the maximum size of a single "file" (database) is 256 MB.
+
+
+
+heap 0 = dynamic ram
+heap 1 = first storage rom
+heap 2 = other storage ram/rom
+...

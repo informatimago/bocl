@@ -1,0 +1,994 @@
+;; Accessor AREF
+;; Accessor BIT
+;; Accessor CAAAAR
+;; Accessor CAAADR
+;; Accessor CAAAR
+;; Accessor CAADAR
+;; Accessor CAADDR
+;; Accessor CAADR
+;; Accessor CAAR
+;; Accessor CADAAR
+;; Accessor CADADR
+;; Accessor CADAR
+;; Accessor CADDAR
+;; Accessor CADDDR
+;; Accessor CADDR
+;; Accessor CADR
+;; Accessor CAR
+;; Accessor CDAAAR
+;; Accessor CDAADR
+;; Accessor CDAAR
+;; Accessor CDADAR
+;; Accessor CDADDR
+;; Accessor CDADR
+;; Accessor CDAR
+;; Accessor CDDAAR
+;; Accessor CDDADR
+;; Accessor CDDAR
+;; Accessor CDDDAR
+;; Accessor CDDDDR
+;; Accessor CDDDR
+;; Accessor CDDR
+;; Accessor CDR
+;; Accessor CHAR
+;; Accessor COMPILER-MACRO-FUNCTION                         
+;; Accessor EIGHTH
+;; Accessor ELT
+;; Accessor FDEFINITION                                     
+;; Accessor FIFTH
+;; Accessor FILL-POINTER
+;; Accessor FIND-CLASS
+;; Accessor FIRST
+;; Accessor FOURTH
+;; Accessor GET
+;; Accessor GETF
+;; Accessor GETHASH
+;; Accessor LDB
+;; Accessor LOGICAL-PATHNAME-TRANSLATIONS
+;; Accessor MACRO-FUNCTION                                  
+;; Accessor MASK-FIELD
+;; Accessor NINTH
+;; Accessor NTH
+;; Accessor READTABLE-CASE
+;; Accessor REST
+;; Accessor ROW-MAJOR-AREF
+;; Accessor SBIT
+;; Accessor SCHAR
+;; Accessor SECOND
+;; Accessor SEVENTH
+;; Accessor SIXTH
+;; Accessor SUBSEQ
+;; Accessor SVREF
+;; Accessor SYMBOL-FUNCTION
+;; Accessor SYMBOL-PLIST
+;; Accessor SYMBOL-VALUE
+;; Accessor TENTH
+;; Accessor THIRD
+;; Accessor VALUES
+;; Class STANDARD-OBJECT
+;; Class STRUCTURE-OBJECT
+;; Condition Type ARITHMETIC-ERROR
+;; Condition Type CELL-ERROR
+;; Condition Type CONDITION
+;; Condition Type CONTROL-ERROR
+;; Condition Type DIVISION-BY-ZERO
+;; Condition Type END-OF-FILE
+;; Condition Type ERROR
+;; Condition Type FILE-ERROR
+;; Condition Type FLOATING-POINT-INEXACT
+;; Condition Type FLOATING-POINT-INVALID-OPERATION
+;; Condition Type FLOATING-POINT-OVERFLOW
+;; Condition Type FLOATING-POINT-UNDERFLOW
+;; Condition Type PACKAGE-ERROR
+;; Condition Type PARSE-ERROR
+;; Condition Type PRINT-NOT-READABLE
+;; Condition Type PROGRAM-ERROR
+;; Condition Type READER-ERROR
+;; Condition Type SERIOUS-CONDITION
+;; Condition Type SIMPLE-CONDITION
+;; Condition Type SIMPLE-ERROR
+;; Condition Type SIMPLE-TYPE-ERROR
+;; Condition Type SIMPLE-WARNING
+;; Condition Type STORAGE-CONDITION
+;; Condition Type STREAM-ERROR
+;; Condition Type STYLE-WARNING
+;; Condition Type TYPE-ERROR
+;; Condition Type UNBOUND-SLOT
+;; Condition Type UNBOUND-VARIABLE
+;; Condition Type UNDEFINED-FUNCTION
+;; Condition Type WARNING
+;; Constant Variable ARRAY-DIMENSION-LIMIT
+;; Constant Variable ARRAY-RANK-LIMIT
+;; Constant Variable ARRAY-TOTAL-SIZE-LIMIT
+;; Constant Variable BOOLE-1
+;; Constant Variable BOOLE-2
+;; Constant Variable BOOLE-AND
+;; Constant Variable BOOLE-ANDC1
+;; Constant Variable BOOLE-ANDC2
+;; Constant Variable BOOLE-C1
+;; Constant Variable BOOLE-C2
+;; Constant Variable BOOLE-CLR
+;; Constant Variable BOOLE-EQV
+;; Constant Variable BOOLE-IOR
+;; Constant Variable BOOLE-NAND
+;; Constant Variable BOOLE-NOR
+;; Constant Variable BOOLE-ORC1
+;; Constant Variable BOOLE-ORC2
+;; Constant Variable BOOLE-SET
+;; Constant Variable BOOLE-XOR
+;; Constant Variable CALL-ARGUMENTS-LIMIT                   
+;; Constant Variable CHAR-CODE-LIMIT
+;; Constant Variable DOUBLE-FLOAT-EPSILON
+;; Constant Variable DOUBLE-FLOAT-NEGATIVE-EPSILON
+;; Constant Variable INTERNAL-TIME-UNITS-PER-SECOND         
+;; Constant Variable LAMBDA-LIST-KEYWORDS                   
+;; Constant Variable LAMBDA-PARAMETERS-LIMIT                
+;; Constant Variable LEAST-NEGATIVE-DOUBLE-FLOAT
+;; Constant Variable LEAST-NEGATIVE-LONG-FLOAT
+;; Constant Variable LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT
+;; Constant Variable LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT
+;; Constant Variable LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT
+;; Constant Variable LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT
+;; Constant Variable LEAST-NEGATIVE-SHORT-FLOAT
+;; Constant Variable LEAST-NEGATIVE-SINGLE-FLOAT
+;; Constant Variable LEAST-POSITIVE-DOUBLE-FLOAT
+;; Constant Variable LEAST-POSITIVE-LONG-FLOAT
+;; Constant Variable LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT
+;; Constant Variable LEAST-POSITIVE-NORMALIZED-LONG-FLOAT
+;; Constant Variable LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT
+;; Constant Variable LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT
+;; Constant Variable LEAST-POSITIVE-SHORT-FLOAT
+;; Constant Variable LEAST-POSITIVE-SINGLE-FLOAT
+;; Constant Variable LONG-FLOAT-EPSILON
+;; Constant Variable LONG-FLOAT-NEGATIVE-EPSILON
+;; Constant Variable MOST-NEGATIVE-DOUBLE-FLOAT
+;; Constant Variable MOST-NEGATIVE-FIXNUM                      
+;; Constant Variable MOST-NEGATIVE-LONG-FLOAT
+;; Constant Variable MOST-NEGATIVE-SHORT-FLOAT
+;; Constant Variable MOST-NEGATIVE-SINGLE-FLOAT
+;; Constant Variable MOST-POSITIVE-DOUBLE-FLOAT
+;; Constant Variable MOST-POSITIVE-FIXNUM                      
+;; Constant Variable MOST-POSITIVE-LONG-FLOAT
+;; Constant Variable MOST-POSITIVE-SHORT-FLOAT
+;; Constant Variable MOST-POSITIVE-SINGLE-FLOAT
+;; Constant Variable MULTIPLE-VALUES-LIMIT
+;; Constant Variable NIL                                    
+;; Constant Variable PI
+;; Constant Variable SHORT-FLOAT-EPSILON
+;; Constant Variable SHORT-FLOAT-NEGATIVE-EPSILON
+;; Constant Variable SINGLE-FLOAT-EPSILON
+;; Constant Variable SINGLE-FLOAT-NEGATIVE-EPSILON
+;; Constant Variable T                                      
+;; Declaration DECLARATION                                  
+;; Declaration DYNAMIC-EXTENT                               
+;; Declaration FTYPE                                        
+;; Declaration IGNORABLE                                    
+;; Declaration IGNORE                                       
+;; Declaration INLINE                                       
+;; Declaration NOTINLINE                                    
+;; Declaration OPTIMIZE                                     
+;; Declaration SPECIAL                          
+;; Declaration TYPE                                         
+;; Function *
+;; Function +
+;; Function -
+;; Function /
+;; Function /=
+;; Function 1+
+;; Function 1-
+;; Function <
+;; Function <=
+;; Function =
+;; Function >
+;; Function >=
+;; Function ABORT
+;; Function ABS
+;; Function ACONS
+;; Function ACOS
+;; Function ACOSH
+;; Function ADJOIN
+;; Function ADJUST-ARRAY
+;; Function ADJUSTABLE-ARRAY-P
+;; Function ALPHA-CHAR-P
+;; Function ALPHANUMERICP
+;; Function APPEND
+;; Function APPLY                                           
+;; Function APROPOS                                         
+;; Function APROPOS-LIST                                    
+;; Function ARITHMETIC-ERROR-OPERANDS
+;; Function ARITHMETIC-ERROR-OPERATION
+;; Function ARRAY-DIMENSION
+;; Function ARRAY-DIMENSIONS
+;; Function ARRAY-DISPLACEMENT
+;; Function ARRAY-ELEMENT-TYPE
+;; Function ARRAY-HAS-FILL-POINTER-P
+;; Function ARRAY-IN-BOUNDS-P
+;; Function ARRAY-RANK
+;; Function ARRAY-ROW-MAJOR-INDEX
+;; Function ARRAY-TOTAL-SIZE
+;; Function ARRAYP
+;; Function ASH
+;; Function ASIN
+;; Function ASINH
+;; Function ASSOC
+;; Function ASSOC-IF
+;; Function ASSOC-IF-NOT
+;; Function ATAN
+;; Function ATANH
+;; Function ATOM
+;; Function BIT-AND
+;; Function BIT-ANDC1
+;; Function BIT-ANDC2
+;; Function BIT-EQV
+;; Function BIT-IOR
+;; Function BIT-NAND
+;; Function BIT-NOR
+;; Function BIT-NOT
+;; Function BIT-ORC1
+;; Function BIT-ORC2
+;; Function BIT-VECTOR-P
+;; Function BIT-XOR
+;; Function BOOLE
+;; Function BOTH-CASE-P
+;; Function BOUNDP
+;; Function BREAK
+;; Function BROADCAST-STREAM-STREAMS
+;; Function BUTLAST
+;; Function BYTE
+;; Function BYTE-POSITION
+;; Function BYTE-SIZE
+;; Function CEILING
+;; Function CELL-ERROR-NAME
+;; Function CERROR
+;; Function CHAR-CODE
+;; Function CHAR-DOWNCASE
+;; Function CHAR-EQUAL
+;; Function CHAR-GREATERP
+;; Function CHAR-INT
+;; Function CHAR-LESSP
+;; Function CHAR-NAME
+;; Function CHAR-NOT-EQUAL
+;; Function CHAR-NOT-GREATERP
+;; Function CHAR-NOT-LESSP
+;; Function CHAR-UPCASE
+;; Function CHAR/=
+;; Function CHAR<
+;; Function CHAR<=
+;; Function CHAR=
+;; Function CHAR>
+;; Function CHAR>=
+;; Function CHARACTER
+;; Function CHARACTERP
+;; Function CIS
+;; Function CLASS-OF
+;; Function CLEAR-INPUT
+;; Function CLEAR-OUTPUT
+;; Function CLOSE
+;; Function CLRHASH
+;; Function CODE-CHAR
+;; Function COERCE
+;; Function COMPILE                                         
+;; Function COMPILE-FILE
+;; Function COMPILE-FILE-PATHNAME
+;; Function COMPILED-FUNCTION-P                             
+;; Function COMPLEMENT                                      
+;; Function COMPLEX
+;; Function COMPLEXP
+;; Function COMPUTE-RESTARTS
+;; Function CONCATENATE
+;; Function CONCATENATED-STREAM-STREAMS
+;; Function CONJUGATE
+;; Function CONS
+;; Function CONSP
+;; Function CONSTANTLY                                      
+;; Function CONSTANTP                                       
+;; Function CONTINUE
+;; Function COPY-ALIST
+;; Function COPY-LIST
+;; Function COPY-PPRINT-DISPATCH                            
+;; Function COPY-READTABLE
+;; Function COPY-SEQ
+;; Function COPY-STRUCTURE
+;; Function COPY-SYMBOL
+;; Function COPY-TREE
+;; Function COS
+;; Function COSH
+;; Function COUNT
+;; Function COUNT-IF
+;; Function COUNT-IF-NOT
+;; Function DECODE-FLOAT
+;; Function DECODE-UNIVERSAL-TIME                           
+;; Function DELETE
+;; Function DELETE-DUPLICATES
+;; Function DELETE-FILE
+;; Function DELETE-IF
+;; Function DELETE-IF-NOT
+;; Function DELETE-PACKAGE
+;; Function DENOMINATOR
+;; Function DEPOSIT-FIELD
+;; Function DESCRIBE
+;; Function DIGIT-CHAR
+;; Function DIGIT-CHAR-P
+;; Function DIRECTORY
+;; Function DIRECTORY-NAMESTRING
+;; Function DISASSEMBLE                                     
+;; Function DPB
+;; Function DRIBBLE
+;; Function ECHO-STREAM-INPUT-STREAM
+;; Function ECHO-STREAM-OUTPUT-STREAM
+;; Function ED                                              
+;; Function ENDP
+;; Function ENOUGH-NAMESTRING
+;; Function ENSURE-DIRECTORIES-EXIST
+;; Function ENSURE-GENERIC-FUNCTION
+;; Function EQ                                              
+;; Function EQL                                             
+;; Function EQUAL                                           
+;; Function EQUALP                                          
+;; Function ERROR
+;; Function EVAL                                            
+;; Function EVENP
+;; Function EVERY                                           
+;; Function EXP
+;; Function EXPORT
+;; Function EXPT
+;; Function FBOUNDP                                         
+;; Function FCEILING
+;; Function FFLOOR
+;; Function FILE-AUTHOR
+;; Function FILE-ERROR-PATHNAME
+;; Function FILE-LENGTH
+;; Function FILE-NAMESTRING
+;; Function FILE-POSITION
+;; Function FILE-STRING-LENGTH
+;; Function FILE-WRITE-DATE
+;; Function FILL
+;; Function FIND
+;; Function FIND-ALL-SYMBOLS
+;; Function FIND-IF
+;; Function FIND-IF-NOT
+;; Function FIND-PACKAGE
+;; Function FIND-RESTART
+;; Function FIND-SYMBOL
+;; Function FINISH-OUTPUT
+;; Function FLOAT
+;; Function FLOAT-DIGITS
+;; Function FLOAT-PRECISION
+;; Function FLOAT-RADIX
+;; Function FLOAT-SIGN
+;; Function FLOATP
+;; Function FLOOR
+;; Function FMAKUNBOUND                                     
+;; Function FORCE-OUTPUT
+;; Function FORMAT                                          
+;; Function FRESH-LINE
+;; Function FROUND
+;; Function FTRUNCATE
+;; Function FUNCALL                                         
+;; Function FUNCTION-LAMBDA-EXPRESSION                      
+;; Function FUNCTIONP                                       
+;; Function GCD
+;; Function GENSYM
+;; Function GENTEMP
+;; Function GET-DECODED-TIME                                
+;; Function GET-DISPATCH-MACRO-CHARACTER
+;; Function GET-INTERNAL-REAL-TIME                          
+;; Function GET-INTERNAL-RUN-TIME                           
+;; Function GET-MACRO-CHARACTER
+;; Function GET-OUTPUT-STREAM-STRING
+;; Function GET-PROPERTIES
+;; Function GET-SETF-EXPANSION
+;; Function GET-UNIVERSAL-TIME                              
+;; Function GRAPHIC-CHAR-P
+;; Function HASH-TABLE-COUNT
+;; Function HASH-TABLE-P
+;; Function HASH-TABLE-REHASH-SIZE
+;; Function HASH-TABLE-REHASH-THRESHOLD
+;; Function HASH-TABLE-SIZE
+;; Function HASH-TABLE-TEST
+;; Function HOST-NAMESTRING
+;; Function IDENTITY                                        
+;; Function IMAGPART
+;; Function IMPORT
+;; Function INPUT-STREAM-P
+;; Function INSPECT
+;; Function INTEGER-DECODE-FLOAT
+;; Function INTEGER-LENGTH                                    
+;; Function INTEGERP
+;; Function INTERACTIVE-STREAM-P
+;; Function INTERN
+;; Function INTERSECTION
+;; Function INVALID-METHOD-ERROR
+;; Function INVOKE-DEBUGGER
+;; Function INVOKE-RESTART
+;; Function INVOKE-RESTART-INTERACTIVELY
+;; Function ISQRT
+;; Function KEYWORDP
+;; Function LAST
+;; Function LCM
+;; Function LDB-TEST
+;; Function LDIFF
+;; Function LENGTH
+;; Function LISP-IMPLEMENTATION-TYPE                        
+;; Function LISP-IMPLEMENTATION-VERSION                     
+;; Function LIST
+;; Function LIST*
+;; Function LIST-ALL-PACKAGES
+;; Function LIST-LENGTH
+;; Function LISTEN
+;; Function LISTP
+;; Function LOAD
+;; Function LOAD-LOGICAL-PATHNAME-TRANSLATIONS
+;; Function LOG
+;; Function LOGAND
+;; Function LOGANDC1
+;; Function LOGANDC2
+;; Function LOGBITP
+;; Function LOGCOUNT
+;; Function LOGEQV
+;; Function LOGICAL-PATHNAME
+;; Function LOGIOR
+;; Function LOGNAND
+;; Function LOGNOR
+;; Function LOGNOT
+;; Function LOGORC1
+;; Function LOGORC2
+;; Function LOGTEST
+;; Function LOGXOR
+;; Function LONG-SITE-NAME                                  
+;; Function LOWER-CASE-P
+;; Function MACHINE-INSTANCE                                
+;; Function MACHINE-TYPE                                    
+;; Function MACHINE-VERSION                                 
+;; Function MACROEXPAND
+;; Function MACROEXPAND-1                                   
+;; Function MAKE-ARRAY
+;; Function MAKE-BROADCAST-STREAM
+;; Function MAKE-CONCATENATED-STREAM
+;; Function MAKE-CONDITION
+;; Function MAKE-DISPATCH-MACRO-CHARACTER
+;; Function MAKE-ECHO-STREAM
+;; Function MAKE-HASH-TABLE
+;; Function MAKE-LIST
+;; Function MAKE-LOAD-FORM-SAVING-SLOTS
+;; Function MAKE-PACKAGE
+;; Function MAKE-PATHNAME
+;; Function MAKE-RANDOM-STATE
+;; Function MAKE-SEQUENCE
+;; Function MAKE-STRING
+;; Function MAKE-STRING-INPUT-STREAM
+;; Function MAKE-STRING-OUTPUT-STREAM
+;; Function MAKE-SYMBOL
+;; Function MAKE-SYNONYM-STREAM
+;; Function MAKE-TWO-WAY-STREAM
+;; Function MAKUNBOUND
+;; Function MAP
+;; Function MAP-INTO
+;; Function MAPC
+;; Function MAPCAN
+;; Function MAPCAR
+;; Function MAPCON
+;; Function MAPHASH
+;; Function MAPL
+;; Function MAPLIST
+;; Function MAX
+;; Function MEMBER
+;; Function MEMBER-IF
+;; Function MEMBER-IF-NOT
+;; Function MERGE
+;; Function MERGE-PATHNAMES
+;; Function METHOD-COMBINATION-ERROR
+;; Function MIN
+;; Function MINUSP
+;; Function MISMATCH
+;; Function MOD
+;; Function MUFFLE-WARNING
+;; Function NAME-CHAR
+;; Function NAMESTRING
+;; Function NBUTLAST
+;; Function NCONC
+;; Function NINTERSECTION
+;; Function NOT                                             
+;; Function NOTANY                                          
+;; Function NOTEVERY                                        
+;; Function NRECONC
+;; Function NREVERSE
+;; Function NSET-DIFFERENCE
+;; Function NSET-EXCLUSIVE-OR
+;; Function NSTRING-CAPITALIZE
+;; Function NSTRING-DOWNCASE
+;; Function NSTRING-UPCASE
+;; Function NSUBLIS
+;; Function NSUBST
+;; Function NSUBST-IF
+;; Function NSUBST-IF-NOT
+;; Function NSUBSTITUTE
+;; Function NSUBSTITUTE-IF
+;; Function NSUBSTITUTE-IF-NOT
+;; Function NTHCDR
+;; Function NULL
+;; Function NUMBERP
+;; Function NUMERATOR
+;; Function NUNION
+;; Function ODDP
+;; Function OPEN
+;; Function OPEN-STREAM-P
+;; Function OUTPUT-STREAM-P
+;; Function PACKAGE-ERROR-PACKAGE
+;; Function PACKAGE-NAME
+;; Function PACKAGE-NICKNAMES
+;; Function PACKAGE-SHADOWING-SYMBOLS
+;; Function PACKAGE-USE-LIST
+;; Function PACKAGE-USED-BY-LIST
+;; Function PACKAGEP
+;; Function PAIRLIS
+;; Function PARSE-INTEGER
+;; Function PARSE-NAMESTRING
+;; Function PATHNAME
+;; Function PATHNAME-DEVICE
+;; Function PATHNAME-DIRECTORY
+;; Function PATHNAME-HOST
+;; Function PATHNAME-MATCH-P
+;; Function PATHNAME-NAME
+;; Function PATHNAME-TYPE
+;; Function PATHNAME-VERSION
+;; Function PATHNAMEP
+;; Function PEEK-CHAR
+;; Function PHASE
+;; Function PLUSP
+;; Function POSITION
+;; Function POSITION-IF
+;; Function POSITION-IF-NOT
+;; Function PPRINT                                          
+;; Function PPRINT-DISPATCH                                 
+;; Function PPRINT-FILL                                     
+;; Function PPRINT-INDENT                                   
+;; Function PPRINT-LINEAR                                   
+;; Function PPRINT-NEWLINE                                  
+;; Function PPRINT-TAB                                      
+;; Function PPRINT-TABULAR                                  
+;; Function PRIN1                                           
+;; Function PRIN1-TO-STRING
+;; Function PRINC                                           
+;; Function PRINC-TO-STRING
+;; Function PRINT                                           
+;; Function PRINT-NOT-READABLE-OBJECT
+;; Function PROBE-FILE
+;; Function PROCLAIM                                        
+;; Function PROVIDE
+;; Function RANDOM
+;; Function RANDOM-STATE-P
+;; Function RASSOC
+;; Function RASSOC-IF
+;; Function RASSOC-IF-NOT
+;; Function RATIONAL
+;; Function RATIONALIZE
+;; Function RATIONALP
+;; Function READ
+;; Function READ-BYTE
+;; Function READ-CHAR
+;; Function READ-CHAR-NO-HANG
+;; Function READ-DELIMITED-LIST
+;; Function READ-FROM-STRING
+;; Function READ-LINE
+;; Function READ-PRESERVING-WHITESPACE
+;; Function READ-SEQUENCE
+;; Function READTABLEP
+;; Function REALP
+;; Function REALPART
+;; Function REDUCE
+;; Function REM
+;; Function REMHASH
+;; Function REMOVE
+;; Function REMOVE-DUPLICATES
+;; Function REMOVE-IF
+;; Function REMOVE-IF-NOT
+;; Function REMPROP
+;; Function RENAME-FILE
+;; Function RENAME-PACKAGE
+;; Function REPLACE
+;; Function REQUIRE
+;; Function RESTART-NAME
+;; Function REVAPPEND
+;; Function REVERSE
+;; Function ROOM                                            
+;; Function ROUND
+;; Function RPLACA
+;; Function RPLACD
+;; Function SCALE-FLOAT
+;; Function SEARCH
+;; Function SET
+;; Function SET-DIFFERENCE
+;; Function SET-DISPATCH-MACRO-CHARACTER
+;; Function SET-EXCLUSIVE-OR
+;; Function SET-MACRO-CHARACTER
+;; Function SET-PPRINT-DISPATCH                             
+;; Function SET-SYNTAX-FROM-CHAR
+;; Function SHADOW
+;; Function SHADOWING-IMPORT
+;; Function SHORT-SITE-NAME                                 
+;; Function SIGNAL
+;; Function SIGNUM
+;; Function SIMPLE-BIT-VECTOR-P
+;; Function SIMPLE-CONDITION-FORMAT-ARGUMENTS
+;; Function SIMPLE-CONDITION-FORMAT-CONTROL
+;; Function SIMPLE-STRING-P
+;; Function SIMPLE-VECTOR-P
+;; Function SIN
+;; Function SINH
+;; Function SLEEP                                           
+;; Function SLOT-BOUNDP
+;; Function SLOT-EXISTS-P
+;; Function SLOT-MAKUNBOUND
+;; Function SLOT-VALUE
+;; Function SOFTWARE-TYPE
+;; Function SOFTWARE-VERSION                 
+;; Function SOME                                            
+;; Function SORT
+;; Function SPECIAL-OPERATOR-P                              
+;; Function SQRT
+;; Function STABLE-SORT
+;; Function STANDARD-CHAR-P
+;; Function STORE-VALUE
+;; Function STREAM-ELEMENT-TYPE
+;; Function STREAM-ERROR-STREAM
+;; Function STREAM-EXTERNAL-FORMAT
+;; Function STREAMP
+;; Function STRING
+;; Function STRING-CAPITALIZE
+;; Function STRING-DOWNCASE
+;; Function STRING-EQUAL
+;; Function STRING-GREATERP
+;; Function STRING-LEFT-TRIM
+;; Function STRING-LESSP
+;; Function STRING-NOT-EQUAL
+;; Function STRING-NOT-GREATERP
+;; Function STRING-NOT-LESSP
+;; Function STRING-RIGHT-TRIM
+;; Function STRING-TRIM
+;; Function STRING-UPCASE
+;; Function STRING/=
+;; Function STRING<
+;; Function STRING<=
+;; Function STRING=
+;; Function STRING>
+;; Function STRING>=
+;; Function STRINGP
+;; Function SUBLIS
+;; Function SUBSETP
+;; Function SUBST
+;; Function SUBST-IF
+;; Function SUBST-IF-NOT
+;; Function SUBSTITUTE
+;; Function SUBSTITUTE-IF
+;; Function SUBSTITUTE-IF-NOT
+;; Function SUBTYPEP                                        
+;; Function SXHASH
+;; Function SYMBOL-NAME
+;; Function SYMBOL-PACKAGE
+;; Function SYMBOLP
+;; Function SYNONYM-STREAM-SYMBOL
+;; Function TAILP
+;; Function TAN
+;; Function TANH
+;; Function TERPRI
+;; Function TRANSLATE-LOGICAL-PATHNAME
+;; Function TRANSLATE-PATHNAME
+;; Function TREE-EQUAL
+;; Function TRUENAME
+;; Function TRUNCATE
+;; Function TWO-WAY-STREAM-INPUT-STREAM
+;; Function TWO-WAY-STREAM-OUTPUT-STREAM
+;; Function TYPE-ERROR-DATUM                                
+;; Function TYPE-ERROR-EXPECTED-TYPE                        
+;; Function TYPE-OF                                         
+;; Function TYPEP                                           
+;; Function UNBOUND-SLOT-INSTANCE
+;; Function UNEXPORT
+;; Function UNINTERN
+;; Function UNION
+;; Function UNREAD-CHAR
+;; Function UNUSE-PACKAGE
+;; Function UPGRADED-ARRAY-ELEMENT-TYPE
+;; Function UPGRADED-COMPLEX-PART-TYPE
+;; Function UPPER-CASE-P
+;; Function USE-PACKAGE
+;; Function USE-VALUE
+;; Function USER-HOMEDIR-PATHNAME                           
+;; Function VALUES-LIST
+;; Function VECTOR
+;; Function VECTOR-POP
+;; Function VECTOR-PUSH
+;; Function VECTOR-PUSH-EXTEND
+;; Function VECTORP
+;; Function WARN
+;; Function WILD-PATHNAME-P
+;; Function WRITE
+;; Function WRITE-BYTE
+;; Function WRITE-CHAR
+;; Function WRITE-LINE
+;; Function WRITE-SEQUENCE
+;; Function WRITE-STRING
+;; Function WRITE-TO-STRING
+;; Function Y-OR-N-P
+;; Function YES-OR-NO-P
+;; Function ZEROP
+;; Local Function CALL-NEXT-METHOD
+;; Local Function NEXT-METHOD-P
+;; Local Macro CALL-METHOD
+;; Local Macro LOOP-FINISH
+;; Local Macro MAKE-METHOD
+;; Local Macro PPRINT-EXIT-IF-LIST-EXHAUSTED                
+;; Local Macro PPRINT-POP                                   
+;; Macro AND                                                
+;; Macro ASSERT
+;; Macro CASE                                               
+;; Macro CCASE                                              
+;; Macro CHECK-TYPE
+;; Macro COND                                               
+;; Macro CTYPECASE                                          
+;; Macro DECF
+;; Macro DECLAIM                                            
+;; Macro DEFCLASS
+;; Macro DEFCONSTANT                                        
+;; Macro DEFGENERIC
+;; Macro DEFINE-COMPILER-MACRO                              
+;; Macro DEFINE-CONDITION
+;; Macro DEFINE-METHOD-COMBINATION
+;; Macro DEFINE-MODIFY-MACRO
+;; Macro DEFINE-SETF-EXPANDER
+;; Macro DEFINE-SYMBOL-MACRO                                
+;; Macro DEFMACRO                                  
+;; Macro DEFMETHOD
+;; Macro DEFPACKAGE
+;; Macro DEFPARAMETER                                       
+;; Macro DEFSETF
+;; Macro DEFSTRUCT
+;; Macro DEFTYPE                                            
+;; Macro DEFUN                                              
+;; Macro DEFVAR                                             
+;; Macro DESTRUCTURING-BIND                                 
+;; Macro DO
+;; Macro DO*
+;; Macro DO-ALL-SYMBOLS
+;; Macro DO-EXTERNAL-SYMBOLS
+;; Macro DO-SYMBOLS
+;; Macro DOLIST
+;; Macro DOTIMES
+;; Macro ECASE                                              
+;; Macro ETYPECASE                                          
+;; Macro FORMATTER                                          
+;; Macro HANDLER-BIND
+;; Macro HANDLER-CASE
+;; Macro IGNORE-ERRORS
+;; Macro IN-PACKAGE
+;; Macro INCF
+;; Macro LAMBDA                                    
+;; Macro LOOP
+;; Macro MULTIPLE-VALUE-BIND                                
+;; Macro MULTIPLE-VALUE-LIST
+;; Macro MULTIPLE-VALUE-SETQ
+;; Macro NTH-VALUE
+;; Macro OR                                                 
+;; Macro POP
+;; Macro PPRINT-LOGICAL-BLOCK                               
+;; Macro PRINT-UNREADABLE-OBJECT                            
+;; Macro PROG
+;; Macro PROG*
+;; Macro PROG1
+;; Macro PROG2
+;; Macro PSETF
+;; Macro PSETQ                                              
+;; Macro PUSH
+;; Macro PUSHNEW
+;; Macro REMF
+;; Macro RESTART-BIND
+;; Macro RESTART-CASE
+;; Macro RETURN                                             
+;; Macro ROTATEF
+;; Macro SETF
+;; Macro SHIFTF
+;; Macro STEP
+;; Macro TIME
+;; Macro TRACE
+;; Macro TYPECASE                                           
+;; Macro UNLESS                                             
+;; Macro UNTRACE
+;; Macro WHEN                                               
+;; Macro WITH-ACCESSORS
+;; Macro WITH-COMPILATION-UNIT
+;; Macro WITH-CONDITION-RESTARTS
+;; Macro WITH-HASH-TABLE-ITERATOR
+;; Macro WITH-INPUT-FROM-STRING
+;; Macro WITH-OPEN-STREAM
+;; Macro WITH-OUTPUT-TO-STRING
+;; Macro WITH-PACKAGE-ITERATOR
+;; Macro WITH-SIMPLE-RESTART
+;; Macro WITH-SLOTS
+;; Macro WITH-STANDARD-IO-SYNTAX
+;; Restart ABORT
+;; Restart CONTINUE
+;; Restart MUFFLE-WARNING
+;; Restart STORE-VALUE
+;; Restart USE-VALUE
+;; Special Form SETQ                                        
+;; Special Operator BLOCK                                   
+;; Special Operator CATCH                                   
+;; Special Operator EVAL-WHEN                               
+;; Special Operator FLET                                    
+;; Special Operator FUNCTION                
+;; Special Operator GO                                      
+;; Special Operator IF                                      
+;; Special Operator LABELS                                  
+;; Special Operator LET                                     
+;; Special Operator LET*                                    
+;; Special Operator LOAD-TIME-VALUE                         
+;; Special Operator LOCALLY                                 
+;; Special Operator MACROLET                                
+;; Special Operator MULTIPLE-VALUE-CALL
+;; Special Operator MULTIPLE-VALUE-PROG1
+;; Special Operator PROGN
+;; Special Operator PROGV                                   
+;; Special Operator QUOTE                                   
+;; Special Operator RETURN-FROM                             
+;; Special Operator SYMBOL-MACROLET                         
+;; Special Operator TAGBODY                                 
+;; Special Operator THE                                     
+;; Special Operator THROW                                   
+;; Special Operator UNWIND-PROTECT                          
+;; Standard Generic Function (SETF CLASS-NAME)
+;; Standard Generic Function (SETF DOCUMENTATION)
+;; Standard Generic Function ADD-METHOD
+;; Standard Generic Function ALLOCATE-INSTANCE
+;; Standard Generic Function CHANGE-CLASS
+;; Standard Generic Function CLASS-NAME
+;; Standard Generic Function COMPUTE-APPLICABLE-METHODS
+;; Standard Generic Function DESCRIBE-OBJECT
+;; Standard Generic Function DOCUMENTATION
+;; Standard Generic Function FIND-METHOD
+;; Standard Generic Function FUNCTION-KEYWORDS
+;; Standard Generic Function INITIALIZE-INSTANCE
+;; Standard Generic Function MAKE-INSTANCE
+;; Standard Generic Function MAKE-INSTANCES-OBSOLETE
+;; Standard Generic Function MAKE-LOAD-FORM
+;; Standard Generic Function METHOD-QUALIFIERS
+;; Standard Generic Function NO-APPLICABLE-METHOD
+;; Standard Generic Function NO-NEXT-METHOD
+;; Standard Generic Function PRINT-OBJECT
+;; Standard Generic Function REINITIALIZE-INSTANCE
+;; Standard Generic Function REMOVE-METHOD
+;; Standard Generic Function SHARED-INITIALIZE
+;; Standard Generic Function SLOT-MISSING
+;; Standard Generic Function SLOT-UNBOUND
+;; Standard Generic Function UPDATE-INSTANCE-FOR-DIFFERENT-CLASS
+;; Standard Generic Function UPDATE-INSTANCE-FOR-REDEFINED-CLASS
+;; Symbol DECLARE                                           
+;; Symbol LAMBDA                                            
+;; System Class ARRAY
+;; System Class BIT-VECTOR
+;; System Class BROADCAST-STREAM
+;; System Class BUILT-IN-CLASS
+;; System Class CHARACTER
+;; System Class CLASS
+;; System Class COMPLEX
+;; System Class CONCATENATED-STREAM
+;; System Class CONS
+;; System Class ECHO-STREAM
+;; System Class FILE-STREAM
+;; System Class FLOAT
+;; System Class FUNCTION
+;; System Class GENERIC-FUNCTION
+;; System Class HASH-TABLE
+;; System Class INTEGER
+;; System Class LIST
+;; System Class LOGICAL-PATHNAME
+;; System Class METHOD
+;; System Class METHOD-COMBINATION
+;; System Class NULL
+;; System Class NUMBER
+;; System Class PACKAGE
+;; System Class PATHNAME
+;; System Class RANDOM-STATE
+;; System Class RATIO
+;; System Class RATIONAL
+;; System Class READTABLE
+;; System Class REAL
+;; System Class RESTART
+;; System Class SEQUENCE
+;; System Class STANDARD-CLASS
+;; System Class STANDARD-GENERIC-FUNCTION
+;; System Class STANDARD-METHOD
+;; System Class STREAM
+;; System Class STRING
+;; System Class STRING-STREAM
+;; System Class STRUCTURE-CLASS
+;; System Class SYMBOL
+;; System Class SYNONYM-STREAM
+;; System Class T
+;; System Class TWO-WAY-STREAM
+;; System Class VECTOR
+;; Type ATOM
+;; Type BASE-CHAR
+;; Type BASE-STRING
+;; Type BIGNUM
+;; Type BIT
+;; Type BOOLEAN
+;; Type COMPILED-FUNCTION
+;; Type DOUBLE-FLOAT
+;; Type EXTENDED-CHAR
+;; Type FIXNUM
+;; Type KEYWORD
+;; Type LONG-FLOAT
+;; Type NIL
+;; Type SHORT-FLOAT
+;; Type SIGNED-BYTE
+;; Type SIMPLE-ARRAY
+;; Type SIMPLE-BASE-STRING
+;; Type SIMPLE-BIT-VECTOR
+;; Type SIMPLE-STRING
+;; Type SIMPLE-VECTOR
+;; Type SINGLE-FLOAT
+;; Type STANDARD-CHAR
+;; Type Specifier AND
+;; Type Specifier EQL
+;; Type Specifier MEMBER
+;; Type Specifier MOD
+;; Type Specifier NOT
+;; Type Specifier OR
+;; Type Specifier SATISFIES
+;; Type Specifier VALUES
+;; Type UNSIGNED-BYTE
+;; Variable *
+;; Variable **
+;; Variable ***
+;; Variable *BREAK-ON-SIGNALS*
+;; Variable *COMPILE-FILE-PATHNAME*
+;; Variable *COMPILE-FILE-TRUENAME*
+;; Variable *COMPILE-PRINT*
+;; Variable *COMPILE-VERBOSE*
+;; Variable *DEBUG-IO*
+;; Variable *DEBUGGER-HOOK*
+;; Variable *DEFAULT-PATHNAME-DEFAULTS*
+;; Variable *ERROR-OUTPUT*
+;; Variable *FEATURES*
+;; Variable *GENSYM-COUNTER*
+;; Variable *LOAD-PATHNAME*
+;; Variable *LOAD-PRINT*
+;; Variable *LOAD-TRUENAME*
+;; Variable *LOAD-VERBOSE*
+;; Variable *MACROEXPAND-HOOK* 
+;; Variable *MODULES*
+;; Variable *PACKAGE*
+;; Variable *PRINT-ARRAY*                                   
+;; Variable *PRINT-BASE*                                    
+;; Variable *PRINT-CASE*                                    
+;; Variable *PRINT-CIRCLE*                                  
+;; Variable *PRINT-ESCAPE*                                  
+;; Variable *PRINT-GENSYM*                                  
+;; Variable *PRINT-LENGTH*                                  
+;; Variable *PRINT-LEVEL*                                   
+;; Variable *PRINT-LINES*                                   
+;; Variable *PRINT-MISER-WIDTH*                             
+;; Variable *PRINT-PPRINT-DISPATCH*                         
+;; Variable *PRINT-PRETTY*                                  
+;; Variable *PRINT-RADIX*                                   
+;; Variable *PRINT-READABLY*                                
+;; Variable *PRINT-RIGHT-MARGIN*                            
+;; Variable *QUERY-IO*
+;; Variable *RANDOM-STATE*
+;; Variable *READ-BASE*
+;; Variable *READ-DEFAULT-FLOAT-FORMAT*
+;; Variable *READ-EVAL*
+;; Variable *READ-SUPPRESS*
+;; Variable *READTABLE*
+;; Variable *STANDARD-INPUT*
+;; Variable *STANDARD-OUTPUT*
+;; Variable *TERMINAL-IO*
+;; Variable *TRACE-OUTPUT*
+;; Variable +
+;; Variable ++
+;; Variable +++
+;; Variable -
+;; Variable /
+;; Variable //
+;; Variable ///

@@ -1,0 +1,45 @@
+1- %read-from-string: deal with packages
+2- eval
+
+(defun eval-in-environment (env form)
+  (cond
+    ((symbolp form)              (eval/symbol               env form))
+    ;; The other atoms are self evaluating:
+    ((atom form)                 (result-values             env form))
+    ;; Now we have a list.
+    (t (case (first form)
+         ;; First we check the special operators:
+         ((FUNCTION)             (eval/function             env form))
+         ((QUOTE)                (eval/quote                env form))
+         ((IF)                   (eval/if                   env form))
+         ((TAGBODY)              (eval/tagbody              env form))
+         ((GO)                   (eval/go                   env form))
+         ((BLOCK)                (eval/block                env form))
+         ((RETURN-FROM)          (eval/return-from          env form))
+         ((CATCH)                (eval/catch                env form))
+         ((THROW)                (eval/throw                env form))
+         ((UNWIND-PROTECT)       (eval/unwind-protect       env form))
+         ((FLET)                 (eval/flet                 env form))
+         ((LABELS)               (eval/labels               env form))
+         ((SETQ)                 (eval/setq                 env form))
+         ((LET)                  (eval/let                  env form))
+         ((LET*)                 (eval/let*                 env form))
+         ((MULTIPLE-VALUE-CALL)  (eval/multiple-value-call  env form))
+         ((MULTIPLE-VALUE-PROG1) (eval/multiple-value-prog1 env form))
+         ((PROGN)                (eval/progn                env form))
+         ((PROGV)                (eval/progv                env form))
+         ((LOCALLY)              (eval/locally              env form))
+         ((THE)                  (eval/the                  env form))
+         ((EVAL-WHEN)            (eval/eval-when            env form))
+         ((SYMBOL-MACROLET MACROLET LOAD-TIME-VALUE)
+          (return-error env
+                        "~S shouldn't occur after minimal compilation"
+                        (first form)))
+         (otherwise
+          ;; We don't have macros anymore, since we do minimal compilation
+          ;; before calling the interpreter.
+          ;; It must be a function call.
+          (eval/funcall env form))))))
+
+3- add macros and minimal compilation
+4- add functions

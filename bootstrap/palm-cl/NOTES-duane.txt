@@ -1,0 +1,429 @@
+From: Duane Rettig <duane@franz.com>
+Subject: LISP to C vs machine level (was: LISP for Windows)
+Date: 1998/12/18
+Message-ID: <4zp8kn7xe.fsf_-_@beta.franz.com>
+References: <366C724A.E2C7938@silver-wolf-tech.com> <m2ogpawu39.fsf@KludgeUnix.com> <36727826.3126958@news.advancenet.net> <xfzk8zvjhx3.fsf@kuovi.cs.tut.fi> <752ti7$32ac3@fido.engr.sgi.com> <4u2yysm00.fsf@beta.franz.com> <slrn77b2jp.2du.mkgardne@perts6.cs.uiuc.edu> <4g1ai8h5n.fsf@beta.franz.com>
+Organization: Franz Inc.
+Newsgroups: comp.lang.lisp
+
+
+
+Some light reading for the weekend, anyone?  :-)
+
+
+A few days ago, I offered to post a list of reasons we at Franz
+had for compiling to native code, instead of using C as a sort of
+pseudo-assembler.  I received a huge number of responses on this
+list and by email, and so I am posting this.  Please consider this
+a first pass; I have no problem refining it, especially in light of
+the fact that I don't know all of the various implementations which
+might be represented by this list.  Also, since as an implementor
+I have landed solidly in the "directly to machine-language" camp,
+this first report will of course be biased in that direction.
+
+I sent a preliminary copy of this document to Howard Stearns, who
+is the developer and owner of Eclipse, a lisp-to-c compiler.  He
+had some very good comments, some of which I have incorporated
+into the document.  Howard also had a proposal for an introduction,
+which was in reality more of an excellent rebuttal to my submission
+(not in the sense that there is disagreement with what I said, but
+in the sense that one can look at things from different points of
+view).  I did not incorporate that introduction here, but I hope
+Howard will post it as part of the discussion afterward.
+
+Feedback is welcome.  Post to comp.lang.lisp, so that the discussion
+can be inclusive.
+
+===
+
+It has been said that C is very close to assembly language.  I disagree.
+This assumption has often lead people to erroneously assume that
+there is little difference between a lisp that compiles to C and one
+that compiles directly to machine code.  In fact, there are quite a
+few things that can be done with assembler/machine-code that are hard
+or impossible to do in C.
+
+On the other hand, the two major reasons to compile lisp to C code
+instead of to machine level are:
+  1. C is much more portable than machine architectures, and thus
+  porting to new architectures is much easier when C is the
+  intermediate target.
+  2. If care is taken to retain readability in the generated C
+  output, it can then be used as source code itself, and can
+  directly interface to other C libraries, instead of needing
+  a foreign-function interface.
+
+I have put together a list of differences between lisp-to-C and
+lisp-to-machine-level styles, as well as intermediate possibilities.
+In this list,  I'll use [] to indicate Franz's Allegro CL solution (a
+direct-to-machine-level solution), {} to indicate a portable C solution,
+and // to indicate a hacked-C-output solution such as the old FranzLisp
+(not Allegro CL). FranzLisp used a hybrid solution, since some of its
+lisp code was written in lisp and some was written in lispy-C.  The lisp
+code went directly to assembler, but the C code was given a -S option
+to generate assembler code, and then sent through an awk script to
+replace some variables with registers.
+
+1. The fact that C does not allow registers to be exposed forces some
+hacks in order to get some much needed values into dedicated registers,
+such as nil, the current function object, and a lisp global values
+table.
+
+[We control the compiler, which defines any special register
+ requirements]
+
+{A portable C implementation might use functions or macros to grab
+such often-used values}
+
+/FranzLisp used both methods, using C variables when in C and
+registers while in compiled lisp code/
+
+2. The calling/returning of args/values only supports C semantics.
+
+  a. No way to know the number of arguments passed.
+
+[We simply allocate a dedicated register for args passed and values
+ returned]
+
+{Portable C might pass an extra argument always for the count, or
+ a marker at the end of the argument list.}
+
+/FranzLisp did not use the C calling sequence, but hacked two values at 
+ assembler-munge time, lbot and np, to registers, and used them to always
+ pass lisp arguments on the bindstack. The number of args passed was the
+ difference between lbot and np./
+
+  b. No direct &optionals processing.
+
+[we generate efficient code for optionals processing using the count
+ register]
+
+{similar code is generated, but usually not as efficient since the count
+ might not be in a register}
+
+/FranzLisp (see the discussion at (a)/
+
+  c. No &rest processing.  Many man-years have been dedicated to the
+solution of the varargs problem, with var-success.  Some architectures
+pass the first few arguments in registers _unless_ varargs is needed,
+in which case they are passed on the stack.  The closest equivalent
+to &rest processing is the printf genre, where the number-of-args is
+implied (but not enforced) by the format control string.
+
+[ Args are always passed in registers, but &rest processing forces a
+ copy to stack.  The lisp calling sequence always guarantees that these
+ stack locations are contiguous, unlike some varargs implementations]
+
+{For truly portable code, varargs must be used.  On some architectures,
+ this does not assume that args are stacked contiguously, and so may be
+ inefficient}
+
+/FranzLisp used the lisp bindstack for arguments, which made &rest args
+ easy enough/
+
+ d. No allowance for &rest args with dynamic extent.  In general,
+dynamic-extent consing is a hard thing to do portably even at the
+machine-level.  The reason for this is because although some of the
+less RISC-like architectures provide separate frame and stack
+pointers, most architectures want basically one major stack-allocation
+operation, at the beginning, if stack allocation is to take place
+at all.  So extra stack space for stack-consing is a little harder
+to get. The two notable cases of where it is done anyway are:
+  i. When the compiler can determine the size of all of the objects
+     and preallocate them; this is easily done with automatic
+     variables in C, as well as directly using local static space
+     in lisp-to-machine-level.
+  ii. When the size of the extra stack is dynamic, but can be
+      determined before the stack space is allocated, such as is the
+      case when the &rest argument wants to be allocated.
+   [We do this directly via the argument count, either when the
+    time comes to allocate extra stack, or else before the stack
+    is allocated, if the architecture requires a single stack grab]
+   {C must rely on the availability of alloca() to do this, or
+    must drop into special assembler code.}
+   /FranzLisp did not stack-allocate/
+
+ e. No &keys processing.  C has no such concept and no equivalents.
+
+[we use a fast primitive call to a keyword-processing primitive, which
+ fills in a keyword table with relevant info.]
+
+{Don't know how Portable C implementations do this.  There are probably
+ many options, including FranzLisp's way}
+
+/ FranzLisp used higher-level lisp constructs and lexpr argument passing
+ to implement keyword processing.  The compiler knew nothing of keywords,
+ and the lispy-C functions didn't accept them./
+ 
+ f. No multiple-values to return.  C uses lvalues to return more than
+one value to the caller.
+
+[Multiple values are usually fairly localized.  We pass the first N
+ values in the same registers that are used as arguments (except sparc,
+ where N is 1) and values over N in a vector that is available to the
+ receiving multiple-value-{setq,bind,call} ]
+
+{Probably several ways to do this in portable C, but none very efficient
+
+ Howard Stearns adds the following example:
+ (multiple-value-call #'bar x y 99 (values-producing-function))
+ as being problematic for determining where to save multiple values.
+}
+
+/FranzLisp was before the days of RISC, and so it hacked the stack to
+ push values before returning./
+
+3. The calling of a function is static.  This static nature of the C
+function call is becoming more and more gray, because of the introduction
+of PIC (position-independent-code) into C (lisp is usually PIC, itself,
+and current Allegro CL generated code is always PIC; those lisps that
+are not PIC must retain relocation bits or strategies, and relocate each
+time the code is moved).  However, the basic unit of the "call whatever
+my current function code is now" in C is (*(void(*)())func)() (talk
+about your "Lots of Irritating Stupid Parentheses" :-) and in segmented
+architectures such as the HP this is very inefficient (it usually
+involves external branches to stub functions both for calling and
+returning).
+
+[We always call through a symbol->function->code access sequence, and
+ for funcall, a function->code sequence.  This may appear to be
+ inefficient, but is no worse than C calling within shared libraries,
+ and is necessary for dynamism, and allows very nice things to be
+ done using a trampoline, including the fact that the trampoline
+ is _always_ in the instruction cache.]
+
+{The only way I know of is to always call indirect through the 
+ ((void*)func)() construct, or to not allow dynamic redefinition,
+ or to hack the linker, certainly not a portable implementation.
+
+ Howard Stearns adds:
+ "If, though declarations or block-compilation, a user specifies that a
+ function being called will not be redefined at run time, then all
+ techniques can generate pretty efficient code. (VERY efficient if the
+ compiler inlines the call away altogether!)  Otherwise, some sort of
+ indirection can be used in all techniques."
+}
+
+/FranzLisp always called through a "translink" table, one per compiled
+ file, which had a set of symbol/start pairs.  The start slot was
+ normally initialized to a lookup function, but lookups could be
+ pre-arranged on the table, so that the start field pointed directly
+ to the function./
+
+4. Special variables must be bound/unbound efficiently.  More and
+more this dynamic-binding technique tends to be discouraged, but
+when it must be used, even the most tightly-inline-assembled code
+is not fast enough; dynamic-binding is slow.  I don't know how
+well C compilers can compile a variable binding, but at the very
+least some provision must be made for bindstack overflow.  (I am
+of course assuming a shallow-binding approach, here, because it
+is what most current lisps use; there is something to be said for
+deep-binding (even though accesses are slower), especially in the
+face of the rising use of multiprocessing).
+
+[We used to do this binding inline, but actually found both speed
+ and space optimizations to be had in calling out to a few
+ hand-assembled primitive functions.]
+{C ???}
+/FranzLisp did no binding in C code; it was done in inlined code
+ by the lisp compiler/
+
+5. Closure variables must be properly referenced.  This includes the
+fact that closed-over environments might only be identifyable by
+address (identity, as opposed to name), and variable access in such
+environments should be as efficient as possible.
+
+[We implement a closed-over environment as a specialized object, and
+ it has its environment information and its function template.  The
+ closure is itself funcallable, and goes through a short piece of code
+ (3 to 5 instructions) to establish its environment and to call its
+ template function.  Variable access through the environment is usually
+ a couple of instructions, with sometimes one indirection.]
+{C:  Howard Stearns says:
+ The main way in which the implementation of closures is effected by
+ machine model is in how the environment is established within the
+ function.  In a lisp-like stack machine, binding access can be much
+ like argument access.  In both register-machines and c-machines,
+ special code must be used to setup, access and debug bindings.
+ My paper, below, briefly covers how Eclipse does this."
+}
+/FranzLisp did not have closures per se.  It had something like
+ closures which captured certain environments, but did not work
+ like CL closures./
+
+6. There are no constructs in C for various possible hardware
+operations.
+
+{This class of deficiency is one which can't be solved
+ in portable C, because the whole point of these operations is for
+ efficiency.  A few C compilers allow for asm statements, but that is
+ the exception, not the rule, and so using asm is non-portable,
+ even on similar architectures.
+
+ Regarding items a and b, below, Howard Stearns says:
+ "C code can be generated that abstracts certain operations into a
+ macro.  On machines which offer support for assembly or
+ overflow-generated interrupts, the macro can be conditionally
+ compiled to make use of the hardware."
+}
+
+/FranzLisp did not take advantage of very many of these optimizations./
+
+  a. Addition/subtraction overflow detection:  When two fixnums are
+     added together in safe code, the result may be a bignum.  To
+     detect this, instruction sequences must be used to detect such
+     overflow.  No C construct allows for this.
+
+  b. On sparc, specifically, the tagged add instruction allows a
+     check that the two operands have the two low order bits set to 0.
+     On architectures where a fixnum has a two-bit tag of 0 (or, more
+     likely, where the tag is in the three LSbits and fixnums take
+     up both tags 0 and 4), this instruction allows for an automatic
+     detection of non-fixnum operands in an add instruction (as the
+     open-coded portion of a #'+ operation). C provides no semantics
+     for such tagged-add usage.  Presumably, portable C will efficiently
+     compile the equivalent mask/test/add operation [e.g.
+     ((x|y & ~3) : lisp_add(x,y) ? (x+y)) ], although this does not
+     also handle the overflow situation.
+
+  c. On architectures which trap on misaligned references (this always
+     excludes RS/6000 for hardware reasons and almost always excludes
+     Intel architectures for operating system reasons), and assuming a
+     three-lower-bit tagging scheme, the tags can be arranged in such a
+     way that a car/cdr access of an object that is not a list will
+     cause a trap that will be recognized by a trap handler.  For
+     example, Allegro defines conses with tag bits 001, and nil has
+     tag 101.  The car function in pseudo-assembler is simply
+     "ld Rx,-1(Ry)".  If the access is not aligned, the object in Ry
+     was not a cons or nil.
+
+     {Portable C note: C can cause alignment traps under some conditions.
+      However, it is hard to predict what assembler code is produced, so
+      that the trap handler can give a nice message which includes the
+      bad object; for example:
+
+      USER(1): (car 'a)
+      Error: Attempt to take the car of A which is not listp.
+      ...
+
+      }
+
+  d. Continuing from errors is hard if the environment cannot be
+     restored.  In the case of an unbound symbol, the simplistic
+     approach (and the one which portable C must take) is to call
+     out to an error handler, which can then return with the corrected
+     value once the restart is taken.  However, this approach can
+     lead to tremendous code bloat, since every safe symbol access
+     must make a function call to an error handler.  Consider instead
+     this session:
+
+USER(1): (defun foo () (declare (optimize (speed 2) (safety 0))) *x*)
+FOO
+USER(2): (compile 'foo)
+; While compiling FOO:
+Warning: Free reference to undeclared variable *X* assumed special.
+FOO
+T
+T
+USER(3): (disassemble 'foo)
+;; disassembly of #<Function FOO>
+;; formals: 
+;; constant vector:
+0:	*X*
+
+;; code start: #x204d43c4:
+   0: e3 02       jcxz	4
+   2: cd 61       int	$97             ; trap-argerr
+   4: d0 7f a3    sarb	[edi-93],$1     ; C_INTERRUPT
+   7: 74 02       jz	11
+   9: cd 64       int	$100            ; trap-signal-hit
+  11: 8b 4e 32    movl	ecx,[esi+50]    ; *X*
+  14: 8b 41 0d    movl	eax,[ecx+13]
+  17: 3b 47 bf    cmpl	eax,[edi-65]    ; UNBOUND
+  20: 75 02       jnz	24
+  22: cd 63       int	$99             ; trap-unbound
+  24: f8          clc
+  25: 8b 75 fc    movl	esi,[ebp-4]
+  28: c3          ret
+  29: 90          nop
+USER(4): (foo)
+Error: Attempt to take the value of the unbound variable `*X*'.
+  [condition type: UNBOUND-VARIABLE]
+
+Restart actions (select using :continue):
+ 0: Try evaluating *X* again.
+ 1: Set the symbol-value of *X* and use its value.
+ 2: Use a value without setting *X*.
+ 3: Return to Top Level (an "abort" restart)
+[1] USER(5): :cont 1
+enter an expression which will evaluate to a new value: 'hi
+HI
+USER(6): (foo)
+HI
+USER(7): 
+
+   Note that in the disassembled output, the interrupt instruction at
+   byte 22 is bypassed if *x* is bound, and its value is in the return
+   value register (eax, in this case).  But when *x* is unbound, the
+   interrupt occurs, and the trap handler parses the code prior to the
+   interrupt both to figure out what symbol is being referenced, and
+   to figure out what destination register is wanted for the value.
+   When the continuation at index 1 is selected, and a value is
+   supplied, the variable is set, and then the interrupt handler
+   arranges that the appropriate register (eax) will get the value
+   when the interrupt is returned at instruction byte 24.
+
+   Needless to say, there is simply no way to do this in C.
+
+In addition to the above list, I have heard several times the
+suggestion that lisp could use the C as a backend for optimizations.
+I tend to disagree with this, because of the nature of C optimizations.
+There are, of course, issues about the front-end optimizations such
+as loop unrolling, strength reduction, and common-subexpression
+elimination that must be considered on a per language-need basis,
+and there are also the back-end optimizations like branch-tensioning,
+instruction scheduling, and other peephole items that must be done.
+But it seems to me that the largest source of C compiler work (and bugs
+that I've seen) has to do with anti-aliasing proofs; given two pointers
+in C, how does one prove that the objects pointed to are/aren't the same?
+Since you can either think of lisp as a language with _all_ pointers
+or _no_ pointers, and since object equality is defined by the semantics
+of the language, pointer aliasing is not a problem as often for lisp.
+
+To be fair, there are areas where algorithms for strength reduction and
+other optimizations could be handled by the lower-level assembler/compiler,
+and some of these optimizations we are behind on (each of the
+native-compiler lisps have their strengths and their weaknesses, and
+for example such numeric analysis is definitely one of CMUCL's strengths).
+
+
+References (thanks to Howard Stearns for supplying this):
+
+A classic virtual register machine for running Lisp is the subject of
+one chapter of:
+  Abelson, Harold, Gerald Jay Sussman and Julie Sussman. 
+  Structure and Interpretation of Computer Programs. MIT Press,
+  1985. 542 pages. ISBN 0-262-01077-1 Second Edition, 1996.
+
+A brief discussion of many of these issues and how they effect
+performance is the first chapter of:
+  Gabriel, Richard P. Performance and Evaluation of Lisp Systems. 
+  MIT Press, 1986. 285 pages. ISBN 0-262-07093-6
+
+Compile-to-C issues are discussed in this paper AND in its references:
+  Stearns, Howard. Lisp/C Integration in Eclipse.  
+  40th Anniversary of Lisp Conference, 1998. 
+  http://www.elwood.com/eclipse/papers/lugm98/lisp-c.html
+
+More detailed discussion of different compilation techniques for Lisp
+can be found throughout:
+  Queinnec, Christian. LiSP in Small Pieces. 
+  Cambridge University Press, Cambridge, U.K., 1996.  514 pages.
+
+
+
+
+-- 
+Duane Rettig          Franz Inc.            http://www.franz.com/ (www)
+1995 University Ave Suite 275  Berkeley, CA 94704
+Phone: (510) 548-3600; FAX: (510) 548-8253   duane@Franz.COM (internet)

@@ -1,0 +1,779 @@
+-*- coding: utf-8 -*-
+Location: http://www.nhplace.com/kent/Papers/Exceptional-Situations-1990.html   
+                        Exceptional Situations In Lisp                         
+                                                                               
+                 This paper appears in the proceedings for the                 
+ First European Conference on the Practical Application of Lisp (EUROPAL'90),  
+             Churchill College, Cambridge, UK, March 27-29, 1990.              
+          It won a "Best Paper" award (Tools & Techniques category).           
+
+The substance of the original text appears in normal fonting, though a small
+number of out-and-out typos were corrected. Oddities of spelling that were the
+custom of the time (either generally, or just for me) were left alone. Some
+formatting of headings and tables was adjusted slightly for HTML. Any new text
+that has been added appears bracketed and in color green; such text is intended
+to help clarify the historical context, since considerable time passed between
+the time this paper was published and the time I converted it to HTML.
+--Kent Pitman, 17-Oct-1998.
+
+                     Annotated original document follows.                      
+            Click here for an index of other titles by Kent Pitman.            
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+                        Exceptional Situations In Lisp                         
+                                                                               
+                                Kent M. Pitman                                 
+
+                       [address at time of publication]                        
+                                Symbolics, Inc.                                
+                      8 New England Executive Park, East                       
+                       Burlington, MA 01803-5007 U.S.A.                        
+
+                                   Abstract                                    
+                                                                               
+It is useful to partition the description of a program's behavior into two
+parts--what happens in normal situations, and what happens in exceptional
+situations. This paper surveys the issues involved in the description of
+program behavior during exceptional situations.
+
+Keywords: Conditions, Errors, Exceptions, Handling, Lisp, Signalling.
+
+Copyright © 1990, 1985 Kent M. Pitman. All Rights Reserved.
+[HTML document Copyright © 1999 Kent M. Pitman. All Rights Reserved.]
+
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                    
+
+I. Introduction
+
+During a computation, functions communicate with one another by passing
+arguments, by returning values, and by side-effect upon shared structures.
+Consider the following definitions:
+
+(+ n1 n2)  returns the sum of its arguments, n1 and n2.                    
+
+(READ-CHAR returns the next character on the input stream, instream. This  
+instream)  function performs an implicit side-effect upon instream,        
+           typically incrementing some internal scan pointer, in order to  
+           assure that subsequent attempts to read from the same stream do 
+           not try to re-read the same character.                          
+
+The descriptions of + and READ-CHAR given above describe their behavior in what
+we shall call the normal situation. Sometimes, however, an exceptional
+situation will arise which does not fit neatly into the normal description of a
+function. For example, + might receive an argument which is not a number, or
+READ-CHAR might receive a stream which has no more available characters.
+
+This paper examines the phenomenon of exceptional situations and the
+programming techniques which can be employed to deal with such situations.
+
+II. The Nature of Exceptional Situations
+
+It is important to recognize that this distinction between normal and
+exceptional situations is in some sense contrived. Making this distinction does
+not change the way programs behave; it simply changes the way we reason about
+programs--hopefully for the better.
+
+We normally think of + as a function which adds two numbers, but imagine for a
+moment that when it receives a non-numeric argument, it just returns false
+
+[1]. We could define it to be "normal" for + to return "either the sum of its
+two arguments if they are numbers or false if they are not." This wouldn't
+change what + did, only how we thought about it. Rather than just being a
+function which returned a number, + would become a function which returned
+either a number or NIL. In general, any program which could potentially be
+described in terms of normal and exceptional situations can also be described
+with only a normal description by simply taking some union of those normal and
+exceptional descriptions and declaring that union to be normal.
+
+However, if we were to claim that it was "normal" to use + with a non-numeric
+argument, then we would have to tolerate as normal a usage such as
+
+                                   (+ 'A 'B)                                   
+                                                                               
+where a programmer called + explicitly with non-numeric because he planned to
+take advantage of the fact that it would yield false. (Perhaps the programmer
+doesn't know that the variable NIL holds the false object and this expression
+encodes his desire to produce NIL as a value.) Somehow we want to discourage
+the programmer from using + in this fashion, and one way to do so is simply to
+describe such a use as "not normal."
+
+In the rest of this section, we will survey some of the specific advantages
+that come from making this admittedly contrived distinction between normal and
+exceptional situations.
+
+Simplifying Assumptions
+
+One reason for distinguishing between normal and exceptional situations shows
+itself in the use of simplifying assumptions that typically distinguish a
+prototype from a production quality program. A programmer may speed the
+development of a program by assuming that the program will be needed only for
+some normal case. For example, the tokenizer for a parser might be initially
+coded to simply read characters from a stream until a token break, without
+handing the exceptional situation that occurs at the end of file when there is
+no next character. In so doing, the programmer pushes off worrying about a
+level of detail that would only be distracting during the prototyping phase.
+Later, after it has been shown that the program works satisfactorily in normal
+situations, the programmer can "tighten up" the program to handle exceptional
+situations. This idea is explored in detail in [Rich 81] and [Lieberman 82].
+
+Presentation
+
+Simplifying assumptions can also be important after a program has been
+developed--when it is being read by another programmer. The person reading the
+code may want to first understand what it does in the normal situation and then
+later refine his understanding of it by inspecting its behavior in exceptional
+situations. If the code for dealing with the normal situation is thickly
+interspersed with code attempting to recognize and deal with exceptional
+situations, the reader's ability to decipher the intent of the program may be
+greatly diminished.
+
+This problem may be dealt with in at least two ways. One way would be to
+provide constructs within the language which encourage the separation of code
+to deal with normal and exceptional situations. Another way would be to provide
+editing technology which allowed the code for the exceptional situations to be
+hidden while the normal situation is examined on its own. Even in the case
+where editing technology is used, it helps significantly if there is
+language-level support for this separation to serve as a guide for the editing
+tools.
+
+Modularity
+
+The idea that the language should encourage separation of normal and
+exceptional situations has appeal for another reason. It frequently happens
+that the same exceptional situation can occur in many different places in a
+program; and, in many cases, the way it should be handled is the same
+throughout the program.
+
+For example, consider a program which is compiling a file from a remote
+machine. If the remote machine crashes, the compilation will probably want to
+simply fail no matter what routine was running. Languages should provide some
+way of centralizing the information about a program's behavior in such an
+exceptional situation so that it doesn't have to be needlessly repeated
+throughout the code for the program.
+
+In languages which have no built-in support for condition handling, information
+must be propagated back from every program to indicate success or failure. The
+constant need to deal explicitly with error codes is at best tedious and
+distracting--and at worst very dangerous. Some programmers are prone to get
+sloppy about checking such codes in all cases where they should, and this can
+lead to unreliable connectivity between programs.
+
+Efficiency
+
+In some cases, there may be efficiency reasons for considering some cases to be
+exceptional. For example, the compiled code for + will be less efficient if it
+must contain explicit checks for its arguments being non-numbers. In Maclisp 
+[Pitman 83] [2], for example, the interpreted + function will "signal an error"
+if invoked with bad arguments, but compiled calls to + will just "do the wrong
+thing" if that situation arises [3].
+
+It would seem a useful goal for a compiler to be permitted to do this sort of
+optimization, but a compiler cannot be permitted to sacrifice proper semantics
+for efficiency.
+
+To avoid any chance that the actions of a good compiler might be seen as
+unpredictable or irrational, we must make it a goal to describe functions in
+such a way that compiler optimizations do not violate programmer expectations.
+By distinguishing between normal and exceptional situations, we can accomplish
+this goal. The definition of + is potentially compromised only in the
+exceptional situation--its semantics will always be maintained for the normal
+situation, even in highly optimized code. If we had not made this distinction,
+we would have to either make + do extra work in compiled code or describe the
+process of compiling + as "unreliable."
+
+III. Dealing With Exceptional Situations
+
+When an exceptional situation arises in a program, there are a number of
+possible actions that can be taken.
+
+Ignoring Exceptional Situations
+
+Our description of exceptional situations is general enough to include
+situations which are not normal but which the program does not recognize as
+such. The example of how compiled calls to + behave in Maclisp is an example of
+this behavior. Hence, one possible way in which programs can deal with
+exceptional situations is to fail to recognize them.
+
+While such failure might not be something to encourage as a programming style,
+it is important to recognize that it does occur--frequently, in fact. It can
+happen any time an assumption of any kind is made by code but not mechanically
+verified (either at compile time or runtime).
+
+Modified Return Value Conventions
+
+In some situations, the type of the return value is highly constrained. For
+example, since we know that many operations on numbers yield only other
+numbers, we could use non-numeric return values from such functions to convey
+other kinds of information. Our earlier suggestion that + might return false
+when passed non-numeric arguments is an example of this technique. While this
+technique is not totally general, it is clearly useful in a statistically
+interesting number of cases.
+
+A slightly more complicated variation of this technique arises with the Maclisp
+ERRSET primitive. ERRSET evaluates its argument, "trapping" any errors. The
+designers of ERRSET wanted to return the result of the computation if there was
+no error, but also to be able to detect whether there was an error or not.
+Since evaluation could return any single object, their challenge was to devise
+a return value convention which expressed both of these pieces of information
+unambiguously. Their solution was to return NIL if an error had occurred or a
+list the first element of which was the result of the evaluation if no error
+occurred.
+
+(ERRSET (OPEN "NOSUCHFILE.TXT"))
+ -> NIL
+
+(ERRSET (OPEN "FILE.TXT"))
+ -> (#FILE-IN-|FILE.TXT|-70766)
+
+Multiple Return Values
+
+The solution to this "ERRSET problem" in Zetalisp [Weinreb 81] is somewhat more
+graceful because a function can simply return multiple values. Zetalisp
+provides a macro called IGNORE-ERRORS which evaluates its argument and returns
+the result (or NIL if an error occurrs) as its "first return value." Since the
+case of NIL being returned in this position is ambiguous (the form might have
+returned NIL or an error might have occurred), it also returns a "second return
+value" which is NIL if no error occurred or non-NIL otherwise.
+
+(IGNORE-ERRORS (OPEN "NOSUCHFILE.TXT"))
+ -> NIL, T
+
+(IGNORE-ERRORS (OPEN "FILE.TXT"))
+ -> #<INPUT-STREAM "FILE.TXT" 3370754>, NIL
+
+Multiple Return Points (Lexical)
+
+Especially in Scheme [Steele 78], a popular way to deal with exceptional
+situations is simply to pass multiple continuations [Steele 76].
+
+For example, we could imagine that our earlier case of READ-CHAR could be
+reformulated by making READ-CHAR take additional arguments of functions to be
+called in the case that either there is or is not a "next character." Consider
+a hypothetical Scheme definition:
+
+(DEFINE (READ-CHAR STREAM SUCCESS FAIL)
+  (IF (STREAM-EMPTY? STREAM)
+      (FAIL)
+      (SUCCESS (STREAM-FIRST STREAM)
+               (STREAM-REST STREAM))))
+
+which would allow the caller to write:
+
+(DEFINE (VIEW-STREAM STREAM)
+  (READ-CHAR STREAM
+             (LAMBDA (FIRST-CHAR REST-OF-STREAM)
+               (WRITE-CHAR FIRST-CHAR)
+               (VIEW-STREAM REST-OF-STREAM))
+             (LAMBDA () 'DONE)))
+
+In this case, the normal and exceptional situations are factored out into
+separate functions so that they can be studied independently.
+
+Multiple Return Points (Dynamic)
+
+Sometimes a convention may have been established between a group of programs so
+that when certain exceptional situations are detected, control is transferred
+to a dynamically established point in the call chain. Such a non-local transfer
+of control is generally accomplished by the THROW primitive in Lisp.
+
+Also in this category are the mechanisms some languages provide for aborting
+and restarting computations. These are typically just "syntactic sugar" for the
+same kind of non-local transfer of control already provided by THROW. For
+example, the Maclisp ^G [4] function "throws" to a point which restarts the
+toplevel Read-Eval-Print loop.
+
+IV. Terminology
+
+In modern Lisp dialects, we encourage the use of DEFSTRUCT and DEFCLASS and
+their associated accessors and constructors rather than CAR, CDR, and CONS
+because they allow us to get away from thinking about how objects are
+implemented and enable us to speak directly in terms of more abstract
+properties of objects. As we have seen, Lisp primitively provides many ways to
+implement treatment of exceptional situations, but it seems equally important
+that we develop proper abstractions for describing and reasoning about
+exceptions.
+
+Signalling
+
+When a program detects an exceptional situation, it will typically want to
+"announce" the presence of the situation, allowing any special code which has
+been set up for dealing with that situation to be run. We will refer to this
+process of announcing an exceptional situation as signalling and to the piece
+of code which announces the situation as the signaller.
+
+The class of exceptional situations which are recognized and signalled will
+henceforth be referred to as conditions.
+
+We will think of signalling as a way for a program to "stop" and request advice
+on which of several ways to "restart." These possible ways to restart will be
+called restart options [5].
+
+Handling
+
+The pieces of code which are asked to select a restart option will be called 
+handlers. If a handler performs a non-local transfer of control (beyond the
+point of the signal), it will be said to have handled the situation. If it does
+not, it will be said to have declined.
+
+Types of Situations
+
+Some conditions are non-fatal in that the failure to handle them will not
+affect the correct behavior of the program if it simply continues on. Some
+common examples of places where non-fatal conditions might want to be signalled
+are "end of line" and "end of page" exceptions on output devices, the entry and
+exit of major and minor modes in an editor, the successful completion of
+subtasks in a multi-task project, or if-needed and if-used situations in a
+knowledge-representation system. These non-fatal conditions are sometimes
+called "hooks" because there is a well-defined behavior that can occur if no
+advice is supplied, but they offer a place to "hang" advice which will augment
+or override the default behavior.
+
+Some situations may be considered fatal in the sense that code should not
+restart beyond the point where they are signalled unless the condition is
+"corrected" by some form of external intervention. We will call such a fatal
+situation an error situation, or error.
+
+Error situations, sometimes called "bugs," may be divided into two classes:
+errors which are detected and signalled, which we shall call error conditions;
+and errors that go unsignalled (usually only to cause confusion later in the
+program's execution).
+
+Common Lisp [Steele 84] is careful to distinguish between two kinds of error
+situations by using the terminology "is an error" when an error might be
+signalled (but is not guaranteed to be) and "signals an error" to refer to
+situations where an error is guaranteed to be signalled. These terms correspond
+fairly directly to our terms "error situation" and "error condition."
+
+V. Signalling
+
+We now turn to the question of what kind of information needs to accompany a
+signal. It may help here to appeal to a fairly concrete example.
+
+Let us imagine a situation in the control program for a robot butler which is
+about to put food on the table where the robot notices that the eggs it is
+about to serve are green. We might imagine that the signaller's code would look
+something like:
+
+To Serve a Tray-of-Food:
+ For each Food in the Tray-of-Food,
+   If the Food's Color is not
+      the Food's Expected-Color,
+     Signal a Bad-Food-Color condition
+       specifying the Food,
+                  its Color, and
+                  its Expected-Color.
+ Carry the Tray-of-Food to the Dining-Room.
+ Place the Tray-of-Food on the Table.
+
+Unfortunately, the "code" does not provide enough information for a potential
+handler to advise it about how to continue beyond the point where the error is
+signalled. Since the handler may not have access to the data structures
+necessary for correcting the problem and since the signaller has not provided
+"code" to implement any corrections, multiple correction strategies will not in
+general be possible.
+
+For this reason, when a condition is signalled, we should remember that two
+kinds of information may need to be provided: a description of the condition
+and a description of what, if anything, the signaller is prepared to do in
+order to restart the stopped computation.
+
+In the case that restarting is possible, the above code does not suffice. What
+would be needed might look more like:
+
+To Serve a Tray-of-Food:
+ For each Food in the Tray-of-Food
+   If the Food's Color is not
+      the Food's Expected-Color,
+     Signal a Bad-Food-Color condition
+       specifying the Food,
+                  its Color, and
+                  its Expected-Color
+       and heeding advice on which of
+           the following ways to restart:
+         To Add-Food-Coloring
+              of a given Color:
+           Put Food-Coloring
+             of the given Color
+             into the Food;
+         To Serve-Food-Anyway:
+           Continue;
+         To Throw-Food-Away:
+           Remove the Food
+             from the Tray-of-Food.
+ Carry the Tray-of-Food to the Dining-Room.
+ Place the Tray-of-Food on the Table.
+
+VI. Handling
+
+When a condition is signalled, handlers may exist which could potentially
+handle the error. We will defer for the moment the question of how such
+handlers are located and for now concern ourselves with what those handlers
+will want to do once they are located.
+
+Informally, we may think of a handler as analogous to a piece of sage advice.
+But like any advice, there may be times when it is appropriate and times when
+it is not. Some of those times may be partly determined by issues of scope
+which will be discussed later; others will be determined by inspecting the
+description of the condition and the options the signaller has suggested are
+available.
+
+Some appropriate means will have to be provided for inspecting the condition.
+In Maclisp, the means provided [6] is a function to examine the condition state
+at the current (or a given) stack frame. This made it quite difficult to test
+condition handlers out of context. Experience with Zetalisp suggests that an
+object-based approach (where the handler receives an argument representing the
+condition's description and is provided with a means of inspecting that object)
+is more flexible.
+
+After inspecting the description, the handler might want to do any of a number
+of things. For example, to continue our earlier robot scenario:
+
+  • It might suggest that it is acceptable to serve the food anyway.
+  • It might suggest that the food not be served.
+  • It might suggest that the color of the food be changed.
+  • It might suggest replacing the food with another kind of food.
+  • It might suggest replacing the food with "better" food of the same kind.
+
+These items involve giving advice about how to restart. In order to give such
+advice, the handler would have to have verified that the particular restart
+option it was suggesting was acceptable to the signaller.
+
+Regardless of the signaller's situation, the handler may always decline to
+handle the condition.
+
+  • It might say it has no suggestion about how to restart.
+
+Also regardless of the situation, the handler may always handle the situation
+by bypassing it entirely. For example:
+
+  • It might blow up the building.
+
+The demolition of the building containing our hypothetical food problem is
+analogous to what happens during a non-local transfer of control from a stack
+frame that is signalling an error. The situation is resolved by obliterating
+some outer context in which the situation arose in the first place.
+
+Provisional Handling
+
+Some advice may want to be given provisionally. For example, the handler might
+want to say: "If you can find nothing better to guide you, I have some advice.
+However, I would prefer that you ask around for other advice first and come
+back to me only as a last resort."
+
+In Zetalisp, the CONDITION-BIND-DEFAULT macro addresses this issue, but forces
+the decision about whether advice is to be provisional or not to be decided at
+coding time (when the user must select between CONDITION-BIND and
+CONDITION-BIND-DEFAULT) rather than allowing the user to defer this decision
+until runtime.
+
+In any system where default handlers may be established, there is the question
+of how to resolve the situation where two defaults have been asserted. In
+Zetalisp, when a signal goes unhandled by normal bound handlers (set up by
+CONDITION-BIND), default handlers (set up by CONDITION-BIND-DEFAULT) are
+searched from the inside out (along the dynamic call chain) until a handler is
+found [7].
+
+The emerging standard for ANSI Common Lisp permits the programmer to resignal a
+condition from within a handler. This power enables one to achieve the power of
+Zetalisp's CONDITION-BIND-DEFAULT using a form like [8]:
+
+(HANDLER-BIND ((type1
+                 #'(LAMBDA (C)
+                     (SIGNAL C)
+                     ... default advice ...
+                     )))
+  form1 form2 ...)
+
+In the above scenario, the use of SIGNAL effectively guards the default advice:
+A recursive signal of the condition occurs. If the recursive signal is handled,
+then the default advice will never be reached. If the recursive signal is not
+handled, the call to SIGNAL returns and the default advice is executed. Unlike
+the Zetalisp approach, the new Common Lisp approach will permit the decision
+about whether the advice is "default" to be made dynamically at
+program-execution time rather than statically at program-writing time.
+
+Classifying Conditions
+
+When a condition handler is trying to determine whether its advice would be
+applicable in a given situation, it can be considerably helped by the
+availability of a class hierarchy for condition types. For example, a general
+piece of advice appropriate for a "file" error can be recognized as appropriate
+for a more specific "file not found" error using such a mechanism.
+
+Experience with the Zetalisp condition system has shown that this is a
+situation where the availability of multiple superclasses for condition types
+is nearly essential. Some errors do not fit neatly into a strict hierarchy; for
+example, if an "end of file" error is signalled from within the READ function,
+is this a "parse" error or a "stream" error? If it is possible for a condition
+type to have multiple superclasses, an "end of file" error can inherit from
+both of the more general types "parse" error and "stream" error. This feature
+allows handlers a great deal of flexibility in deciding which conditions they
+are willing to advise.
+
+Classifying Restart Options
+
+Some advice may be more specific than others. For example, suppose that the
+handler for our Bad-Food-Color condition wants to suggest that the food color
+to be changed and the signaller is prepared to Add-Food-Coloring. There might
+want to be some notion of a class hierarchy for restart options such that
+Add-Food-Coloring is recognized as an appropriate substitute for Change-Color 
+[9].
+
+VII. Connecting Signallers with Handlers
+
+When a condition is signalled, there are some questions about how an
+appropriate handler should be located.
+
+Scope of Handlers
+
+The first decision to be made is whether handlers for conditions are to be
+"globally assigned" or "locally bound."
+
+The trend in programming seems strongly in the direction of eliminating any
+notion of "global" assignment in favor of operators that bind things. Hence,
+recent Lisp dialects are more likely to provide operators with names like
+CONDITION-BIND which provide handlers for conditions within a certain scope 
+[10] than operators with names like CONDITION-SET which side-effect some
+"global" default handler.
+
+In Zetalisp, for example, the CONDITION-BIND macro makes a set of handlers
+available within the dynamic context of the execution of its body. It also
+accomplishes the additional service of partitioning the applicability of
+handlers according to condition type. For example, the form
+
+(CONDITION-BIND ((type1 handler1)
+                 (type2 handler2) ...)
+  form1 form2 ...)
+
+will attempt to use a given handler for signals generated within its body only
+if those signals are of the associated type (or some subclass of that type).
+
+Had the handlers not been partitioned by type, each handler would have been
+required to determine which its applicability dynamically. In practice, this
+would probably have resulted in unnecessarily bloated and highly idiomatic code
+usages such as:
+
+(HYPOTHETICAL-CONDITION-BIND
+        (#'(LAMBDA (CONDITION)
+             (COND   ((TYPEP CONDITION 'type1)
+                      (FUNCALL handler1 
+                               CONDITION))
+                     (T (DECLINE CONDITION))))
+         #'(LAMBDA (CONDITION)
+             (COND   ((TYPEP CONDITION 'type2)
+                      (FUNCALL handler2 
+                               CONDITION))
+                     (T (DECLINE CONDITION))))
+         ...)
+  form1 form2 ...)
+
+Global Handling
+
+One could imagine the possibility of associating a newly defined condition type
+with a global handler for conditions of that type. In Lisp dialects providing
+some sort of generic function or message passing facility, this might be
+implemented as a method for objects of that condition type which is called only
+if no bound handler was found. Among other things, this idea of a global
+handler could be used to insure that some action (e.g., entry to the debugger)
+would always occur if a particular type of condition went unhandled.
+
+Zetalisp runs each bound handler in an environment where it is no longer
+visible, so that if an error occurs while running a buggy handler, that handler
+will not be used to try to handle the error. A key problem with the idea of
+global handlers is that it is more difficult to devise a mechanism (especially
+in a shared memory, multi-tasking environment such as Zetalisp uses) for
+disabling a global handler temporarily (in a way that does not interfere with
+other "processes").
+
+The Synchronous Nature of Conditions
+
+The "condition systems" provided in existing Lisps [1990] are primarily 
+synchronous. That is, the act of signalling a condition from code causes that
+code to block pending advice from handlers, which are then run synchronously in
+the same process.
+
+Any discussion of asynchronous conditions would require new terminology to
+define what it means to interrupt a running process, and is beyond the scope of
+this paper. X3J13 has also chosen to leave this an open issue.
+
+VIII. Summary
+
+The descriptions of programs may be usefully divided into two parts, which
+separately describe their behavior in normal situations and their behavior in 
+exceptional situations.
+
+This distinction is important when developing programs because it allows
+programmers to make simplifying assumptions about the nature of programs. It
+can also have important consequences on the presentation of a program's code,
+by visually separating the code that handles normal and exceptional situations.
+Aspects of programs' modularity and efficiency can also be affected by the
+decision to make this distinction.
+
+Most languages already provide adequate control mechanism for dealing with
+exceptional situations, including ignoring such situations, varying return
+value conventions, varying the number of return values, and allowing programs
+to exit via non-local transfer of control such as THROW.
+
+Unfortunately, although these mechanisms are powerful enough to implement
+appropriate kinds of control structures, they are not sufficiently abstract to
+encourage as a language for describing and reasoning about exceptional
+situations. New vocabulary must be evolved to present existing functionality in
+a more abstract way.
+
+In this paper, we have surveyed various aspects of existing condition systems
+[1990] for Lisp and have established terminology which may be used in
+describing their behavior in an abstract way.
+
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                    
+
+                                     Notes                                     
+                                                                               
+An earlier version of this paper [Pitman 85] was available as Working Paper 268
+from the M.I.T Artificial Intelligence Laboratory but was never formally
+published. In spite of this, the original paper did serve as a basis for the
+design of the condition system which is part of the Common Lisp standard now
+[1990] being finalized by American National Standards Institute (ANSI)
+subcommittee X3J13 in the United States. The concepts expressed in the earlier
+paper are as valid today as they were five years ago. The paper has been
+updated primarily to incorporate minor changes in terminology and "frame of
+reference" since the 1985 paper.
+
+Many of the ideas in this paper were inspired by the "New Error System" for the
+Symbolics computers [Weinreb 83]. Other ideas descend from discussions with
+Eugene Ciccarelli, David Moon, and Daniel Weinreb.
+
+Any reference to "the emerging ANSI Common Lisp standard" refers to work in
+progress by the American National Standards Institute (ANSI) subcommittee X3J13
+in the United States. At the time this paper was written (December, 1989),
+X3J13 had not produced any public document such as a standard or even a draft
+standard. As such, references to what the ANSI standard might or might not look
+like are really just snapshots of work in progress and therefore subject to
+change without notice. Mention of ANSI and its ongoing process is for
+illustration purposes only--the ideas expressed here are those of the author
+and are not yet formally endorsed by ANSI.
+
+[Since the time of this paper, of course, ANSI has published X3.226/1994,
+informally referred to as ANSI Common Lisp. The official copy is available only
+in hardcopy, but a content-equivalent derivative work is available as the 
+Common Lisp HyperSpec.
+--KMP 04-Apr-1999]
+
+Some terms used in this paper also occur in the documentation for Zetalisp
+(e.g., [Weinreb 83]) and in the emerging ANSI Common Lisp standard. The usages
+in this paper have been chosen to be essentially compatible.
+
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                    
+
+                                  References                                   
+                                                                               
+[Conway    R.W. Conway and D. Gries, An Introduction to Programming: A         
+75]        Structured Approach Using PL/I and PL/C-7, Winthrop Publishers,     
+           Inc., Cambridge, MA, 1975.                                          
+           [The purpose of this reference here is probably confused. I had     
+           wanted to cite a reference to PL/1, from which many of the ideas in 
+           Weinreb's work descended. However, I think it may be only Honeywell 
+           Multics PL/1 that had the relevant features and this referenced item
+           doesn't specifically document that dialect. Oh well. Can't change   
+           history. If someone does have a citation for Honeywell Multics PL/1,
+           they should tell me and I'll update this document.                  
+           --KMP 04-Apr-1999]                                                  
+[Lieberman H. Lieberman, "Seeing What Your Programs Are Doing," Memo 656, MIT  
+82]        Artificial Intelligence Laboratory, Cambridge, MA, February 1982.   
+[Liskov    B. Liskov, et al, CLU Reference Manual, Technical Report 225, MIT   
+79]        Laboratory for Computer Science, Cambridge, MA, October 1979.       
+[Pitman    K. Pitman, The Revised Maclisp Manual (Saturday Evening Edition),   
+83]        Technical Report 295, MIT Laboratory for Computer Science,          
+           Cambridge, MA, May 1983.                                            
+[Pitman    K. Pitman, "Exceptional Situations In Lisp," Working Paper 268, MIT 
+85]        Artificial Intelligence Laboratory, Cambridge, MA, February 1985.   
+[Rich 81]  C. Rich and R.C. Waters, "The Disciplined Use of Simplifying        
+           Assumptions," Working Paper 220, MIT Artificial Intelligence        
+           Laboratory, Cambridge, MA, December 1981.                           
+[Steele    G.L. Steele, Jr., and G.J. Sussman, "LAMBDA, The Ultimate           
+76]        Imperative," Memo 353, MIT Artificial Intelligence Laboratory,      
+           Cambridge, MA, March 1976.                                          
+[Steele    G.L. Steele, Jr., and G.J. Sussman, "The Revised Report on SCHEME: A
+78]        Dialect of LISP," Memo 452, MIT Artificial Intelligence Laboratory, 
+           Cambridge, MA, January 1978.                                        
+[Steele    G.L. Steele, Jr., Common Lisp: The Language, Digital Press,         
+84]        Burlington, MA, 1984.                                               
+           [Subsequent to publication of this paper, Steele published the      
+           Second Edition which incorporates the first; this second edition is 
+           available on the web. --KMP 04-Apr-1999]                            
+[Weinreb   D.L. Weinreb and D.A. Moon, Lisp Machine Manual (Fourth Edition),   
+81]        MIT Artificial Intelligence Laboratory, Cambridge, MA, July 1981.   
+[Weinreb   D.L. Weinreb, Signalling and Handling Conditions, Document #990097, 
+83]        Symbolics, Inc., Cambridge, MA, 1983.                               
+
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                    
+
+                                   Footnotes                                   
+                                                                               
+1  At least one commercially available dialect of Lisp does exactly this.      
+                                                                               
+2  Maclisp is a dialect of Lisp for DEC PDP-10 and Honeywell Multics machines. 
+   It reached peak popularity in the 1970's and had a strong influence on      
+   Common Lisp.                                                                
+                                                                               
+3  Specifically, it will ignore the type information of the arguments,         
+   interpreting the bit patterns as if they represented fixnums. The result may
+   be mystifying to novice programmers.                                        
+                                                                               
+4  The Maclisp function ^G is so named because it simulates the effect of the  
+   Maclisp abort character, Control-G.                                         
+                                                                               
+5  The concept which was originally introduced in Symbolics Zetalisp as a      
+   "proceed option" is called a "restart" by X3J13. This paper uses X3J13      
+   terminology where possible.                                                 
+                                                                               
+6  Actually, Maclisp has only an error system, not a condition system, but we  
+   will assume that the same principles apply.                                 
+                                                                               
+7  The best direction of search is a subject of debate. For example, the author
+   contends that CONDITION-BIND-DEFAULT should search from outside in. However,
+   few systems have ever reached the necessary complexity for this situation to
+   have occurred at all. In time, as systems grow larger and need more fine    
+   tuning, better data will be available about what programmers really want and
+   need, and subjective questions like this will be more readily answered.     
+                                                                               
+8  The emerging ANSI Common Lisp specification uses the term HANDLER-BIND for  
+   what Zetalisp calls CONDITION-BIND.                                         
+                                                                               
+9  The author is not aware of condition systems for any existing languages that
+   support the notion of a class hierarchy for restart options.                
+   [This paper was written before Dylan came along. Dylan unifies the notion of
+   conditions and restarts, and in the process provides type hierarchy support 
+   for restarts. --KMP 04-Apr-1999]                                            
+                                                                               
+10 The scope could in principle be either dynamic or lexical, though in        
+   practice dynamic scope or some very close variant always seems to be        
+   preferred in existing systems.                                              
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Original printed text document
+Copyright 1985, 1990 Kent M. Pitman. All Rights Reserved.
+
+HTML hypertext version of document
+Copyright 1999, Kent M. Pitman. All rights reserved.
+The following limited, non-exclusive, revokable licenses are granted:
+
+    Browsing of this document (that is, transmission and display of a temporary
+    copy of this document for the ordinary purpose of direct viewing by a human
+    being in the usual manner that hypertext browsers permit such viewing) is
+    expressly permitted, provided that no recopying, redistribution, redisplay,
+    or retransmission is made of any such copy.
+   
+    Bookmarking of this document (that is, recording only the document's title
+    and Uniform Resource Locator, or URL, but not its content, for the purpose
+    of remembering an association between the document's title and the URL, and
+    /or for the purpose of making a subsequent request for a fresh copy of the
+    content named by that URL) is also expressly permitted.
+   
+All other uses require negotiated permission.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            Click here for an index of other titles by Kent Pitman.            
+

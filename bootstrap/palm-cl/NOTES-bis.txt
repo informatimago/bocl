@@ -1,0 +1,1255 @@
+;;;; -*- mode:lisp;coding:utf-8 -*-
+
+(tagbody
+ (progn ;; <--- exit point for (go :label)
+   (progn ;; <--- exit point for (go :label)
+     (go :label)))
+ :label)
+
+
+(block :the-future
+  (progn ;; <--- exit point for (return-from :the-future)
+    (progn ;; <--- exit point for (return-from :the-future)
+      (return-from :the-future))))
+
+
+(catch :ball
+  (progn ;; <--- exit point for (throw :ball)
+    (progn ;; <--- exit point for (throw :ball)
+      (throw :ball))))
+
+
+
+"
+http://www.lispworks.com/reference/HyperSpec/Body/05_b.htm
+
+5.2 Transfer of Control to an Exit Point
+
+1. Intervening exit points are ``abandoned'' (i.e., their extent ends
+   and it is no longer valid to attempt to transfer control through
+   them).
+
+2. The cleanup clauses of any intervening unwind-protect clauses are
+   evaluated.
+
+3. Intervening dynamic bindings of special variables, catch tags,
+   condition handlers, and restarts are undone.
+
+4. The extent of the exit point being invoked ends, and control is
+   passed to the target.
+"
+
+
+Interpreter in Lisp
+
+Bytecompiler / virtual machine
+
+
+
+
+
+Accessor COMPILER-MACRO-FUNCTION                                03_Evaluation
+Accessor MACRO-FUNCTION                                         03_Evaluation
+Declaration DECLARATION                                         03_Evaluation
+Declaration DYNAMIC-EXTENT                                      03_Evaluation
+Declaration FTYPE                                               03_Evaluation
+Declaration IGNORE                                              03_Evaluation
+Declaration IGNORABLE                                           03_Evaluation
+Declaration INLINE                                              03_Evaluation
+Declaration NOTINLINE                                           03_Evaluation
+Declaration OPTIMIZE                                            03_Evaluation
+Declaration SPECIAL                                             03_Evaluation
+Declaration TYPE                                                03_Evaluation
+Function COMPILE                                                03_Evaluation
+Function CONSTANTP                                              03_Evaluation
+Function EVAL                                                   03_Evaluation
+Function MACROEXPAND                                            03_Evaluation
+Function MACROEXPAND-1                                          03_Evaluation
+Function PROCLAIM                                               03_Evaluation
+Function SPECIAL-OPERATOR-P                                     03_Evaluation
+Macro DECLAIM                                                   03_Evaluation
+Macro DEFINE-COMPILER-MACRO                                     03_Evaluation
+Macro DEFINE-SYMBOL-MACRO                                       03_Evaluation
+Macro DEFMACRO                                                  03_Evaluation
+Macro LAMBDA                                                    03_Evaluation
+Special Operator EVAL-WHEN                                      03_Evaluation
+Special Operator LOAD-TIME-VALUE                                03_Evaluation
+Special Operator LOCALLY                                        03_Evaluation
+Special Operator QUOTE                                          03_Evaluation
+Special Operator SYMBOL-MACROLET                                03_Evaluation
+Special Operator THE                                            03_Evaluation
+Symbol DECLARE                                                  03_Evaluation
+Symbol LAMBDA                                                   03_Evaluation
+Variable *MACROEXPAND-HOOK*                                     03_Evaluation
+
+
+Class STANDARD-OBJECT                                           04_Type
+Class STRUCTURE-OBJECT                                          04_Type
+Condition Type SIMPLE-TYPE-ERROR                                04_Type
+Condition Type TYPE-ERROR                                       04_Type
+Function COERCE                                                 04_Type
+Function SUBTYPEP                                               04_Type
+Function TYPE-ERROR-DATUM                                       04_Type
+Function TYPE-ERROR-EXPECTED-TYPE                               04_Type
+Function TYPE-OF                                                04_Type
+Function TYPEP                                                  04_Type
+Macro DEFTYPE                                                   04_Type
+System Class BUILT-IN-CLASS                                     04_Type
+System Class CLASS                                              04_Type
+System Class FUNCTION                                           04_Type
+System Class GENERIC-FUNCTION                                   04_Type
+System Class METHOD                                             04_Type
+System Class METHOD-COMBINATION                                 04_Type
+System Class STANDARD-CLASS                                     04_Type
+System Class STANDARD-GENERIC-FUNCTION                          04_Type
+System Class STANDARD-METHOD                                    04_Type
+System Class STRUCTURE-CLASS                                    04_Type
+System Class T                                                  04_Type
+Type BOOLEAN                                                    04_Type
+Type COMPILED-FUNCTION                                          04_Type
+Type NIL                                                        04_Type
+Type Specifier AND                                              04_Type
+Type Specifier EQL                                              04_Type
+Type Specifier MEMBER                                           04_Type
+Type Specifier NOT                                              04_Type
+Type Specifier OR                                               04_Type
+Type Specifier SATISFIES                                        04_Type
+Type Specifier VALUES                                           04_Type
+
+
+
+Accessor FDEFINITION                                            05_Flow
+Accessor VALUES                                                 05_Flow
+Condition Type CONTROL-ERROR                                    05_Flow
+Condition Type PROGRAM-ERROR                                    05_Flow
+Condition Type UNDEFINED-FUNCTION                               05_Flow
+Constant Variable CALL-ARGUMENTS-LIMIT                          05_Flow
+Constant Variable LAMBDA-LIST-KEYWORDS                          05_Flow
+Constant Variable LAMBDA-PARAMETERS-LIMIT                       05_Flow
+Constant Variable MULTIPLE-VALUES-LIMIT                         05_Flow
+Constant Variable NIL                                           05_Flow
+Constant Variable T                                             05_Flow
+Function APPLY                                                  05_Flow
+Function COMPILED-FUNCTION-P                                    05_Flow
+Function COMPLEMENT                                             05_Flow
+Function CONSTANTLY                                             05_Flow
+Function EQ                                                     05_Flow
+Function EQL                                                    05_Flow
+Function EQUAL                                                  05_Flow
+Function EQUALP                                                 05_Flow
+Function EVERY                                                  05_Flow
+Function FBOUNDP                                                05_Flow
+Function FMAKUNBOUND                                            05_Flow
+Function FUNCALL                                                05_Flow
+Function FUNCTION-LAMBDA-EXPRESSION                             05_Flow
+Function FUNCTIONP                                              05_Flow
+Function GET-SETF-EXPANSION                                     05_Flow
+Function IDENTITY                                               05_Flow
+Function NOT                                                    05_Flow
+Function NOTANY                                                 05_Flow
+Function NOTEVERY                                               05_Flow
+Function SOME                                                   05_Flow
+Function VALUES-LIST                                            05_Flow
+Macro AND                                                       05_Flow
+Macro CASE                                                      05_Flow
+Macro CCASE                                                     05_Flow
+Macro COND                                                      05_Flow
+Macro CTYPECASE                                                 05_Flow
+Macro DEFCONSTANT                                               05_Flow
+Macro DEFINE-MODIFY-MACRO                                       05_Flow
+Macro DEFINE-SETF-EXPANDER                                      05_Flow
+Macro DEFPARAMETER                                              05_Flow
+Macro DEFSETF                                                   05_Flow
+Macro DEFUN                                                     05_Flow
+Macro DEFVAR                                                    05_Flow
+Macro DESTRUCTURING-BIND                                        05_Flow
+Macro ECASE                                                     05_Flow
+Macro ETYPECASE                                                 05_Flow
+Macro MULTIPLE-VALUE-BIND                                       05_Flow
+Macro MULTIPLE-VALUE-LIST                                       05_Flow
+Macro MULTIPLE-VALUE-SETQ                                       05_Flow
+Macro NTH-VALUE                                                 05_Flow
+Macro OR                                                        05_Flow
+Macro PROG                                                      05_Flow
+Macro PROG*                                                     05_Flow
+Macro PROG1                                                     05_Flow
+Macro PROG2                                                     05_Flow
+Macro PSETF                                                     05_Flow
+Macro PSETQ                                                     05_Flow
+Macro RETURN                                                    05_Flow
+Macro ROTATEF                                                   05_Flow
+Macro SETF                                                      05_Flow
+Macro SHIFTF                                                    05_Flow
+Macro TYPECASE                                                  05_Flow
+Macro UNLESS                                                    05_Flow
+Macro WHEN                                                      05_Flow
+Special Form SETQ                                               05_Flow
+Special Operator BLOCK                                          05_Flow
+Special Operator CATCH                                          05_Flow
+Special Operator FLET                                           05_Flow
+Special Operator FUNCTION                                       05_Flow
+Special Operator GO                                             05_Flow
+Special Operator IF                                             05_Flow
+Special Operator LABELS                                         05_Flow
+Special Operator LET                                            05_Flow
+Special Operator LET*                                           05_Flow
+Special Operator MACROLET                                       05_Flow
+Special Operator MULTIPLE-VALUE-CALL                            05_Flow
+Special Operator MULTIPLE-VALUE-PROG1                           05_Flow
+Special Operator PROGN                                          05_Flow
+Special Operator PROGV                                          05_Flow
+Special Operator RETURN-FROM                                    05_Flow
+Special Operator TAGBODY                                        05_Flow
+Special Operator THROW                                          05_Flow
+Special Operator UNWIND-PROTECT                                 05_Flow
+
+
+Macro DO                                                        06_Iteration
+Macro DO*                                                       06_Iteration
+Macro DOTIMES                                                   06_Iteration
+Macro DOLIST                                                    06_Iteration
+Macro LOOP                                                      06_Iteration
+Local Macro LOOP-FINISH                                         06_Iteration
+
+
+
+Standard Generic Function FUNCTION-KEYWORDS                     07_Object
+Accessor FIND-CLASS                                             07_Object
+Condition Type UNBOUND-SLOT                                     07_Object
+Function CLASS-OF                                               07_Object
+Function ENSURE-GENERIC-FUNCTION                                07_Object
+Function MAKE-LOAD-FORM-SAVING-SLOTS                            07_Object
+Function SLOT-BOUNDP                                            07_Object
+Function SLOT-EXISTS-P                                          07_Object
+Function SLOT-MAKUNBOUND                                        07_Object
+Function SLOT-VALUE                                             07_Object
+Function UNBOUND-SLOT-INSTANCE                                  07_Object
+Local Function CALL-NEXT-METHOD                                 07_Object
+Local Function NEXT-METHOD-P                                    07_Object
+Local Macro CALL-METHOD                                         07_Object
+Local macro MAKE-METHOD                                         07_Object
+Macro DEFCLASS                                                  07_Object
+Macro DEFGENERIC                                                07_Object
+Macro DEFINE-METHOD-COMBINATION                                 07_Object
+Macro DEFMETHOD                                                 07_Object
+Macro WITH-ACCESSORS                                            07_Object
+Macro WITH-SLOTS                                                07_Object
+Standard Generic Function (SETF CLASS-NAME)                     07_Object
+Standard Generic Function ADD-METHOD                            07_Object
+Standard Generic Function ALLOCATE-INSTANCE                     07_Object
+Standard Generic Function CHANGE-CLASS                          07_Object
+Standard Generic Function CLASS-NAME                            07_Object
+Standard Generic Function COMPUTE-APPLICABLE-METHODS            07_Object
+Standard Generic Function FIND-METHOD                           07_Object
+Standard Generic Function INITIALIZE-INSTANCE                   07_Object
+Standard Generic Function MAKE-INSTANCE                         07_Object
+Standard Generic Function MAKE-INSTANCES-OBSOLETE               07_Object
+Standard Generic Function MAKE-LOAD-FORM                        07_Object
+Standard Generic Function METHOD-QUALIFIERS                     07_Object
+Standard Generic Function NO-APPLICABLE-METHOD                  07_Object
+Standard Generic Function NO-NEXT-METHOD                        07_Object
+Standard Generic Function REINITIALIZE-INSTANCE                 07_Object
+Standard Generic Function REMOVE-METHOD                         07_Object
+Standard Generic Function SHARED-INITIALIZE                     07_Object
+Standard Generic Function SLOT-MISSING                          07_Object
+Standard Generic Function SLOT-UNBOUND                          07_Object
+Standard Generic Function UPDATE-INSTANCE-FOR-DIFFERENT-CLASS   07_Object
+Standard Generic Function UPDATE-INSTANCE-FOR-REDEFINED-CLASS   07_Object
+
+Macro DEFSTRUCT                                                 08_Structure
+Function COPY-STRUCTURE                                         08_Structure
+
+Condition Type CELL-ERROR                                       09_Condition
+Condition Type CONDITION                                        09_Condition
+Condition Type ERROR                                            09_Condition
+Condition Type PARSE-ERROR                                      09_Condition
+Condition Type SERIOUS-CONDITION                                09_Condition
+Condition Type SIMPLE-CONDITION                                 09_Condition
+Condition Type SIMPLE-ERROR                                     09_Condition
+Condition Type SIMPLE-WARNING                                   09_Condition
+Condition Type STORAGE-CONDITION                                09_Condition
+Condition Type STYLE-WARNING                                    09_Condition
+Condition Type WARNING                                          09_Condition
+Function ABORT                                                  09_Condition
+Function BREAK                                                  09_Condition
+Function CELL-ERROR-NAME                                        09_Condition
+Function CERROR                                                 09_Condition
+Function COMPUTE-RESTARTS                                       09_Condition
+Function CONTINUE                                               09_Condition
+Function ERROR                                                  09_Condition
+Function FIND-RESTART                                           09_Condition
+Function INVALID-METHOD-ERROR                                   09_Condition
+Function INVOKE-DEBUGGER                                        09_Condition
+Function INVOKE-RESTART                                         09_Condition
+Function INVOKE-RESTART-INTERACTIVELY                           09_Condition
+Function MAKE-CONDITION                                         09_Condition
+Function METHOD-COMBINATION-ERROR                               09_Condition
+Function MUFFLE-WARNING                                         09_Condition
+Function RESTART-NAME                                           09_Condition
+Function SIGNAL                                                 09_Condition
+Function SIMPLE-CONDITION-FORMAT-ARGUMENTS                      09_Condition
+Function SIMPLE-CONDITION-FORMAT-CONTROL                        09_Condition
+Function STORE-VALUE                                            09_Condition
+Function USE-VALUE                                              09_Condition
+Function WARN                                                   09_Condition
+Macro ASSERT                                                    09_Condition
+Macro CHECK-TYPE                                                09_Condition
+Macro DEFINE-CONDITION                                          09_Condition
+Macro HANDLER-BIND                                              09_Condition
+Macro HANDLER-CASE                                              09_Condition
+Macro IGNORE-ERRORS                                             09_Condition
+Macro RESTART-BIND                                              09_Condition
+Macro RESTART-CASE                                              09_Condition
+Macro WITH-CONDITION-RESTARTS                                   09_Condition
+Macro WITH-SIMPLE-RESTART                                       09_Condition
+Restart ABORT                                                   09_Condition
+Restart CONTINUE                                                09_Condition
+Restart MUFFLE-WARNING                                          09_Condition
+Restart STORE-VALUE                                             09_Condition
+Restart USE-VALUE                                               09_Condition
+System Class RESTART                                            09_Condition
+Variable *BREAK-ON-SIGNALS*                                     09_Condition
+Variable *DEBUGGER-HOOK*                                        09_Condition
+
+
+Accessor GET                                                    10_Symbol
+Accessor SYMBOL-FUNCTION                                        10_Symbol
+Accessor SYMBOL-PLIST                                           10_Symbol
+Accessor SYMBOL-VALUE                                           10_Symbol
+Condition Type UNBOUND-VARIABLE                                 10_Symbol
+Function BOUNDP                                                 10_Symbol
+Function COPY-SYMBOL                                            10_Symbol
+Function GENSYM                                                 10_Symbol
+Function GENTEMP                                                10_Symbol
+Function KEYWORDP                                               10_Symbol
+Function MAKE-SYMBOL                                            10_Symbol
+Function MAKUNBOUND                                             10_Symbol
+Function REMPROP                                                10_Symbol
+Function SET                                                    10_Symbol
+Function SYMBOL-NAME                                            10_Symbol
+Function SYMBOL-PACKAGE                                         10_Symbol
+Function SYMBOLP                                                10_Symbol
+System Class SYMBOL                                             10_Symbol
+Type KEYWORD                                                    10_Symbol
+Variable *GENSYM-COUNTER*                                       10_Symbol
+
+
+Condition Type PACKAGE-ERROR                                    11_Package
+Function DELETE-PACKAGE                                         11_Package
+Function EXPORT                                                 11_Package
+Function FIND-ALL-SYMBOLS                                       11_Package
+Function FIND-PACKAGE                                           11_Package
+Function FIND-SYMBOL                                            11_Package
+Function IMPORT                                                 11_Package
+Function INTERN                                                 11_Package
+Function LIST-ALL-PACKAGES                                      11_Package
+Function MAKE-PACKAGE                                           11_Package
+Function PACKAGE-ERROR-PACKAGE                                  11_Package
+Function PACKAGE-NAME                                           11_Package
+Function PACKAGE-NICKNAMES                                      11_Package
+Function PACKAGE-SHADOWING-SYMBOLS                              11_Package
+Function PACKAGE-USE-LIST                                       11_Package
+Function PACKAGE-USED-BY-LIST                                   11_Package
+Function PACKAGEP                                               11_Package
+Function RENAME-PACKAGE                                         11_Package
+Function SHADOW                                                 11_Package
+Function SHADOWING-IMPORT                                       11_Package
+Function UNEXPORT                                               11_Package
+Function UNINTERN                                               11_Package
+Function UNUSE-PACKAGE                                          11_Package
+Function USE-PACKAGE                                            11_Package
+Macro DEFPACKAGE                                                11_Package
+Macro DO-SYMBOLS                                                11_Package
+Macro DO-EXTERNAL-SYMBOLS                                       11_Package
+Macro DO-ALL-SYMBOLS                                            11_Package
+Macro IN-PACKAGE                                                11_Package
+Macro WITH-PACKAGE-ITERATOR                                     11_Package
+System Class PACKAGE                                            11_Package
+Variable *PACKAGE*                                              11_Package
+
+
+                                                                12_Number
+Accessor LDB                                                    12_Number
+Accessor MASK-FIELD                                             12_Number
+Condition Type ARITHMETIC-ERROR                                 12_Number
+Condition Type DIVISION-BY-ZERO                                 12_Number
+Condition Type FLOATING-POINT-INEXACT                           12_Number
+Condition Type FLOATING-POINT-INVALID-OPERATION                 12_Number
+Condition Type FLOATING-POINT-OVERFLOW                          12_Number
+Condition Type FLOATING-POINT-UNDERFLOW                         12_Number
+Constant Variable BOOLE-1                                       12_Number
+Constant Variable BOOLE-2                                       12_Number
+Constant Variable BOOLE-AND                                     12_Number
+Constant Variable BOOLE-ANDC1                                   12_Number
+Constant Variable BOOLE-ANDC2                                   12_Number
+Constant Variable BOOLE-C1                                      12_Number
+Constant Variable BOOLE-C2                                      12_Number
+Constant Variable BOOLE-CLR                                     12_Number
+Constant Variable BOOLE-EQV                                     12_Number
+Constant Variable BOOLE-IOR                                     12_Number
+Constant Variable BOOLE-NAND                                    12_Number
+Constant Variable BOOLE-NOR                                     12_Number
+Constant Variable BOOLE-ORC1                                    12_Number
+Constant Variable BOOLE-ORC2                                    12_Number
+Constant Variable BOOLE-SET                                     12_Number
+Constant Variable BOOLE-XOR                                     12_Number
+Constant Variable DOUBLE-FLOAT-EPSILON                          12_Number
+Constant Variable DOUBLE-FLOAT-NEGATIVE-EPSILON                 12_Number
+Constant Variable LEAST-NEGATIVE-DOUBLE-FLOAT                   12_Number
+Constant Variable LEAST-NEGATIVE-LONG-FLOAT                     12_Number
+Constant Variable LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT        12_Number
+Constant Variable LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT          12_Number
+Constant Variable LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT         12_Number
+Constant Variable LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT        12_Number
+Constant Variable LEAST-NEGATIVE-SHORT-FLOAT                    12_Number
+Constant Variable LEAST-NEGATIVE-SINGLE-FLOAT                   12_Number
+Constant Variable LEAST-POSITIVE-DOUBLE-FLOAT                   12_Number
+Constant Variable LEAST-POSITIVE-LONG-FLOAT                     12_Number
+Constant Variable LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT        12_Number
+Constant Variable LEAST-POSITIVE-NORMALIZED-LONG-FLOAT          12_Number
+Constant Variable LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT         12_Number
+Constant Variable LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT        12_Number
+Constant Variable LEAST-POSITIVE-SHORT-FLOAT                    12_Number
+Constant Variable LEAST-POSITIVE-SINGLE-FLOAT                   12_Number
+Constant Variable LONG-FLOAT-EPSILON                            12_Number
+Constant Variable LONG-FLOAT-NEGATIVE-EPSILON                   12_Number
+Constant Variable MOST-NEGATIVE-DOUBLE-FLOAT                    12_Number
+Constant Variable MOST-NEGATIVE-FIXNUM                          12_Number
+Constant Variable MOST-NEGATIVE-LONG-FLOAT                      12_Number
+Constant Variable MOST-NEGATIVE-SHORT-FLOAT                     12_Number
+Constant Variable MOST-NEGATIVE-SINGLE-FLOAT                    12_Number
+Constant Variable MOST-POSITIVE-DOUBLE-FLOAT                    12_Number
+Constant Variable MOST-POSITIVE-FIXNUM                          12_Number
+Constant Variable MOST-POSITIVE-LONG-FLOAT                      12_Number
+Constant Variable MOST-POSITIVE-SHORT-FLOAT                     12_Number
+Constant Variable MOST-POSITIVE-SINGLE-FLOAT                    12_Number
+Constant Variable PI                                            12_Number
+Constant Variable SHORT-FLOAT-EPSILON                           12_Number
+Constant Variable SHORT-FLOAT-NEGATIVE-EPSILON                  12_Number
+Constant Variable SINGLE-FLOAT-EPSILON                          12_Number
+Constant Variable SINGLE-FLOAT-NEGATIVE-EPSILON                 12_Number
+Function  ARITHMETIC-ERROR-OPERATION                            12_Number
+Function *                                                      12_Number
+Function +                                                      12_Number
+Function -                                                      12_Number
+Function /                                                      12_Number
+Function /=                                                     12_Number
+Function 1+                                                     12_Number
+Function 1-                                                     12_Number
+Function <                                                      12_Number
+Function <=                                                     12_Number
+Function =                                                      12_Number
+Function >                                                      12_Number
+Function >=                                                     12_Number
+Function ABS                                                    12_Number
+Function ACOS                                                   12_Number
+Function ACOSH                                                  12_Number
+Function ARITHMETIC-ERROR-OPERANDS                              12_Number
+Function ASH                                                    12_Number
+Function ASIN                                                   12_Number
+Function ASINH                                                  12_Number
+Function ATAN                                                   12_Number
+Function ATANH                                                  12_Number
+Function BOOLE                                                  12_Number
+Function BYTE                                                   12_Number
+Function BYTE-POSITION                                          12_Number
+Function BYTE-SIZE                                              12_Number
+Function CEILING                                                12_Number
+Function CIS                                                    12_Number
+Function COMPLEX                                                12_Number
+Function COMPLEXP                                               12_Number
+Function CONJUGATE                                              12_Number
+Function COS                                                    12_Number
+Function COSH                                                   12_Number
+Function DECODE-FLOAT                                           12_Number
+Function DENOMINATOR                                            12_Number
+Function DEPOSIT-FIELD                                          12_Number
+Function DPB                                                    12_Number
+Function EVENP                                                  12_Number
+Function EXP                                                    12_Number
+Function EXPT                                                   12_Number
+Function FCEILING                                               12_Number
+Function FFLOOR                                                 12_Number
+Function FLOAT                                                  12_Number
+Function FLOAT-DIGITS                                           12_Number
+Function FLOAT-PRECISION                                        12_Number
+Function FLOAT-RADIX                                            12_Number
+Function FLOAT-SIGN                                             12_Number
+Function FLOATP                                                 12_Number
+Function FLOOR                                                  12_Number
+Function FROUND                                                 12_Number
+Function FTRUNCATE                                              12_Number
+Function GCD                                                    12_Number
+Function IMAGPART                                               12_Number
+Function INTEGER-DECODE-FLOAT                                   12_Number
+Function INTEGER-LENGTH                                         12_Number
+Function INTEGERP                                               12_Number
+Function ISQRT                                                  12_Number
+Function LCM                                                    12_Number
+Function LDB-TEST                                               12_Number
+Function LOG                                                    12_Number
+Function LOGAND                                                 12_Number
+Function LOGANDC1                                               12_Number
+Function LOGANDC2                                               12_Number
+Function LOGBITP                                                12_Number
+Function LOGCOUNT                                               12_Number
+Function LOGEQV                                                 12_Number
+Function LOGIOR                                                 12_Number
+Function LOGNAND                                                12_Number
+Function LOGNOR                                                 12_Number
+Function LOGNOT                                                 12_Number
+Function LOGORC1                                                12_Number
+Function LOGORC2                                                12_Number
+Function LOGTEST                                                12_Number
+Function LOGXOR                                                 12_Number
+Function MAKE-RANDOM-STATE                                      12_Number
+Function MAX                                                    12_Number
+Function MIN                                                    12_Number
+Function MINUSP                                                 12_Number
+Function MOD                                                    12_Number
+Function NUMBERP                                                12_Number
+Function NUMERATOR                                              12_Number
+Function ODDP                                                   12_Number
+Function PARSE-INTEGER                                          12_Number
+Function PHASE                                                  12_Number
+Function PLUSP                                                  12_Number
+Function RANDOM                                                 12_Number
+Function RANDOM-STATE-P                                         12_Number
+Function RATIONAL                                               12_Number
+Function RATIONALIZE                                            12_Number
+Function RATIONALP                                              12_Number
+Function REALP                                                  12_Number
+Function REALPART                                               12_Number
+Function REM                                                    12_Number
+Function ROUND                                                  12_Number
+Function SCALE-FLOAT                                            12_Number
+Function SIGNUM                                                 12_Number
+Function SIN                                                    12_Number
+Function SINH                                                   12_Number
+Function SQRT                                                   12_Number
+Function TAN                                                    12_Number
+Function TANH                                                   12_Number
+Function TRUNCATE                                               12_Number
+Function UPGRADED-COMPLEX-PART-TYPE                             12_Number
+Function ZEROP                                                  12_Number
+Macro DECF                                                      12_Number
+Macro INCF                                                      12_Number
+System Class COMPLEX                                            12_Number
+System Class FLOAT                                              12_Number
+System Class INTEGER                                            12_Number
+System Class NUMBER                                             12_Number
+System Class RANDOM-STATE                                       12_Number
+System Class RATIO                                              12_Number
+System Class RATIONAL                                           12_Number
+System Class REAL                                               12_Number
+Type BIGNUM                                                     12_Number
+Type BIT                                                        12_Number
+Type DOUBLE-FLOAT                                               12_Number
+Type FIXNUM                                                     12_Number
+Type LONG-FLOAT                                                 12_Number
+Type SHORT-FLOAT                                                12_Number
+Type SIGNED-BYTE                                                12_Number
+Type SINGLE-FLOAT                                               12_Number
+Type Specifier MOD                                              12_Number
+Type UNSIGNED-BYTE                                              12_Number
+Variable *RANDOM-STATE*                                         12_Number
+
+
+
+                                                                13_Characters
+Constant Variable CHAR-CODE-LIMIT                               13_Characters
+Function ALPHA-CHAR-P                                           13_Characters
+Function ALPHANUMERICP                                          13_Characters
+Function CHAR-CODE                                              13_Characters
+Function CHAR-INT                                               13_Characters
+Function CHAR-NAME                                              13_Characters
+Function CHAR-UPCASE                                            13_Characters
+Function CHAR-DOWNCASE                                          13_Characters
+Function CHAR=                                                  13_Characters
+Function CHAR/=                                                 13_Characters
+Function CHAR<                                                  13_Characters
+Function CHAR>                                                  13_Characters
+Function CHAR<=                                                 13_Characters
+Function CHAR>=                                                 13_Characters
+Function CHAR-EQUAL                                             13_Characters
+Function CHAR-NOT-EQUAL                                         13_Characters
+Function CHAR-LESSP                                             13_Characters
+Function CHAR-GREATERP                                          13_Characters
+Function CHAR-NOT-GREATERP                                      13_Characters
+Function CHAR-NOT-LESSP                                         13_Characters
+Function CHARACTER                                              13_Characters
+Function CHARACTERP                                             13_Characters
+Function CODE-CHAR                                              13_Characters
+Function DIGIT-CHAR                                             13_Characters
+Function DIGIT-CHAR-P                                           13_Characters
+Function GRAPHIC-CHAR-P                                         13_Characters
+Function NAME-CHAR                                              13_Characters
+Function STANDARD-CHAR-P                                        13_Characters
+Function UPPER-CASE-P                                           13_Characters
+Function LOWER-CASE-P                                           13_Characters
+Function BOTH-CASE-P                                            13_Characters
+System Class CHARACTER                                          13_Characters
+Type BASE-CHAR                                                  13_Characters
+Type EXTENDED-CHAR                                              13_Characters
+Type STANDARD-CHAR                                              13_Characters
+
+
+                                                                14_Cons
+System Class LIST                                               14_Cons
+Accessor CAR                                                    14_Cons
+Accessor CDR                                                    14_Cons
+Accessor CAAR                                                   14_Cons
+Accessor CADR                                                   14_Cons
+Accessor CDAR                                                   14_Cons
+Accessor CDDR                                                   14_Cons
+Accessor CAAAR                                                  14_Cons
+Accessor CAADR                                                  14_Cons
+Accessor CADAR                                                  14_Cons
+Accessor CADDR                                                  14_Cons
+Accessor CDAAR                                                  14_Cons
+Accessor CDADR                                                  14_Cons
+Accessor CDDAR                                                  14_Cons
+Accessor CDDDR                                                  14_Cons
+Accessor CAAAAR                                                 14_Cons
+Accessor CAAADR                                                 14_Cons
+Accessor CAADAR                                                 14_Cons
+Accessor CAADDR                                                 14_Cons
+Accessor CADAAR                                                 14_Cons
+Accessor CADADR                                                 14_Cons
+Accessor CADDAR                                                 14_Cons
+Accessor CADDDR                                                 14_Cons
+Accessor CDAAAR                                                 14_Cons
+Accessor CDAADR                                                 14_Cons
+Accessor CDADAR                                                 14_Cons
+Accessor CDADDR                                                 14_Cons
+Accessor CDDAAR                                                 14_Cons
+Accessor CDDADR                                                 14_Cons
+Accessor CDDDAR                                                 14_Cons
+Accessor CDDDDR                                                 14_Cons
+Accessor FIRST                                                  14_Cons
+Accessor SECOND                                                 14_Cons
+Accessor THIRD                                                  14_Cons
+Accessor FOURTH                                                 14_Cons
+Accessor FIFTH                                                  14_Cons
+Accessor SIXTH                                                  14_Cons
+Accessor SEVENTH                                                14_Cons
+Accessor EIGHTH                                                 14_Cons
+Accessor NINTH                                                  14_Cons
+Accessor TENTH                                                  14_Cons
+Accessor GETF                                                   14_Cons
+Accessor NTH                                                    14_Cons
+Accessor REST                                                   14_Cons
+Function ACONS                                                  14_Cons
+Function ADJOIN                                                 14_Cons
+Function APPEND                                                 14_Cons
+Function ASSOC                                                  14_Cons
+Function ASSOC-IF                                               14_Cons
+Function ASSOC-IF-NOT                                           14_Cons
+Function ATOM                                                   14_Cons
+Function BUTLAST                                                14_Cons
+Function NBUTLAST                                               14_Cons
+Function CONS                                                   14_Cons
+Function CONSP                                                  14_Cons
+Function COPY-ALIST                                             14_Cons
+Function COPY-LIST                                              14_Cons
+Function COPY-TREE                                              14_Cons
+Function ENDP                                                   14_Cons
+Function GET-PROPERTIES                                         14_Cons
+Function INTERSECTION                                           14_Cons
+Function NINTERSECTION                                          14_Cons
+Function LAST                                                   14_Cons
+Function LDIFF                                                  14_Cons
+Function TAILP                                                  14_Cons
+Function LIST                                                   14_Cons
+Function LIST*                                                  14_Cons
+Function LIST-LENGTH                                            14_Cons
+Function LISTP                                                  14_Cons
+Function MAKE-LIST                                              14_Cons
+Function MAPC                                                   14_Cons
+Function MAPCAR                                                 14_Cons
+Function MAPCAN                                                 14_Cons
+Function MAPL                                                   14_Cons
+Function MAPLIST                                                14_Cons
+Function MAPCON                                                 14_Cons
+Function MEMBER                                                 14_Cons
+Function MEMBER-IF                                              14_Cons
+Function MEMBER-IF-NOT                                          14_Cons
+Function NCONC                                                  14_Cons
+Function NTHCDR                                                 14_Cons
+Function NULL                                                   14_Cons
+Function PAIRLIS                                                14_Cons
+Function RASSOC                                                 14_Cons
+Function RASSOC-IF                                              14_Cons
+Function RASSOC-IF-NOT                                          14_Cons
+Function REVAPPEND                                              14_Cons
+Function NRECONC                                                14_Cons
+Function RPLACA                                                 14_Cons
+Function RPLACD                                                 14_Cons
+Function SET-DIFFERENCE                                         14_Cons
+Function NSET-DIFFERENCE                                        14_Cons
+Function SET-EXCLUSIVE-OR                                       14_Cons
+Function NSET-EXCLUSIVE-OR                                      14_Cons
+Function SUBLIS                                                 14_Cons
+Function NSUBLIS                                                14_Cons
+Function SUBSETP                                                14_Cons
+Function SUBST                                                  14_Cons
+Function SUBST-IF                                               14_Cons
+Function SUBST-IF-NOT                                           14_Cons
+Function NSUBST                                                 14_Cons
+Function NSUBST-IF                                              14_Cons
+Function NSUBST-IF-NOT                                          14_Cons
+Function TREE-EQUAL                                             14_Cons
+Function UNION                                                  14_Cons
+Function NUNION                                                 14_Cons
+Macro POP                                                       14_Cons
+Macro PUSH                                                      14_Cons
+Macro PUSHNEW                                                   14_Cons
+Macro REMF                                                      14_Cons
+System Class CONS                                               14_Cons
+System Class NULL                                               14_Cons
+Type ATOM                                                       14_Cons
+
+
+
+                                                                15_Array
+Accessor AREF                                                   15_Array
+Accessor BIT                                                    15_Array
+Accessor SBIT                                                   15_Array
+Accessor FILL-POINTER                                           15_Array
+Accessor ROW-MAJOR-AREF                                         15_Array
+Accessor SVREF                                                  15_Array
+Constant Variable ARRAY-DIMENSION-LIMIT                         15_Array
+Constant Variable ARRAY-RANK-LIMIT                              15_Array
+Constant Variable ARRAY-TOTAL-SIZE-LIMIT                        15_Array
+Function ADJUST-ARRAY                                           15_Array
+Function ADJUSTABLE-ARRAY-P                                     15_Array
+Function ARRAY-DIMENSION                                        15_Array
+Function ARRAY-DIMENSIONS                                       15_Array
+Function ARRAY-DISPLACEMENT                                     15_Array
+Function ARRAY-ELEMENT-TYPE                                     15_Array
+Function ARRAY-HAS-FILL-POINTER-P                               15_Array
+Function ARRAY-IN-BOUNDS-P                                      15_Array
+Function ARRAY-RANK                                             15_Array
+Function ARRAY-ROW-MAJOR-INDEX                                  15_Array
+Function ARRAY-TOTAL-SIZE                                       15_Array
+Function ARRAYP                                                 15_Array
+Function BIT-AND                                                15_Array
+Function BIT-ANDC1                                              15_Array
+Function BIT-ANDC2                                              15_Array
+Function BIT-EQV                                                15_Array
+Function BIT-IOR                                                15_Array
+Function BIT-NAND                                               15_Array
+Function BIT-NOR                                                15_Array
+Function BIT-NOT                                                15_Array
+Function BIT-ORC1                                               15_Array
+Function BIT-ORC2                                               15_Array
+Function BIT-XOR                                                15_Array
+Function BIT-VECTOR-P                                           15_Array
+Function MAKE-ARRAY                                             15_Array
+Function SIMPLE-BIT-VECTOR-P                                    15_Array
+Function SIMPLE-VECTOR-P                                        15_Array
+Function UPGRADED-ARRAY-ELEMENT-TYPE                            15_Array
+Function VECTOR                                                 15_Array
+Function VECTOR-POP                                             15_Array
+Function VECTOR-PUSH                                            15_Array
+Function VECTOR-PUSH-EXTEND                                     15_Array
+Function VECTORP                                                15_Array
+System Class ARRAY                                              15_Array
+System Class BIT-VECTOR                                         15_Array
+System Class VECTOR                                             15_Array
+Type SIMPLE-ARRAY                                               15_Array
+Type SIMPLE-BIT-VECTOR                                          15_Array
+Type SIMPLE-VECTOR                                              15_Array
+
+
+
+
+Accessor CHAR                                                   16_String
+Accessor SCHAR                                                  16_String
+Function MAKE-STRING                                            16_String
+Function SIMPLE-STRING-P                                        16_String
+Function STRING                                                 16_String
+Function STRING-TRIM                                            16_String
+Function STRING-LEFT-TRIM                                       16_String
+Function STRING-RIGHT-TRIM                                      16_String
+Function STRING-UPCASE                                          16_String
+Function STRING-DOWNCASE                                        16_String
+Function STRING-CAPITALIZE                                      16_String
+Function NSTRING-UPCASE                                         16_String
+Function NSTRING-DOWNCASE                                       16_String
+Function NSTRING-CAPITALIZE                                     16_String
+Function STRING=                                                16_String
+Function STRING/=                                               16_String
+Function STRING<                                                16_String
+Function STRING>                                                16_String
+Function STRING<=                                               16_String
+Function STRING>=                                               16_String
+Function STRING-EQUAL                                           16_String
+Function STRING-NOT-EQUAL                                       16_String
+Function STRING-LESSP                                           16_String
+Function STRING-GREATERP                                        16_String
+Function STRING-NOT-GREATERP                                    16_String
+Function STRING-NOT-LESSP                                       16_String
+Function STRINGP                                                16_String
+System Class STRING                                             16_String
+Type BASE-STRING                                                16_String
+Type SIMPLE-BASE-STRING                                         16_String
+Type SIMPLE-STRING                                              16_String
+
+
+
+Accessor ELT                                                    17_Sequence
+Accessor SUBSEQ                                                 17_Sequence
+Function CONCATENATE                                            17_Sequence
+Function COPY-SEQ                                               17_Sequence
+Function COUNT                                                  17_Sequence
+Function COUNT-IF                                               17_Sequence
+Function COUNT-IF-NOT                                           17_Sequence
+Function FILL                                                   17_Sequence
+Function FIND                                                   17_Sequence
+Function FIND-IF                                                17_Sequence
+Function FIND-IF-NOT                                            17_Sequence
+Function LENGTH                                                 17_Sequence
+Function MAKE-SEQUENCE                                          17_Sequence
+Function MAP                                                    17_Sequence
+Function MAP-INTO                                               17_Sequence
+Function MERGE                                                  17_Sequence
+Function MISMATCH                                               17_Sequence
+Function POSITION                                               17_Sequence
+Function POSITION-IF                                            17_Sequence
+Function POSITION-IF-NOT                                        17_Sequence
+Function REDUCE                                                 17_Sequence
+Function REMOVE                                                 17_Sequence
+Function REMOVE-IF                                              17_Sequence
+Function REMOVE-IF-NOT                                          17_Sequence
+Function DELETE                                                 17_Sequence
+Function DELETE-IF                                              17_Sequence
+Function DELETE-IF-NOT                                          17_Sequence
+Function REMOVE-DUPLICATES                                      17_Sequence
+Function DELETE-DUPLICATES                                      17_Sequence
+Function REPLACE                                                17_Sequence
+Function REVERSE                                                17_Sequence
+Function NREVERSE                                               17_Sequence
+Function SEARCH                                                 17_Sequence
+Function SORT                                                   17_Sequence
+Function STABLE-SORT                                            17_Sequence
+Function SUBSTITUTE                                             17_Sequence
+Function SUBSTITUTE-IF                                          17_Sequence
+Function SUBSTITUTE-IF-NOT                                      17_Sequence
+Function NSUBSTITUTE                                            17_Sequence
+Function NSUBSTITUTE-IF                                         17_Sequence
+Function NSUBSTITUTE-IF-NOT                                     17_Sequence
+System Class SEQUENCE                                           17_Sequence
+
+
+                                                                18_HashTable
+Accessor GETHASH                                                18_HashTable
+Function CLRHASH                                                18_HashTable
+Function HASH-TABLE-COUNT                                       18_HashTable
+Function HASH-TABLE-P                                           18_HashTable
+Function HASH-TABLE-REHASH-SIZE                                 18_HashTable
+Function HASH-TABLE-REHASH-THRESHOLD                            18_HashTable
+Function HASH-TABLE-SIZE                                        18_HashTable
+Function HASH-TABLE-TEST                                        18_HashTable
+Function MAKE-HASH-TABLE                                        18_HashTable
+Function MAPHASH                                                18_HashTable
+Function REMHASH                                                18_HashTable
+Function SXHASH                                                 18_HashTable
+Macro WITH-HASH-TABLE-ITERATOR                                  18_HashTable
+System Class HASH-TABLE                                         18_HashTable
+
+
+System Class PATHNAME                                           19_Filename
+System Class LOGICAL-PATHNAME                                   19_Filename
+Accessor LOGICAL-PATHNAME-TRANSLATIONS                          19_Filename
+Function LOAD-LOGICAL-PATHNAME-TRANSLATIONS                     19_Filename
+Function LOGICAL-PATHNAME                                       19_Filename
+Function MAKE-PATHNAME                                          19_Filename
+Function MERGE-PATHNAMES                                        19_Filename
+Function NAMESTRING                                             19_Filename
+Function FILE-NAMESTRING                                        19_Filename
+Function DIRECTORY-NAMESTRING                                   19_Filename
+Function HOST-NAMESTRING                                        19_Filename
+Function ENOUGH-NAMESTRING                                      19_Filename
+Function PARSE-NAMESTRING                                       19_Filename
+Function PATHNAME                                               19_Filename
+Function PATHNAME-HOST                                          19_Filename
+Function PATHNAME-DEVICE                                        19_Filename
+Function PATHNAME-DIRECTORY                                     19_Filename
+Function PATHNAME-NAME                                          19_Filename
+Function PATHNAME-TYPE                                          19_Filename
+Function PATHNAME-VERSION                                       19_Filename
+Function PATHNAME-MATCH-P                                       19_Filename
+Function PATHNAMEP                                              19_Filename
+Function TRANSLATE-LOGICAL-PATHNAME                             19_Filename
+Function TRANSLATE-PATHNAME                                     19_Filename
+Function WILD-PATHNAME-P                                        19_Filename
+Variable *DEFAULT-PATHNAME-DEFAULTS*                            19_Filename
+
+
+
+
+Condition Type FILE-ERROR                                       20_File
+Function DELETE-FILE                                            20_File
+Function DIRECTORY                                              20_File
+Function ENSURE-DIRECTORIES-EXIST                               20_File
+Function FILE-AUTHOR                                            20_File
+Function FILE-ERROR-PATHNAME                                    20_File
+Function FILE-WRITE-DATE                                        20_File
+Function PROBE-FILE                                             20_File
+Function RENAME-FILE                                            20_File
+Function TRUENAME                                               20_File
+
+
+
+
+Condition Type END-OF-FILE                                      21_Stream
+Condition Type STREAM-ERROR                                     21_Stream
+Function BROADCAST-STREAM-STREAMS                               21_Stream
+Function CLEAR-INPUT                                            21_Stream
+Function CLOSE                                                  21_Stream
+Function CONCATENATED-STREAM-STREAMS                            21_Stream
+Function ECHO-STREAM-INPUT-STREAM                               21_Stream
+Function ECHO-STREAM-OUTPUT-STREAM                              21_Stream
+Function FILE-LENGTH                                            21_Stream
+Function FILE-POSITION                                          21_Stream
+Function FILE-STRING-LENGTH                                     21_Stream
+Function FINISH-OUTPUT                                          21_Stream
+Function FORCE-OUTPUT                                           21_Stream
+Function CLEAR-OUTPUT                                           21_Stream
+Function GET-OUTPUT-STREAM-STRING                               21_Stream
+Function INPUT-STREAM-P                                         21_Stream
+Function OUTPUT-STREAM-P                                        21_Stream
+Function INTERACTIVE-STREAM-P                                   21_Stream
+Function LISTEN                                                 21_Stream
+Function MAKE-BROADCAST-STREAM                                  21_Stream
+Function MAKE-CONCATENATED-STREAM                               21_Stream
+Function MAKE-ECHO-STREAM                                       21_Stream
+Function MAKE-STRING-INPUT-STREAM                               21_Stream
+Function MAKE-STRING-OUTPUT-STREAM                              21_Stream
+Function MAKE-SYNONYM-STREAM                                    21_Stream
+Function MAKE-TWO-WAY-STREAM                                    21_Stream
+Function OPEN                                                   21_Stream
+Function OPEN-STREAM-P                                          21_Stream
+Function PEEK-CHAR                                              21_Stream
+Function READ-BYTE                                              21_Stream
+Function READ-CHAR                                              21_Stream
+Function READ-CHAR-NO-HANG                                      21_Stream
+Function READ-LINE                                              21_Stream
+Function READ-SEQUENCE                                          21_Stream
+Function STREAM-ELEMENT-TYPE                                    21_Stream
+Function STREAM-ERROR-STREAM                                    21_Stream
+Function STREAM-EXTERNAL-FORMAT                                 21_Stream
+Function STREAMP                                                21_Stream
+Function SYNONYM-STREAM-SYMBOL                                  21_Stream
+Function TERPRI                                                 21_Stream
+Function FRESH-LINE                                             21_Stream
+Function TWO-WAY-STREAM-INPUT-STREAM                            21_Stream
+Function TWO-WAY-STREAM-OUTPUT-STREAM                           21_Stream
+Function UNREAD-CHAR                                            21_Stream
+Function WRITE-BYTE                                             21_Stream
+Function WRITE-CHAR                                             21_Stream
+Function WRITE-SEQUENCE                                         21_Stream
+Function WRITE-STRING                                           21_Stream
+Function WRITE-LINE                                             21_Stream
+Function Y-OR-N-P                                               21_Stream
+Function YES-OR-NO-P                                            21_Stream
+Macro WITH-INPUT-FROM-STRING                                    21_Stream
+Macro WITH-OPEN-STREAM                                          21_Stream
+Macro WITH-OUTPUT-TO-STRING                                     21_Stream
+System Class BROADCAST-STREAM                                   21_Stream
+System Class CONCATENATED-STREAM                                21_Stream
+System Class ECHO-STREAM                                        21_Stream
+System Class FILE-STREAM                                        21_Stream
+System Class STREAM                                             21_Stream
+System Class STRING-STREAM                                      21_Stream
+System Class SYNONYM-STREAM                                     21_Stream
+System Class TWO-WAY-STREAM                                     21_Stream
+Variable *DEBUG-IO*                                             21_Stream
+Variable *ERROR-OUTPUT*                                         21_Stream
+Variable *QUERY-IO*                                             21_Stream
+Variable *STANDARD-INPUT*                                       21_Stream
+Variable *STANDARD-OUTPUT*                                      21_Stream
+Variable *TRACE-OUTPUT*                                         21_Stream
+Variable *TERMINAL-IO*                                          21_Stream
+Macro WITH-OPEN-FILE                                            21_Stream
+
+
+
+
+
+Condition Type PRINT-NOT-READABLE                               22_Printer
+Function COPY-PPRINT-DISPATCH                                   22_Printer
+Function FORMAT                                                 22_Printer
+Function PPRINT-DISPATCH                                        22_Printer
+Function PPRINT-FILL                                            22_Printer
+Function PPRINT-LINEAR                                          22_Printer
+Function PPRINT-TABULAR                                         22_Printer
+Function PPRINT-INDENT                                          22_Printer
+Function PPRINT-NEWLINE                                         22_Printer
+Function PPRINT-TAB                                             22_Printer
+Function PRINT-NOT-READABLE-OBJECT                              22_Printer
+Function SET-PPRINT-DISPATCH                                    22_Printer
+Function WRITE                                                  22_Printer
+Function PRIN1                                                  22_Printer
+Function PRINT                                                  22_Printer
+Function PPRINT                                                 22_Printer
+Function PRINC                                                  22_Printer
+Function WRITE-TO-STRING                                        22_Printer
+Function PRIN1-TO-STRING                                        22_Printer
+Function PRINC-TO-STRING                                        22_Printer
+Local Macro PPRINT-EXIT-IF-LIST-EXHAUSTED                       22_Printer
+Local Macro PPRINT-POP                                          22_Printer
+Macro FORMATTER                                                 22_Printer
+Macro PPRINT-LOGICAL-BLOCK                                      22_Printer
+Macro PRINT-UNREADABLE-OBJECT                                   22_Printer
+Standard Generic Function PRINT-OBJECT                          22_Printer
+Variable *PRINT-ARRAY*                                          22_Printer
+Variable *PRINT-BASE*                                           22_Printer
+Variable *PRINT-RADIX*                                          22_Printer
+Variable *PRINT-CASE*                                           22_Printer
+Variable *PRINT-CIRCLE*                                         22_Printer
+Variable *PRINT-ESCAPE*                                         22_Printer
+Variable *PRINT-GENSYM*                                         22_Printer
+Variable *PRINT-LEVEL*                                          22_Printer
+Variable *PRINT-LENGTH*                                         22_Printer
+Variable *PRINT-LINES*                                          22_Printer
+Variable *PRINT-MISER-WIDTH*                                    22_Printer
+Variable *PRINT-PPRINT-DISPATCH*                                22_Printer
+Variable *PRINT-PRETTY*                                         22_Printer
+Variable *PRINT-READABLY*                                       22_Printer
+Variable *PRINT-RIGHT-MARGIN*                                   22_Printer
+
+
+
+Accessor READTABLE-CASE                                         23_Reader
+Condition Type READER-ERROR                                     23_Reader
+Function COPY-READTABLE                                         23_Reader
+Function MAKE-DISPATCH-MACRO-CHARACTER                          23_Reader
+Function READ                                                   23_Reader
+Function READ-PRESERVING-WHITESPACE                             23_Reader
+Function READ-DELIMITED-LIST                                    23_Reader
+Function READ-FROM-STRING                                       23_Reader
+Function READTABLEP                                             23_Reader
+Function SET-DISPATCH-MACRO-CHARACTER                           23_Reader
+Function GET-DISPATCH-MACRO-CHARACTER                           23_Reader
+Function SET-MACRO-CHARACTER                                    23_Reader
+Function GET-MACRO-CHARACTER                                    23_Reader
+Function SET-SYNTAX-FROM-CHAR                                   23_Reader
+Macro WITH-STANDARD-IO-SYNTAX                                   23_Reader
+System Class READTABLE                                          23_Reader
+Variable *READ-BASE*                                            23_Reader
+Variable *READ-DEFAULT-FLOAT-FORMAT*                            23_Reader
+Variable *READ-EVAL*                                            23_Reader
+Variable *READ-SUPPRESS*                                        23_Reader
+Variable *READTABLE*                                            23_Reader
+
+
+
+
+
+Function COMPILE-FILE                                           24_System
+Function COMPILE-FILE-PATHNAME                                  24_System
+Function LOAD                                                   24_System
+Function PROVIDE                                                24_System
+Function REQUIRE                                                24_System
+Macro WITH-COMPILATION-UNIT                                     24_System
+Variable *COMPILE-FILE-PATHNAME*                                24_System
+Variable *COMPILE-FILE-TRUENAME*                                24_System
+Variable *COMPILE-PRINT*                                        24_System
+Variable *COMPILE-VERBOSE*                                      24_System
+Variable *FEATURES*                                             24_System
+Variable *LOAD-PATHNAME*                                        24_System
+Variable *LOAD-TRUENAME*                                        24_System
+Variable *LOAD-PRINT*                                           24_System
+Variable *LOAD-VERBOSE*                                         24_System
+Variable *MODULES*                                              24_System
+
+
+
+
+
+Constant Variable INTERNAL-TIME-UNITS-PER-SECOND                25_Environment
+Function APROPOS                                                25_Environment
+Function APROPOS-LIST                                           25_Environment
+Function DECODE-UNIVERSAL-TIME                                  25_Environment
+Function DESCRIBE                                               25_Environment
+Function DISASSEMBLE                                            25_Environment
+Function DRIBBLE                                                25_Environment
+Function ED                                                     25_Environment
+Function GET-INTERNAL-REAL-TIME                                 25_Environment
+Function GET-INTERNAL-RUN-TIME                                  25_Environment
+Function GET-UNIVERSAL-TIME                                     25_Environment
+Function GET-DECODED-TIME                                       25_Environment
+Function INSPECT                                                25_Environment
+Function LISP-IMPLEMENTATION-TYPE                               25_Environment
+Function LISP-IMPLEMENTATION-VERSION                            25_Environment
+Function MACHINE-INSTANCE                                       25_Environment
+Function MACHINE-TYPE                                           25_Environment
+Function MACHINE-VERSION                                        25_Environment
+Function ROOM                                                   25_Environment
+Function SHORT-SITE-NAME                                        25_Environment
+Function LONG-SITE-NAME                                         25_Environment
+Function SLEEP                                                  25_Environment
+Function SOFTWARE-TYPE                                          25_Environment
+Function SOFTWARE-VERSION                                       25_Environment
+Function USER-HOMEDIR-PATHNAME                                  25_Environment
+Macro STEP                                                      25_Environment
+Macro TIME                                                      25_Environment
+Macro TRACE                                                     25_Environment
+Macro UNTRACE                                                   25_Environment
+Standard Generic Function DESCRIBE-OBJECT                       25_Environment
+Standard Generic Function DOCUMENTATION                         25_Environment
+Standard Generic Function (SETF DOCUMENTATION)                  25_Environment
+Variable *                                                      25_Environment
+Variable **                                                     25_Environment
+Variable ***                                                    25_Environment
+Variable +                                                      25_Environment
+Variable ++                                                     25_Environment
+Variable +++                                                    25_Environment
+Variable -                                                      25_Environment
+Variable /                                                      25_Environment
+Variable //                                                     25_Environment
+Variable ///                                                    25_Environment
+Function ENCODE-UNIVERSAL-TIME                                  25_Environment
+
+
+
+
+
+
+
+Special Operator EVAL-WHEN                                      03_Evaluation
+Special Operator LOAD-TIME-VALUE                                03_Evaluation
+Special Operator LOCALLY                                        03_Evaluation
+Special Operator QUOTE                                          03_Evaluation
+Special Operator SYMBOL-MACROLET                                03_Evaluation
+Special Operator THE                                            03_Evaluation
+Special Form SETQ                                               05_Flow
+Special Operator BLOCK                                          05_Flow
+Special Operator CATCH                                          05_Flow
+Special Operator FLET                                           05_Flow
+Special Operator FUNCTION                                       05_Flow
+Special Operator GO                                             05_Flow
+Special Operator IF                                             05_Flow
+Special Operator LABELS                                         05_Flow
+Special Operator LET                                            05_Flow
+Special Operator LET*                                           05_Flow
+Special Operator MACROLET                                       05_Flow
+Special Operator MULTIPLE-VALUE-CALL                            05_Flow
+Special Operator MULTIPLE-VALUE-PROG1                           05_Flow
+Special Operator PROGN                                          05_Flow
+Special Operator PROGV                                          05_Flow
+Special Operator RETURN-FROM                                    05_Flow
+Special Operator TAGBODY                                        05_Flow
+Special Operator THROW                                          05_Flow
+Special Operator UNWIND-PROTECT                                 05_Flow
+
+
+
+
+Condition Type ARITHMETIC-ERROR                                 12_Number
+Condition Type CELL-ERROR                                       09_Condition
+Condition Type CONDITION                                        09_Condition
+Condition Type CONTROL-ERROR                                    05_Flow
+Condition Type DIVISION-BY-ZERO                                 12_Number
+Condition Type END-OF-FILE                                      21_Stream
+Condition Type ERROR                                            09_Condition
+Condition Type FILE-ERROR                                       20_File
+Condition Type FLOATING-POINT-INEXACT                           12_Number
+Condition Type FLOATING-POINT-INVALID-OPERATION                 12_Number
+Condition Type FLOATING-POINT-OVERFLOW                          12_Number
+Condition Type FLOATING-POINT-UNDERFLOW                         12_Number
+Condition Type PACKAGE-ERROR                                    11_Package
+Condition Type PARSE-ERROR                                      09_Condition
+Condition Type PRINT-NOT-READABLE                               22_Printer
+Condition Type PROGRAM-ERROR                                    05_Flow
+Condition Type READER-ERROR                                     23_Reader
+Condition Type SERIOUS-CONDITION                                09_Condition
+Condition Type SIMPLE-CONDITION                                 09_Condition
+Condition Type SIMPLE-ERROR                                     09_Condition
+Condition Type SIMPLE-WARNING                                   09_Condition
+Condition Type STORAGE-CONDITION                                09_Condition
+Condition Type STREAM-ERROR                                     21_Stream
+Condition Type STYLE-WARNING                                    09_Condition
+Condition Type UNBOUND-SLOT                                     07_Object
+Condition Type UNBOUND-VARIABLE                                 10_Symbol
+Condition Type UNDEFINED-FUNCTION                               05_Flow
+Condition Type WARNING                                          09_Condition
+Type ATOM                                                       14_Cons
+Type BASE-CHAR                                                  13_Characters
+Type BASE-STRING                                                16_String
+Type BIGNUM                                                     12_Number
+Type BIT                                                        12_Number
+Type DOUBLE-FLOAT                                               12_Number
+Type EXTENDED-CHAR                                              13_Characters
+Type FIXNUM                                                     12_Number
+Type KEYWORD                                                    10_Symbol
+Type LONG-FLOAT                                                 12_Number
+Type SHORT-FLOAT                                                12_Number
+Type SIGNED-BYTE                                                12_Number
+Type SIMPLE-ARRAY                                               15_Array
+Type SIMPLE-BASE-STRING                                         16_String
+Type SIMPLE-BIT-VECTOR                                          15_Array
+Type SIMPLE-STRING                                              16_String
+Type SIMPLE-VECTOR                                              15_Array
+Type SINGLE-FLOAT                                               12_Number
+Type STANDARD-CHAR                                              13_Characters
+Type Specifier MOD                                              12_Number
+Type UNSIGNED-BYTE                                              12_Number
+
+
+Class STANDARD-OBJECT                                           04_Type
+Class STRUCTURE-OBJECT                                          04_Type
+System Class ARRAY                                              15_Array
+System Class BIT-VECTOR                                         15_Array
+System Class BROADCAST-STREAM                                   21_Stream
+System Class BUILT-IN-CLASS                                     04_Type
+System Class CHARACTER                                          13_Characters
+System Class CLASS                                              04_Type
+System Class COMPLEX                                            12_Number
+System Class CONCATENATED-STREAM                                21_Stream
+System Class CONS                                               14_Cons
+System Class ECHO-STREAM                                        21_Stream
+System Class FILE-STREAM                                        21_Stream
+System Class FLOAT                                              12_Number
+System Class FUNCTION                                           04_Type
+System Class GENERIC-FUNCTION                                   04_Type
+System Class HASH-TABLE                                         18_HashTable
+System Class INTEGER                                            12_Number
+System Class LIST                                               14_Cons
+System Class LOGICAL-PATHNAME                                   19_Filename
+System Class METHOD                                             04_Type
+System Class METHOD-COMBINATION                                 04_Type
+System Class NULL                                               14_Cons
+System Class NUMBER                                             12_Number
+System Class PACKAGE                                            11_Package
+System Class PATHNAME                                           19_Filename
+System Class RANDOM-STATE                                       12_Number
+System Class RATIO                                              12_Number
+System Class RATIONAL                                           12_Number
+System Class READTABLE                                          23_Reader
+System Class REAL                                               12_Number
+System Class RESTART                                            09_Condition
+System Class SEQUENCE                                           17_Sequence
+System Class STANDARD-CLASS                                     04_Type
+System Class STANDARD-GENERIC-FUNCTION                          04_Type
+System Class STANDARD-METHOD                                    04_Type
+System Class STREAM                                             21_Stream
+System Class STRING                                             16_String
+System Class STRING-STREAM                                      21_Stream
+System Class STRUCTURE-CLASS                                    04_Type
+System Class SYMBOL                                             10_Symbol
+System Class SYNONYM-STREAM                                     21_Stream
+System Class T                                                  04_Type
+System Class TWO-WAY-STREAM                                     21_Stream
+System Class VECTOR                                             15_Array
+
+
+"
++--------------------------------+--------------------------------+
+|                                |                                |
++--------------------------------+--------------------------------+
+"
+
+

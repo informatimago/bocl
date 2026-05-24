@@ -12,7 +12,9 @@
 --version.lock
 
 sources/bocl
+sources/print_types
 tests/test_reader
+tests/test_eval
 
 *-Listing.xml
 *-Results.xml

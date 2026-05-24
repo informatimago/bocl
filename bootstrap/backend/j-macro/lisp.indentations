@@ -1,0 +1,5 @@
+;; -*- mode:lisp -*-
+(2 define-function
+   define-method)
+(0 block)
+
