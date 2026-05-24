@@ -343,6 +343,16 @@ typedef struct Package {
     Ref used;        /* list of Package — used-package list */
 } Package;
 
+/* CL Hash Table. Phase 4 minimum: alist-backed (per design notes —
+   "alists for simplicity"). test is one of the symbols EQ, EQL, EQUAL,
+   EQUALP and selects the comparator. */
+typedef struct HashTable {
+    BLOCK_HEADER;
+    Ref test;        /* SYMBOL — EQ / EQL / EQUAL / EQUALP */
+    Ref entries;     /* alist: ((key . value) ...) */
+    Ref count;       /* INTEGER — number of entries */
+} HashTable;
+
 
 /* Slots */
 
@@ -366,6 +376,7 @@ typedef union Slots {
     BuiltInFunction             built_in_function;
     FuncallableStandardObject	funcallable_function;
     Package                     package;
+    HashTable                   hash_table;
     /*                          Classes: */
     Class                       class;
     StandardClass               standard_class;

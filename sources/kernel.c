@@ -24,6 +24,7 @@
 #include "version.h"
 #include "bocl.h"
 #include "packages.h"
+#include "hash_table.h"
 
 /* Internal Object Structure */
 
@@ -1720,6 +1721,7 @@ void kernel_initialize(void){
     reader_initialize();
     stream_initialize();
     kernel_initialize_packages();
+    kernel_initialize_hash_tables();
     bocl_register_load();
 
     kernel_initialize_rootset();

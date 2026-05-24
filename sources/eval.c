@@ -377,6 +377,17 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref designator=car(arguments);
             VALUES1(bocl_in_package(designator));}
 
+        /* (LAMBDA formals body...) at value position is the CL macro that
+           expands to (FUNCTION (LAMBDA formals body...)). Without the Lisp-
+           side macro system we just synthesise the closure here. The head-
+           position case ((lambda …) args…) is handled below. */
+        if(operator==LAMBDA_Symbol){
+            check_arg_count_min(arguments,1);
+            Ref params=car(arguments);
+            Ref body=cdr(arguments);
+            Ref fn=function_new(LAMBDA_Symbol,params,body);
+            VALUES1(closure_new(fn,environment));}
+
         if(operator==IF_Symbol){
             eval_counters.IF++;
             check_arg_count(arguments,2,3);

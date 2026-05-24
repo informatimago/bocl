@@ -33,7 +33,9 @@ bool equal(Ref a,Ref b){
     if(stringp(a)){
         if(!stringp(b)){
             return false;}
-        return eql(a,b) || string_equal(a,b);}
+        /* EQUAL is case-sensitive on strings per CL spec; that's string_eq.
+           The case-insensitive comparator is reserved for EQUALP / STRING-EQUAL. */
+        return eql(a,b) || string_eq(a,b);}
 
     if(bit_vector_p(a)){
         if(!bit_vector_p(b)){
