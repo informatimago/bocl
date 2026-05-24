@@ -25,6 +25,7 @@
 #include "bocl.h"
 #include "packages.h"
 #include "hash_table.h"
+#include "conditions.h"
 
 /* Internal Object Structure */
 
@@ -1722,6 +1723,7 @@ void kernel_initialize(void){
     stream_initialize();
     kernel_initialize_packages();
     kernel_initialize_hash_tables();
+    kernel_initialize_conditions();
     bocl_register_load();
 
     kernel_initialize_rootset();

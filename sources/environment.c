@@ -81,7 +81,7 @@ Ref environment_frames(Ref environment){
               push(list(TAGBODY_Symbol,frame_env,firsts(frame->parameters.tagbody.tags),NULL),&results);
               break;
           case frame_handler:
-              push(list(S(HANDLER),frame_env,frame->parameters.handler.conditions,NULL),&results);
+              push(list(S(HANDLER),frame_env,frame->parameters.handler.clauses,NULL),&results);
               break;
           case frame_restart:
               push(list(S(RESTART),frame_env,frame->parameters.restart.restart,NULL),&results);

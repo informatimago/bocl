@@ -19,6 +19,7 @@ tests/test_arithmetic
 tests/test_load
 tests/test_packages
 tests/test_hash_table
+tests/test_conditions
 
 *-Listing.xml
 *-Results.xml

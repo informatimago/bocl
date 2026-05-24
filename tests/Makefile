@@ -4,8 +4,8 @@ include ../sources/common.mk
 
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
-# PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages test_hash_table
-PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table
+# PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions
+PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
@@ -27,6 +27,9 @@ test_packages_LIBS = -L../sources -lbocl
 test_hash_table_SRCS = test_hash_table.c simple_test.c
 test_hash_table_LIBS = -L../sources -lbocl
 
+test_conditions_SRCS = test_conditions.c simple_test.c
+test_conditions_LIBS = -L../sources -lbocl
+
 test_ci_SRCS = test_ci.c
 test_ci_LIBS =
 # $(test_ci_SRCS) \
@@ -38,7 +41,8 @@ all_SRCS = \
 	test_arithmetic.c \
 	test_load.c \
 	test_packages.c \
-	test_hash_table.c
+	test_hash_table.c \
+	test_conditions.c
 
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
@@ -123,6 +127,14 @@ test_hash_table: $(test_hash_table_SRCS:%.c=%.d) $(test_hash_table_SRCS:%.c=%.o)
 run_test_hash_table:test_hash_table
 	@printf "# Testing %s\n" $^
 	$(VERBOSE) $(RUN) ./test_hash_table ;echo status=$$?
+
+test_conditions: $(test_conditions_SRCS:%.c=%.d) $(test_conditions_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_conditions_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_conditions_SRCS:%.c=%.o) $(test_conditions_LIBS)
+
+run_test_conditions:test_conditions
+	@printf "# Testing %s\n" $^
+	$(VERBOSE) $(RUN) ./test_conditions ;echo status=$$?
 
 run_test_bocl: $(BOCL)
 	@printf "# Testing bocl\n"

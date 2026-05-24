@@ -153,14 +153,19 @@ Ref copy_list(Ref list){
     uword pool=open_live_pool();
     add_to_live_pool(list);
     if(nullp(list)){
+        close_live_pool(pool);
         return list;}
     Ref result=cons(car(list),NIL_Symbol);
+    add_to_live_pool(result);
     Ref tail=result;
     list=cdr(list);
     while(consp(list)){
-        rplacd(tail,cons(car(list),NIL_Symbol));
+        Ref new_cell=cons(car(list),NIL_Symbol);
+        rplacd(tail,new_cell);
+        tail=new_cell;            /* previously missing — produced (A) for (list A B) */
         list=cdr(list);}
-    rplacd(tail,cdr(list));
+    if(!nullp(list)){              /* preserve dotted-list tail */
+        rplacd(tail,list);}
     close_live_pool(pool);
     return result;}
 

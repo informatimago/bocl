@@ -707,6 +707,67 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     dolist(subform,cleanup){
                         evale(subform,environment,results);}}}}
 
+        /* (HANDLER-CASE form clause...) where each clause is
+              (type-spec (var) body...)
+           type-spec is currently restricted to a single class designator
+           (a symbol naming a built-in class, or the class object itself).
+           Listed compound types (or, and, etc.) wait for the type system. */
+        if(operator==S(HANDLER-CASE)){
+            eval_counters.UNWIND_PROTECT++;  /* reuse counter; no dedicated one */
+            check_arg_count_min(arguments,1);
+            Ref form=car(arguments);
+            Ref raw_clauses=cdr(arguments);
+            /* Normalise each clause: (type (var) body...) → (type-class var body-form). */
+            Ref clauses=NIL_Symbol;
+            {dolist(clause,raw_clauses){
+                if(!consp(clause) || !consp(cdr(clause))){
+                    ERROR("HANDLER-CASE: malformed clause %s",
+                          string_cstring(prin1_to_string(clause)));}
+                Ref type_spec=car(clause);
+                Ref varlist  =cadr(clause);
+                Ref body     =cddr(clause);
+                /* Resolve type_spec to a class object. */
+                Ref type_class = symbolp(type_spec) ? find_class(type_spec) : type_spec;
+                if(!typep(type_class,T_Class)){
+                    ERROR("HANDLER-CASE: unknown type %s",
+                          string_cstring(prin1_to_string(type_spec)));}
+                /* varlist must be () or (var). */
+                Ref var = nullp(varlist) ? NIL_Symbol : car(varlist);
+                /* body becomes a PROGN form for uniform eval. */
+                Ref body_form = cons(PROGN_Symbol, body);
+                push(list(type_class, var, body_form, NULL), &clauses);}}
+            clauses = nreverse(clauses);
+
+            Frame frame;
+            frame.type = frame_handler;
+            frame.parameters.handler.clauses        = clauses;
+            frame.parameters.handler.matched_clause = NIL_Symbol;
+            frame.parameters.handler.condition      = NIL_Symbol;
+            frame.results = results;
+            int code = setjmp(frame.non_local_exit);
+            if(code == 0){
+                push_frame(&frame, environment);
+                evale(form, environment, results);
+                pop_frame(&frame, environment);
+                PASS_VALUES();
+            } else {
+                /* signal_condition longjmps us here; clause + cond on the frame. */
+                pop_frame(&frame, environment);
+                Ref clause = frame.parameters.handler.matched_clause;
+                Ref cond   = frame.parameters.handler.condition;
+                if(nullp(clause)){
+                    /* unwind-only: re-raise to outer handler. Not currently used. */
+                    FATAL("HANDLER-CASE unwound without a matched clause%s","");}
+                Ref var       = cadr(clause);
+                Ref body_form = caddr(clause);
+                /* Bind var to the condition in a fresh env and eval body. */
+                Ref new_env = environment_new(environment, NIL_Symbol);
+                if(!nullp(var)){
+                    Ref wrap = env_make_lexical_variable(var, cond);
+                    environment_add_variable(wrap, new_env);}
+                evale(body_form, new_env, results);
+                PASS_VALUES();}}
+
         else if(operator==BLOCK_Symbol){
             eval_counters.BLOCK++;
             check_arg_count_min(arguments,1);

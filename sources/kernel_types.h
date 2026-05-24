@@ -148,7 +148,12 @@ typedef struct Frame {
             Ref target_tag; /* set by GO, the tag we must jump to */
         } tagbody;
         struct {
-            Ref conditions;
+            /* List of (type-class var-symbol body-form) clauses in source
+               order. SIGNAL fills the next two fields with the firing
+               clause and its condition before longjmp. */
+            Ref clauses;
+            Ref matched_clause;   /* (type-class var-sym body) — set by signaller */
+            Ref condition;        /* the condition object that was signalled */
         } handler;
         struct {
             Ref restart;
@@ -353,6 +358,15 @@ typedef struct HashTable {
     Ref count;       /* INTEGER — number of entries */
 } HashTable;
 
+/* CL Condition object. Minimal: the class slot already lives in Object;
+   we add a format-control STRING and format-arguments list so SIMPLE-
+   ERROR / SIMPLE-WARNING etc. can carry their data. */
+typedef struct Condition {
+    BLOCK_HEADER;
+    Ref format_control;       /* STRING or NIL */
+    Ref format_arguments;     /* list */
+} Condition;
+
 
 /* Slots */
 
@@ -377,6 +391,7 @@ typedef union Slots {
     FuncallableStandardObject	funcallable_function;
     Package                     package;
     HashTable                   hash_table;
+    Condition                   condition;
     /*                          Classes: */
     Class                       class;
     StandardClass               standard_class;
