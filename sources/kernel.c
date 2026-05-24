@@ -21,6 +21,7 @@
 #include "printer.h"
 #include "structure_functions.h"
 #include "arithmetic.h"
+#include "version.h"
 
 /* Internal Object Structure */
 
@@ -1566,17 +1567,20 @@ void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,Mul
 void check_no_more_arguments(Ref function,Ref arguments){
     if(nullp(arguments)){
         return;}
-    char* fname=string_cstring(function_name(function));
+    /* function_name returns the SYMBOL naming the function; pass its name
+       string into string_cstring, not the symbol itself. (Pre-fix, this
+       crashed with "got SYMBOL, expected STRING".) */
+    char* fname=string_cstring(symbol_name(function_name(function)));
     char* args=string_cstring(prin1_to_string(arguments));
     error(fname,"Too many arguments, unused: %s",args);
-    /* TODO: clear up this mess, error doesn't return! */
+    /* error() is _Noreturn, so the frees below are unreachable. Kept as a
+       note that the strdup'd buffers are leaked when we exit on error. */
     free(fname);free(args);}
 
 Ref pop_mandatory_argument(Ref function,Ref* arguments){
     if(nullp(*arguments)){
-        char* fname=string_cstring(function_name(function));
-        error(fname,"Missing mantadory argument");
-        /* TODO: clear up this mess, error doesn't return! */
+        char* fname=string_cstring(symbol_name(function_name(function)));
+        error(fname,"Missing mandatory argument");
         free(fname);}
     return pop(arguments);}
 
@@ -1623,6 +1627,16 @@ void delete_from_rootset(Ref object){
     rootset=delete(object,rootset);}
 
 
+static void kernel_LISP_IMPLEMENTATION_TYPE(unused Ref function,Ref arguments,MultipleValues* results){
+    check_no_more_arguments(function,arguments);
+    results->count=1;
+    results->values[0]=T("BOCL");}
+
+static void kernel_LISP_IMPLEMENTATION_VERSION(unused Ref function,Ref arguments,MultipleValues* results){
+    check_no_more_arguments(function,arguments);
+    results->count=1;
+    results->values[0]=T(BOCL_VERSION);}
+
 static void kernel_initialize_features(void){
     Ref features=S("*FEATURES*");
     Ref list=NIL_Symbol;
@@ -1648,6 +1662,20 @@ static void kernel_initialize_features(void){
     define_constant(S(CHAR-CODE-LIMIT),         I(CHAR_CODE_LIMIT));
     define_constant(S(LAMBDA-PARAMETERS-LIMIT), I(LAMBDA_PARAMETERS_LIMIT));
     define_constant(S(MULTIPLE-VALUES-LIMIT),   I(MULTIPLE_VALUES_LIMIT));
+
+    /* The kernel has no fixnum/bignum distinction yet — every integer is a
+       word. most-{positive,negative}-fixnum therefore reflect the full word
+       range. Bignum support lives on the Lisp side ([bootstrap/bignum.lisp])
+       and will narrow MOST-POSITIVE-FIXNUM once it is loaded. */
+    define_constant(S(MOST-POSITIVE-FIXNUM),    I(WORD_MAX));
+    define_constant(S(MOST-NEGATIVE-FIXNUM),    I(WORD_MIN));
+
+    {   Ref fname=S(LISP-IMPLEMENTATION-TYPE);
+        set_symbol_function(fname,built_in_function_new(fname,NIL_Symbol,
+                                                        kernel_LISP_IMPLEMENTATION_TYPE)); }
+    {   Ref fname=S(LISP-IMPLEMENTATION-VERSION);
+        set_symbol_function(fname,built_in_function_new(fname,NIL_Symbol,
+                                                        kernel_LISP_IMPLEMENTATION_VERSION)); }
 
     define_variable(S(*LOADING-FASL-FILE*),     S(NIL));
 }

@@ -17,6 +17,7 @@
 #include "printer.h"
 #include "reader.h"
 #include "variable.h"
+#include "version.h"
 
 static const char* source="http://gitlab.com/bocl/bocl/";
 static const char* bocl_lisp="(defun repl () (catch 'quit (do () () (print (eval (read))))))";
@@ -253,14 +254,13 @@ static void process_options(int argc,char** argv){
 
 static void print_banner(void){
     printf("\nWelcome to ");
-    printf("BOCL Version 0.0\n");
-    /* bocl_read_eval_cstring("(WRITE-LINE (LISP-IMPLEMENTATION-TYPE))"); */
+    printf("BOCL Version %s\n",BOCL_VERSION);
     printf("Copyright 2021 Pascal J. Bourguignon\n");
     printf("Licensed under AGPL; source codes available at:\n");
     printf("%s\n\n",source);}
 
 static void print_version(void){
-    bocl_read_eval_cstring("(WRITE-LINE (LISP-IMPLEMENTATION-VERSION))");}
+    printf("%s\n",BOCL_VERSION);}
 
 static void wait_for_termination(int status){
     printf("Enter RET to terminate with status %d.\n",status);

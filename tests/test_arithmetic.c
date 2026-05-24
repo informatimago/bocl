@@ -201,6 +201,52 @@ static void test_function_factorial(void){
     TEST_EQ(eql, I(120), e("(fct 5)"));
     TEST_EQ(eql, I(720), e("(fct 6)"));}
 
+/* ------------------------------------------------------------------ */
+/*  Variadic arity.                                                     */
+/* ------------------------------------------------------------------ */
+
+static void test_arith_variadic(void){
+    TEST_EQ(eql, I(15),          e("(+ 1 2 3 4 5)"));
+    TEST_EQ(eql, I(120),         e("(* 1 2 3 4 5)"));
+    TEST_EQ(eql, I(84),          e("(- 100 10 5 1)"));
+    TEST_EQ(eql, I(5),           e("(/ 100 5 4)"));
+    /* Identities. */
+    TEST_EQ(eql, I(0),           e("(+)"));
+    TEST_EQ(eql, I(1),           e("(*)"));
+    /* Unary forms. */
+    TEST_EQ(eql, I(-5),          e("(- 5)"));
+    TEST_EQ(float_eq, F(0.25),   e("(/ 4)"));
+    /* The user's original failing form. */
+    TEST_EQ(eql, I(1000000000000L), e("(* 10000 10000 10000)"));}
+
+static void test_cmp_variadic(void){
+    TEST_EQ(eql, T_Symbol,   e("(< 1 2 3 4)"));
+    TEST_EQ(eql, NIL_Symbol, e("(< 1 2 2 4)"));
+    TEST_EQ(eql, T_Symbol,   e("(<= 1 2 2 4)"));
+    TEST_EQ(eql, T_Symbol,   e("(= 5 5 5)"));
+    TEST_EQ(eql, T_Symbol,   e("(/= 1 2 3)"));
+    TEST_EQ(eql, NIL_Symbol, e("(/= 1 2 1)"));
+    TEST_EQ(eql, T_Symbol,   e("(> 4 3 2 1)"));
+    TEST_EQ(eql, T_Symbol,   e("(>= 4 4 3 2)"));}
+
+static void test_minmax_variadic(void){
+    TEST_EQ(eql, I(1),   e("(min 3 1 4 1 5 9 2 6)"));
+    TEST_EQ(eql, I(9),   e("(max 3 1 4 1 5 9 2 6)"));}
+
+static void test_fixnum_constants(void){
+    /* Kernel has no fixnum/bignum split — most-positive-fixnum is WORD_MAX
+       and most-negative-fixnum is WORD_MIN. We can only assert easy invariants
+       (a full one like 1+ MOST-POSITIVE-FIXNUM = -MOST-NEGATIVE-FIXNUM blows
+       up since the right-hand side overflows). */
+    TEST_EQ(eql, T_Symbol, e("(plusp most-positive-fixnum)"));
+    TEST_EQ(eql, T_Symbol, e("(minusp most-negative-fixnum)"));
+    TEST_EQ(eql, T_Symbol, e("(< most-negative-fixnum 0 most-positive-fixnum)"));}
+
+static void test_impl_version(void){
+    /* (lisp-implementation-type) returns a non-empty string. */
+    TEST_EQ(eql, T_Symbol, e("(stringp (lisp-implementation-type))"));
+    TEST_EQ(eql, T_Symbol, e("(stringp (lisp-implementation-version))"));}
+
 TEST_INITIALIZE(test_arithmetic);
 TEST_SUITE(test_arithmetic, arith_init, arith_clean)
     TEST_CASE( "+ integers",          test_plus_int)
@@ -228,4 +274,9 @@ TEST_SUITE(test_arithmetic, arith_init, arith_clean)
     TEST_CASE( "coerce",              test_coerce)
     TEST_CASE( "user fn: squares",    test_function_squares)
     TEST_CASE( "user fn: factorial",  test_function_factorial)
+    TEST_CASE( "variadic + - * /",    test_arith_variadic)
+    TEST_CASE( "variadic comparisons",test_cmp_variadic)
+    TEST_CASE( "variadic min/max",    test_minmax_variadic)
+    TEST_CASE( "fixnum constants",    test_fixnum_constants)
+    TEST_CASE( "lisp-impl-type/ver",  test_impl_version)
     TEST_FINALIZE()

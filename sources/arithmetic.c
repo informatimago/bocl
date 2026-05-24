@@ -25,102 +25,104 @@ static bool either_float(Ref a, Ref b){
     return floatp(a) || floatp(b);}
 
 /* -------------------------------------------------------------------- *
- *  2-arg arithmetic: + - * /                                            *
+ *  Variadic arithmetic: + - * /                                         *
  *                                                                       *
  *  Mixed int/float promotes to float. int+int detects overflow via the  *
  *  __builtin_*_overflow intrinsics and signals ARITHMETIC_ERROR.        *
+ *                                                                       *
+ *  Per CL: (+) -> 0, (*) -> 1, (- x) -> -x, (/ x) -> 1/x,                *
+ *  (- a b c) -> a-b-c, (/ a b c) -> a/b/c.                              *
  * -------------------------------------------------------------------- */
+
+/* Combine two numbers with a binary op (+, -, *, / coded as a single char). */
+static Ref num_combine(char op, Ref a, Ref b){
+    check_number(a); check_number(b);
+    if(either_float(a,b)){
+        floating av=as_floating(a), bv=as_floating(b), r=0.0;
+        switch(op){
+          case '+': r = av + bv; break;
+          case '-': r = av - bv; break;
+          case '*': r = av * bv; break;
+          case '/':
+              if(bv==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+              r = av / bv; break;
+          default: FATAL("num_combine: unknown op %c",op);}
+        return float_from_floating(r);
+    } else {
+        word av=integer_value(a), bv=integer_value(b), r=0;
+        switch(op){
+          case '+':
+              if(__builtin_add_overflow(av,bv,&r)){
+                  ARITHMETIC_ERROR("Integer overflow in (+ %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
+              break;
+          case '-':
+              if(__builtin_sub_overflow(av,bv,&r)){
+                  ARITHMETIC_ERROR("Integer overflow in (- %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
+              break;
+          case '*':
+              if(__builtin_mul_overflow(av,bv,&r)){
+                  ARITHMETIC_ERROR("Integer overflow in (* %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
+              break;
+          case '/':
+              if(bv==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+              if(av%bv != 0){
+                  /* Inexact integer division promotes to float (no ratios yet). */
+                  return float_from_floating((floating)av/(floating)bv);}
+              if(av==WORD_MIN && bv==-1){
+                  ARITHMETIC_ERROR("Integer overflow in (/ %"WORD_FORMAT" -1)",av);}
+              r = av / bv;
+              break;
+          default: FATAL("num_combine: unknown op %c",op);}
+        return integer_from_word(r);}}
 
 void kernel_PLUS(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref a=pop_mandatory_argument(function,&current);
-    Ref b=pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    check_number(a); check_number(b);
-    results->count=1;
-    if(either_float(a,b)){
-        results->values[0]=float_from_floating(as_floating(a)+as_floating(b));
-    } else {
-        word r;
-        if(__builtin_add_overflow(integer_value(a),integer_value(b),&r)){
-            ARITHMETIC_ERROR("Integer overflow in (+ %"WORD_FORMAT" %"WORD_FORMAT")",
-                             integer_value(a),integer_value(b));}
-        results->values[0]=integer_from_word(r);}
-    close_live_pool(pool);}
-
-void kernel_MINUS(Ref function,Ref arguments,MultipleValues* results){
-    uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref a=pop_mandatory_argument(function,&current);
-    Ref b=pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    check_number(a); check_number(b);
-    results->count=1;
-    if(either_float(a,b)){
-        results->values[0]=float_from_floating(as_floating(a)-as_floating(b));
-    } else {
-        word r;
-        if(__builtin_sub_overflow(integer_value(a),integer_value(b),&r)){
-            ARITHMETIC_ERROR("Integer overflow in (- %"WORD_FORMAT" %"WORD_FORMAT")",
-                             integer_value(a),integer_value(b));}
-        results->values[0]=integer_from_word(r);}
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref acc=I(0);
+    add_to_live_pool(acc);
+    Ref tail=arguments;
+    if(consp(tail)){ acc=cons_car(tail); check_number(acc); tail=cons_cdr(tail); }
+    while(consp(tail)){ acc=num_combine('+',acc,cons_car(tail)); tail=cons_cdr(tail); }
+    results->count=1; results->values[0]=acc;
     close_live_pool(pool);}
 
 void kernel_TIMES(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref a=pop_mandatory_argument(function,&current);
-    Ref b=pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    check_number(a); check_number(b);
-    results->count=1;
-    if(either_float(a,b)){
-        results->values[0]=float_from_floating(as_floating(a)*as_floating(b));
-    } else {
-        word r;
-        if(__builtin_mul_overflow(integer_value(a),integer_value(b),&r)){
-            ARITHMETIC_ERROR("Integer overflow in (* %"WORD_FORMAT" %"WORD_FORMAT")",
-                             integer_value(a),integer_value(b));}
-        results->values[0]=integer_from_word(r);}
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref acc=I(1);
+    add_to_live_pool(acc);
+    Ref tail=arguments;
+    if(consp(tail)){ acc=cons_car(tail); check_number(acc); tail=cons_cdr(tail); }
+    while(consp(tail)){ acc=num_combine('*',acc,cons_car(tail)); tail=cons_cdr(tail); }
+    results->count=1; results->values[0]=acc;
     close_live_pool(pool);}
 
-/* CL's / on two integers that divide evenly is an integer; otherwise it
-   would be a ratio. Until we have ratios on the Lisp side, promote to float
-   when the division is not exact. */
+void kernel_MINUS(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref tail=arguments;
+    if(!consp(tail)){ ERROR("(-) needs at least one argument%s",""); }
+    Ref acc=cons_car(tail); check_number(acc); tail=cons_cdr(tail);
+    if(!consp(tail)){
+        /* (- x) == (- 0 x) */
+        acc=num_combine('-',I(0),acc);
+    } else {
+        while(consp(tail)){ acc=num_combine('-',acc,cons_car(tail)); tail=cons_cdr(tail); }}
+    results->count=1; results->values[0]=acc;
+    close_live_pool(pool);}
+
 void kernel_DIVIDE(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref a=pop_mandatory_argument(function,&current);
-    Ref b=pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    check_number(a); check_number(b);
-    results->count=1;
-    if(either_float(a,b)){
-        floating bv=as_floating(b);
-        if(bv==0.0){
-            ARITHMETIC_ERROR("Division by zero%s","");}
-        results->values[0]=float_from_floating(as_floating(a)/bv);
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref tail=arguments;
+    if(!consp(tail)){ ERROR("(/) needs at least one argument%s",""); }
+    Ref acc=cons_car(tail); check_number(acc); tail=cons_cdr(tail);
+    if(!consp(tail)){
+        /* (/ x) == (/ 1 x) */
+        acc=num_combine('/',I(1),acc);
     } else {
-        word av=integer_value(a), bv=integer_value(b);
-        if(bv==0){
-            ARITHMETIC_ERROR("Division by zero%s","");}
-        if((av%bv)==0){
-            /* Exact integer division. Overflow: WORD_MIN / -1. */
-            if(av==WORD_MIN && bv==-1){
-                ARITHMETIC_ERROR("Integer overflow in (/ %"WORD_FORMAT" -1)",av);}
-            results->values[0]=integer_from_word(av/bv);
-        } else {
-            /* Promote to float (no ratios yet). */
-            results->values[0]=float_from_floating((floating)av/(floating)bv);}}
+        while(consp(tail)){ acc=num_combine('/',acc,cons_car(tail)); tail=cons_cdr(tail); }}
+    results->count=1; results->values[0]=acc;
     close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *
@@ -139,26 +141,63 @@ static bool num_lt(Ref a, Ref b){
             ? as_floating(a)<as_floating(b)
             : integer_value(a)<integer_value(b);}
 
-/* Build a 2-arg comparator dispatch. */
-#define ARITH_CMP2(cname,exprab)                                    \
+/* Variadic monotonic comparator: (cmp a b c) ≡ (and (cmp a b) (cmp b c)).
+   pairp(prev,curr) is the predicate the user picked (e.g. num_lt for <). */
+typedef bool (*num_pair_pred)(Ref,Ref);
+
+static Ref num_cmp_monotonic(Ref function,Ref arguments,num_pair_pred pairp){
+    Ref tail=arguments;
+    if(!consp(tail)){
+        ERROR("%s needs at least one argument",
+              string_cstring(symbol_name(function_name(function))));}
+    Ref prev=cons_car(tail); check_number(prev); tail=cons_cdr(tail);
+    while(consp(tail)){
+        Ref curr=cons_car(tail); check_number(curr);
+        if(!pairp(prev,curr)){ return NIL_Symbol; }
+        prev=curr; tail=cons_cdr(tail);}
+    return T_Symbol;}
+
+/* (/= a b c …) is NOT monotonic — it requires every pair distinct. */
+static Ref num_neq_all_distinct(Ref function,Ref arguments){
+    if(!consp(arguments)){
+        ERROR("%s needs at least one argument",
+              string_cstring(symbol_name(function_name(function))));}
+    /* All pairwise comparison: O(n²) is fine for the small n at the REPL. */
+    Ref outer=arguments;
+    while(consp(outer)){
+        Ref a=cons_car(outer); check_number(a);
+        Ref inner=cons_cdr(outer);
+        while(consp(inner)){
+            Ref b=cons_car(inner); check_number(b);
+            if(num_eq(a,b)){ return NIL_Symbol; }
+            inner=cons_cdr(inner);}
+        outer=cons_cdr(outer);}
+    return T_Symbol;}
+
+static bool num_le_pred(Ref a, Ref b){ return !num_lt(b,a); }
+static bool num_gt_pred(Ref a, Ref b){ return  num_lt(b,a); }
+static bool num_ge_pred(Ref a, Ref b){ return !num_lt(a,b); }
+
+#define ARITH_CMPN(cname,predfn)                                    \
     void cname(Ref function,Ref arguments,MultipleValues* results){ \
         uword pool=open_live_pool();                                \
-        add_to_live_pool(function);                                 \
-        add_to_live_pool(arguments);                                \
-        Ref current=arguments;                                      \
-        Ref a=pop_mandatory_argument(function,&current);            \
-        Ref b=pop_mandatory_argument(function,&current);            \
-        check_no_more_arguments(function,current);                  \
+        add_to_live_pool(function); add_to_live_pool(arguments);    \
         results->count=1;                                           \
-        results->values[0]=as_boolean(exprab);                      \
+        results->values[0]=num_cmp_monotonic(function,arguments,predfn); \
         close_live_pool(pool);}
 
-ARITH_CMP2(kernel_NUM_EQ,    num_eq(a,b))
-ARITH_CMP2(kernel_NUM_NEQ, ! num_eq(a,b))
-ARITH_CMP2(kernel_LT,        num_lt(a,b))
-ARITH_CMP2(kernel_GT,        num_lt(b,a))
-ARITH_CMP2(kernel_LE,      ! num_lt(b,a))
-ARITH_CMP2(kernel_GE,      ! num_lt(a,b))
+ARITH_CMPN(kernel_NUM_EQ, num_eq)
+ARITH_CMPN(kernel_LT,     num_lt)
+ARITH_CMPN(kernel_GT,     num_gt_pred)
+ARITH_CMPN(kernel_LE,     num_le_pred)
+ARITH_CMPN(kernel_GE,     num_ge_pred)
+
+void kernel_NUM_NEQ(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    results->count=1;
+    results->values[0]=num_neq_all_distinct(function,arguments);
+    close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *
  *  Predicates: zerop  plusp  minusp  oddp  evenp                        *
@@ -264,31 +303,31 @@ void kernel_ABS(Ref function,Ref arguments,MultipleValues* results){
         results->values[0]=integer_from_word(v<0?-v:v);}
     close_live_pool(pool);}
 
-/* MIN and MAX are defined for two args here; the n-ary form lives in Lisp. */
+/* Variadic MIN and MAX: at least one argument; folded by the strict predicate. */
 void kernel_MIN(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref a=pop_mandatory_argument(function,&current);
-    Ref b=pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    check_number(a); check_number(b);
-    results->count=1;
-    results->values[0]=num_lt(a,b)?a:b;
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref tail=arguments;
+    if(!consp(tail)){ ERROR("(min) needs at least one argument%s",""); }
+    Ref best=cons_car(tail); check_number(best); tail=cons_cdr(tail);
+    while(consp(tail)){
+        Ref next=cons_car(tail); check_number(next);
+        if(num_lt(next,best)){ best=next; }
+        tail=cons_cdr(tail);}
+    results->count=1; results->values[0]=best;
     close_live_pool(pool);}
 
 void kernel_MAX(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
-    Ref current=arguments;
-    Ref a=pop_mandatory_argument(function,&current);
-    Ref b=pop_mandatory_argument(function,&current);
-    check_no_more_arguments(function,current);
-    check_number(a); check_number(b);
-    results->count=1;
-    results->values[0]=num_lt(a,b)?b:a;
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref tail=arguments;
+    if(!consp(tail)){ ERROR("(max) needs at least one argument%s",""); }
+    Ref best=cons_car(tail); check_number(best); tail=cons_cdr(tail);
+    while(consp(tail)){
+        Ref next=cons_car(tail); check_number(next);
+        if(num_lt(best,next)){ best=next; }
+        tail=cons_cdr(tail);}
+    results->count=1; results->values[0]=best;
     close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *

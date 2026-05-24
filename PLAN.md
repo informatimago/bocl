@@ -2,6 +2,21 @@
 
 Companion to [README.org](README.org) and [design/design.org](design/design.org). This file is the operational plan for turning bocl into a fully conforming Common Lisp implementation validated against ansi-test.
 
+## Project conventions
+
+### Version policy
+
+The current version is held in [sources/version.h](sources/version.h) as
+`BOCL_VERSION_MAJOR.BOCL_VERSION_MINOR.BOCL_VERSION_PATCH`. The banner,
+`--version`, and the Lisp-visible `(LISP-IMPLEMENTATION-VERSION)` all read
+from there.
+
+**Rule**: every commit that touches `sources/`, `tests/`, `bootstrap/`, or
+any `documents` material (PDFs, .org files) must bump `BOCL_VERSION_PATCH`
+by exactly one. PR descriptions and commit messages should reference the
+resulting version. MAJOR and MINOR only move on intentional milestone
+bumps (e.g. ansi-test passing, first self-host).
+
 ## 1. Audit (current state, 2026-05-24)
 
 bocl follows a two-layer bootstrap: a small **C kernel** plus a **Lisp library** under [bootstrap/](bootstrap/) loaded on top of it. Per the project's own design notes (README.org, design/design.org, bootstrap/TODO), the kernel is intentionally minimal — just enough to LOAD the Lisp side.
@@ -133,12 +148,23 @@ the sign is only honoured at position 0.
 - `(defun sq (n) (* n n)) (sq 4)` → `16`.
 - `(defun fct (n) (if (= n 0) 1 (* n (fct (1- n))))) (fct 5)` → `120`,
   `(fct 6)` → `720`. Self-recursion works.
+- `(* 10000 10000 10000)` → `1000000000000`. Variadic arithmetic landed
+  in v0.0.10 — `+ - * / = /= < > <= >= MIN MAX` all accept 0/1/n args
+  per CL (e.g. `(+) ⇒ 0`, `(*) ⇒ 1`, `(- x) ⇒ -x`, `(/ x) ⇒ 1/x`).
 
-Tests: [tests/test_arithmetic.c](tests/test_arithmetic.c) — 25 CUnit
+**Numeric range**: the kernel has no fixnum/bignum split — every
+integer is a word. `MOST-POSITIVE-FIXNUM = WORD_MAX` and
+`MOST-NEGATIVE-FIXNUM = WORD_MIN` are exposed as kernel constants.
+Bignums are planned for the Lisp side (see
+[bootstrap/bignum.lisp](bootstrap/bignum.lisp)) and will narrow
+`MOST-POSITIVE-FIXNUM` once loaded.
+
+Tests: [tests/test_arithmetic.c](tests/test_arithmetic.c) — 30 CUnit
 cases covering every operator with edge cases (zero, negative, mixed
 int+float, division-by-zero promotion, MOD vs REM sign, banker's
 rounding ties-to-even, bitwise `ASH` shift-by-zero/large/negative,
-`INTEGER-LENGTH` on negatives). All green.
+`INTEGER-LENGTH` on negatives, variadic forms including identities,
+fixnum constants, `(lisp-implementation-{type,version})`). All green.
 
 ### Phase 3 — file load + packages (1 week)
 
