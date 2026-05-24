@@ -857,7 +857,12 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 int result=setjmp(frame.non_local_exit);
                 UNWIND(result){
                     UWBODY{
-                        dolist(subform,body){evale(subform,environment,results);}}
+                        /* Tags (top-level symbols or integers) are labels —
+                           they are NOT evaluated. Only proper forms (conses)
+                           are evaluated. */
+                        dolist(subform,body){
+                            if(consp(subform)){
+                                evale(subform,environment,results);}}}
                     UWCLEANUP{
                     }}
                 if(frame.parameters.tagbody.target_tag==NULL){
