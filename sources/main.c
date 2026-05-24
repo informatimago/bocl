@@ -255,7 +255,7 @@ static void process_options(int argc,char** argv){
 static void print_banner(void){
     printf("\nWelcome to ");
     printf("BOCL Version %s\n",BOCL_VERSION);
-    printf("Copyright 2021 Pascal J. Bourguignon\n");
+    printf("Copyright 2021-2026 Pascal J. Bourguignon\n");
     printf("Licensed under AGPL; source codes available at:\n");
     printf("%s\n\n",source);}
 
