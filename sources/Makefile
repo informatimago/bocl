@@ -5,7 +5,7 @@ PROGRAMS = print_types bocl
 common_SRCS = \
 	bocl.c string_list.c \
 	kernel.c kernel_objects.c memory.c boerror.c \
-	built_in_functions.c \
+	built_in_functions.c arithmetic.c \
 	eval.c environment.c \
 	variable.c cons.c data.c \
 	structure.c kernel_structure_functions.c structure_functions.c \

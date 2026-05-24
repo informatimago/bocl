@@ -15,6 +15,7 @@ sources/bocl
 sources/print_types
 tests/test_reader
 tests/test_eval
+tests/test_arithmetic
 
 *-Listing.xml
 *-Results.xml

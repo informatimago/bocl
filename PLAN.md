@@ -94,19 +94,51 @@ Incidental bug fixes en route:
 
 Tests: [tests/test_eval.c](tests/test_eval.c) — 17 CUnit cases covering quote / self-eval / if / progn / setq (single + multi-pair) / let / defparameter / defun (identity + let body) / lambda head / `(function …)` / flet / labels / block / `(block … (return-from …))` / catch+throw. All green.
 
-### Phase 2 — numbers + arithmetic in the kernel (1 week)
+### Phase 2 — numbers + arithmetic in the kernel ✅ DONE
 
-Implement in [sources/integer.c](sources/integer.c) / [sources/float.c](sources/float.c) and register via the generator:
+Shipped in a new [sources/arithmetic.c](sources/arithmetic.c) (and `.h`),
+registered at startup via `kernel_initialize_arithmetic()`, called from
+`kernel_initialize()` right after the auto-generated `built_in_functions`.
+Hand-registered rather than going through `generate-built-in-functions.lisp`
+so the work is self-contained and reviewable; the generator can absorb
+these later.
 
-- `+ - * /` (2-arg first; n-ary form in Lisp library)
-- `= /= < > <= >= ZEROP PLUSP MINUSP ODDP EVENP`
-- `1+ 1- ABS MIN MAX MOD REM TRUNCATE FLOOR CEILING ROUND`
-- bitwise: `LOGAND LOGOR LOGXOR LOGNOT ASH INTEGER-LENGTH`
-- coercion: `COERCE`, `FLOAT`, `INTEGER`
+What landed (all 2-arg primitives; n-ary forms stay for the Lisp side):
 
-Defer ratios / complex / bignum to [bootstrap/bignum.lisp](bootstrap/bignum.lisp).
+- **arithmetic**: `+  -  *  /` with overflow detection via
+  `__builtin_*_overflow`; mixed int/float promotes to float; integer `/`
+  promotes to float when the division is inexact (no ratios yet).
+- **comparisons**: `=  /=  <  >  <=  >=` (numeric — so `(= 1 1.0) ⇒ T`).
+- **predicates**: `ZEROP  PLUSP  MINUSP  ODDP  EVENP`.
+- **magnitude**: `1+  1-  ABS  MIN  MAX`.
+- **integer division family**: `TRUNCATE  FLOOR  CEILING  ROUND` all
+  return 2 values (quotient, remainder); `ROUND` uses banker's rounding
+  (ties to even). Plus `MOD` (sign of divisor) and `REM` (sign of dividend).
+  1-arg forms supported (divisor defaults to 1).
+- **bitwise**: `LOGAND  LOGOR  LOGXOR  LOGNOT  ASH  INTEGER-LENGTH`.
+- **coercion**: `FLOAT`, `INTEGER` (truncating), and a narrow `COERCE`
+  that handles `FLOAT / SINGLE-FLOAT / DOUBLE-FLOAT / SHORT-FLOAT /
+  LONG-FLOAT / INTEGER / FIXNUM / NUMBER` targets. Full `COERCE` stays
+  on the Lisp side.
 
-Tests: per-op edge cases, overflow, mixed int/float promotion.
+Deferred to the Lisp library (per design): ratios, complex, bignum
+(in [bootstrap/bignum.lisp](bootstrap/bignum.lisp)).
+
+Incidental reader fix: `scan_integer` accepted a sign anywhere in the
+token, so `1+` parsed as the integer `1` (and the `+` was silently
+dropped, leaving callers with a misleading "malformed form" error). Now
+the sign is only honoured at position 0.
+
+**Milestones met**:
+- `(defun sq (n) (* n n)) (sq 4)` → `16`.
+- `(defun fct (n) (if (= n 0) 1 (* n (fct (1- n))))) (fct 5)` → `120`,
+  `(fct 6)` → `720`. Self-recursion works.
+
+Tests: [tests/test_arithmetic.c](tests/test_arithmetic.c) — 25 CUnit
+cases covering every operator with edge cases (zero, negative, mixed
+int+float, division-by-zero promotion, MOD vs REM sign, banker's
+rounding ties-to-even, bitwise `ASH` shift-by-zero/large/negative,
+`INTEGER-LENGTH` on negatives). All green.
 
 ### Phase 3 — file load + packages (1 week)
 

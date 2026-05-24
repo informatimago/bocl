@@ -20,6 +20,7 @@
 #include "reader.h"
 #include "printer.h"
 #include "structure_functions.h"
+#include "arithmetic.h"
 
 /* Internal Object Structure */
 
@@ -1657,6 +1658,7 @@ void kernel_initialize(void){
 
     kernel_objects_initialize();
     kernel_initialize_built_in_functions();
+    kernel_initialize_arithmetic();
     kernel_initialize_integers();
     kernel_initialize_characters();
     kernel_initialize_features();

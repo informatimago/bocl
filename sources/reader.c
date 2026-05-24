@@ -290,23 +290,19 @@ static Ref parse_bit_vector(parser_state* parser){
               return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}}}
 
 static Ref scan_integer(parser_state* parser){
-    /* [-+]?[0-9]+\.? */
+    /* [-+]?[0-9]+\.?  — sign is allowed ONLY at position 0; otherwise a
+       token like "1+" would mis-parse as the integer 1 and the "+" would
+       be silently dropped. */
     const char* token=(char*)parser->token;
     word sign=1;
     bool value_set=false;
     word value=0;
     size_t pos=0;
     word digit=0;
+    if(token[0]=='-'){ sign=-1; pos=1; }
+    else if(token[0]=='+'){ sign=+1; pos=1; }
     while(token[pos]){
         switch(token[pos]){
-          case '-':
-              sign=-1;
-              pos++;
-              break;
-          case '+':
-              sign=+1;
-              pos++;
-              break;
           case '0':case '1':case '2':case '3':case '4':
           case '5':case '6':case '7':case '8':case '9':
               digit=token[pos]-'0';
