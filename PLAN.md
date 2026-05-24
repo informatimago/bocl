@@ -67,18 +67,32 @@ Only [tests/test_reader.c](tests/test_reader.c) is active (CUnit, links libbocl)
 - `make clean-backups` target — remove `*.~N~` files; gitignore them.
 - Resurrect `gitlab-ci.yml-test` into `.gitlab-ci.yml` so existing reader tests run in CI.
 
-### Phase 1 — make `EVAL` actually evaluate (1–2 weeks)
+### Phase 1 — make `EVAL` actually evaluate ✅ DONE
 
-The single unblocker.
+The single unblocker. Landed in commit *(see git log)*.
 
-1. Finalise the calling convention `kernel_apply(callee, list-of-args, *results)` and document it in [design/design.org](design/design.org).
-2. Replace the placeholder `static Ref f(...)` in [sources/eval.c:232](sources/eval.c:232) with real dispatch into `kernel_apply_built_in` / `kernel_apply_function` / macro-expand-and-recurse.
-3. Implement `kernel_apply_function`: fresh `Environment`, bind required/optional/rest/keyword/aux params, push `frame_block` named after the function for `(return-from <name>)`, evaluate body, pop, return values.
-4. Implement `kernel_apply_closure` — same but captured lexical env from the closure object.
-5. Implement `SETQ` in [sources/eval.c:301](sources/eval.c:301): look up in env → lexical assign, else global. Multiple pairs.
-6. Implement `FLET` and `LABELS` (line 438+ has half code). `MACROLET` and `SYMBOL-MACROLET` can stay on the Lisp side, but the kernel must at least recognise them and expand into closures.
-7. Wire `bocl_eval` to call `evale` with the global environment and a fresh `MultipleValues`, then drop the placeholder message.
-8. **Milestone**: `(defun double (n) (* n n)) (double 4)` → `16` (depends on Phase 2 for `*`).
+What shipped:
+
+- `bocl_eval` now calls `evale` with a lazily-allocated global lexical environment held by the GC rootset.
+- `kernel_apply_function` / `kernel_apply_closure` moved from `kernel.c` (where they were `NOT_IMPLEMENTED_YET`) into [eval.c](sources/eval.c), where they can use the frame machinery. Mandatory args only — `&optional` / `&rest` / `&key` / `&aux` raise an explicit error.
+- `evale` dispatch rewritten: drops the placeholder `f()`, tries the env's function namespace first (FLET/LABELS), falls back to `symbol_function`. Macros dispatch via `env_local_macro_p` / `env_global_macro_p` wrappers.
+- `SETQ` implemented with multi-pair semantics: lexical assign if found in env, else global `set_symbol_value`.
+- `FLET` and `LABELS` bind `env_local_function` wrappers; the dispatch turns them into transient `Closure`s captured over the binding env.
+- `DEFUN`, `DEFPARAMETER`, `DEFVAR`, `DEFCONSTANT` as pseudo-special-operators in the kernel (move to the Lisp side once the macro system lands).
+- `(function …)` and `((lambda …) …)` head positions both work.
+- `environment_find_variable` / `_find_function` / `_find_block` / `_find_catch` implemented (they were `NOT_IMPLEMENTED_YET`).
+- `env_variable_value` bug fix — was returning the *name* slot instead of the value slot of every wrapper class.
+
+Incidental bug fixes en route:
+
+- **Reader**: `parse_list` and `parse_string` did not advance past their closing delimiter (`)` / `"`); an outer `parse_list` then saw the inner's close-paren as its own. Fixed.
+- **Variable subsystem**: `make_special_variable` checked `special_variable_p` (so it errored on idempotent `defparameter`); now checks `constant_variable_p` per the error message, and both `make_*_variable` are idempotent.
+- **CATCH / THROW**: neither evaluated its tag form; `CATCH`'s body wrongly skipped symbol/integer forms; `THROW`'s and `RETURN-FROM`'s error path called `error()` with the format string in the function-name slot. All fixed.
+- **`NON_LOCAL_EXIT`** macro popped the current frame before `unwind_next_frame`, which crashed when the target frame was outermost (`frame->next == NULL`). Rewrote so the `UNWIND` state machine pops each frame on setjmp re-entry.
+
+**Milestone met**: `(defun double (n) (let ((x n)) x)) (double 4)` → `4`. Multiplication waits for Phase 2.
+
+Tests: [tests/test_eval.c](tests/test_eval.c) — 17 CUnit cases covering quote / self-eval / if / progn / setq (single + multi-pair) / let / defparameter / defun (identity + let body) / lambda head / `(function …)` / flet / labels / block / `(block … (return-from …))` / catch+throw. All green.
 
 ### Phase 2 — numbers + arithmetic in the kernel (1 week)
 

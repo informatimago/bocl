@@ -1551,15 +1551,8 @@ void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results)
         /* TODO: (or function closure) */
         TYPE_ERROR(function_or_closure,FUNCTION_Class);}}
 
-void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results){
-    NOT_IMPLEMENTED_YET();
-    /* slots->environment */
-    /* slots->function */
-    /*         (closure,arguments,results); */}
-
-void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results){
-    NOT_IMPLEMENTED_YET();
-    /* slots->body(function,arguments,results); */}
+/* kernel_apply_closure and kernel_apply_function are implemented in eval.c,
+   where the frame machinery (push_frame / UNWIND) lives. */
 
 void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,MultipleValues* results){
     slots->kernel_function(function,arguments,results);}

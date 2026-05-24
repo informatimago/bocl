@@ -7,13 +7,12 @@
 #include "printer.h"
 #include "variable.h"
 #include "macros.h"
+#include "eval.h"
 
 
 Ref bocl_eval(Ref sexp){
-    Ref out=variable_value(S(*STANDARD-OUTPUT*));
-    princ(T(";; The Mighty Eval Function is not there yet, so your sexps are safe!"),out);
-    return sexp;
-    /* return S(NIL); */
+    MultipleValues results={0};
+    return evale(sexp,eval_global_environment(),&results);
 }
 
 Ref bocl_read_cstring(const char* text){

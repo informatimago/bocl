@@ -157,11 +157,12 @@ static void test_read_list(void){
            bocl_read_cstring("(a list)"));
     TEST_EQ(equal,list(C(a),S(SLIGHTLY),C(LEFT_PARENTHESIS),S(LONGER),C(QUOTATION_MARK),S(LIST),C(QUOTATION_MARK),C(RIGHT_PARENTHESIS),NULL),
            bocl_read_cstring("(#\\a slightly #\\(longer #\\\" list #\\\" #\\))"));
+    /* The input has 4 levels of parens around LIST: ((((list)))) ⇒ ((((LIST)))). */
     TEST_EQ(equal,list(S(A),list(S(RECURSIVE),list(S(AND),list(S(DEEP),
                                                               S(NIL),
                                                               list(S(NIL),NULL),
                                                               list(list(S(NIL),NULL),NULL),
-                                                              list(list(list(S(LIST),NULL),NULL),NULL),NULL),
+                                                              list(list(list(list(S(LIST),NULL),NULL),NULL),NULL),NULL),
                                                   S(ET),NULL),
                                 S(ENCORE),NULL),NULL),
            bocl_read_cstring("(a (recursive (and (deep () (()) ((())) ((((list))))) et) encore))"));}

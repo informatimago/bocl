@@ -9,6 +9,9 @@ void make_constant_variable(Ref symbol){
     if(special_variable_p(symbol)){
         ERROR("Cannot make constant a special variable %s",
               string_cstring(symbol_name(symbol)));}
+    if(constant_variable_p(symbol)){
+        /* Already constant — idempotent. */
+        return;}
     Ref plist=symbol_plist(symbol);
     plist=putf(plist,S($CONSTANT),S(T));
     set_symbol_plist(symbol,plist);}
@@ -17,9 +20,13 @@ bool constant_variable_p(Ref symbol){
    return !nullp(getf(symbol_plist(symbol),S($CONSTANT),S(NIL)));}
 
 void make_special_variable(Ref symbol){
-    if(special_variable_p(symbol)){
+    if(constant_variable_p(symbol)){
         ERROR("Cannot make special a constant variable %s",
               string_cstring(symbol_name(symbol)));}
+    if(special_variable_p(symbol)){
+        /* Already special — idempotent (defvar/defparameter may be called more
+           than once on the same name). */
+        return;}
     Ref plist=symbol_plist(symbol);
     plist=putf(plist,S($SPECIAL),S(T));
     set_symbol_plist(symbol,plist);}

@@ -4,13 +4,16 @@ include ../sources/common.mk
 
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
-# PROGRAMS    = test_ci test_reader
-PROGRAMS    = test_reader
+# PROGRAMS    = test_ci test_reader test_eval
+PROGRAMS    = test_reader test_eval
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
 test_reader_SRCS = test_reader.c simple_test.c
 test_reader_LIBS = -L../sources -lbocl
+
+test_eval_SRCS = test_eval.c simple_test.c
+test_eval_LIBS = -L../sources -lbocl
 
 test_ci_SRCS = test_ci.c
 test_ci_LIBS =
@@ -18,7 +21,8 @@ test_ci_LIBS =
 #
 
 all_SRCS = \
-	$(test_reader_SRCS)
+	$(test_reader_SRCS) \
+	test_eval.c
 
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
@@ -63,6 +67,14 @@ test_reader: $(test_reader_SRCS:%.c=%.d) $(test_reader_SRCS:%.c=%.o) $(LIBBOCL)
 run_test_reader:test_reader
 	@printf "# Testing %s\n" $^
 	$(VERBOSE) $(RUN) ./test_reader ;echo status=$$?
+
+test_eval: $(test_eval_SRCS:%.c=%.d) $(test_eval_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_eval_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_eval_SRCS:%.c=%.o) $(test_eval_LIBS)
+
+run_test_eval:test_eval
+	@printf "# Testing %s\n" $^
+	$(VERBOSE) $(RUN) ./test_eval ;echo status=$$?
 
 run_test_bocl: $(BOCL)
 	@printf "# Testing bocl\n"

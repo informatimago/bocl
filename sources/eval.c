@@ -6,6 +6,20 @@
 #include "environment.h"
 #include "variable.h"
 
+/* Forward decls for the apply helpers implemented later in this file. */
+void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
+void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results);
+
+/* The single lazily-allocated global lexical environment. Held by the GC rootset
+   so it survives across bocl_eval calls. */
+static Ref bocl_global_environment = NULL;
+
+Ref eval_global_environment(void){
+    if(bocl_global_environment==NULL){
+        bocl_global_environment=environment_new(NIL_Symbol,S(T));
+        push_to_rootset(bocl_global_environment);}
+    return bocl_global_environment;}
+
 typedef enum {
     non_local_exit_initial=0,
     non_local_exit_unwind=1,
@@ -176,11 +190,21 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
 #define UWCLEANUP                                                       \
     if(unwind_index==3)
 
+/* Trigger the unwind that takes us to target_frame. We do NOT pop the current
+   top frame here — every UNWIND state machine pops *itself* in its UWBODY
+   case 4 on re-entry via setjmp. Popping here would have torn the target
+   frame off the stack when it was the only frame on it. */
 #define NON_LOCAL_EXIT(target_frame)                                    \
     do {                                                                \
-        Frame* frame=pop_frame(NULL,environment);                       \
-        frame->target=target_frame;                                     \
-        unwind_next_frame(frame); } while(0)
+        Frame* current_top=environment->slots->environment.frames;      \
+        if(current_top==NULL){                                          \
+            FATAL("NON_LOCAL_EXIT: %s","no active frame");}             \
+        current_top->target=(target_frame);                             \
+        non_local_exit_t exit_code=(current_top==(target_frame))        \
+            ?non_local_exit_target                                      \
+            :non_local_exit_unwind;                                     \
+        longjmp(current_top->non_local_exit,(int)exit_code);            \
+    } while(0)
 
 #define PASS_VALUES()      do{close_live_pool(pool);return ((results->count==0)?NIL_Symbol:results->values[0]);}while(0)
 //#define VALUES0()          do{close_live_pool(pool);results->count=0;return NIL_Symbol;}while(0)
@@ -229,7 +253,6 @@ Ref get_eval_counters(void){
     push(cons(S(VARIABLE),              integer_from_word(eval_counters.variable)),             &result);
     return result;}
 
-static Ref f(unused Ref thing){ /* TODO: Placeholder */ return NULL;}
 Ref evale(Ref form,Ref environment,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(form);
@@ -239,11 +262,17 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         eval_counters.variable++;
         /* Symbol macros must have been expanded by the minimal compilation,
         so we only have variables. */
+        if(form==NIL_Symbol){
+            VALUES1(NIL_Symbol);}
+        if(form==T_Symbol){
+            VALUES1(T_Symbol);}
         Ref variable = environment_find_variable(form,environment);
-        if(nullp(variable)){
-            /* TODO: restart to change the variable or to bind it? */
-            error("NO SUCH VARIABLE %p",(void*)form);}
-        VALUES1(env_variable_value(variable));}
+        if(!nullp(variable)){
+            VALUES1(env_variable_value(variable));}
+        /* Not lexically bound — try the symbol's global value cell. */
+        if(symbol_boundp(form)){
+            VALUES1(symbol_value(form));}
+        ERROR("Unbound variable: %s",string_cstring(symbol_name(form)));}
 
     else if(!consp(form)){
         eval_counters.literal++;
@@ -264,24 +293,79 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             eval_counters.FUNCTION++;
             check_arg_count(arguments,1,1);
             Ref fname = car(arguments);
-            if(symbolp(fname)
-               || (consp(fname)
-                   && eql(SETF_Symbol,car(fname))
-                   && consp(cdr(fname))
-                   && symbolp(cadr(fname))
-                   && nullp(cddr(fname)))){
-                Ref fun = environment_find_function(fname,environment);
-                if(fun==0){
-                    ERROR("No such function %s",string_cstring(prin1_to_string(fname)));}
-                if(env_global_function_p(fun)){
-                    /* return the global function */
-                }
-                else{
-                    /* Build a local closure */
-                }
-            }else{ /* lambda-expression? */
-            }
-            VALUES1(NIL_Symbol);}
+            if(symbolp(fname)){
+                /* Local function bound by FLET/LABELS? Wrap it as a real Function. */
+                Ref local = environment_find_function(fname,environment);
+                if(!nullp(local) && env_local_function_p(local)){
+                    Ref fn=function_new(env_local_function_name(local),
+                                        env_local_function_lambda_list(local),
+                                        env_local_function_body(local));
+                    VALUES1(closure_new(fn,environment));}
+                if(symbol_fboundp(fname)){
+                    VALUES1(symbol_function(fname));}
+                ERROR("Undefined function: %s",
+                      string_cstring(symbol_name(fname)));}
+            if(consp(fname)
+               && eql(SETF_Symbol,car(fname))
+               && consp(cdr(fname))
+               && symbolp(cadr(fname))
+               && nullp(cddr(fname))){
+                /* (SETF NAME) — no SETF support yet. */
+                ERROR("FUNCTION: (SETF %s) not yet supported",
+                      string_cstring(symbol_name(cadr(fname))));}
+            if(consp(fname) && eql(LAMBDA_Symbol,car(fname))){
+                /* (lambda (params...) body...) — turn into a closure. */
+                check_arg_count_min(cdr(fname),1);
+                Ref params=cadr(fname);
+                Ref body=cddr(fname);
+                Ref fn=function_new(LAMBDA_Symbol,params,body);
+                VALUES1(closure_new(fn,environment));}
+            ERROR("FUNCTION: invalid function name: %s",
+                  string_cstring(prin1_to_string(fname)));}
+
+        /* DEFUN / DEFPARAMETER / DEFVAR / DEFCONSTANT are treated as pseudo-special
+           operators in this minimal kernel because the macro system on the Lisp
+           side is not loaded yet. Once it is, these should move out. */
+        if(operator==S(DEFUN)){
+            check_arg_count_min(arguments,2);
+            Ref name=car(arguments);
+            Ref params=cadr(arguments);
+            Ref body=cddr(arguments);
+            if(!symbolp(name)){
+                ERROR("DEFUN: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+            Ref fn=function_new(name,params,body);
+            set_symbol_function(name,fn);
+            VALUES1(name);}
+
+        if(operator==S(DEFPARAMETER)){
+            check_arg_count(arguments,2,3);  /* name value [doc] */
+            Ref name=car(arguments);
+            if(!symbolp(name)){
+                ERROR("DEFPARAMETER: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+            Ref value=evale(cadr(arguments),environment,results);
+            define_parameter(name,value);
+            VALUES1(name);}
+
+        if(operator==S(DEFVAR)){
+            check_arg_count(arguments,1,3);  /* name [value [doc]] */
+            Ref name=car(arguments);
+            if(!symbolp(name)){
+                ERROR("DEFVAR: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+            if(consp(cdr(arguments)) && !symbol_boundp(name)){
+                Ref value=evale(cadr(arguments),environment,results);
+                define_variable(name,value);}
+            else{
+                define_variable(name,UNBOUND_Object);}
+            VALUES1(name);}
+
+        if(operator==S(DEFCONSTANT)){
+            check_arg_count(arguments,2,3);  /* name value [doc] */
+            Ref name=car(arguments);
+            if(!symbolp(name)){
+                ERROR("DEFCONSTANT: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+            Ref value=evale(cadr(arguments),environment,results);
+            define_constant(name,value);
+            VALUES1(name);}
 
         if(operator==IF_Symbol){
             eval_counters.IF++;
@@ -298,7 +382,33 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
 
         if(operator==SETQ_Symbol){
             eval_counters.SETQ++;
-            NOT_IMPLEMENTED_YET();}
+            /* (SETQ var1 val1 var2 val2 …) — evaluate each value, assign to the
+               corresponding variable in left-to-right order; result is the last value
+               (NIL if zero pairs). Odd number of arguments is an error. */
+            if(nullp(arguments)){
+                VALUES1(NIL_Symbol);}
+            Ref last_value=NIL_Symbol;
+            Ref tail=arguments;
+            while(consp(tail)){
+                if(!consp(cdr(tail))){
+                    ERROR("Odd number of arguments to %s","SETQ");}
+                Ref name=car(tail);
+                Ref value_form=cadr(tail);
+                if(!symbolp(name)){
+                    ERROR("SETQ: %s is not a symbol",
+                          string_cstring(prin1_to_string(name)));}
+                Ref value=evale(value_form,environment,results);
+                Ref variable=environment_find_variable(name,environment);
+                if(!nullp(variable)){
+                    env_set_variable_value(value,variable);}
+                else{
+                    /* Not lexically bound — assign the symbol's global value cell.
+                       Mirrors most CL implementations' implicit-global behaviour
+                       for a bare SETQ at top level. */
+                    set_symbol_value(name,value);}
+                last_value=value;
+                tail=cddr(tail);}
+            VALUES1(last_value);}
 
         if(operator==PROGN_Symbol){
             eval_counters.PROGN++;
@@ -431,74 +541,52 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
              environment=environment_next_environment(environment);
              PASS_VALUES();}
 
-        if(operator==LABELS_Symbol){
-            NOT_IMPLEMENTED_YET();
-        }
-
         if(operator==FLET_Symbol){
-            NOT_IMPLEMENTED_YET();
             eval_counters.FLET++;
             check_arg_count_min(arguments,1);
             Ref bindings=car(arguments);
-            Ref specials=NIL_Symbol;
             Ref body=cdr(arguments);
-            /* find the special declarations */
-            while(consp(body)
-                  && consp(car(body))
-                  && eql(DECLARE_Symbol,caar(body))){
-                Ref decl=pop(&body);
-                if(eql(SPECIAL_Symbol,car(decl))){
-                    dolist(symbol,cdr(decl)){
-                        push(symbol,&specials);}}}
-            /* evaluate the initial-values in environment, and */
-            /* bind the symbols to the values in new_environment */
-            Ref new_environment=environment_new(environment,false);
-            bool has_dynamic_binding=false;
+            /* Skip DECLAREs at the head of body (only SPECIAL recognised so far). */
+            while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
+                pop(&body);}
+            /* Build the new env. Local-function bodies see the OUTER env (parent of new). */
+            Ref new_environment=environment_new(environment,NIL_Symbol);
             {dolist(binding,bindings){
-                    Ref name;
-                    Ref value;
-                    Ref var;
-                    if(consp(binding)){
-                        name=car(binding);
-                        value=evale(cadr(binding),environment,results);}
-                    else{
-                        name=binding;
-                        value=NIL_Symbol;}
-                    if(special_variable_p(name) || !nullp(memq(name,specials))){
-                        /* dynamic binding */
-                        has_dynamic_binding=true;
-                        bool saved_boundp=symbol_boundp(name);
-                        Ref saved_value=saved_boundp?symbol_value(name):NIL_Symbol;
-                        var=env_make_local_special_variable(name,as_boolean(saved_boundp),saved_value);
-                        set_symbol_value(name,value);}
-                    else{
-                        var=env_make_lexical_variable(name,value);}
-                    environment_add_variable(var,new_environment);}}
+                    if(!consp(binding)){
+                        ERROR("FLET: %s","each binding must be (name lambda-list . body)");}
+                    Ref name=car(binding);
+                    Ref lambda_list=cadr(binding);
+                    Ref fn_body=cddr(binding);
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,fn_body);
+                    environment_add_function(fn_wrapper,new_environment);}}
              environment=new_environment;
-             if(has_dynamic_binding){
-                 /* unwind-protect the body evaluation */
-                 Frame frame;
-                 frame.type=frame_protect;
-                 int result=setjmp(frame.non_local_exit);
-                 UNWIND(result){
-                     UWBODY{
-                         /* evaluate the body */
-                         dolist(subform,body){
-                             evale(subform,environment,results);}}
-                     UWCLEANUP{
-                         /* restore the dynamic bindings */
-                         {dolist(binding,bindings){
-                                 Ref name=consp(binding)?car(binding):binding;
-                                 Ref var=environment_find_variable(name,environment);
-                                 if(!env_local_special_variable_p(var)){
-                                     FATAL("Oops unwinding dynamic binding of a nonn local special variable! %s",
-                                           string_cstring(symbol_name(name)));}
-                                 if(is_true(env_local_special_variable_saved_boundp(var))){
-                                     set_symbol_value(name,env_local_special_variable_saved_value(var));}
-                                 else{
-                                     symbol_make_unbound(name);}}}}}}
-             else{
-                 dolist(subform,body){
+             {dolist(subform,body){
+                     evale(subform,environment,results);}}
+             environment=environment_next_environment(environment);
+             PASS_VALUES();}
+
+        if(operator==LABELS_Symbol){
+            eval_counters.LABELS++;
+            check_arg_count_min(arguments,1);
+            Ref bindings=car(arguments);
+            Ref body=cdr(arguments);
+            while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
+                pop(&body);}
+            /* Build the new env FIRST, then add wrappers — each fn body will resolve
+               its sibling references via the same env (because the wrapper's body is
+               evaluated only when the function is called, by which point all siblings
+               are bound). */
+            Ref new_environment=environment_new(environment,NIL_Symbol);
+            {dolist(binding,bindings){
+                    if(!consp(binding)){
+                        ERROR("LABELS: %s","each binding must be (name lambda-list . body)");}
+                    Ref name=car(binding);
+                    Ref lambda_list=cadr(binding);
+                    Ref fn_body=cddr(binding);
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,fn_body);
+                    environment_add_function(fn_wrapper,new_environment);}}
+             environment=new_environment;
+             {dolist(subform,body){
                      evale(subform,environment,results);}}
              environment=environment_next_environment(environment);
              PASS_VALUES();}
@@ -621,7 +709,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref result=cadr(arguments);
             Frame* target_frame=find_block_frame(name,environment);
             if(NULL==target_frame){
-                error("No block named ~p",(void*)name);}
+                ERROR("No block named %s",string_cstring(prin1_to_string(name)));}
             evale(result,environment,target_frame->results);
             NON_LOCAL_EXIT(target_frame);}
 
@@ -629,7 +717,8 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         else if(operator==CATCH_Symbol){
             eval_counters.CATCH++;
             check_arg_count_min(arguments,1);
-            Ref tag=car(arguments);
+            /* CATCH evaluates its tag. */
+            Ref tag=evale(car(arguments),environment,results);
             Ref body=cdr(arguments);
             Frame frame;
             frame.type=frame_catch;
@@ -639,21 +728,20 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             UNWIND(result){
                 UWBODY{
                     dolist(subform,body){
-                        /* skip tags, since they're not variables… */
-                        if(!(symbolp(subform)||integerp(subform))){
-                            evale(subform,environment,results);}}}
+                        evale(subform,environment,results);}}
                 UWCLEANUP{}}
             return (results->count>0)?results->values[0]:NIL_Symbol;}
 
         else if(operator==THROW_Symbol){
             eval_counters.THROW++;
             check_arg_count(arguments,2,2);
-            Ref object=car(arguments);
-            Ref result=cadr(arguments);
+            /* THROW evaluates its tag form and its result form. */
+            Ref object=evale(car(arguments),environment,results);
+            Ref result_form=cadr(arguments);
             Frame* target_frame=find_catch_frame(object,environment);
             if(NULL==target_frame){
-                error("No active catch for tag %p",(void*)object);}
-            evale(result,environment,target_frame->results);
+                ERROR("No active catch for tag %s",string_cstring(prin1_to_string(object)));}
+            evale(result_form,environment,target_frame->results);
             NON_LOCAL_EXIT(target_frame);}
 
         else if(operator==TAGBODY_Symbol){
@@ -691,59 +779,160 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 ERROR("No active catch for tag %p",(void*)tag);}
             NON_LOCAL_EXIT(target_frame);}
 
-        /* operator is not a special operator, let's try functions and macros:  */
-        Ref function=environment_find_function(operator,environment);
-        if(nullp(function)){
-            ERROR("No such function %s",string_cstring(symbol_name(operator)));}
+        /* operator is not a special operator, let's try functions and macros. */
+        Ref function = NIL_Symbol;
+        Ref macro    = NIL_Symbol;            /* env_local_macro / env_global_macro wrapper */
 
-        Ref fun=NIL_Symbol;
-        Ref mac=NIL_Symbol;
-        if(env_global_function_p(function)){
-            Ref compiler_macro=env_global_function_compiler_macro(function);
-            if(nullp(compiler_macro)){
+        /* 1. Lexical function namespace (FLET/LABELS, future MACROLET). */
+        Ref local = environment_find_function(operator,environment);
+        if(!nullp(local)){
+            if(env_local_function_p(local)){
+                eval_counters.local_function++;
+                /* Build a transient Function from the wrapper and close it over
+                   the env in which it was bound. */
+                Ref fn=function_new(env_local_function_name(local),
+                                    env_local_function_lambda_list(local),
+                                    env_local_function_body(local));
+                function=closure_new(fn,environment);}
+            else if(env_local_macro_p(local) || env_global_macro_p(local)){
+                eval_counters.local_macro++;
+                macro=local;}
+            else if(env_global_function_p(local)){
                 eval_counters.global_function++;
-                /* call the function */
-                fun = f(function);}
+                Ref fn=function_new(env_global_function_name(local),
+                                    env_global_function_lambda_list(local),
+                                    env_global_function_body(local));
+                function=closure_new(fn,environment);}
             else{
-                eval_counters.compiler_macro++;
-                /* expand the compiler macro and evaluate the result */
-                mac = f(compiler_macro);}}
-        else if(env_local_function_p(function)){
-            eval_counters.local_function++;
-            /* call the function */
-            fun = f(function);}
-        else if(env_global_macro_p(function)){
-            eval_counters.global_macro++;
-            /* expand the macro and evaluate the result */
-            mac = f(function);}
-        else if(env_local_macro_p(function)){
-            eval_counters.local_macro++;
-            /* expand the macro and evaluate the result */
-            mac = f(function);}
-        else{
-            FATAL("Got a function that is none of the expected types %p",(void*)function);}
+                FATAL("Function-namespace wrapper of unexpected type %p",(void*)local);}}
 
-        if(!nullp(fun)){
-            /* Call a function */
-            COLLECTING(args);
-            {dolist(subform,arguments){
-                    Ref value=evale(subform,environment,results);
-                    COLLECT(args,value);}}
-             kernel_apply(fun,args,results);
-             PASS_VALUES();}
-        else if(!nullp(mac)){
-            /* Expand a macro */
-            Ref args = NIL_Symbol;
+        /* 2. Global function namespace (symbol's function cell). */
+        if(nullp(function) && nullp(macro)){
+            if(symbol_fboundp(operator)){
+                Ref f=symbol_function(operator);
+                if(f!=UNBOUND_Object){
+                    eval_counters.global_function++;
+                    function=f;}}}
+
+        if(nullp(function) && nullp(macro)){
+            ERROR("Undefined function: %s",string_cstring(symbol_name(operator)));}
+
+        if(!nullp(macro)){
+            /* Macro call: build (form env) as the argument list, kernel_apply the
+               macro function, then evaluate the expansion in the same env. */
+            Ref lambda_list=env_local_macro_p(macro)
+                            ?env_local_macro_lambda_list(macro)
+                            :env_global_macro_lambda_list(macro);
+            Ref body       =env_local_macro_p(macro)
+                            ?env_local_macro_body(macro)
+                            :env_global_macro_body(macro);
+            Ref name       =env_local_macro_p(macro)
+                            ?env_local_macro_name(macro)
+                            :env_global_macro_name(macro);
+            Ref fn=function_new(name,lambda_list,body);
+            Ref args=NIL_Symbol;
             push(environment,&args);
             push(form,&args);
-            kernel_apply(mac,args,results);
+            kernel_apply(fn,args,results);
             evale(results->values[0],environment,results);
-            PASS_VALUES();}}
-    else{
-        /* operator = lambda expression?  ((lambda …) …)*/
-        NOT_IMPLEMENTED_YET();
+            PASS_VALUES();}
+
+        /* Function call: evaluate the arguments in order, then apply. */
+        {COLLECTING(args);
+         {dolist(subform,arguments){
+                 Ref value=evale(subform,environment,results);
+                 COLLECT(args,value);}}
+         kernel_apply(function,args,results);
+         PASS_VALUES();}}
+
+    else if(consp(operator) && eql(LAMBDA_Symbol,car(operator))){
+        /* ((lambda (params...) body...) args...) */
         eval_counters.lambda_function++;
-    }
+        Ref params=cadr(operator);
+        Ref body=cddr(operator);
+        Ref fn=function_new(LAMBDA_Symbol,params,body);
+        Ref closure=closure_new(fn,environment);
+        COLLECTING(args);
+        {dolist(subform,arguments){
+                Ref value=evale(subform,environment,results);
+                COLLECT(args,value);}}
+        kernel_apply(closure,args,results);
+        PASS_VALUES();}
+
+    else{
+        ERROR("evale: malformed form %s",string_cstring(prin1_to_string(form)));}
 
     close_live_pool(pool);
     return NIL_Symbol;}
+
+
+/* ------------------------------------------------------------------ */
+/*  Function application.                                              */
+/*                                                                      */
+/*  These live in eval.c (not kernel.c) because they need push_frame /  */
+/*  pop_frame / UNWIND from the eval.c control-flow machinery.          */
+/* ------------------------------------------------------------------ */
+
+/* Bind the params from `lambda_list` to the values in `arguments` into
+   `target_env`. Phase 1: required parameters only — no &optional / &rest /
+   &key / &aux / &allow-other-keys. Any of those markers in the lambda list
+   signals an error so we don't silently produce wrong bindings. */
+static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env){
+    Ref ll=lambda_list;
+    while(consp(ll)){
+        Ref param=car(ll);
+        if(symbolp(param)
+           && (param==S(&OPTIONAL) || param==S(&REST)
+               || param==S(&KEY)   || param==S(&AUX)
+               || param==S(&ALLOW-OTHER-KEYS) || param==S(&BODY)
+               || param==S(&WHOLE) || param==S(&ENVIRONMENT))){
+            ERROR("Lambda-list keyword %s not yet implemented",
+                  string_cstring(symbol_name(param)));}
+        if(!symbolp(param)){
+            ERROR("Lambda-list parameter is not a symbol: %s",
+                  string_cstring(prin1_to_string(param)));}
+        Ref value=pop_mandatory_argument(function,&arguments);
+        Ref var=env_make_lexical_variable(param,value);
+        environment_add_variable(var,target_env);
+        ll=cdr(ll);}
+    check_no_more_arguments(function,arguments);}
+
+/* Run `body` in `environment` with a block frame named `block_name` so
+   RETURN-FROM works inside user code. (Parameter named `environment` because
+   the UWBODY macro hardcodes that name.) */
+static void eval_body_in_block(Ref function,Ref block_name,Ref body,Ref environment,MultipleValues* results){
+    Frame frame;
+    frame.type=frame_block;
+    frame.parameters.block.name=block_name;
+    frame.results=results;
+    int code=setjmp(frame.non_local_exit);
+    UNWIND(code){
+        UWBODY{
+            {dolist(form,body){
+                    evale(form,environment,results);}}}
+        UWCLEANUP{}}
+    (void)function;}
+
+void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    /* A bare Function with no captured lexical env: parent is the global env so
+       references to globals still resolve. */
+    Ref env=environment_new(eval_global_environment(),NIL_Symbol);
+    add_to_live_pool(env);
+    bind_required_parameters(function,slots->lambda_list,arguments,env);
+    eval_body_in_block(function,slots->lisp_name,slots->body,env,results);
+    close_live_pool(pool);}
+
+void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(closure);
+    add_to_live_pool(arguments);
+    check_type(slots->function,FUNCTION_Class);
+    Function* fslots=&(slots->function->slots->function);
+    Ref env=environment_new(slots->environment,NIL_Symbol);
+    add_to_live_pool(env);
+    bind_required_parameters(slots->function,fslots->lambda_list,arguments,env);
+    eval_body_in_block(slots->function,fslots->lisp_name,fslots->body,env,results);
+    close_live_pool(pool);}

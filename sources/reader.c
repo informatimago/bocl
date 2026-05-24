@@ -235,6 +235,9 @@ static Ref parse_string(parser_state* parser){
                   break;
               case '"':
                   parser->token[parser->length]='\0';
+                  /* Consume the closing '"' so the caller's state stays consistent
+                     (parse_token leaves ch at the post-token char; do the same). */
+                  advance_character(parser);
                   parser->eof=false;
                   return string_new_cstring((char*)parser->token);
               default:
@@ -256,6 +259,8 @@ static Ref parse_list(parser_state* parser){
         skip_spaces(parser);
         if(parser->eof){
             return NIL_Symbol;}}
+    /* Consume the closing ')' so an outer parse_list doesn't see it as its own. */
+    advance_character(parser);
     parser->eof=false;
     return nreverse(result);}
 

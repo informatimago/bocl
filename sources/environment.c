@@ -132,17 +132,62 @@ Ref environment_add_declaration(Ref declaration, Ref environment){
     close_live_pool(pool);
     return environment;}
 
+/* Read the name slot of any env variable wrapper. */
+static Ref env_variable_wrapper_name(Ref variable){
+    if(env_lexical_variable_p(variable))       { return env_lexical_variable_name(variable); }
+    if(env_local_special_variable_p(variable)) { return env_local_special_variable_name(variable); }
+    if(env_global_special_variable_p(variable)){ return env_global_special_variable_name(variable); }
+    if(env_constant_variable_p(variable))      { return env_constant_variable_name(variable); }
+    TYPE_ERROR(variable,LEXICAL_VARIABLE_Class);}
+
+/* Read the name slot of any env function wrapper (global or local fn, global or local macro). */
+static Ref env_function_wrapper_name(Ref function){
+    if(env_local_function_p(function))      { return env_local_function_name(function); }
+    if(env_global_function_p(function))     { return env_global_function_name(function); }
+    if(env_local_macro_p(function))         { return env_local_macro_name(function); }
+    if(env_global_macro_p(function))        { return env_global_macro_name(function); }
+    if(env_local_symbol_macro_p(function))  { return env_local_symbol_macro_name(function); }
+    if(env_global_symbol_macro_p(function)) { return env_global_symbol_macro_name(function); }
+    TYPE_ERROR(function,LOCAL_FUNCTION_Class);}
+
 Ref environment_find_variable(Ref name, Ref environment){
-    NOT_IMPLEMENTED_YET();
+    while(!nullp(environment) && typep(environment,ENVIRONMENT_Class)){
+        Environment* env=&(environment->slots->environment);
+        Ref vars=env->variables;
+        while(consp(vars)){
+            Ref var=cons_car(vars);
+            if(eql(name,env_variable_wrapper_name(var))){
+                return var;}
+            vars=cons_cdr(vars);}
+        environment=env->next_environment;}
     return NIL_Symbol;}
+
 Ref environment_find_function(Ref name, Ref environment){
-    NOT_IMPLEMENTED_YET();
+    while(!nullp(environment) && typep(environment,ENVIRONMENT_Class)){
+        Environment* env=&(environment->slots->environment);
+        Ref funs=env->functions;
+        while(consp(funs)){
+            Ref fun=cons_car(funs);
+            if(eql(name,env_function_wrapper_name(fun))){
+                return fun;}
+            funs=cons_cdr(funs);}
+        environment=env->next_environment;}
     return NIL_Symbol;}
+
 Ref environment_find_block(Ref name, Ref environment){
-    NOT_IMPLEMENTED_YET();
+    while(!nullp(environment) && typep(environment,ENVIRONMENT_Class)){
+        Environment* env=&(environment->slots->environment);
+        if(!nullp(memq(name,env->blocks))){
+            return name;}
+        environment=env->next_environment;}
     return NIL_Symbol;}
+
 Ref environment_find_catch(Ref tag, Ref environment){
-    NOT_IMPLEMENTED_YET();
+    while(!nullp(environment) && typep(environment,ENVIRONMENT_Class)){
+        Environment* env=&(environment->slots->environment);
+        if(!nullp(memq(tag,env->catchs))){
+            return tag;}
+        environment=env->next_environment;}
     return NIL_Symbol;}
 
 
@@ -151,14 +196,29 @@ bool env_special_variable_p(Ref object){
             || env_local_special_variable_p(object);}
 
 Ref env_variable_value(Ref variable){
+    if(env_lexical_variable_p(variable))       { return env_lexical_variable_value(variable); }
+    if(env_local_special_variable_p(variable)) {
+        /* Local-special is a dynamic binding: its current value is in the symbol's value cell. */
+        return symbol_value(env_local_special_variable_name(variable)); }
+    if(env_global_special_variable_p(variable)){ return env_global_special_variable_value(variable); }
+    if(env_constant_variable_p(variable))      { return env_constant_variable_value(variable); }
+    TYPE_ERROR(variable,LEXICAL_VARIABLE_Class);}
+
+Ref env_set_variable_value(Ref new_value, Ref variable){
     if(env_lexical_variable_p(variable)){
-        return env_lexical_variable_name(variable);}
+        set_env_lexical_variable_value(new_value,variable);
+        return new_value;}
     if(env_local_special_variable_p(variable)){
-        return env_local_special_variable_name(variable);}
+        set_symbol_value(env_local_special_variable_name(variable),new_value);
+        return new_value;}
     if(env_global_special_variable_p(variable)){
-        return env_global_special_variable_name(variable);}
+        set_env_global_special_variable_value(new_value,variable);
+        /* Also update the symbol's value cell so dynamic-binding lookups stay consistent. */
+        set_symbol_value(env_global_special_variable_name(variable),new_value);
+        return new_value;}
     if(env_constant_variable_p(variable)){
-        return env_constant_variable_name(variable);}
+        ERROR("Cannot assign to constant variable %s",
+              string_cstring(symbol_name(env_constant_variable_name(variable))));}
     TYPE_ERROR(variable,LEXICAL_VARIABLE_Class);}
 
 /**** THE END ****/
