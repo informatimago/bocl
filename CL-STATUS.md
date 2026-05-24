@@ -151,6 +151,29 @@ done, `LEAST-POSITIVE-*`, `LEAST-NEGATIVE-*`, `LONG-FLOAT-EPSILON`,
 the various FP limits. Define them with `define_constant` from C
 (some) or `defconstant` in Lisp (most).
 
+## The condition system, split into two layers
+
+(Per the project's decision: the condition system does **not** need
+CLOS. It works fine with structures.)
+
+- **Minimal condition system** — already shipped in v0.0.15
+  ([sources/conditions.c](sources/conditions.c)). Built-in classes
+  `CONDITION`, `SIMPLE-CONDITION`, `SIMPLE-ERROR`, `WARNING`,
+  `SIMPLE-WARNING`, plus `SIGNAL` / `ERROR` / `WARN` /
+  `HANDLER-CASE`. This is what the kernel and the bootstrap Lisp
+  library use internally to signal and recover. It must be available
+  as early as possible — that is, *now*. The only missing piece in
+  this layer is `HANDLER-BIND` (in which the handler runs in the
+  dynamic context of `SIGNAL` and can decline by returning normally)
+  — added in slice 9a below.
+
+- **Full ANSI condition system for user code** — slice 13. Lets
+  users define their own condition types via `DEFINE-CONDITION` (a
+  macro that expands to `DEFSTRUCT` + class registration), and adds
+  the restart layer (`RESTART-CASE`, `RESTART-BIND`, `FIND-RESTART`,
+  `INVOKE-RESTART`, `CERROR`). Integrates with the kernel's existing
+  class hierarchy — no CLOS required.
+
 ## Implementation order
 
 Now that we have macros + APPLY + sequence basics:
@@ -169,11 +192,23 @@ Now that we have macros + APPLY + sequence basics:
    `SIGNUM`, `GCD`, `LCM` (Lisp).
 7. **DESTRUCTURING-BIND** (Lisp).
 8. **DEFSTRUCT** (Lisp, on top of `make-structure-class`).
-9. **HANDLER-BIND** + restart system in C; `CERROR` follows.
+9a. **HANDLER-BIND** in the C kernel — completes the *minimal*
+   condition system that the Lisp library needs. Small. Should land
+   before any later phase that wants to write condition handlers in
+   the bootstrap library.
+9b. **Restart machinery** in the C kernel: `RESTART-CASE`,
+   `RESTART-BIND`, `FIND-RESTART`, `INVOKE-RESTART`. `CERROR` then
+   lands as a Lisp macro.
 10. **CLOS** — port CLOSette on top of all of the above.
 11. **LOOP** — the macro.
 12. **FORMAT** — the directive engine.
-13. **DEFINE-CONDITION** + ANSI condition hierarchy.
+13. **Full condition system for user code**: `DEFINE-CONDITION`
+    (Lisp macro over DEFSTRUCT + kernel class registration); the
+    standard ANSI condition hierarchy (TYPE-ERROR, ARITHMETIC-ERROR,
+    STREAM-ERROR, …, most already declared in `kernel_objects.c`);
+    `MUFFLE-WARNING` and the standard restart names. Integrates the
+    minimal layer (used by the implementation) with the user-defined
+    layer.
 
 ## Appendix A: the 242 implemented symbols
 
