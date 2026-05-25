@@ -158,6 +158,46 @@ static void test_rest_and_key(void){
     TEST_EQ(equal, list(list(K(X), I(7), NULL), I(7), NULL),
                                  eval_cstring("(lo-5 :x 7)"));}
 
+/* ------------------------------------------------------------------ */
+/*  The four newer special operators (slice 1 of the post-5.5 plan):  */
+/*  LET*, MACROLET, SYMBOL-MACROLET, LOAD-TIME-VALUE.                  */
+/* ------------------------------------------------------------------ */
+
+static void test_let_star_sequential(void){
+    /* Each init sees the previous bindings — would fail with LET. */
+    TEST_EQ(equal, list(I(1), I(2), I(6), NULL),
+            eval_cstring("(let* ((a 1) (b (* a 2)) (c (* b 3))) (list a b c))"));
+    /* Inner LET* shadows outer. */
+    TEST_EQ(equal, list(I(15), I(22), NULL),
+            eval_cstring("(let* ((x 10)) (let* ((x (+ x 5)) (y (+ x 7))) (list x y)))"));}
+
+static void test_macrolet_basic(void){
+    /* A local macro defined with MACROLET. */
+    TEST_EQ(eql, I(49),
+            eval_cstring("(macrolet ((sqr (x) `(* ,x ,x))) (sqr 7))"));}
+
+static void test_macrolet_shadows_global(void){
+    /* A MACROLET binding shadows a global DEFMACRO of the same name.
+       Each macro body returns ''sym so the expansion is (QUOTE sym) and
+       eval of that yields the symbol. */
+    eval_cstring("(defmacro mle-outer () ''globally)");
+    TEST_EQ(eql, S(LOCALLY),
+            eval_cstring("(macrolet ((mle-outer () ''locally)) (mle-outer))"));
+    /* Outside the MACROLET, the global is back. */
+    TEST_EQ(eql, S(GLOBALLY), eval_cstring("(mle-outer)"));}
+
+static void test_symbol_macrolet(void){
+    /* A bare symbol bound to an expansion. */
+    TEST_EQ(eql, I(42),
+            eval_cstring("(symbol-macrolet ((sm-x 42)) sm-x)"));
+    /* In a context that uses arithmetic. */
+    TEST_EQ(eql, I(50),
+            eval_cstring("(symbol-macrolet ((sm-y 42)) (+ sm-y 8))"));}
+
+static void test_load_time_value(void){
+    /* Just evaluates the form once and returns the value. */
+    TEST_EQ(eql, I(6), eval_cstring("(load-time-value (+ 1 2 3))"));}
+
 
 TEST_INITIALIZE(test_eval);
 TEST_SUITE(test_eval, eval_init, eval_clean)
@@ -183,4 +223,9 @@ TEST_SUITE(test_eval, eval_init, eval_clean)
     TEST_CASE( "lambda-list &key",      test_key)
     TEST_CASE( "lambda-list &key (:ext intern)", test_key_with_external_keyword)
     TEST_CASE( "lambda-list &rest + &key",       test_rest_and_key)
+    TEST_CASE( "LET* sequential",                test_let_star_sequential)
+    TEST_CASE( "MACROLET",                       test_macrolet_basic)
+    TEST_CASE( "MACROLET shadows global",        test_macrolet_shadows_global)
+    TEST_CASE( "SYMBOL-MACROLET",                test_symbol_macrolet)
+    TEST_CASE( "LOAD-TIME-VALUE",                test_load_time_value)
     TEST_FINALIZE()

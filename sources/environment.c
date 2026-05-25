@@ -132,12 +132,17 @@ Ref environment_add_declaration(Ref declaration, Ref environment){
     close_live_pool(pool);
     return environment;}
 
-/* Read the name slot of any env variable wrapper. */
+/* Read the name slot of any env variable wrapper. Symbol-macro wrappers
+   (SYMBOL-MACROLET / DEFINE-SYMBOL-MACRO) also live in the variable
+   namespace — evale checks them before treating a symbol as an ordinary
+   variable lookup. */
 static Ref env_variable_wrapper_name(Ref variable){
     if(env_lexical_variable_p(variable))       { return env_lexical_variable_name(variable); }
     if(env_local_special_variable_p(variable)) { return env_local_special_variable_name(variable); }
     if(env_global_special_variable_p(variable)){ return env_global_special_variable_name(variable); }
     if(env_constant_variable_p(variable))      { return env_constant_variable_name(variable); }
+    if(env_local_symbol_macro_p(variable))     { return env_local_symbol_macro_name(variable); }
+    if(env_global_symbol_macro_p(variable))    { return env_global_symbol_macro_name(variable); }
     TYPE_ERROR(variable,LEXICAL_VARIABLE_Class);}
 
 /* Read the name slot of any env function wrapper (global or local fn, global or local macro). */

@@ -261,14 +261,23 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
 
     if(symbolp(form)){
         eval_counters.variable++;
-        /* Symbol macros must have been expanded by the minimal compilation,
-        so we only have variables. */
         if(form==NIL_Symbol){
             VALUES1(NIL_Symbol);}
         if(form==T_Symbol){
             VALUES1(T_Symbol);}
         Ref variable = environment_find_variable(form,environment);
         if(!nullp(variable)){
+            /* SYMBOL-MACROLET binds a wrapper whose "value" is the
+               macro expansion form, not a value. Detect that and
+               re-evaluate the expansion. */
+            if(env_local_symbol_macro_p(variable)){
+                Ref expansion = env_local_symbol_macro_expansion(variable);
+                evale(expansion,environment,results);
+                PASS_VALUES();}
+            if(env_global_symbol_macro_p(variable)){
+                Ref expansion = env_global_symbol_macro_expansion(variable);
+                evale(expansion,environment,results);
+                PASS_VALUES();}
             VALUES1(env_variable_value(variable));}
         /* Not lexically bound — try the symbol's global value cell. */
         if(symbol_boundp(form)){
@@ -534,7 +543,39 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
              environment=environment_next_environment(environment);
              PASS_VALUES();}
 
-        /* NO LET*, since it's minimal-compiled out into LET */
+        /* LET*: sequential binding. Each init form is evaluated in the
+           env that already has the previous bindings, so it CANNOT be a
+           macro over LET (which evaluates all inits in the outer env).
+           For now we don't honour SPECIAL declarations in LET* — the
+           lexical case covers the bulk of real usage. */
+        if(operator==LET__Symbol){
+            eval_counters.LET_++;
+            check_arg_count_min(arguments,1);
+            Ref bindings=car(arguments);
+            Ref body=cdr(arguments);
+            /* Skip DECLAREs at the head of body. */
+            while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
+                pop(&body);}
+            Ref new_environment=environment_new(environment,NIL_Symbol);
+            environment=new_environment;
+            {dolist(binding,bindings){
+                    Ref name;
+                    Ref value;
+                    if(consp(binding)){
+                        name=car(binding);
+                        value=evale(cadr(binding),environment,results);
+                    } else {
+                        name=binding;
+                        value=NIL_Symbol;}
+                    if(!symbolp(name)){
+                        ERROR("LET*: %s is not a symbol",
+                              string_cstring(prin1_to_string(name)));}
+                    Ref var=env_make_lexical_variable(name,value);
+                    environment_add_variable(var,environment);}}
+            {dolist(subform,body){
+                    evale(subform,environment,results);}}
+            environment=environment_next_environment(environment);
+            PASS_VALUES();}
 
         if(operator==PROGV_Symbol){
             eval_counters.PROGV++;
@@ -628,12 +669,67 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
              environment=environment_next_environment(environment);
              PASS_VALUES();}
 
-        if(operator==SYMBOL_MACROLET_Symbol){
-            NOT_IMPLEMENTED_YET();
-        }
+        /* MACROLET — lexical macro bindings. Same shape as FLET but the
+           wrappers go in the function namespace as local macros, so the
+           usual call dispatch (environment_find_function → check macro
+           path) picks them up. */
         if(operator==MACROLET_Symbol){
-            NOT_IMPLEMENTED_YET();
-        }
+            eval_counters.MACROLET++;
+            check_arg_count_min(arguments,1);
+            Ref bindings=car(arguments);
+            Ref body=cdr(arguments);
+            while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
+                pop(&body);}
+            Ref new_environment=environment_new(environment,NIL_Symbol);
+            {dolist(binding,bindings){
+                    if(!consp(binding)){
+                        ERROR("MACROLET: %s","each binding must be (name lambda-list . body)");}
+                    Ref name=car(binding);
+                    Ref lambda_list=cadr(binding);
+                    Ref macro_body=cddr(binding);
+                    Ref wrapper=env_make_local_macro(name,lambda_list,macro_body);
+                    environment_add_function(wrapper,new_environment);}}
+             environment=new_environment;
+             {dolist(subform,body){
+                     evale(subform,environment,results);}}
+             environment=environment_next_environment(environment);
+             PASS_VALUES();}
+
+        /* SYMBOL-MACROLET — lexical symbol macros. The wrapper goes in
+           the VARIABLE namespace; evale's symbol-lookup path (above)
+           checks env_local_symbol_macro_p before treating the symbol as
+           an ordinary variable. */
+        if(operator==SYMBOL_MACROLET_Symbol){
+            eval_counters.SYMBOL_MACROLET++;
+            check_arg_count_min(arguments,1);
+            Ref bindings=car(arguments);
+            Ref body=cdr(arguments);
+            while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
+                pop(&body);}
+            Ref new_environment=environment_new(environment,NIL_Symbol);
+            {dolist(binding,bindings){
+                    if(!consp(binding) || !consp(cdr(binding))){
+                        ERROR("SYMBOL-MACROLET: %s","each binding must be (name expansion)");}
+                    Ref name=car(binding);
+                    Ref expansion=cadr(binding);
+                    if(!symbolp(name)){
+                        ERROR("SYMBOL-MACROLET: %s is not a symbol",
+                              string_cstring(prin1_to_string(name)));}
+                    Ref wrapper=env_make_local_symbol_macro(name,expansion);
+                    environment_add_variable(wrapper,new_environment);}}
+             environment=new_environment;
+             {dolist(subform,body){
+                     evale(subform,environment,results);}}
+             environment=environment_next_environment(environment);
+             PASS_VALUES();}
+
+        /* LOAD-TIME-VALUE — without a compiler, just evaluate the form
+           once and return its value. (CL allows multiple evaluations as
+           "permissible but not required"; we evaluate it now.) */
+        if(operator==LOAD_TIME_VALUE_Symbol){
+            eval_counters.LOAD_TIME_VALUE++;
+            check_arg_count(arguments,1,2);   /* form [read-only-p] — ignore read-only-p */
+            VALUES1(evale(car(arguments),environment,results));}
 
         if(operator==MULTIPLE_VALUE_CALL_Symbol){
             eval_counters.MULTIPLE_VALUE_CALL++;
@@ -882,26 +978,17 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 ERROR("No active catch for tag %p",(void*)tag);}
             NON_LOCAL_EXIT(target_frame);}
 
-        /* operator is not a special operator. Check for a globally defined
-           DEFMACRO first — the macro function is stashed in the symbol's
-           plist under $MACRO. */
-        {
-            Ref macro_fn = getf(symbol_plist(operator), S($MACRO), NIL_Symbol);
-            if(!nullp(macro_fn)){
-                eval_counters.global_macro++;
-                /* Apply the macro function to the unevaluated argument
-                   list, then eval the expansion in the SAME environment. */
-                MultipleValues mac_results = {0};
-                kernel_apply(macro_fn, arguments, &mac_results);
-                Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
-                evale(expansion, environment, results);
-                PASS_VALUES();}
-        }
+        /* operator is not a special operator. Lookup order matters here
+           for lexical-vs-global shadowing:
+             1. Lexical function namespace (FLET / LABELS / MACROLET) —
+                a local macro must beat a global macro of the same name.
+             2. Global DEFMACRO ($MACRO on the symbol's plist).
+             3. Global function (symbol's function cell). */
 
         Ref function = NIL_Symbol;
         Ref macro    = NIL_Symbol;            /* env_local_macro / env_global_macro wrapper */
 
-        /* 1. Lexical function namespace (FLET/LABELS, future MACROLET). */
+        /* 1. Lexical function namespace. */
         Ref local = environment_find_function(operator,environment);
         if(!nullp(local)){
             if(env_local_function_p(local)){
@@ -924,7 +1011,19 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             else{
                 FATAL("Function-namespace wrapper of unexpected type %p",(void*)local);}}
 
-        /* 2. Global function namespace (symbol's function cell). */
+        /* 2. Global DEFMACRO. */
+        if(nullp(function) && nullp(macro)){
+            Ref macro_fn = getf(symbol_plist(operator), S($MACRO), NIL_Symbol);
+            if(!nullp(macro_fn)){
+                eval_counters.global_macro++;
+                MultipleValues mac_results = {0};
+                kernel_apply(macro_fn, arguments, &mac_results);
+                Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
+                evale(expansion, environment, results);
+                PASS_VALUES();}
+        }
+
+        /* 3. Global function namespace (symbol's function cell). */
         if(nullp(function) && nullp(macro)){
             if(symbol_fboundp(operator)){
                 Ref f=symbol_function(operator);
@@ -936,8 +1035,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             ERROR("Undefined function: %s",string_cstring(symbol_name(operator)));}
 
         if(!nullp(macro)){
-            /* Macro call: build (form env) as the argument list, kernel_apply the
-               macro function, then evaluate the expansion in the same env. */
+            /* Macro call: kernel_apply the macro function to the
+               UNEVALUATED argument list (same convention as DEFMACRO),
+               then evaluate the expansion in the same env. */
             Ref lambda_list=env_local_macro_p(macro)
                             ?env_local_macro_lambda_list(macro)
                             :env_global_macro_lambda_list(macro);
@@ -948,11 +1048,10 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                             ?env_local_macro_name(macro)
                             :env_global_macro_name(macro);
             Ref fn=function_new(name,lambda_list,body);
-            Ref args=NIL_Symbol;
-            push(environment,&args);
-            push(form,&args);
-            kernel_apply(fn,args,results);
-            evale(results->values[0],environment,results);
+            MultipleValues mac_results = {0};
+            kernel_apply(fn,arguments,&mac_results);
+            Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
+            evale(expansion,environment,results);
             PASS_VALUES();}
 
         /* Function call: evaluate the arguments in order, then apply. */
