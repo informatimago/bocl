@@ -205,6 +205,55 @@ static void kernel_IDENTITY(Ref function, Ref arguments, MultipleValues* results
     results->values[0] = x;
     close_live_pool(pool);}
 
+/* (MAKE-STRING n &key initial-element) — fresh string of length n.
+   initial-element defaults to a space; only the keyword form is honoured
+   here (the standard's :element-type is accepted and ignored). */
+static void kernel_MAKE_STRING(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref len_ref = pop_mandatory_argument(function, &current);
+    Ref initial = pop_key_argument(function, &current, K(INITIAL-ELEMENT), NIL_Symbol);
+    /* :element-type is accepted but ignored. */
+    pop_key_argument(function, &current, K(ELEMENT-TYPE), NIL_Symbol);
+    word len = integer_value(len_ref);
+    if(len < 0){ ERROR("MAKE-STRING: negative length %ld",(long)len); }
+    Ref s = string_new((halfword)len);
+    /* Fill with INITIAL-ELEMENT if supplied; otherwise default to SPACE
+       so freshly-minted strings don't contain uninitialized memory. */
+    octet code = ' ';
+    if(characterp(initial)){
+        code = (octet)integer_value(character_code(initial));}
+    {   octet* bytes = string_octets(s);
+        for(word i = 0; i < len; i++){
+            bytes[i] = code;}}
+    results->count = 1;
+    results->values[0] = s;
+    close_live_pool(pool);}
+
+/* (CHAR-SET string index char) — mutate string[index] to char. The kernel
+   has the underlying char_set with C signature (new_char, string, index)
+   — we adapt to the standard CL (setf (char s i) c) arg order here. */
+static void kernel_CHAR_SET(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref str   = pop_mandatory_argument(function, &current);
+    Ref index = pop_mandatory_argument(function, &current);
+    Ref ch    = pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    if(!stringp(str)){ TYPE_ERROR(str, STRING_Class); }
+    if(!characterp(ch)){ TYPE_ERROR(ch, CHARACTER_Class); }
+    word i = integer_value(index);
+    word len = (word)string_length(str);
+    if(i < 0 || i >= len){
+        ERROR("CHAR-SET: index %ld out of range 0..%ld",(long)i,(long)(len-1));}
+    octet* bytes = string_octets(str);
+    bytes[i] = (octet)integer_value(character_code(ch));
+    results->count = 1;
+    results->values[0] = ch;
+    close_live_pool(pool);}
+
 /* (GENSYM &optional prefix) — return a fresh uninterned symbol whose name
    is `prefix` followed by an integer counter. Default prefix is "G". */
 static word gensym_counter = 0;
@@ -249,4 +298,15 @@ void kernel_initialize_sequences(void){
     register_fn(S(NOTANY),   ll_fn_rest_lists, kernel_NOTANY);
     register_fn(S(IDENTITY), list(S(X), NULL), kernel_IDENTITY);
     register_fn(S(GENSYM),   NIL_Symbol,       kernel_GENSYM);
+
+    /* String-library kernel primitives — see prelude.lisp for the Lisp
+       layer that sits on top of these. */
+    register_fn(S(MAKE-STRING),
+                list(S(LENGTH),
+                     S(&KEY), S(INITIAL-ELEMENT), S(ELEMENT-TYPE),
+                     NULL),
+                kernel_MAKE_STRING);
+    register_fn(S(CHAR-SET),
+                list(S(STRING), S(INDEX), S(CHARACTER), NULL),
+                kernel_CHAR_SET);
 }

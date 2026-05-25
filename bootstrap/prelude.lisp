@@ -627,4 +627,209 @@
   ;; (ACONS k v a) ≡ (CONS (CONS k v) a)
   (cons (cons key value) alist))
 
+;; -------------------------------------------------------------------- ;;
+;;  String / character library (slice 5).                                ;;
+;;                                                                       ;;
+;;  The kernel supplies the raw character ops (CHAR-CODE / CODE-CHAR /   ;;
+;;  CHAR / SCHAR / STRING= / STRING-EQUAL / STRING-LENGTH / MAKE-STRING  ;;
+;;  / CHAR-SET) and we layer the case predicates, case conversion, the   ;;
+;;  ordering predicates, and the common processing helpers on top.       ;;
+;; -------------------------------------------------------------------- ;;
+
+;; ---- Character predicates and case conversion. -----------------------
+
+(defun upper-case-p (char)
+  (let ((c (char-code char)))
+    (and (>= c (char-code #\A)) (<= c (char-code #\Z)))))
+
+(defun lower-case-p (char)
+  (let ((c (char-code char)))
+    (and (>= c (char-code #\a)) (<= c (char-code #\z)))))
+
+(defun both-case-p (char)
+  (or (upper-case-p char) (lower-case-p char)))
+
+(defun alpha-char-p (char)
+  (both-case-p char))
+
+(defun digit-char-p (char &optional (radix 10))
+  ;; Return the digit's integer value, or NIL if char isn't a digit in
+  ;; the given radix.
+  (let* ((c  (char-code char))
+         (d0 (char-code #\0))
+         (a  (char-code #\A))
+         (la (char-code #\a))
+         (v  (cond ((and (>= c d0) (<= c (+ d0 9))) (- c d0))
+                   ((and (>= c a)  (<= c (+ a 25))) (+ 10 (- c a)))
+                   ((and (>= c la) (<= c (+ la 25))) (+ 10 (- c la)))
+                   (t nil))))
+    (if (and v (< v radix)) v nil)))
+
+(defun alphanumericp (char)
+  (or (alpha-char-p char) (digit-char-p char)))
+
+(defun char-upcase (char)
+  (if (lower-case-p char)
+      (code-char (- (char-code char) 32))
+      char))
+
+(defun char-downcase (char)
+  (if (upper-case-p char)
+      (code-char (+ (char-code char) 32))
+      char))
+
+(defun char-equal (c1 c2)
+  ;; case-insensitive character compare.
+  (eql (char-code (char-upcase c1)) (char-code (char-upcase c2))))
+
+;; ---- STRING coercion designator. -------------------------------------
+
+(defun string (designator)
+  ;; CL: (string x) returns a string. If x is already a string, it's
+  ;; returned as-is; symbol -> its name; character -> a 1-char string.
+  (cond ((stringp designator) designator)
+        ((symbolp designator) (symbol-name designator))
+        ((characterp designator)
+         (let ((s (make-string 1)))
+           (char-set s 0 designator)
+           s))
+        (t (error "STRING: cannot coerce ~S to a string" designator))))
+
+;; ---- String case conversion. -----------------------------------------
+
+(defun %string-map (function s)
+  ;; Build a fresh string by applying FUNCTION (char -> char) to each
+  ;; position of S. S is run through STRING first so symbols/characters
+  ;; coerce.
+  (let* ((s   (string s))
+         (n   (string-length s))
+         (out (make-string n)))
+    (dotimes (i n out)
+      (char-set out i (funcall function (char s i))))))
+
+(defun string-upcase   (s) (%string-map #'char-upcase   s))
+(defun string-downcase (s) (%string-map #'char-downcase s))
+
+(defun string-capitalize (s)
+  ;; Upper-case the first letter of each maximal run of alphanumerics,
+  ;; lower-case the rest.
+  (let* ((s        (string s))
+         (n        (string-length s))
+         (out      (make-string n))
+         (in-word  nil))
+    (dotimes (i n out)
+      (let ((c (char s i)))
+        (cond ((alphanumericp c)
+               (char-set out i
+                         (if in-word (char-downcase c) (char-upcase c)))
+               (setq in-word t))
+              (t
+               (char-set out i c)
+               (setq in-word nil)))))))
+
+;; ---- String ordering. ------------------------------------------------
+
+(defun %string-compare (a b case-fold)
+  ;; Return a < 0 / 0 / > 0 like memcmp; honour case-fold when t.
+  (let* ((a  (string a))
+         (b  (string b))
+         (na (string-length a))
+         (nb (string-length b))
+         (n  (if (< na nb) na nb)))
+    (do ((i 0 (1+ i)))
+        ((= i n) (- na nb))
+      (let* ((ca (char a i))
+             (cb (char b i))
+             (xa (if case-fold (char-code (char-upcase ca)) (char-code ca)))
+             (xb (if case-fold (char-code (char-upcase cb)) (char-code cb))))
+        (when (/= xa xb) (return (- xa xb)))))))
+
+(defun string<  (a b) (< (%string-compare a b nil) 0))
+(defun string>  (a b) (> (%string-compare a b nil) 0))
+(defun string<= (a b) (<= (%string-compare a b nil) 0))
+(defun string>= (a b) (>= (%string-compare a b nil) 0))
+(defun string/= (a b) (not (zerop (%string-compare a b nil))))
+
+(defun string-lessp    (a b) (<  (%string-compare a b t) 0))
+(defun string-greaterp (a b) (>  (%string-compare a b t) 0))
+(defun string-not-lessp    (a b) (>= (%string-compare a b t) 0))
+(defun string-not-greaterp (a b) (<= (%string-compare a b t) 0))
+(defun string-not-equal    (a b) (not (zerop (%string-compare a b t))))
+
+;; ---- String trim. ----------------------------------------------------
+;;
+;; CHAR-BAG can be a string or a list of characters; we treat strings
+;; as a sequence of characters for membership purposes.
+
+(defun subseq-string (s start end)
+  ;; Helper: copy s[start..end) into a fresh string.
+  (let* ((len (- end start))
+         (out (make-string len)))
+    (dotimes (i len out)
+      (char-set out i (char s (+ start i))))))
+
+(defun %in-char-bag (char bag)
+  (cond ((stringp bag)
+         (dotimes (i (string-length bag) nil)
+           (when (eql char (char bag i)) (return t))))
+        ((listp bag)
+         (find char bag))
+        (t nil)))
+
+(defun string-left-trim (char-bag s)
+  (let* ((s (string s))
+         (n (string-length s)))
+    (do ((i 0 (1+ i)))
+        ((or (= i n) (not (%in-char-bag (char s i) char-bag)))
+         (subseq-string s i n)))))
+
+(defun string-right-trim (char-bag s)
+  (let* ((s (string s))
+         (n (string-length s)))
+    (do ((i n (1- i)))
+        ((or (zerop i) (not (%in-char-bag (char s (1- i)) char-bag)))
+         (subseq-string s 0 i)))))
+
+(defun string-trim (char-bag s)
+  (string-right-trim char-bag (string-left-trim char-bag s)))
+
+;; ---- SEARCH (string-in-string only for now). -------------------------
+
+(defun search (pattern target &key (test #'eql) (start1 0) end1 (start2 0) end2)
+  ;; Return the position in TARGET where PATTERN first occurs as a
+  ;; contiguous sub-sequence, or NIL.  We only handle string-in-string
+  ;; here; list-in-list support can be added later.
+  (let* ((pattern (string pattern))
+         (target  (string target))
+         (e1 (or end1 (string-length pattern)))
+         (e2 (or end2 (string-length target)))
+         (plen (- e1 start1))
+         (tlen (- e2 start2)))
+    (when (<= plen tlen)
+      (do ((i start2 (1+ i))
+           (limit (- e2 plen)))
+          ((> i limit) nil)
+        (let ((match t))
+          (do ((j 0 (1+ j)))
+              ((or (not match) (= j plen)))
+            (unless (funcall test (char pattern (+ start1 j)) (char target (+ i j)))
+              (setq match nil)))
+          (when match (return i)))))))
+
+;; ---- SUBSTITUTE (lists for now, like the rest of Slice 4). ----------
+
+(defun substitute (new old sequence &key (test #'eql) (key #'identity))
+  (cond ((listp sequence)
+         (let ((acc '()))
+           (dolist (x sequence (nreverse acc))
+             (push (if (funcall test old (funcall key x)) new x) acc))))
+        ((stringp sequence)
+         (let* ((n   (string-length sequence))
+                (out (make-string n)))
+           (dotimes (i n out)
+             (let ((c (char sequence i)))
+               (char-set out i
+                         (if (funcall test old (funcall key c)) new c))))))
+        (t (error "SUBSTITUTE: unsupported sequence type"))))
+
 ;;;; THE END
