@@ -25,6 +25,7 @@ tests/test_macros
 tests/test_sequences
 tests/test_setf
 tests/test_control
+tests/test_seq_lib
 
 *-Listing.xml
 *-Results.xml

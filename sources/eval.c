@@ -50,29 +50,45 @@ static Frame* pop_frame(Frame* frame,Ref environment){
         FATAL("Popped frame is not the %s frame.","expected");}
     return result;}
 
+/* Frames live on the env where the establishing special-op fired. Inner
+   LET / LET* / FLET / MACROLET create child envs that don't have those
+   frames in their own ->frames list, so we must walk the parent chain. */
+
 static Frame* find_block_frame(Ref block_name,Ref environment){
-    check_class(environment,ENVIRONMENT_Class);
-    Environment* env=&(environment->slots->environment);
-    Frame* frame=env->frames;
-    while(frame && ((frame->type!=frame_block) || (frame->parameters.block.name!=block_name))){
-        frame=frame->next;}
-    return frame;}
+    while(typep(environment,ENVIRONMENT_Class)){
+        Environment* env=&(environment->slots->environment);
+        Frame* frame=env->frames;
+        while(frame){
+            if(frame->type==frame_block
+               && frame->parameters.block.name==block_name){
+                return frame;}
+            frame=frame->next;}
+        environment=env->next_environment;}
+    return NULL;}
 
 static Frame* find_catch_frame(Ref catch_object,Ref environment){
-    check_class(environment,ENVIRONMENT_Class);
-    Environment* env=&(environment->slots->environment);
-    Frame* frame=env->frames;
-    while(frame && ((frame->type!=frame_catch) || (frame->parameters.catch.object!=catch_object))){
-        frame=frame->next;}
-    return frame;}
+    while(typep(environment,ENVIRONMENT_Class)){
+        Environment* env=&(environment->slots->environment);
+        Frame* frame=env->frames;
+        while(frame){
+            if(frame->type==frame_catch
+               && frame->parameters.catch.object==catch_object){
+                return frame;}
+            frame=frame->next;}
+        environment=env->next_environment;}
+    return NULL;}
 
 static Frame* find_tagbody_frame(Ref tag,Ref environment){
-    check_class(environment,ENVIRONMENT_Class);
-    Environment* env=&(environment->slots->environment);
-    Frame* frame=env->frames;
-    while(frame && ((frame->type!=frame_tagbody) || nullp(assq(tag,frame->parameters.tagbody.tags)))){
-        frame=frame->next;}
-    return frame;}
+    while(typep(environment,ENVIRONMENT_Class)){
+        Environment* env=&(environment->slots->environment);
+        Frame* frame=env->frames;
+        while(frame){
+            if(frame->type==frame_tagbody
+               && !nullp(assq(tag,frame->parameters.tagbody.tags))){
+                return frame;}
+            frame=frame->next;}
+        environment=env->next_environment;}
+    return NULL;}
 
 unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
     check_class(environment,ENVIRONMENT_Class);
@@ -90,13 +106,28 @@ unused static Frame* find_restart_frame(unused Ref restart,unused Ref environmen
     NOT_IMPLEMENTED_YET();
     return NULL;}
 
-static _Noreturn void unwind_next_frame(Frame* frame){
-    /* Unwind one frame */
-    non_local_exit_t exit=((frame->next==frame->target)
-                           ?non_local_exit_target
-                           :non_local_exit_unwind);
-    frame->next->target=frame->target;
-    longjmp(frame->next->non_local_exit,(int)exit);}
+static _Noreturn void unwind_next_frame(Frame* popped, Ref environment){
+    /* After popping `popped` from `environment`'s frames list, find the
+       new top frame to longjmp into. The next frame may be in a parent
+       env (LET / FLET / etc. create child envs whose frames list is
+       empty even though their parent has the BLOCK/HANDLER/etc. frame).
+       Pre-fix this just used popped->next which only walks within one
+       env and crashed on NULL when the popped frame was the only one
+       in its env. */
+    Frame* next = NULL;
+    Ref env_walk = environment;
+    while(typep(env_walk, ENVIRONMENT_Class)){
+        Frame* f = env_walk->slots->environment.frames;
+        if(f != NULL){ next = f; break; }
+        env_walk = env_walk->slots->environment.next_environment;
+    }
+    if(next == NULL){
+        FATAL("unwind_next_frame: %s","no next frame; target not reached");}
+    non_local_exit_t exit = (next == popped->target)
+                                ? non_local_exit_target
+                                : non_local_exit_unwind;
+    next->target = popped->target;
+    longjmp(next->non_local_exit, (int)exit);}
 
 static int check_non_local_exit(int exit){
     if((exit<non_local_exit_initial)||(non_local_exit_target<exit)){
@@ -180,12 +211,12 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
         (unwind_state##__LINE__++,                                                              \
          unwind_index = unwind_step[unwind_select##__LINE__][unwind_state##__LINE__]))
 
-#define UWBODY                                                          \
-    switch(unwind_index){                                               \
-      case 1: push_frame(&frame,environment); break;                    \
-      case 4: pop_frame(&frame,environment);  break;                    \
-      case 5: unwind_next_frame(&frame);      break;                    \
-      default:                                break;}                   \
+#define UWBODY                                                            \
+    switch(unwind_index){                                                 \
+      case 1: push_frame(&frame,environment); break;                      \
+      case 4: pop_frame(&frame,environment);  break;                      \
+      case 5: unwind_next_frame(&frame,environment); break;               \
+      default:                                break;}                     \
     if(unwind_index==2)
 
 #define UWCLEANUP                                                       \
@@ -194,10 +225,21 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
 /* Trigger the unwind that takes us to target_frame. We do NOT pop the current
    top frame here — every UNWIND state machine pops *itself* in its UWBODY
    case 4 on re-entry via setjmp. Popping here would have torn the target
-   frame off the stack when it was the only frame on it. */
+   frame off the stack when it was the only frame on it.
+
+   Frames live on the env where the establishing special-op fired; inner
+   LET / FLET / etc. create child envs that don't carry those frames. So
+   we walk up the env chain looking for the nearest one with a non-NULL
+   frames list — that's the "current top frame" for unwind purposes. */
 #define NON_LOCAL_EXIT(target_frame)                                    \
     do {                                                                \
-        Frame* current_top=environment->slots->environment.frames;      \
+        Ref _env_walk = environment;                                    \
+        Frame* current_top = NULL;                                      \
+        while(typep(_env_walk, ENVIRONMENT_Class)){                     \
+            current_top = _env_walk->slots->environment.frames;         \
+            if(current_top != NULL){ break; }                           \
+            _env_walk = _env_walk->slots->environment.next_environment; \
+        }                                                               \
         if(current_top==NULL){                                          \
             FATAL("NON_LOCAL_EXIT: %s","no active frame");}             \
         current_top->target=(target_frame);                             \
@@ -1163,31 +1205,45 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
         if(state == in_optional){
             /* &OPTIONAL element: symbol, or (var init), or (var init svar). */
             Ref opt_name, opt_init;
+            Ref opt_svar = NIL_Symbol;
             if(symbolp(param)){
                 opt_name = param;
                 opt_init = NIL_Symbol;
             } else if(consp(param)){
                 opt_name = car(param);
                 opt_init = consp(cdr(param)) ? cadr(param) : NIL_Symbol;
+                if(consp(cdr(param)) && consp(cddr(param))){
+                    opt_svar = caddr(param);}
             } else {
                 ERROR("Bad &OPTIONAL parameter: %s",
                       string_cstring(prin1_to_string(param)));}
             Ref value;
+            bool supplied;
             if(consp(arguments)){
                 value = pop(&arguments);
+                supplied = true;
             } else {
                 MultipleValues init_results = {0};
-                value = evale(opt_init, target_env, &init_results);}
+                value = evale(opt_init, target_env, &init_results);
+                supplied = false;}
             Ref var = env_make_lexical_variable(opt_name, value);
             environment_add_variable(var, target_env);
+            if(!nullp(opt_svar)){
+                Ref sw = env_make_lexical_variable(opt_svar,
+                                                   supplied ? T_Symbol : NIL_Symbol);
+                environment_add_variable(sw, target_env);}
             ll = cdr(ll);
             continue;}
         if(state == in_key){
-            /* &KEY param: symbol  | (var init)  | ((:kw var) init [svar])
-               Spec is the keyword the user uses; var is the local name. */
+            /* &KEY param: symbol  | (var init)  | (var init svar)
+               | ((:kw var) init [svar])
+               Spec is the keyword the user uses; var is the local name;
+               svar (if present) is bound to T when the keyword was
+               supplied by the caller, NIL otherwise. */
             Ref var_name;
             Ref keyword;
-            Ref init_form = NIL_Symbol;
+            Ref init_form  = NIL_Symbol;
+            Ref svar       = NIL_Symbol;          /* supplied-p var, or NIL */
             if(symbolp(param)){
                 var_name = param;
                 char* nm = string_cstring(symbol_name(param));
@@ -1204,6 +1260,8 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
                     keyword = keyword_intern_cstring(nm);
                     free(nm);}
                 if(consp(cdr(param))){ init_form = cadr(param); }
+                if(consp(cdr(param)) && consp(cddr(param))){
+                    svar = caddr(param);}
             } else {
                 ERROR("Bad &KEY parameter: %s",
                       string_cstring(prin1_to_string(param)));}
@@ -1214,6 +1272,10 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
                 value = evale(init_form, target_env, &init_r);}
             Ref var = env_make_lexical_variable(var_name, value);
             environment_add_variable(var, target_env);
+            if(!nullp(svar)){
+                Ref sw = env_make_lexical_variable(svar,
+                                                   found ? T_Symbol : NIL_Symbol);
+                environment_add_variable(sw, target_env);}
             ll = cdr(ll);
             continue;}
         /* Required parameter. */

@@ -390,4 +390,241 @@
            ;; CL: pass :abort t when body aborted.
            (close ,var))))))
 
+;; -------------------------------------------------------------------- ;;
+;;  Sequence library (slice 4) — generic over LIST first; STRING and    ;;
+;;  VECTOR cases use type-specific paths where the kernel supplies them ;;
+;;  (LIST-LENGTH, STRING-LENGTH, VECTOR-LENGTH, NTH/CHAR-REF/SVREF).    ;;
+;;                                                                       ;;
+;;  Most CL sequence functions take :TEST and :KEY keyword args; we     ;;
+;;  support those via &KEY and the new kernel default-evaluation path.  ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun length (seq)
+  (cond ((null seq)        0)
+        ((consp seq)       (list-length seq))
+        ((stringp seq)     (string-length seq))
+        ((vectorp seq)     (vector-length seq))
+        ((bit-vector-p seq)(bit-vector-length seq))
+        (t (error "LENGTH: not a sequence"))))
+
+(defun elt (seq i)
+  (cond ((consp seq)        (nth i seq))
+        ((stringp seq)      (char seq i))
+        ((vectorp seq)      (svref seq i))
+        ((bit-vector-p seq) (bit seq i))
+        (t (error "ELT: not a sequence"))))
+
+;; -------------------------------------------------------------------- ;;
+;;  List-only versions of REDUCE, FIND, POSITION, COUNT, REMOVE, MAPCAN ;;
+;;  + their IF variants. These are simple enough that supporting all    ;;
+;;  sequence types right now is overkill; the LIST case unblocks 95% of ;;
+;;  Lisp library code. Specialised string/vector paths can be slotted in;;
+;;  later by changing these definitions.                                ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun reduce (function sequence &key (initial-value nil iv-supplied) from-end)
+  ;; FROM-END is honoured by reversing first; not the most efficient but
+  ;; minimal-and-correct.
+  (let ((seq (if from-end (reverse sequence) sequence)))
+    (cond
+      ((null seq)
+       (if iv-supplied initial-value (funcall function)))
+      (iv-supplied
+       (let ((acc initial-value))
+         (dolist (x seq) (setq acc (if from-end (funcall function x acc)
+                                                (funcall function acc x))))
+         acc))
+      (t
+       (let ((acc (car seq)))
+         (dolist (x (cdr seq)) (setq acc (if from-end (funcall function x acc)
+                                                      (funcall function acc x))))
+         acc)))))
+
+(defun find-if (predicate sequence &key (key #'identity))
+  (dolist (x sequence nil)
+    (when (funcall predicate (funcall key x))
+      (return-from find-if x))))
+
+(defun find (item sequence &key (test #'eql) (key #'identity))
+  (find-if (lambda (x) (funcall test item x)) sequence :key key))
+
+(defun position-if (predicate sequence &key (key #'identity))
+  (let ((i 0))
+    (dolist (x sequence nil)
+      (when (funcall predicate (funcall key x))
+        (return-from position-if i))
+      (setq i (+ i 1)))))
+
+(defun position (item sequence &key (test #'eql) (key #'identity))
+  (position-if (lambda (x) (funcall test item x)) sequence :key key))
+
+(defun count-if (predicate sequence &key (key #'identity))
+  (let ((n 0))
+    (dolist (x sequence n)
+      (when (funcall predicate (funcall key x))
+        (setq n (+ n 1))))))
+
+(defun count (item sequence &key (test #'eql) (key #'identity))
+  (count-if (lambda (x) (funcall test item x)) sequence :key key))
+
+(defun remove-if (predicate sequence &key (key #'identity))
+  (let ((acc nil))
+    (dolist (x sequence (nreverse acc))
+      (unless (funcall predicate (funcall key x))
+        (push x acc)))))
+
+(defun remove (item sequence &key (test #'eql) (key #'identity))
+  (remove-if (lambda (x) (funcall test item x)) sequence :key key))
+
+(defun mapcan (function &rest lists)
+  ;; (MAPCAN fn list...) — like MAPCAR but the results are NCONC'd.
+  (let ((acc nil))
+    (dolist (chunk (apply #'mapcar function lists))
+      (setq acc (nconc acc chunk)))
+    acc))
+
+(defun maplist (function &rest lists)
+  ;; (MAPLIST fn list...) — applies fn to successive sublists.
+  (let ((acc nil))
+    (do ((tails lists (mapcar #'cdr tails)))
+        ((some #'null tails) (nreverse acc))
+      (push (apply function tails) acc))))
+
+(defun mapcon (function &rest lists)
+  (let ((acc nil))
+    (do ((tails lists (mapcar #'cdr tails)))
+        ((some #'null tails) acc)
+      (setq acc (nconc acc (apply function tails))))))
+
+;; -------------------------------------------------------------------- ;;
+;;  Sub-sequences.                                                       ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun butlast (list &optional (n 1))
+  ;; List minus the last n elements. Naive but correct.
+  (let* ((len (length list))
+         (keep (- len n)))
+    (if (<= keep 0)
+        nil
+        (let ((acc nil)
+              (rem list)
+              (i 0))
+          (dotimes (k keep (nreverse acc))
+            k                                ;; suppress unused warnings
+            (push (car rem) acc)
+            (setq rem (cdr rem))
+            (setq i (+ i 1)))))))
+
+(defun subseq (sequence start &optional end)
+  ;; Minimal — list only. STRING / VECTOR specialisations later.
+  (let ((rem (nthcdr start sequence))
+        (acc nil)
+        (count (if end (- end start) -1)))
+    (do ((i 0 (+ i 1)))
+        ((or (null rem) (and (>= count 0) (= i count))) (nreverse acc))
+      (push (car rem) acc)
+      (setq rem (cdr rem)))))
+
+;; -------------------------------------------------------------------- ;;
+;;  Concatenation — list result-type only for now.                       ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun concatenate (result-type &rest sequences)
+  ;; Currently only result-type LIST is supported.
+  (case result-type
+    ((list cl:list nil)
+     (let ((acc nil))
+       (dolist (seq sequences)
+         ;; Walk seq generically.
+         (cond ((null seq))
+               ((consp seq)
+                (dolist (x seq) (push x acc)))
+               ((or (stringp seq) (vectorp seq) (bit-vector-p seq))
+                (dotimes (i (length seq))
+                  (push (elt seq i) acc)))
+               (t (error "CONCATENATE: not a sequence"))))
+       (nreverse acc)))
+    (t (error "CONCATENATE: only :LIST result-type is supported"))))
+
+;; -------------------------------------------------------------------- ;;
+;;  Sort — merge sort on lists.                                          ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun %merge (less a b)
+  ;; Stable merge of two ordered lists. LESS is the comparator.
+  (cond ((null a) b)
+        ((null b) a)
+        ((funcall less (car a) (car b))
+         (cons (car a) (%merge less (cdr a) b)))
+        (t
+         (cons (car b) (%merge less a (cdr b))))))
+
+(defun %list-split (list)
+  ;; Tortoise/hare split. For (a b) returns (values (a) (b)).
+  ;; Pre-fix the loop never entered for 2-element lists, returning
+  ;; (NIL (a b)) and causing infinite recursion in SORT.
+  (let ((slow list) (fast list) (acc nil))
+    (do ()
+        ((or (null fast) (null (cdr fast))))
+      (push (car slow) acc)
+      (setq slow (cdr slow))
+      (setq fast (cddr fast)))
+    (values (nreverse acc) slow)))
+
+(defun sort (sequence less &key (key #'identity))
+  ;; Destructive-style call signature (kept compatible — but we
+  ;; allocate fresh cons cells, so SEQUENCE may or may not be reused).
+  ;; KEY is applied via a wrapper that ignores it during comparison.
+  (let ((cmp (if (eq key #'identity)
+                 less
+                 (lambda (x y) (funcall less (funcall key x) (funcall key y))))))
+    (labels ((rec (lst)
+               (cond ((null lst) nil)
+                     ((null (cdr lst)) lst)
+                     (t
+                      (multiple-value-bind (l r) (%list-split lst)
+                        (%merge cmp (rec l) (rec r)))))))
+      (rec sequence))))
+
+(defun stable-sort (sequence less &key (key #'identity))
+  ;; Merge sort is naturally stable.
+  (sort sequence less :key key))
+
+;; -------------------------------------------------------------------- ;;
+;;  Set operations (on lists).                                           ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun adjoin (item list &key (test #'eql) (key #'identity))
+  (if (find item list :test test :key key) list (cons item list)))
+
+(defun union (list1 list2 &key (test #'eql) (key #'identity))
+  ;; Result contains every element of list2, plus every element of list1
+  ;; not already in list2 (by key + test).
+  (let ((acc (copy-list list2)))
+    (dolist (x list1 acc)
+      (unless (find (funcall key x) acc :test test :key key)
+        (setq acc (cons x acc))))))
+
+(defun intersection (list1 list2 &key (test #'eql) (key #'identity))
+  (remove-if (lambda (x) (not (find (funcall key x) list2 :test test :key key)))
+             list1))
+
+(defun set-difference (list1 list2 &key (test #'eql) (key #'identity))
+  (remove-if (lambda (x) (find (funcall key x) list2 :test test :key key))
+             list1))
+
+(defun pairlis (keys values &optional (alist nil))
+  ;; (PAIRLIS '(a b c) '(1 2 3)) -> ((C . 3) (B . 2) (A . 1))
+  ;; per CL: keys and values are pushed onto alist in order, so the
+  ;; LAST pair becomes the FIRST in the result.
+  (do ((ks keys (cdr ks))
+       (vs values (cdr vs))
+       (acc alist))
+      ((or (null ks) (null vs)) acc)
+    (setq acc (acons (car ks) (car vs) acc))))
+
+(defun acons (key value alist)
+  ;; (ACONS k v a) ≡ (CONS (CONS k v) a)
+  (cons (cons key value) alist))
+
 ;;;; THE END
