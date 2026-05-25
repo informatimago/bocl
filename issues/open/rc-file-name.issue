@@ -1,0 +1,46 @@
+bocl tries to open a rc-file.
+But looks like the RC file name is empty.
+
+It should be one of:
+
+~/.bocl
+~/.bocl.lisp
+~/.config/bocl/init
+~/.config/bocl/init.lisp
+~/.common-lisp
+~/.common-lisp.lisp
+~/.config/common-lisp/init
+~/.config/common-lisp/init.lisp
+
+The first file present should be loaded, unless one of the following
+options is given:
+
+    -n|-norc|--no-init
+
+If the  -i|--init FILE  option is given then the init files are loaded
+in order (several -i options can be given), after the RC file.
+
+
+~/src/public/bocl
+master
+17:06[pjb@thalassa org.xquartz:0 bocl 84Gi]$ sources/bocl -n
+
+Welcome to BOCL Version 0.0.31
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+bocl> (quit)
+
+~/src/public/bocl
+master
+17:06[pjb@thalassa org.xquartz:0 bocl 84Gi]$ sources/bocl 
+
+Welcome to BOCL Version 0.0.31
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+In fopen_mode_for:
+ERROR: File does not exist (and if-does-not-exist is :ERROR)
