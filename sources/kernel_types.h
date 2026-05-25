@@ -128,6 +128,8 @@ typedef enum {
     frame_catch,
     frame_tagbody,
     frame_handler,
+    frame_handler_bind,          /* HANDLER-BIND: call handler in signal's dynamic context */
+    frame_handler_bind_inactive, /* same frame, temporarily deactivated while handler runs */
     frame_restart,
 } frame_type;
 
@@ -155,6 +157,14 @@ typedef struct Frame {
             Ref matched_clause;   /* (type-class var-sym body) — set by signaller */
             Ref condition;        /* the condition object that was signalled */
         } handler;
+        struct {
+            /* List of (type-class . handler-fn) pairs.
+               handler-fn is a Lisp callable (closure / function).
+               Unlike frame_handler, signaling calls handler-fn directly
+               and then continues; no longjmp unless the handler itself
+               does a non-local exit. */
+            Ref bindings;
+        } handler_bind;
         struct {
             Ref restart;
             Ref arguments;

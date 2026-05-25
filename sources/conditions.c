@@ -28,46 +28,67 @@ Ref make_simple_condition(Ref class, Ref format_control, Ref format_arguments){
 /*  Signal mechanism                                                     */
 /* ------------------------------------------------------------------ */
 
-/* Walk env's frames looking for the first HANDLER-CASE clause whose
-   type matches the condition's class. Returns the frame + selects the
-   clause+condition into its handler slot; returns NULL if no match. */
-static Frame* find_matching_handler(Ref cond, Ref environment){
-    if(!typep(environment, ENVIRONMENT_Class)){ return NULL; }
-    Ref cls = class_of(cond);
-    Frame* frame = environment->slots->environment.frames;
-    while(frame){
-        if(frame->type == frame_handler){
-            Ref clauses = frame->parameters.handler.clauses;
-            while(consp(clauses)){
-                Ref clause = cons_car(clauses);
-                Ref type_class = car(clause);
-                if(subclassp(cls, type_class)){
-                    frame->parameters.handler.matched_clause = clause;
-                    frame->parameters.handler.condition = cond;
-                    return frame;}
-                clauses = cons_cdr(clauses);}}
-        frame = frame->next;}
-    return NULL;}
-
-/* Walk up from the current top frame to the target handler frame,
-   signalling target on the way. We don't actually need the same plumbing
-   as RETURN-FROM because intermediate frames (e.g. UNWIND-PROTECT) will
-   re-enter via their own setjmp; we just longjmp to the topmost frame
-   and let the UNWIND state machine chain to next. */
+/* Walk the full environment chain looking for handlers.
+   For frame_handler (HANDLER-CASE): set matched_clause+condition, longjmp.
+   For frame_handler_bind (HANDLER-BIND): call the handler function in place
+   (no unwind); if it returns normally, continue the search.
+   Returns NIL_Symbol if no HANDLER-CASE catches the condition (per CL SIGNAL
+   semantics — SIGNAL returns NIL when unhandled). */
 Ref signal_condition(Ref cond, Ref environment){
-    Frame* target = find_matching_handler(cond, environment);
-    if(target == NULL){
-        /* No handler — per CL, SIGNAL returns NIL when nothing handles. */
-        return NIL_Symbol;}
-    /* Reuse the standard NON_LOCAL_EXIT machinery: set the top frame's
-       target to `target`, longjmp into it. The handler frame's setjmp
-       returns non_local_exit_target / _unwind appropriately. */
-    Frame* top = environment->slots->environment.frames;
-    if(top == NULL){
-        FATAL("signal_condition: %s","no frames in env yet a handler matched");}
-    top->target = target;
-    int code = (top == target) ? 2 /* target */ : 1 /* unwind */;
-    longjmp(top->non_local_exit, code);}
+    Ref cls = class_of(cond);
+
+    /* Walk the entire environment chain so handlers established inside
+       inner LET / FLET / etc. frames are visible. */
+    Ref env_walk = environment;
+    while(typep(env_walk, ENVIRONMENT_Class)){
+        Frame* frame = env_walk->slots->environment.frames;
+        while(frame){
+            /* ---- HANDLER-BIND ---- */
+            if(frame->type == frame_handler_bind){
+                Ref bindings = frame->parameters.handler_bind.bindings;
+                while(consp(bindings)){
+                    Ref pair = car(bindings);
+                    Ref type_class = car(pair);
+                    Ref handler_fn  = cdr(pair);
+                    if(subclassp(cls, type_class)){
+                        /* Deactivate this frame while the handler runs so
+                           re-signaling the same condition from the handler
+                           skips this binding (CL spec requirement). */
+                        frame->type = frame_handler_bind_inactive;
+                        MultipleValues hresults;
+                        kernel_apply(handler_fn, list(cond, NULL), &hresults);
+                        frame->type = frame_handler_bind; /* restore */
+                        /* Handler returned normally — continue signaling. */
+                        goto next_frame;
+                    }
+                    bindings = cdr(bindings);}}
+
+            /* ---- HANDLER-CASE ---- */
+            else if(frame->type == frame_handler){
+                Ref clauses = frame->parameters.handler.clauses;
+                while(consp(clauses)){
+                    Ref clause = cons_car(clauses);
+                    Ref type_class = car(clause);
+                    if(subclassp(cls, type_class)){
+                        frame->parameters.handler.matched_clause = clause;
+                        frame->parameters.handler.condition = cond;
+                        /* Reuse the NON_LOCAL_EXIT machinery: longjmp to the
+                           topmost frame in this env, chaining through UNWIND. */
+                        Frame* top = env_walk->slots->environment.frames;
+                        if(top == NULL){
+                            FATAL("signal_condition: %s",
+                                  "no frames in env yet a handler matched");}
+                        top->target = frame;
+                        int code = (top == frame) ? 2 : 1;
+                        longjmp(top->non_local_exit, code);}
+                    clauses = cons_cdr(clauses);}}
+
+            next_frame:
+            frame = frame->next;}
+        env_walk = env_walk->slots->environment.next_environment;}
+
+    /* No handler caught the condition. */
+    return NIL_Symbol;}
 
 /* ------------------------------------------------------------------ */
 /*  Kernel built-ins                                                     */

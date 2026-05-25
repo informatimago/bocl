@@ -83,6 +83,10 @@ Ref environment_frames(Ref environment){
           case frame_handler:
               push(list(S(HANDLER),frame_env,frame->parameters.handler.clauses,NULL),&results);
               break;
+          case frame_handler_bind:
+          case frame_handler_bind_inactive:
+              push(list(S(HANDLER-BIND),frame_env,frame->parameters.handler_bind.bindings,NULL),&results);
+              break;
           case frame_restart:
               push(list(S(RESTART),frame_env,frame->parameters.restart.restart,NULL),&results);
               break;}

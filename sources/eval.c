@@ -922,6 +922,49 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 evale(body_form, new_env, results);
                 PASS_VALUES();}}
 
+        /* (HANDLER-BIND ((type handler-fn-form) ...) body...)
+           Unlike HANDLER-CASE, HANDLER-BIND does NOT unwind the stack when
+           a matching condition is signaled.  Instead it calls the handler
+           function in the dynamic context of the signal point (via
+           signal_condition / kernel_apply).  If the handler returns normally
+           signaling continues to outer handlers.  If it performs a non-local
+           exit that exit takes effect normally. */
+        if(operator==S(HANDLER-BIND)){
+            check_arg_count_min(arguments,1);
+            Ref raw_bindings = car(arguments);
+            Ref body         = cdr(arguments);
+            /* Evaluate each handler form and build list of (type-class . fn). */
+            COLLECTING(bindings);
+            dolist(clause, raw_bindings){
+                if(!consp(clause) || !consp(cdr(clause))){
+                    ERROR("HANDLER-BIND: malformed binding %s",
+                          string_cstring(prin1_to_string(clause)));}
+                Ref type_spec  = car(clause);
+                Ref fn_form    = cadr(clause);
+                Ref type_class = symbolp(type_spec) ? find_class(type_spec) : type_spec;
+                if(!typep(type_class,T_Class)){
+                    ERROR("HANDLER-BIND: unknown type %s",
+                          string_cstring(prin1_to_string(type_spec)));}
+                MultipleValues fn_results;
+                evale(fn_form, environment, &fn_results);
+                Ref fn = fn_results.values[0];
+                COLLECT(bindings, cons(type_class, fn));}
+            bindings = nreverse(bindings);
+            /* Push a frame_handler_bind frame, eval body, pop frame.
+               The UNWIND/UWBODY macro handles push (step 1) and pop (step 4)
+               automatically.  No manual push_frame/pop_frame here. */
+            Frame frame;
+            frame.type = frame_handler_bind;
+            frame.parameters.handler_bind.bindings = bindings;
+            frame.results = results;
+            int code = setjmp(frame.non_local_exit);
+            UNWIND(code){
+                UWBODY{
+                    dolist(subform, body){
+                        evale(subform, environment, results);}}
+                UWCLEANUP{}}
+            PASS_VALUES();}
+
         else if(operator==BLOCK_Symbol){
             eval_counters.BLOCK++;
             check_arg_count_min(arguments,1);
