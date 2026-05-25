@@ -5,7 +5,7 @@ include ../sources/common.mk
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
 # PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions
-PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring test_structures test_handler_bind test_restarts test_format
+PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring test_structures test_handler_bind test_restarts test_format test_loop
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
@@ -79,7 +79,8 @@ all_SRCS = \
 	test_structures.c \
 	test_handler_bind.c \
 	test_restarts.c \
-	test_format.c
+	test_format.c \
+	test_loop.c
 
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
@@ -303,3 +304,14 @@ test_format: $(test_format_SRCS:%.c=%.d) $(test_format_SRCS:%.c=%.o) $(LIBBOCL)
 run_test_format:test_format
 	@printf "# Testing %s\n" $^
 	$(VERBOSE) $(RUN) ./test_format ;echo status=$$?
+
+test_loop_SRCS = test_loop.c simple_test.c
+test_loop_LIBS = -L../sources -lbocl
+
+test_loop: $(test_loop_SRCS:%.c=%.d) $(test_loop_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_loop_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_loop_SRCS:%.c=%.o) $(test_loop_LIBS)
+
+run_test_loop:test_loop
+	@printf "# Testing %s\n" $^
+	$(VERBOSE) $(RUN) ./test_loop ;echo status=$$?

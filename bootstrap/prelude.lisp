@@ -117,6 +117,22 @@
 (defmacro decf (place &optional (delta 1))
   `(setf ,place (- ,place ,delta)))
 
+(defmacro prog1 (first-form &rest more-forms)
+  "Evaluate FIRST-FORM and MORE-FORMS in order; return the value of FIRST-FORM."
+  (let ((result (gensym "P1-")))
+    `(let ((,result ,first-form))
+       ,@more-forms
+       ,result)))
+
+(defmacro prog2 (first-form second-form &rest more-forms)
+  "Evaluate all forms in order; return the value of SECOND-FORM."
+  (let ((result (gensym "P2-")))
+    `(progn
+       ,first-form
+       (let ((,result ,second-form))
+         ,@more-forms
+         ,result))))
+
 ;; -------------------------------------------------------------------- ;;
 ;;  Accessors: FIRST..TENTH, NTH, REST.                                  ;;
 ;; -------------------------------------------------------------------- ;;
@@ -440,6 +456,20 @@
                                                       (funcall function acc x))))
          acc)))))
 
+(defun member (item list &key (test #'eql) (key #'identity))
+  "Return the first cons in LIST whose CAR satisfies TEST with ITEM, or NIL."
+  (do ((l list (cdr l)))
+      ((null l) nil)
+    (when (funcall test item (funcall key (car l)))
+      (return l))))
+
+(defun member-if (predicate list &key (key #'identity))
+  "Return the first cons in LIST whose CAR satisfies PREDICATE, or NIL."
+  (do ((l list (cdr l)))
+      ((null l) nil)
+    (when (funcall predicate (funcall key (car l)))
+      (return l))))
+
 (defun find-if (predicate sequence &key (key #'identity))
   (dolist (x sequence nil)
     (when (funcall predicate (funcall key x))
@@ -475,6 +505,25 @@
 
 (defun remove (item sequence &key (test #'eql) (key #'identity))
   (remove-if (lambda (x) (funcall test item x)) sequence :key key))
+
+(defun some (predicate sequence)
+  "Return the first true value of (PREDICATE element) over SEQUENCE, or NIL."
+  (dolist (x sequence nil)
+    (let ((v (funcall predicate x)))
+      (when v (return v)))))
+
+(defun every (predicate sequence)
+  "Return T if (PREDICATE element) is true for every element of SEQUENCE."
+  (dolist (x sequence t)
+    (unless (funcall predicate x) (return nil))))
+
+(defun notany (predicate sequence)
+  "Return T if (PREDICATE element) is false for every element of SEQUENCE."
+  (not (some predicate sequence)))
+
+(defun notevery (predicate sequence)
+  "Return T if (PREDICATE element) is false for at least one element."
+  (not (every predicate sequence)))
 
 (defun mapcan (function &rest lists)
   ;; (MAPCAN fn list...) — like MAPCAR but the results are NCONC'd.
@@ -1379,5 +1428,276 @@
     (if (null destination)
         (get-output-stream-string stream)
         nil)))
+
+;; ---- LOOP ------------------------------------------------------------------
+;;
+;; Supported clauses:
+;;   named, with, for/as ... in/on/from/upfrom/downfrom/to/upto/below/
+;;     downto/above/by/across/=.../then..., repeat,
+;;   while, until, do/doing,
+;;   collect/collecting, append/appending, nconc/nconcing,
+;;   sum/summing, count/counting, maximize/maximizing, minimize/minimizing,
+;;   always, never, thereis, return, initially, finally.
+;;
+;; Simple (keyword-free) form: (loop body...) → infinite loop, (return x) exits.
+
+(defun %lkw (sym &rest names)
+  "True if SYM is a symbol whose STRING-NAME matches any of NAMES."
+  (and (symbolp sym)
+       (some (lambda (n) (string= (symbol-name sym) n)) names)))
+
+(defun %loop-kw-p (x)
+  (%lkw x "NAMED" "WITH" "FOR" "AS" "REPEAT" "WHILE" "UNTIL"
+          "DO" "DOING"
+          "COLLECT" "COLLECTING" "APPEND" "APPENDING"
+          "NCONC" "NCONCING" "SUM" "SUMMING" "COUNT" "COUNTING"
+          "MAXIMIZE" "MAXIMIZING" "MINIMIZE" "MINIMIZING"
+          "ALWAYS" "NEVER" "THEREIS" "RETURN" "INITIALLY" "FINALLY"))
+
+(defun %loop-simple-p (clauses)
+  (not (some #'%loop-kw-p clauses)))
+
+(defun %loop-accum-init (kind)
+  (if (member kind '(:sum :count)) 0 nil))
+
+(defun %loop-accum-step (kind var expr)
+  (case kind
+    (:collect  `(setq ,var (cons ,expr ,var)))
+    (:append   `(setq ,var (append ,var ,expr)))
+    (:nconc    `(setq ,var (nconc ,var ,expr)))
+    (:sum      `(incf ,var ,expr))
+    (:count    `(when ,expr (incf ,var)))
+    (:maximize `(let ((%v ,expr)) (when (or (null ,var) (> %v ,var)) (setq ,var %v))))
+    (:minimize `(let ((%v ,expr)) (when (or (null ,var) (< %v ,var)) (setq ,var %v))))))
+
+(defun %loop-expand (all-clauses)
+  (let ((rest     all-clauses)
+        (name     nil)
+        (letb     nil)    ; ((var init) ...) pushed in parse order; nreversed → LET*
+        (tests    nil)    ; pushed; nreversed → top-of-loop exit conditions
+        (setups   nil)    ; pushed; nreversed → run after tests, before body
+        (body     nil)    ; do/doing forms (append, already in order)
+        (steps    nil)    ; pushed; nreversed → bottom-of-loop advances
+        (initially nil)
+        (finally   nil)
+        (accums    nil)   ; (kind result-var expr) — first in = last pushed; nreverse
+        (always-f  nil)
+        (never-f   nil)
+        (thereis-f nil)
+        (return-f  nil)
+        (return-set nil))
+    (flet ((pk  ()     (car rest))
+           (pop! ()    (prog1 (car rest) (setq rest (cdr rest))))
+           (try! (nm)  (when (%lkw (car rest) nm) (pop!) t))
+           (take-body ()
+             (let ((acc nil))
+               (do () ((or (null rest) (%loop-kw-p (pk))))
+                 (push (pop!) acc))
+               (nreverse acc))))
+      (do () ((null rest))
+        (let ((kw (pop!)))
+          (cond
+            ;; NAMED
+            ((%lkw kw "NAMED")
+             (setq name (pop!)))
+            ;; WITH var [= init] [AND ...]
+            ((%lkw kw "WITH")
+             (let ((v (pop!)))
+               (try! "=")
+               (push (list v (if (and rest (not (%loop-kw-p (pk))))
+                                 (pop!) nil))
+                     letb))
+             (do () ((not (try! "AND")))
+               (let ((v (pop!)))
+                 (try! "=")
+                 (push (list v (if (and rest (not (%loop-kw-p (pk))))
+                                   (pop!) nil))
+                       letb))))
+            ;; FOR / AS
+            ((%lkw kw "FOR" "AS")
+             (let ((v (pop!)))
+               (cond
+                 ;; FOR v IN list
+                 ((%lkw (pk) "IN")
+                  (pop!)
+                  (let ((lv (gensym "LV-")))
+                    (push (list lv (pop!)) letb)   ; lv bound first (LET* order)
+                    (push (list v  nil)    letb)
+                    (push `(null ,lv)            tests)
+                    (push `(setq ,v (car ,lv))   setups)
+                    (push `(setq ,lv (cdr ,lv))  steps)))
+                 ;; FOR v ON list
+                 ((%lkw (pk) "ON")
+                  (pop!)
+                  (push (list v (pop!)) letb)
+                  (push `(null ,v)      tests)
+                  (push `(setq ,v (cdr ,v)) steps))
+                 ;; FOR v ACROSS vector/string
+                 ((%lkw (pk) "ACROSS")
+                  (pop!)
+                  (let ((sv  (gensym "SV-"))
+                        (lnv (gensym "LN-"))
+                        (iv  (gensym "IV-")))
+                    ;; push sv first → ends up first in LET* after nreverse
+                    (push (list sv  (pop!))        letb)
+                    (push (list lnv `(length ,sv)) letb)
+                    (push (list iv  0)             letb)
+                    (push (list v   nil)           letb)
+                    (push `(>= ,iv ,lnv)             tests)
+                    (push `(setq ,v (elt ,sv ,iv))   setups)
+                    (push `(incf ,iv)                steps)))
+                 ;; FOR v FROM start [TO/BELOW/DOWNTO/ABOVE end] [BY step]
+                 ((%lkw (pk) "FROM" "UPFROM" "DOWNFROM")
+                  (let* ((dir   (pop!))
+                         (start (pop!))
+                         (downp (%lkw dir "DOWNFROM"))
+                         (end-f nil)
+                         (incl  t)
+                         (step  (if downp -1 1)))
+                    (push (list v start) letb)
+                    (do () ((or (null rest)
+                                (not (%lkw (pk) "TO" "UPTO" "BELOW"
+                                                "DOWNTO" "ABOVE" "BY"))))
+                      (let ((sub (pop!)))
+                        (cond
+                          ((%lkw sub "TO" "UPTO")  (setq end-f (pop!) incl  t))
+                          ((%lkw sub "BELOW")       (setq end-f (pop!) incl  nil))
+                          ((%lkw sub "DOWNTO")      (setq end-f (pop!) incl  t  downp t))
+                          ((%lkw sub "ABOVE")       (setq end-f (pop!) incl  nil downp t))
+                          ((%lkw sub "BY")          (setq step  (pop!))))))
+                    (when end-f
+                      (push (if downp
+                                (if incl `(< ,v ,end-f)  `(<= ,v ,end-f))
+                                (if incl `(> ,v ,end-f)  `(>= ,v ,end-f)))
+                            tests))
+                    (push `(incf ,v ,step) steps)))
+                 ;; FOR v = init [THEN update]
+                 ((%lkw (pk) "=")
+                  (pop!)
+                  (let ((init (pop!)))
+                    (if (%lkw (pk) "THEN")
+                        (progn (pop!)
+                               (push (list v init) letb)
+                               (push `(setq ,v ,(pop!)) steps))
+                        (push (list v init) letb))))
+                 (t
+                  (error "LOOP FOR: unknown sub-clause ~S" (pk))))))
+            ;; REPEAT n
+            ((%lkw kw "REPEAT")
+             (let ((rv (gensym "R-")))
+               (push (list rv (pop!)) letb)
+               (push `(<= ,rv 0)  tests)
+               (push `(decf ,rv)  steps)))
+            ;; WHILE cond
+            ((%lkw kw "WHILE")
+             (push `(not ,(pop!)) tests))
+            ;; UNTIL cond
+            ((%lkw kw "UNTIL")
+             (push (pop!) tests))
+            ;; DO / DOING
+            ((%lkw kw "DO" "DOING")
+             (setq body (append body (take-body))))
+            ;; Accumulation clauses
+            ((%lkw kw "COLLECT" "COLLECTING")
+             (let ((e (pop!)) (iv nil))
+               (when (try! "INTO") (setq iv (pop!)))
+               (push (list :collect (or iv (gensym "C-")) e) accums)))
+            ((%lkw kw "APPEND" "APPENDING")
+             (let ((e (pop!)) (iv nil))
+               (when (try! "INTO") (setq iv (pop!)))
+               (push (list :append (or iv (gensym "A-")) e) accums)))
+            ((%lkw kw "NCONC" "NCONCING")
+             (let ((e (pop!)) (iv nil))
+               (when (try! "INTO") (setq iv (pop!)))
+               (push (list :nconc (or iv (gensym "NC-")) e) accums)))
+            ((%lkw kw "SUM" "SUMMING")
+             (let ((e (pop!)) (iv nil))
+               (when (try! "INTO") (setq iv (pop!)))
+               (push (list :sum (or iv (gensym "S-")) e) accums)))
+            ((%lkw kw "COUNT" "COUNTING")
+             (let ((e (pop!)) (iv nil))
+               (when (try! "INTO") (setq iv (pop!)))
+               (push (list :count (or iv (gensym "K-")) e) accums)))
+            ((%lkw kw "MAXIMIZE" "MAXIMIZING")
+             (let ((e (pop!)) (iv nil))
+               (when (try! "INTO") (setq iv (pop!)))
+               (push (list :maximize (or iv (gensym "MX-")) e) accums)))
+            ((%lkw kw "MINIMIZE" "MINIMIZING")
+             (let ((e (pop!)) (iv nil))
+               (when (try! "INTO") (setq iv (pop!)))
+               (push (list :minimize (or iv (gensym "MN-")) e) accums)))
+            ;; ALWAYS / NEVER / THEREIS
+            ((%lkw kw "ALWAYS")   (setq always-f  (pop!)))
+            ((%lkw kw "NEVER")    (setq never-f   (pop!)))
+            ((%lkw kw "THEREIS")  (setq thereis-f (pop!)))
+            ;; RETURN
+            ((%lkw kw "RETURN")
+             (setq return-f (pop!) return-set t))
+            ;; INITIALLY / FINALLY
+            ((%lkw kw "INITIALLY")
+             (setq initially (append initially (take-body))))
+            ((%lkw kw "FINALLY")
+             (setq finally (append finally (take-body))))
+            (t
+             (error "LOOP: unknown clause keyword: ~S" kw))))))
+    ;; --- code generation ---
+    ;; accums: last pushed = first defined; nreverse so primary = first defined
+    (setq accums (nreverse accums))
+    (let* ((top-tag      (gensym "TOP-"))
+           (end-tag      (gensym "END-"))
+           (let*-binds   (nreverse letb))
+           (accum-binds  (mapcar (lambda (a)
+                                   (list (second a) (%loop-accum-init (first a))))
+                                 accums))
+           (test-forms   (mapcar (lambda (tst) `(when ,tst (go ,end-tag)))
+                                 (nreverse tests)))
+           (setup-forms  (nreverse setups))
+           (step-forms   (nreverse steps))
+           (accum-forms  (mapcar (lambda (a)
+                                   (%loop-accum-step (first a) (second a) (third a)))
+                                 accums))
+           (always-chk   (when always-f
+                           `((unless ,always-f (return-from ,(or name nil) nil)))))
+           (never-chk    (when never-f
+                           `((when   ,never-f  (return-from ,(or name nil) nil)))))
+           (thereis-chk  (when thereis-f
+                           (let ((tv (gensym "TV-")))
+                             `((let ((,tv ,thereis-f))
+                                 (when ,tv (return-from ,(or name nil) ,tv)))))))
+           (primary      (first accums))
+           (result-expr  (cond (return-set return-f)
+                               (primary
+                                (let ((k (first primary)) (rv (second primary)))
+                                  (if (eq k :collect) `(nreverse ,rv) rv)))
+                               (always-f  t)
+                               (never-f   t)
+                               (t         nil))))
+      `(block ,(or name nil)
+         (let* (,@let*-binds ,@accum-binds)
+           (tagbody
+             ,@initially
+             ,top-tag
+             ,@test-forms
+             ,@setup-forms
+             ,@always-chk
+             ,@never-chk
+             ,@thereis-chk
+             ,@body
+             ,@accum-forms
+             ,@step-forms
+             (go ,top-tag)
+             ,end-tag
+             ,@finally
+             (return-from ,(or name nil) ,result-expr)))))))
+
+(defmacro loop (&rest clauses)
+  (if (%loop-simple-p clauses)
+      (let ((top (gensym "LOOP-")))
+        `(block nil
+           (tagbody
+             ,top
+             ,@clauses
+             (go ,top))))
+      (%loop-expand clauses)))
 
 ;;;; THE END

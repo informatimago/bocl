@@ -18,6 +18,7 @@ Ref structure_class_instance_direct_slots(Ref structure_class){
     add_to_live_pool(structure_class);
     /*
     Return an a-list of (slot-name . index) for the direct slots of the structure_class.
+    NOTE: do NOT close the pool before returning; the caller must keep result live.
     */
     check_class(structure_class,STRUCTURE_CLASS_Class);
     Ref superclass = car(structure_class->slots->structure_class.direct_superclasses);
@@ -27,7 +28,7 @@ Ref structure_class_instance_direct_slots(Ref structure_class){
     dolist(sname,structure_class->slots->structure_class.slot_names){
         push(cons(sname,integer_from_uword(offset)),&alist);
         offset++;}
-    close_live_pool(pool);
+    (void)pool; /* pool intentionally left open — caller closes it after use */
     return alist;}
 
 
@@ -36,6 +37,10 @@ Ref structure_class_instance_slots(Ref structure_class){
     /*
     Return an a-list of (slot-name . index) for all the slots of the
     structure_class (including the slots defined in the superclasses).
+    NOTE: do NOT close the pool before returning the non-NIL result; the
+    returned cons list must remain in the live pool until the caller is done
+    with it.  The caller's own close_live_pool() will clean up these cells.
+    The early-return NIL case is safe to close immediately (no cons cells).
     */
     check_class(structure_class,STRUCTURE_CLASS_Class);
     if(structure_class==STRUCTURE_OBJECT_Class){
@@ -44,7 +49,7 @@ Ref structure_class_instance_slots(Ref structure_class){
     Ref superclass = car(structure_class->slots->structure_class.direct_superclasses);
     Ref result=nconc(structure_class_instance_slots(superclass),
                      structure_class_instance_direct_slots(structure_class));
-    close_live_pool(pool);
+    (void)pool; /* pool intentionally left open — caller closes it after use */
     return result;}
 
 
