@@ -9,6 +9,7 @@
 #include "cons.h"
 #include "bostring.h"
 #include "character.h"
+#include "stream.h"
 
 /* The recursive_p parameters are unused, since we don't deal with #=/## references */
 
@@ -768,10 +769,21 @@ Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursi
     return S(NIL);
 }
 
+Ref kernel_unread_char(Ref ch, Ref stream){
+    octet code = (octet)integer_value(character_code(ch));
+    FILE* cstream = stream_cstream(stream);
+    ungetc((int)code, cstream);
+    return ch;}
+
 Ref kernel_read_from_string(Ref input_string,Ref eof_error_p,Ref eof_value,Ref start,Ref end,Ref preserve_whitespace){
-    NOT_IMPLEMENTED_YET();
-    return S(NIL);
-}
+    Ref stream = stream_input_string(input_string, start, end);
+    Ref result;
+    if(is_true(preserve_whitespace))
+        result=kernel_read_preserving_whitespace(stream, eof_error_p, eof_value, NIL_Symbol);
+    else
+        result=kernel_read(stream, eof_error_p, eof_value, NIL_Symbol);
+    stream_close(stream);
+    return result;}
 
 
 void reader_initialize(){

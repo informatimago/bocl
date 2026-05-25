@@ -143,6 +143,7 @@ Ref princ(Ref par_object, Ref par_stream);
 Ref terpri(Ref par_stream);
 Ref kernel_read_char(Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
 Ref kernel_peek_char(Ref par_peek_type, Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
+Ref kernel_unread_char(Ref par_char, Ref par_stream);
 Ref kernel_read(Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
 Ref kernel_read_preserving_whitespace(Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
 Ref kernel_read_delimited_list(Ref par_character, Ref par_input_stream, Ref par_recursive_p);

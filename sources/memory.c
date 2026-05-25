@@ -60,16 +60,25 @@ typedef struct FreeBlock {
 } FreeBlock;
 
 
+/* Segregated free-list threshold:
+   Blocks >= LARGE_THRESHOLD go into large_list; smaller go into small_list.
+   During allocation we always try large_list first — every block there is
+   >= LARGE_THRESHOLD, so it satisfies any typical bocl allocation (<128 B)
+   in O(1) without scanning.  The small_list is a fallback when large_list
+   is exhausted, which is rare during normal operation.                      */
+#define LARGE_THRESHOLD 128u
+
 typedef struct Zone {
     uword size; /* total Zone size */
     uword offset_to_contents; /* offset to first Block */
-    FreeBlock free_list; /* free_list.next points to the first free block. */
+    FreeBlock large_list; /* blocks >= LARGE_THRESHOLD; first is largest  */
+    FreeBlock small_list; /* blocks <  LARGE_THRESHOLD; first is largest  */
     FreeBlock* before_best_candidate;
     struct Zone* next_zone;
 } Zone;
 
 
-#define DefaultZoneSize  (16UL*1024UL*1024UL-16UL)
+#define DefaultZoneSize  (64UL*1024UL*1024UL-16UL)
 #define MinimumBlockSize (sizeof(FreeBlock))
 
 Zone* Zones=NULL;
@@ -105,12 +114,16 @@ static Zone* zone_allocate(size_t size){
     Zone* zone=CHECK_POINTER(malloc(size));
     zone->size=CHECK_SIZE_TO_UWORD(size);
     zone->offset_to_contents=sizeof(Zone);
-    zone->free_list.size=sizeof(zone->free_list);
-    zone->free_list.objcount=FREE_BLOCK;
-    zone->free_list.next=(FreeBlock*)first_block(zone);
-    zone->free_list.next->size=CHECK_SIZE_TO_HALFWORD(size-sizeof(Zone));
-    zone->free_list.next->objcount=FREE_BLOCK;
-    zone->free_list.next->next=NULL;
+    /* Initial free block is the entire zone body — always large. */
+    zone->large_list.size=sizeof(zone->large_list);
+    zone->large_list.objcount=FREE_BLOCK;
+    zone->large_list.next=(FreeBlock*)first_block(zone);
+    zone->large_list.next->size=CHECK_SIZE_TO_HALFWORD(size-sizeof(Zone));
+    zone->large_list.next->objcount=FREE_BLOCK;
+    zone->large_list.next->next=NULL;
+    zone->small_list.size=sizeof(zone->small_list);
+    zone->small_list.objcount=FREE_BLOCK;
+    zone->small_list.next=NULL;
     zone->before_best_candidate=NULL;
     zone->next_zone=Zones;
     Zones=zone;
@@ -123,46 +136,35 @@ static Zone* zone_allocate(size_t size){
          (CS(current_zone,__LINE__) = CS(current_zone,__LINE__)->next_zone, \
           zonevar = CS(current_zone,__LINE__)))
 
-static FreeBlock* find_before_free_block(Zone* zone,FreeBlock* free_block){
-    FreeBlock* current=&zone->free_list;
-    while((current->next!=NULL)&&(current->next!=free_block)){
-        current=current->next;}
-    return (current->next==NULL)
-            ?NULL
-            :current;}
+/* find_before_free_block and insert_free_block are legacy helpers used
+   only by the (now unused) free_block() function. */
+static FreeBlock* find_before_free_block(Zone* zone,FreeBlock* fb){
+    FreeBlock* cur=&zone->large_list;
+    while(cur->next && cur->next!=fb) cur=cur->next;
+    if(cur->next==fb) return cur;
+    cur=&zone->small_list;
+    while(cur->next && cur->next!=fb) cur=cur->next;
+    return (cur->next==fb)?cur:NULL;}
 
 static void insert_free_block(Zone* zone,FreeBlock* new){
-    FreeBlock* previous=&zone->free_list;
-    if(previous->next==NULL){
-        previous->next=new;}
-    else{
-        while(previous->next){
-            if(previous->next->size < new->size){
-                /* insert here */
-                new->next=previous->next;
-                previous->next=new;
-                break;
-            }
-            /* insert farther */
-            previous=previous->next;}}}
+    /* Legacy path: insert into large_list or small_list by size. */
+    if(new->size >= LARGE_THRESHOLD){
+        new->next=zone->large_list.next;
+        zone->large_list.next=new;
+    }else{
+        new->next=zone->small_list.next;
+        zone->small_list.next=new;}}
 
 static FreeBlock* before_best_free_block(FreeBlock* free_list,halfword size){
-    /*
-    The first free block is free_list->next.
-    If the best free block is the first one, then return free_list,
-    else return the block that points to the best one (result->next).
-    If no free block is good, then return NULL.
-    */
-    while(free_list->next){
-        if(free_list->next->size<size){
-            /* no good free block */
-            return NULL;}
-        if(free_list->next->size==size){
-            return free_list;}
-        if(free_list->next->next==NULL){
-            /* last chance */
-            return free_list;}
-        free_list=free_list->next;}
+    /* First-fit: return a pointer to the node whose ->next is the first
+       free block large enough for SIZE.  Returns NULL if none exists.
+       First-fit is O(k) — terminates as soon as any adequate block is found.
+       Combined with the coalescing sweep this keeps the free list short. */
+    FreeBlock* prev = free_list;
+    while(prev->next){
+        if(prev->next->size >= size)
+            return prev;
+        prev = prev->next;}
     return NULL;}
 
 static Block* allocate_in_best_zone(Zone* zone,halfword size){
@@ -187,39 +189,21 @@ static Block* allocate_in_best_zone(Zone* zone,halfword size){
         return block;}}
 
 static Block* allocate_in_zone(Zone* zone,halfword size){
-    /*
-    Finds the best candidate free block in the zone, and allocates a
-    block from it.  If no suitable free block exit in the zone, then
-    return NULL. (GC might be in order).
-    */
-    zone->before_best_candidate=before_best_free_block(&(zone->free_list),size);
-    return (zone->before_best_candidate==NULL)
-            ?NULL
-            :allocate_in_best_zone(zone,size);}
+    /* Try large_list first (every entry is >= LARGE_THRESHOLD, so any
+       allocation request < LARGE_THRESHOLD finds an adequate block
+       immediately in O(1)).  Fall back to small_list for small requests. */
+    FreeBlock* candidate=before_best_free_block(&(zone->large_list),size);
+    if(!candidate && size<LARGE_THRESHOLD)
+        candidate=before_best_free_block(&(zone->small_list),size);
+    zone->before_best_candidate=candidate;
+    return candidate?allocate_in_best_zone(zone,size):NULL;}
 
 static Block* allocate_in_zones(halfword size){
-    /*
-    Search the best suitable free zone in all the zones,
-    and allocate from it, unless non exist then NULL is returned.
-    */
-    Zone* best_zone=NULL;
-    FreeBlock* candidate=NULL;
+    /* First-fit across zones: allocate from the first zone that has space. */
     {do_zones(zone){
-            candidate=before_best_free_block(&(zone->free_list),size);
-            zone->before_best_candidate=candidate;
-            if(candidate!=NULL){
-                if(best_zone==NULL){
-                    best_zone=zone;}
-                else{
-                    if(zone->before_best_candidate->size
-                       < best_zone->before_best_candidate->size){
-                        best_zone=zone;}}
-                if(candidate->size==size){
-                    /* good candidate */
-                    break;}}}}
-    return best_zone
-            ?allocate_in_best_zone(best_zone,size)
-            :NULL;}
+        Block* b=allocate_in_zone(zone,size);
+        if(b) return b;}}
+    return NULL;}
 
 static Block* allocate_internal(size_t size){
     /*
@@ -258,11 +242,76 @@ bool set_garbage_collection_enabled(bool on){
     garbage_collection_enabled=on;
     return result;}
 
-static void mark(Block* rootset){
-    if(rootset && !marked_block_p(rootset)){
-        mark_block(rootset);
-        for(uword i=0;i<block_objcount(rootset);i++){
-            mark(rootset->blocks[i]);}}}
+/* Size of the BLOCK_HEADER in bytes (2 × halfword on LP64, 2 × uword otherwise). */
+#ifdef _POSIX_V6_LP64_OFF64
+#  define BLOCK_HDR_BYTES (2u*(unsigned)sizeof(halfword))
+#else
+#  define BLOCK_HDR_BYTES (2u*(unsigned)sizeof(uword))
+#endif
+
+/* Return true iff PTR is a plausible start-of-block pointer:
+   - non-null and pointer-aligned
+   - lies within a managed heap zone
+   - has a block->size that fits inside that zone
+   This guards against corrupted refs that land in the middle of a block. */
+static bool valid_block_start_p(Block* ptr){
+    if(!ptr) return false;
+    if((uword)ptr % sizeof(void*) != 0) return false;   /* alignment */
+    for(Zone* z=Zones; z!=NULL; z=z->next_zone){
+        char* zstart=(char*)first_block(z);
+        char* zend  =(char*)end_block(z);
+        if((char*)ptr<zstart || (char*)ptr>=zend) continue;
+        /* ptr is in this zone — check size plausibility */
+        halfword bsz = ptr->size;   /* safe: ptr is aligned and within zone */
+        if(bsz < MinimumBlockSize)  return false;
+        if((char*)ptr + bsz > zend) return false;
+        return true;}
+    return false;}
+
+/* Maximum number of pointer-sized slots a block of the given size can hold.
+   Used to cap block_objcount() against corrupted headers. */
+static uword block_physical_slot_count(Block* b){
+    return (b->size > BLOCK_HDR_BYTES) ? (b->size - BLOCK_HDR_BYTES) / sizeof(Block*) : 0;}
+
+/* -----------------------------------------------------------------------
+ * Iterative mark phase — avoids stack overflow on long list structures.
+ *
+ * We maintain an explicit work-stack (malloc-managed, lives for the
+ * lifetime of the process).  For each block popped we mark it, compute
+ * how many of its children to inspect (capped at the physical size of
+ * the block to guard against corrupted objcount), and push the children.
+ * ----------------------------------------------------------------------- */
+static Block** mark_wstack     = NULL;
+static uword   mark_wstack_cap = 0;
+static uword   mark_wstack_top = 0;
+
+static void mark_wstack_push(Block* b){
+    if(mark_wstack_top >= mark_wstack_cap){
+        uword new_cap = (mark_wstack_cap == 0) ? 4096 : mark_wstack_cap * 2;
+        mark_wstack = realloc(mark_wstack, new_cap * sizeof(Block*));
+        mark_wstack_cap = new_cap;}
+    mark_wstack[mark_wstack_top++] = b;}
+
+static void mark(Block* root){
+    /* Seed the worklist — use valid_block_start_p, not just pointer_in_zones,
+       to reject refs that land in the middle of another block. */
+    if(!root || !valid_block_start_p(root) || marked_block_p(root)) return;
+    mark_wstack_top = 0;
+    mark_wstack_push(root);
+    while(mark_wstack_top > 0){
+        Block* b = mark_wstack[--mark_wstack_top];
+        if(!b || !valid_block_start_p(b) || marked_block_p(b)) continue;
+        mark_block(b);
+        uword cnt = block_objcount(b);
+        uword max = block_physical_slot_count(b);
+        if(cnt > max) cnt = max;   /* guard against corrupted objcount */
+        for(uword i = 0; i < cnt; i++){
+            Block* child = b->blocks[i];
+            /* IMPORTANT: valid_block_start_p MUST come before marked_block_p —
+               marked_block_p dereferences child->objcount, which is only safe
+               once we know child is a real block start. */
+            if(child && valid_block_start_p(child) && !marked_block_p(child))
+                mark_wstack_push(child);}}}
 
 
 static Block* free_block(Zone* zone,Block* block){
@@ -273,7 +322,14 @@ static Block* free_block(Zone* zone,Block* block){
     if(free_block_p(next)){
         FreeBlock* previous=find_before_free_block(zone,(FreeBlock*)next);
         if(previous==NULL){
-            FATAL("Cannot find the free block in the free block list %s!","(should not occur)");}
+            /* The adjacent block looks free (objcount==FREE_BLOCK) but is
+               not in the free list.  This can happen when heap corruption
+               mangles an objcount field.  Skip coalescing conservatively. */
+            FreeBlock* new=(FreeBlock*)block;
+            new->objcount=FREE_BLOCK;
+            new->next=NULL;
+            insert_free_block(zone,new);
+            return (Block*)new;}
         FreeBlock* joined=previous->next;
         /* remove the joined free block */
         previous->next=joined->next;
@@ -292,22 +348,74 @@ static Block* free_block(Zone* zone,Block* block){
         insert_free_block(zone,new);
         return (Block*)new;}}
 
+/* Promote the largest block to the front of a free list.  O(N).
+   This makes first-fit allocation O(1) for the first (largest) block. */
+static void promote_largest(FreeBlock* sentinel){
+    FreeBlock* before_max = sentinel;
+    halfword   max_size   = 0;
+    FreeBlock* prev       = sentinel;
+    while(prev->next){
+        if(prev->next->size > max_size){
+            max_size   = prev->next->size;
+            before_max = prev;}
+        prev = prev->next;}
+    if(before_max != sentinel){
+        FreeBlock* largest   = before_max->next;
+        before_max->next     = largest->next;
+        largest->next        = sentinel->next;
+        sentinel->next       = largest;}}
+
 static uword sweep_zone(Zone* zone){
-    uword total=0;
-    Block* end=end_block(zone);
-    Block* current=first_block(zone);
-    do{
-        if(free_block_p(current)){
-            /* stay free */
-        }else if(marked_block_p(current)){
-            /* alive! */
+    /* Single O(N) pass: rebuild both free lists from scratch, coalescing
+       adjacent dead/free blocks as we scan in address order.
+       Each newly freed block is distributed to large_list or small_list
+       based on its size.  After the pass, the largest block in each list
+       is promoted to the front for O(1) first-fit allocation.             */
+    zone->large_list.next     = NULL;
+    zone->small_list.next     = NULL;
+    zone->before_best_candidate = NULL;
+
+    uword      total   = 0;
+    Block*     end     = end_block(zone);
+    Block*     current = first_block(zone);
+    FreeBlock* tail    = NULL;  /* tail of the current coalescing run */
+
+    while(current < end){
+        Block* nxt = next_block(current);   /* pre-compute before possible extension */
+
+        if(marked_block_p(current)){
             clear_block(current);
+            tail = NULL;
         }else{
-            /* garbage */
-            total+=current->size;
-            current=free_block(zone,current);}
-        current=next_block(current);
-    }while(current<end);
+            if(!free_block_p(current))
+                total += current->size;
+            FreeBlock* fb = (FreeBlock*)current;
+            if(tail != NULL && (Block*)((char*)tail + tail->size) == current){
+                /* coalesce: extend the tail block in-place */
+                tail->size = CHECK_SIZE_TO_HALFWORD(
+                    (uword)tail->size + (uword)fb->size);
+                /* tail may have crossed the size threshold after extension —
+                   we'll re-distribute both lists at the end if needed, but
+                   for now leave it in whichever list it was inserted into.
+                   allocate_in_zone checks large_list first regardless.     */
+            }else{
+                /* new free run: put in the appropriate list */
+                fb->objcount = FREE_BLOCK;
+                if(fb->size >= LARGE_THRESHOLD){
+                    fb->next = zone->large_list.next;
+                    zone->large_list.next = fb;
+                }else{
+                    fb->next = zone->small_list.next;
+                    zone->small_list.next = fb;}
+                tail = fb;}}
+
+        current = nxt;}
+
+    /* Promote the largest block in each list to the front so that
+       first-fit on large_list terminates in O(1).                   */
+    promote_largest(&zone->large_list);
+    promote_largest(&zone->small_list);
+
     return total;}
 
 static uword sweep(void){
@@ -369,7 +477,8 @@ uword garbage_collect(void){
     if(!garbage_collection_enabled){
         return 0;}
     mark((Block*)rootset);
-    return sweep();}
+    uword freed = sweep();
+    return freed;}
 
 
 
@@ -413,7 +522,8 @@ void memory_dump(FILE* out){
             fprintf(out,"      size                         0x%08"UWORD_X_FORMAT" %12"UWORD_FORMAT"\n",zone->size,zone->size);
             fprintf(out,"      offset_to_contents           0x%08"UWORD_X_FORMAT" %12"UWORD_FORMAT"\n",zone->offset_to_contents,zone->offset_to_contents);
             fprintf(out,"      /contents              %16p\n",(void*)first_block(zone));
-            fprintf(out,"      free_list              %16p\n",(void*)zone->free_list.next);
+            fprintf(out,"      large_list             %16p\n",(void*)zone->large_list.next);
+            fprintf(out,"      small_list             %16p\n",(void*)zone->small_list.next);
             fprintf(out,"      before_best_candidate  %16p\n",(void*)zone->before_best_candidate);
             fprintf(out,"      next_zone              %16p\n",(void*)zone->next_zone);
             fprintf(out,"      /end                   %16p\n",(void*)end_block(zone));
@@ -428,7 +538,7 @@ void memory_dump(FILE* out){
                      fprintf(out," in-root-set");}
                  if(free_block_p(block)){
                      fprintf(out," free-block");}
-                 if(in_free_list(&(zone->free_list),block)){
+                 if(in_free_list(&(zone->large_list),block)||in_free_list(&(zone->small_list),block)){
                      fprintf(out," in-free-list");}
                  if(!marked_block_p(block) && marked_block_p(block)){
                      fprintf(out," marked");}

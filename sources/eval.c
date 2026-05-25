@@ -21,11 +21,7 @@ Ref eval_global_environment(void){
         push_to_rootset(bocl_global_environment);}
     return bocl_global_environment;}
 
-typedef enum {
-    non_local_exit_initial=0,
-    non_local_exit_unwind=1,
-    non_local_exit_target=2,
-} non_local_exit_t;
+/* non_local_exit_t is declared in kernel.h so conditions.c can use it. */
 
 
 static void push_frame(Frame* frame,Ref environment){
@@ -102,9 +98,8 @@ unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
         frame=frame->next;}
     return frame;}
 
-unused static Frame* find_restart_frame(unused Ref restart,unused Ref environment){
-    NOT_IMPLEMENTED_YET();
-    return NULL;}
+/* find_restart_frame: implemented in conditions.c as part of FIND-RESTART /
+   INVOKE-RESTART.  The stub is removed. */
 
 static _Noreturn void unwind_next_frame(Frame* popped, Ref environment){
     /* After popping `popped` from `environment`'s frames list, find the
@@ -964,6 +959,86 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                         evale(subform, environment, results);}}
                 UWCLEANUP{}}
             PASS_VALUES();}
+
+        /* (RESTART-CASE form (name lambda-list body...) ...)
+           Establishes named restarts visible to FIND-RESTART / INVOKE-RESTART
+           during the evaluation of `form`.  When a restart is invoked,
+           INVOKE-RESTART longjmps here (code = non_local_exit_target) with
+           matched_name + matched_args set on the frame; we then run the
+           restart's body and return its value.
+           Keyword options (:report :interactive :test) are parsed but ignored.
+           NOTE: unlike HANDLER-CASE this uses the UNWIND state machine so
+           non-local exits that merely pass THROUGH this frame work correctly. */
+        if(operator==S(RESTART-CASE)){
+            check_arg_count_min(arguments,1);
+            Ref form         = car(arguments);
+            Ref raw_clauses  = cdr(arguments);
+            /* Parse each clause: (name lambda-list [keyword form]... body...) */
+            COLLECTING(restarts);
+            dolist(clause, raw_clauses){
+                if(!consp(clause)){
+                    ERROR("RESTART-CASE: malformed clause %s",
+                          string_cstring(prin1_to_string(clause)));}
+                Ref rname   = car(clause);
+                Ref rest    = cdr(clause);
+                Ref varlist = consp(rest) ? car(rest) : NIL_Symbol;
+                rest = consp(rest) ? cdr(rest) : NIL_Symbol;
+                /* Skip known keyword options (:report, :interactive, :test)
+                   and their associated value forms.  We must NOT skip
+                   arbitrary keywords because a restart body may legitimately
+                   begin with a keyword literal (e.g. `(my-restart () :ok)`). */
+                while(consp(rest) && consp(cdr(rest)) &&
+                      (car(rest)==K(REPORT) ||
+                       car(rest)==K(INTERACTIVE) ||
+                       car(rest)==K(TEST))){
+                    rest = cddr(rest);}
+                Ref body_form = cons(PROGN_Symbol, rest);
+                COLLECT(restarts, list(rname, varlist, body_form, NULL));}
+            restarts = nreverse(restarts);
+
+            Frame frame;
+            frame.type = frame_restart;
+            frame.parameters.restart.restarts      = restarts;
+            frame.parameters.restart.matched_name  = NIL_Symbol;
+            frame.parameters.restart.matched_args  = NIL_Symbol;
+            frame.results = results;
+
+            int code = setjmp(frame.non_local_exit);
+            UNWIND(code){
+                UWBODY{
+                    evale(form, environment, results);}
+                UWCLEANUP{}}
+
+            /* Check code: 0 = form completed normally; 2 = restart invoked. */
+            if(code == non_local_exit_initial){
+                PASS_VALUES();}
+            /* Restart was invoked (non_local_exit_target).
+               frame.parameters.restart.matched_name / matched_args are set. */
+            {
+                Ref matched_name = frame.parameters.restart.matched_name;
+                Ref matched_args = frame.parameters.restart.matched_args;
+                /* Find matching restart spec. */
+                Ref restart_spec = NIL_Symbol;
+                dolist(r, frame.parameters.restart.restarts){
+                    if(car(r)==matched_name){ restart_spec=r; break;}}
+                if(nullp(restart_spec)){
+                    FATAL("RESTART-CASE: no restart named %s",
+                          string_cstring(prin1_to_string(matched_name)));}
+                Ref varlist   = cadr(restart_spec);
+                Ref body_form = caddr(restart_spec);
+                /* Bind restart arguments to the lambda-list variables. */
+                Ref new_env = environment_new(environment, NIL_Symbol);
+                Ref args = matched_args;
+                dolist(param, varlist){
+                    if(consp(args)){
+                        Ref wrap = env_make_lexical_variable(param, car(args));
+                        environment_add_variable(wrap, new_env);
+                        args = cdr(args);}
+                    else {
+                        Ref wrap = env_make_lexical_variable(param, NIL_Symbol);
+                        environment_add_variable(wrap, new_env);}}
+                evale(body_form, new_env, results);
+                PASS_VALUES();}}
 
         else if(operator==BLOCK_Symbol){
             eval_counters.BLOCK++;

@@ -88,7 +88,7 @@ Ref environment_frames(Ref environment){
               push(list(S(HANDLER-BIND),frame_env,frame->parameters.handler_bind.bindings,NULL),&results);
               break;
           case frame_restart:
-              push(list(S(RESTART),frame_env,frame->parameters.restart.restart,NULL),&results);
+              push(list(S(RESTART),frame_env,frame->parameters.restart.restarts,NULL),&results);
               break;}
         frame=frame->next;}
     results=nreverse(results);

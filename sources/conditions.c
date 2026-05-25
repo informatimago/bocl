@@ -215,20 +215,131 @@ static void kernel_SIMPLE_CONDITION_FORMAT_ARGUMENTS(Ref function, Ref arguments
     results->values[0] = c->slots->condition.format_arguments;
     close_live_pool(pool);}
 
+/* ------------------------------------------------------------------ */
+/*  Restart system: FIND-RESTART / INVOKE-RESTART / ABORT             */
+/* ------------------------------------------------------------------ */
+
+/* Walk the full env chain looking for any frame_restart frame that
+   has a restart named `name`.  Returns the frame, or NULL if not
+   found.  Innermost (most recently established) match wins. */
+static Frame* find_restart_frame_by_name(Ref name, Ref environment){
+    Ref env = environment;
+    while(typep(env, ENVIRONMENT_Class)){
+        Frame* frame = env->slots->environment.frames;
+        while(frame){
+            if(frame->type == frame_restart){
+                Ref restarts = frame->parameters.restart.restarts;
+                while(consp(restarts)){
+                    if(car(car(restarts)) == name){ return frame; }
+                    restarts = cdr(restarts);}}
+            frame = frame->next;}
+        env = env->slots->environment.next_environment;}
+    return NULL;}
+
+/* (FIND-RESTART name) → restart-designator or NIL.
+   In bocl's minimal impl the "restart object" is just the name symbol. */
+static void kernel_FIND_RESTART(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref name = pop_mandatory_argument(function, &current);
+    /* Accept either a symbol or a restart object (which is also the symbol). */
+    if(!symbolp(name)){
+        ERROR("FIND-RESTART: expected a symbol, got %s",
+              string_cstring(prin1_to_string(name)));}
+    Frame* rf = find_restart_frame_by_name(name, eval_global_environment());
+    results->count = 1;
+    results->values[0] = rf ? name : NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (INVOKE-RESTART restart-designator &rest args)
+   Finds the innermost active restart with the given name and performs
+   a non-local exit to its RESTART-CASE frame with `args` bound.
+   Never returns normally. */
+static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref designator = pop_mandatory_argument(function, &current);
+    Ref restart_args = current; /* remaining args passed to restart body */
+    Ref name = symbolp(designator) ? designator : designator;
+    if(!symbolp(name)){
+        ERROR("INVOKE-RESTART: expected a symbol, got %s",
+              string_cstring(prin1_to_string(designator)));}
+    Ref env = eval_global_environment();
+    Frame* target = find_restart_frame_by_name(name, env);
+    if(target == NULL){
+        ERROR("INVOKE-RESTART: no active restart named %s",
+              string_cstring(prin1_to_string(name)));}
+    /* Set the matched restart on the frame. */
+    target->parameters.restart.matched_name = name;
+    target->parameters.restart.matched_args = restart_args;
+    /* Trigger a non-local exit toward `target`.  Use the same strategy as
+       NON_LOCAL_EXIT: find the current topmost frame and longjmp toward
+       target, letting the UNWIND chain propagate through intermediates. */
+    Frame* top = NULL;
+    Ref env2 = env;
+    while(typep(env2, ENVIRONMENT_Class)){
+        top = env2->slots->environment.frames;
+        if(top){ break; }
+        env2 = env2->slots->environment.next_environment;}
+    if(top == NULL){
+        FATAL("INVOKE-RESTART: %s","no active frame");}
+    top->target = target;
+    int code = (top == target) ? (int)non_local_exit_target : (int)non_local_exit_unwind;
+    longjmp(top->non_local_exit, code);
+    /* NOTREACHED */
+    (void)results;
+    close_live_pool(pool);}
+
+/* (INVOKE-RESTART-INTERACTIVELY name) — same as invoke-restart with no args. */
+static void kernel_INVOKE_RESTART_INTERACTIVELY(Ref function, Ref arguments, MultipleValues* results){
+    /* Delegate: add NIL args list */
+    kernel_INVOKE_RESTART(function, arguments, results);}
+
+/* (ABORT) — invoke the innermost ABORT restart or fatal-error if none. */
+static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref env = eval_global_environment();
+    Frame* target = find_restart_frame_by_name(S(ABORT), env);
+    if(target == NULL){
+        FATAL("ABORT: no active %s restart", "ABORT");}
+    target->parameters.restart.matched_name = S(ABORT);
+    target->parameters.restart.matched_args = NIL_Symbol;
+    Frame* top = NULL;
+    Ref env2 = env;
+    while(typep(env2, ENVIRONMENT_Class)){
+        top = env2->slots->environment.frames;
+        if(top){ break; }
+        env2 = env2->slots->environment.next_environment;}
+    if(top == NULL){ FATAL("ABORT: %s","no active frame"); }
+    top->target = target;
+    int code = (top == target) ? (int)non_local_exit_target : (int)non_local_exit_unwind;
+    longjmp(top->non_local_exit, code);
+    (void)results;
+    close_live_pool(pool);}
+
 static void register_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
     set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
 
 void kernel_initialize_conditions(void){
-    Ref ll_datum = list(S(DATUM), NULL);
-    Ref ll_obj   = list(S(OBJECT), NULL);
-    Ref ll_cls   = list(S(CLASS-OR-NAME), NULL);
-    Ref ll_c     = list(S(CONDITION), NULL);
+    Ref ll_datum   = list(S(DATUM), NULL);
+    Ref ll_obj     = list(S(OBJECT), NULL);
+    Ref ll_cls     = list(S(CLASS-OR-NAME), NULL);
+    Ref ll_c       = list(S(CONDITION), NULL);
+    Ref ll_restart = list(S(RESTART-DESIGNATOR), NULL);
+    Ref ll_empty   = NIL_Symbol;
 
-    register_fn(S(SIGNAL),                            ll_datum, kernel_SIGNAL);
-    register_fn(S(ERROR),                             ll_datum, kernel_ERROR);
-    register_fn(S(WARN),                              ll_datum, kernel_WARN);
-    register_fn(S(MAKE-CONDITION),                    ll_cls,   kernel_MAKE_CONDITION);
-    register_fn(S(CONDITIONP),                        ll_obj,   kernel_CONDITIONP);
-    register_fn(S(SIMPLE-CONDITION-FORMAT-CONTROL),   ll_c,     kernel_SIMPLE_CONDITION_FORMAT_CONTROL);
-    register_fn(S(SIMPLE-CONDITION-FORMAT-ARGUMENTS), ll_c,     kernel_SIMPLE_CONDITION_FORMAT_ARGUMENTS);
+    register_fn(S(SIGNAL),                            ll_datum,   kernel_SIGNAL);
+    register_fn(S(ERROR),                             ll_datum,   kernel_ERROR);
+    register_fn(S(WARN),                              ll_datum,   kernel_WARN);
+    register_fn(S(MAKE-CONDITION),                    ll_cls,     kernel_MAKE_CONDITION);
+    register_fn(S(CONDITIONP),                        ll_obj,     kernel_CONDITIONP);
+    register_fn(S(SIMPLE-CONDITION-FORMAT-CONTROL),   ll_c,       kernel_SIMPLE_CONDITION_FORMAT_CONTROL);
+    register_fn(S(SIMPLE-CONDITION-FORMAT-ARGUMENTS), ll_c,       kernel_SIMPLE_CONDITION_FORMAT_ARGUMENTS);
+    register_fn(S(FIND-RESTART),                      ll_restart, kernel_FIND_RESTART);
+    register_fn(S(INVOKE-RESTART),                    ll_restart, kernel_INVOKE_RESTART);
+    register_fn(S(INVOKE-RESTART-INTERACTIVELY),      ll_restart, kernel_INVOKE_RESTART_INTERACTIVELY);
+    register_fn(S(ABORT),                             ll_empty,   kernel_ABORT);
 }

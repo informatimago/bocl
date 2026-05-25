@@ -312,6 +312,100 @@ Bring up [bootstrap/](bootstrap/) on top of the kernel, in order:
 
 One Lisp-level test file per step under `tests/lisp/`.
 
+#### Phase 5 progress (slices landed)
+
+**Slice 1 — LET\*, MACROLET, SYMBOL-MACROLET, LOAD-TIME-VALUE (v0.0.21)**:
+All four special operators wired into `evale`. `LET*` sequences its
+bindings; `MACROLET` establishes local macro definitions visible in its
+body; `SYMBOL-MACROLET` expands symbol references inline; `LOAD-TIME-VALUE`
+evaluates at load time and caches the result. Test: `test_setf.c` (covers
+SYMBOL-MACROLET round-trip). All green.
+
+**Slice 2 — SETF + DEFINE-SETF-EXPANDER (v0.0.22)**:
+`SETF` macro expands via built-in place descriptors for `CAR`, `CDR`,
+`AREF`, `GETHASH`, `SYMBOL-VALUE`, plus any user-defined expanders.
+`DEFINE-SETF-EXPANDER` stores the expander in the function cell of the
+accessor symbol. Tests: [tests/test_setf.c](tests/test_setf.c) — 12 cases, all green.
+
+**Slice 3 — control macros (v0.0.23)**:
+`WHEN`, `UNLESS`, `COND`, `CASE`, `TYPECASE`, `DO`, `DO*`, `DOTIMES`,
+`DOLIST`, `LOOP` (simple iteration), `AND`, `OR`, `NOT`, `PROG1`,
+`PROG2`, `PROG`, `TAGBODY`/`GO`. Tests:
+[tests/test_control.c](tests/test_control.c) — all green.
+
+**Slice 4 — sequence library (v0.0.24)**:
+`APPEND`, `REVERSE`, `NREVERSE`, `LENGTH`, `ELT`, `SUBSEQ`, `COPY-SEQ`,
+`CONCATENATE`, `MAP`, `MAP-INTO`, `REDUCE`, `COUNT`, `FIND`, `POSITION`,
+`REMOVE`, `DELETE`, `SUBSTITUTE`, `NSUBSTITUTE`, `SORT`, `STABLE-SORT`,
+and their `-IF` / `-IF-NOT` variants. Tests:
+[tests/test_sequences.c](tests/test_sequences.c) and
+[tests/test_seq_lib.c](tests/test_seq_lib.c) — all green.
+
+**Slice 5 — string / character library (v0.0.25)**:
+`STRING-UPCASE`, `STRING-DOWNCASE`, `STRING-CAPITALIZE`, `STRING-TRIM`,
+`STRING=`, `STRING<`, `STRING>`, `STRING-EQUAL` (case-insensitive),
+`CHAR-UPCASE`, `CHAR-DOWNCASE`, `CHAR-ALPHABETIC-P`, `CHAR-NUMERIC-P`,
+`ALPHA-CHAR-P`, `DIGIT-CHAR-P`, `CHAR-CODE`, `CODE-CHAR`, `CHAR=`,
+`CHAR<`, `STRING-TO-NUMBER`, `NUMBER-TO-STRING`, `PARSE-INTEGER`.
+Tests: [tests/test_strings.c](tests/test_strings.c) — all green.
+
+**Slice 6 — numeric extras (v0.0.26)**:
+`EXPT`, `SQRT`, `EXP`, `LOG`, `SIN`, `COS`, `TAN`, `ASIN`, `ACOS`,
+`ATAN`, `SINH`, `COSH`, `TANH`, `FLOOR`, `CEILING`, `TRUNCATE`, `ROUND`
+(extended — already in Phase 2; this slice added `GCD`, `LCM`,
+`ISQRT`, `SIGNUM`, `CONJUGATE`, `PHASE`, `REALPART`, `IMAGPART`, `CIS`,
+`NUMERATOR`, `DENOMINATOR`, `FLOAT-DIGITS`, `FLOAT-PRECISION`,
+`SCALE-FLOAT`, `DECODE-FLOAT`, `INTEGER-DECODE-FLOAT`,
+`FLOAT-RADIX`).
+Tests: [tests/test_numeric_extras.c](tests/test_numeric_extras.c) — all green.
+
+**Slice 7 — DESTRUCTURING-BIND (v0.0.28)**:
+Full destructuring pattern matching including nested lists, `&optional`,
+`&rest`, `&key`, `&aux`, `&whole`, `&body`. Shared with DEFMACRO's
+lambda-list parser. Tests:
+[tests/test_destructuring.c](tests/test_destructuring.c) — all green.
+
+**Slice 8 — DEFSTRUCT (v0.0.29)**:
+`DEFSTRUCT` expands into a structure class plus generated `make-*`,
+`*-p`, and slot accessor functions. Supports `:conc-name`,
+`:constructor`, `:predicate`, `:include`. Tests:
+[tests/test_structures.c](tests/test_structures.c) — all green.
+
+**Slice 9a — HANDLER-BIND + restarts (v0.0.30)**:
+`HANDLER-BIND` establishes dynamic condition handlers without unwinding;
+`RESTART-CASE`, `RESTART-BIND`, `FIND-RESTART`, `INVOKE-RESTART`,
+`CERROR`, `WITH-SIMPLE-RESTART`. Tests:
+[tests/test_handler_bind.c](tests/test_handler_bind.c) and
+[tests/test_restarts.c](tests/test_restarts.c) — all green.
+
+**Slice 10 — FORMAT + I/O primitives + GC overhaul (v0.0.31)**:
+`FORMAT` (directives `~A ~S ~% ~& ~~ ~D ~B ~O ~X ~R ~F ~E ~G ~I ~<…~>
+~(…~) ~[…~]` and `~* ~? ~^`), `WRITE-STRING`, `WRITE-CHAR`,
+`READ-FROM-STRING`, `WITH-OUTPUT-TO-STRING`, `PRINC-TO-STRING`,
+`WRITE-TO-STRING`. Tests:
+[tests/test_format.c](tests/test_format.c) — 19 cases, all green.
+
+GC overhaul (driven by crashes and hangs uncovered when GC was
+re-enabled under load from this slice's prelude):
+
+- **Child pointer order fix** in `mark()`: `valid_block_start_p` must
+  precede `marked_block_p` to avoid dereferencing an invalid pointer.
+  Eliminated the SIGSEGV that occurred when GC ran during prelude load.
+- **O(1) free-block insertion**: replaced the O(N) sorted-list insert
+  with a simple prepend; total sweep time drops from O(N²) to O(N).
+- **Coalescing sweep**: a single O(N) pass merges physically adjacent
+  dead blocks into one larger free block, reducing fragmentation.
+- **Segregated free lists** (`large_list` ≥ 128 B, `small_list` < 128 B)
+  with largest-block-first promotion: O(1) allocation for all bocl
+  objects (all ≤ 96 B, so every `large_list` entry satisfies any
+  request).
+- **FILE\* leak fix**: `bocl_read_cstring`, `bocl_read_eval_loop_cstring`,
+  and `kernel_read_from_string` each created a `fmemopen`-backed stream
+  and never closed it. After thousands of prelude reads, `_fwalk`
+  (called by `getc` to flush all open FILE\* handles) became O(N) per
+  character, making the test suite hang. Fixed by calling `stream_close`
+  after each use.
+
 ### Phase 6 — exhaustive C-level kernel test suite
 
 Independent of ansi-test, a CUnit suite per kernel subsystem under `tests/`:

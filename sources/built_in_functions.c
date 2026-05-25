@@ -1985,6 +1985,60 @@ void kernel_GET_OUTPUT_STREAM_STRING(Ref function,Ref arguments,MultipleValues* 
     close_live_pool(pool);
 }
 
+/* ---- Slice 10: WRITE-CHAR, WRITE-STRING, FRESH-LINE, UNREAD-CHAR ------- */
+
+void kernel_WRITE_CHAR(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_char   = pop_mandatory_argument(function,&current);
+    Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=bocl_write_char(par_char,par_stream);
+    close_live_pool(pool);}
+
+void kernel_FRESH_LINE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=bocl_fresh_line(par_stream);
+    close_live_pool(pool);}
+
+void kernel_UNREAD_CHAR(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_char   = pop_mandatory_argument(function,&current);
+    Ref def_stream = variable_value(S(*STANDARD-INPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=kernel_unread_char(par_char,par_stream);
+    close_live_pool(pool);}
+
+/* KERNEL-WRITE-STRING string stream start end — all positional.
+   The Lisp wrapper WRITE-STRING provides the CL signature with &optional
+   stream and &key start end. */
+void kernel_KERNEL_WRITE_STRING(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_string = pop_mandatory_argument(function,&current);
+    Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    Ref par_start  = pop_optional_argument(function,&current,NIL_Symbol);
+    Ref par_end    = pop_optional_argument(function,&current,NIL_Symbol);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=bocl_write_string(par_string,par_stream,par_start,par_end);
+    close_live_pool(pool);}
+
 void kernel_OPEN(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
@@ -2966,5 +3020,21 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(ENV-SPECIAL-VARIABLE-P);
         Ref lambda_list=list(S(OBJECT),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ENV_SPECIAL_VARIABLE_P));}
+    /* Slice 10: character-level I/O primitives */
+    {   Ref fname=S(WRITE-CHAR);
+        Ref lambda_list=list(S(CHAR),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_WRITE_CHAR));}
+    {   Ref fname=S(FRESH-LINE);
+        Ref lambda_list=NIL_Symbol;
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FRESH_LINE));}
+    {   Ref fname=S(UNREAD-CHAR);
+        Ref lambda_list=list(S(CHAR),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_UNREAD_CHAR));}
+    {   Ref fname=S(KERNEL-WRITE-STRING);
+        Ref lambda_list=list(S(STRING),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_KERNEL_WRITE_STRING));}
+    {   Ref fname=S(KERNEL-FORMAT-RUN);
+        Ref lambda_list=list(S(STREAM),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FORMAT_RUN));}
 }
 /**** THE END ****/

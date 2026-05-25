@@ -18,7 +18,9 @@ Ref bocl_eval(Ref sexp){
 
 Ref bocl_read_cstring(const char* text){
     Ref stream=stream_input_string(string_new_cstring(text),I(0),NIL_Symbol);
-    return kernel_read(stream,NIL_Symbol,NIL_Symbol,NIL_Symbol);}
+    Ref result=kernel_read(stream,NIL_Symbol,NIL_Symbol,NIL_Symbol);
+    stream_close(stream);
+    return result;}
 
 Ref bocl_read_eval_cstring(const char* text){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));
@@ -42,7 +44,9 @@ Ref bocl_repl(Ref inp,Ref out){
 Ref bocl_read_eval_loop_cstring(const char* text){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));
     Ref inp=stream_input_string(string_new_cstring(text),I(0),NIL_Symbol);
-    return bocl_repl(inp,out);}
+    Ref result=bocl_repl(inp,out);
+    stream_close(inp);
+    return result;}
 
 Ref bocl_in_package(Ref package_designator){
     Ref pkg = package_find(package_designator);

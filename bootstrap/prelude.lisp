@@ -1218,4 +1218,166 @@
               ',copy-sym)))
        ',name)))
 
+;;;; -----------------------------------------------------------------------
+;;;;  Slice 9b — CERROR / WITH-SIMPLE-RESTART
+;;;; -----------------------------------------------------------------------
+
+;; CERROR: signal a correctable error. Establishes a CONTINUE restart so
+;; a HANDLER-BIND can invoke it to recover.  `continue-string` names the
+;; restart's report; bocl does not display it yet.
+(defmacro cerror (continue-string datum &rest args)
+  ;; continue-string names the restart's report action; accepted for CL
+  ;; compatibility but not used by bocl yet.
+  `(restart-case (error ,datum ,@args)
+     (continue () nil)))
+
+;; WITH-SIMPLE-RESTART: shorthand for RESTART-CASE with one named restart.
+(defmacro with-simple-restart (restart-spec &body body)
+  (let ((name (if (consp restart-spec) (car restart-spec) restart-spec)))
+    `(restart-case (progn ,@body)
+       (,name () nil))))
+
+;;;; -----------------------------------------------------------------------
+;;;; Slice 10 — FORMAT, I/O library
+;;;;
+;;;; Kernel built-ins added in this slice (C side):
+;;;;   write-char           — write a character to a stream
+;;;;   kernel-write-string  — write a string region to a stream (positional args)
+;;;;   fresh-line           — emit a newline (simplified: always emits one)
+;;;;   unread-char          — push a character back onto an input stream
+;;;;
+;;;; Kernel built-ins already available that we wrap here:
+;;;;   terpri  prin1  princ  prin1-to-string
+;;;;   kernel-read  kernel-read-char  kernel-peek-char  kernel-read-from-string
+;;;;   make-string-output-stream  get-output-stream-string
+;;;;   make-string-input-stream
+;;;; -----------------------------------------------------------------------
+
+;; ---- Output primitives --------------------------------------------------
+
+(defun write-string (string &optional (stream *standard-output*)
+                     &key (start 0) end)
+  ;; Write STRING[START..END) to STREAM; return STRING.
+  (kernel-write-string string stream start end))
+
+(defun write-line (string &optional (stream *standard-output*)
+                   &key (start 0) end)
+  ;; Like WRITE-STRING but appends a newline.
+  (write-string string stream :start start :end end)
+  (terpri stream)
+  string)
+
+;; ---- Input wrappers -----------------------------------------------------
+
+(defun read (&optional (stream *standard-input*)
+                       (eof-error-p t) eof-value recursive-p)
+  (kernel-read stream eof-error-p eof-value recursive-p))
+
+(defun read-char (&optional (stream *standard-input*)
+                             (eof-error-p t) eof-value recursive-p)
+  (kernel-read-char stream eof-error-p eof-value recursive-p))
+
+(defun peek-char (&optional (peek-type nil)
+                             (stream *standard-input*)
+                             (eof-error-p t) eof-value recursive-p)
+  (kernel-peek-char peek-type stream eof-error-p eof-value recursive-p))
+
+(defun read-from-string (string &optional (eof-error-p t) eof-value
+                         &key (start 0) end preserve-whitespace)
+  ;; Returns the first Lisp object read from STRING.
+  ;; (The second CL return value — the end position — is not yet returned.)
+  (kernel-read-from-string string eof-error-p eof-value start end
+                            preserve-whitespace))
+
+;; ---- String-stream macros -----------------------------------------------
+
+(defmacro with-output-to-string (var-spec &body body)
+  ;; VAR-SPEC is (VAR) — a one-element list holding the stream variable name.
+  ;; (Bocl does not support destructuring macro lambda lists, so we accept
+  ;; the whole spec as one argument and extract the variable manually.)
+  (let ((var (if (consp var-spec) (car var-spec) var-spec)))
+    `(let ((,var (make-string-output-stream)))
+       ,@body
+       (get-output-stream-string ,var))))
+
+(defmacro with-input-from-string (spec &body body)
+  ;; SPEC is (VAR STRING) or (VAR STRING :START start :END end).
+  ;; Extract the variable and string; start/end default to 0/nil.
+  ;; (Bocl does not support destructuring macro lambda lists.)
+  (let ((var    (car  spec))
+        (string (cadr spec)))
+    `(let ((,var (make-string-input-stream ,string nil nil)))
+       ,@body)))
+
+;; ---- String coercions ---------------------------------------------------
+
+(defun princ-to-string (obj)
+  (with-output-to-string (s) (princ obj s)))
+
+(defun write-to-string (obj)
+  (with-output-to-string (s) (prin1 obj s)))
+
+;; ---- READ-LINE ----------------------------------------------------------
+
+(defun read-line (&optional (stream *standard-input*)
+                             (eof-error-p t) eof-value recursive-p)
+  ;; Return (values string missing-newline-p).
+  ;; missing-newline-p is T when the line ended at EOF rather than #\Newline.
+  (let ((out       (make-string-output-stream))
+        (eof-box   (list nil))        ; unique sentinel — cannot be a character
+        (saw-any   nil))
+    (block read-line-block
+      (do ()
+          (nil)
+        (let ((c (kernel-read-char stream nil eof-box recursive-p)))
+          (cond
+            ((eq c eof-box)
+             (when (and (not saw-any) eof-error-p)
+               (error "READ-LINE: end of file on stream"))
+             (return-from read-line-block
+               (if saw-any
+                   (values (get-output-stream-string out) t)
+                   (values eof-value t))))
+            ((eql c #\Newline)
+             (return-from read-line-block
+               (values (get-output-stream-string out) nil)))
+            (t
+             (setq saw-any t)
+             (write-char c out))))))))
+
+;; ---- FORMAT -------------------------------------------------------------
+;;
+;; The core format runner is implemented in C (kernel-format-run) to avoid
+;; allocation pressure from the Lisp interpreter expanding do-loop gensyms
+;; on every call.
+;;
+;; Supported directives:
+;;   ~A ~S ~W  PRINC / PRIN1 the next argument
+;;   ~D ~B ~O ~X ~nR   integer in decimal / binary / octal / hex / radix-n
+;;   ~C     print a character
+;;   ~%     newline(s)              ~&    fresh-line(s)
+;;   ~~     literal tilde
+;;   ~P     plural suffix ("s" or "")
+;;   ~nT    emit n spaces (tab — simplified)
+;;   ~n*    skip n arguments (default 1)
+;;   ~{…~}  iterate over a list argument
+;;   ~F ~E ~G   float (simplified: behaves like ~A)
+;;
+;; Numeric prefix:  ~nX  (decimal integer)  ~vX (from next arg)  ~#X (count)
+;; Modifiers:       : and @ (honoured where noted above)
+;;
+;; Destination:  T  → *standard-output*, returns NIL
+;;               NIL → returns a fresh string
+;;               stream → writes to stream, returns NIL
+
+(defun format (destination control-string &rest args)
+  ;; Delegate to the C kernel runner to avoid GC-pressure from Lisp do-loops.
+  (let ((stream (cond ((eq destination t)   *standard-output*)
+                      ((eq destination nil) (make-string-output-stream))
+                      (t                    destination))))
+    (kernel-format-run stream control-string 0 (string-length control-string) args)
+    (if (null destination)
+        (get-output-stream-string stream)
+        nil)))
+
 ;;;; THE END

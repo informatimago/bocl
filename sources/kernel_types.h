@@ -166,8 +166,13 @@ typedef struct Frame {
             Ref bindings;
         } handler_bind;
         struct {
-            Ref restart;
-            Ref arguments;
+            /* RESTART-CASE: list of (name varlist body-form) triples in
+               source order.  INVOKE-RESTART sets matched_name + matched_args
+               before longjmping to this frame (same protocol as HANDLER-CASE
+               sets matched_clause + condition). */
+            Ref restarts;
+            Ref matched_name;
+            Ref matched_args;
         } restart;
     } parameters;
     MultipleValues* results;

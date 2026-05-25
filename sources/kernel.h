@@ -72,7 +72,8 @@ Ref symbol_intern_cstring(const char* name);
 
 /* Keyword */
 
-Ref keyword_intern_cstring(const char* name);
+Ref  keyword_intern_cstring(const char* name);
+bool keywordp(Ref object);
 
 /* Null */
 
@@ -105,6 +106,13 @@ FILE* stream_cstream(Ref stream);
 type_t stream_type(Ref stream);
 
 Ref string_stream_new(FILE* memstream);
+
+/* Non-local exit codes shared between eval.c and conditions.c */
+typedef enum {
+    non_local_exit_initial = 0,
+    non_local_exit_unwind  = 1,
+    non_local_exit_target  = 2,
+} non_local_exit_t;
 
 /* FUNCTIONS */
 
