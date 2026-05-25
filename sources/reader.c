@@ -29,7 +29,7 @@ Hard-wired reader macros:
 | ;       | comments            | ; foo                         |
 | '       | quote               | 'foo                          |
 | "       | strings             | "foo"  \\ and \" escapes. |
-| (       | lists               | (f o o) (no dotted list)      |
+| (       | lists               | (f o o) (a . b) (a b . c)    |
 | #\      | characters          | #\f                           |
 | #(      | vectors             | #(f o o)                      |
 | #*      | bit-vectors         | #*101010                      |
@@ -358,13 +358,31 @@ static bool feature_present_p(Ref expr){
     return false;}
 
 static Ref parse_list(parser_state* parser){
-    /* We've read opening (  we need to read objects util closing ) */
+    /* We've read opening (  we need to read objects until closing ).
+       Supports dotted-pair notation: (a b . cdr) */
     Ref result=NIL_Symbol;
+    Ref dotted_cdr=NIL_Symbol;
+    bool is_dotted=false;
     advance_character(parser);
     skip_spaces(parser);
     if(parser->eof){
         return NIL_Symbol;}
     while(parser->ch!=')'){
+        /* Detect dotted-pair separator: a lone '.' followed by a non-constituent
+           character (whitespace, close-paren, string, etc.).  The token ".5" or
+           ".." is NOT a separator — constituentp('.') is true so they continue. */
+        if(parser->ch=='.'){
+            bool eof2=false,err2=false;
+            octet next=peek_octet(parser->input_stream,&eof2,&err2);
+            if(eof2 || !constituentp(next)){
+                /* Consume the dot, skip whitespace, read the cdr object. */
+                advance_character(parser);
+                skip_spaces(parser);
+                if(!parser->eof){
+                    dotted_cdr=parse_object(parser);
+                    is_dotted=true;}
+                skip_spaces(parser);
+                break;}}
         Ref element=parse_object(parser);
         if(element != reader_skip_marker){
             push(element,&result);}
@@ -374,6 +392,15 @@ static Ref parse_list(parser_state* parser){
     /* Consume the closing ')' so an outer parse_list doesn't see it as its own. */
     advance_character(parser);
     parser->eof=false;
+    if(is_dotted){
+        /* nreconc: reverse result in-place with dotted_cdr as the final cdr. */
+        Ref head=dotted_cdr;
+        while(consp(result)){
+            Ref next=cdr(result);
+            rplacd(result,head);
+            head=result;
+            result=next;}
+        return head;}
     return nreverse(result);}
 
 static Ref parse_vector(parser_state* parser){

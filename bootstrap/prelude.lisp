@@ -918,4 +918,174 @@
     (logior (logand integer  (lognot mask))
             (logand newbyte  mask))))
 
+;; -------------------------------------------------------------------- ;;
+;;  DESTRUCTURING-BIND (slice 7).                                        ;;
+;;                                                                       ;;
+;;  Expands at macro-expansion time into a flat LET* binding list.       ;;
+;;  The helper %DB-BINDINGS walks the pattern recursively and generates  ;;
+;;  (VAR FORM) pairs; gensym'd position vars ensure shared subforms are  ;;
+;;  evaluated only once. Supported lambda-list syntax:                   ;;
+;;    required (possibly nested), &WHOLE, &OPTIONAL (with default and    ;;
+;;    supplied-p), &REST / &BODY, &KEY (with :keyword rename and         ;;
+;;    supplied-p), &ALLOW-OTHER-KEYS, &AUX.                              ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun %db-bindings (pattern src)
+  ;; Returns a flat list of (VAR ACCESS-FORM) pairs for use in LET*.
+  ;; SRC is a Lisp form that evaluates to the object being destructured.
+  (let ((binds '()))
+    (labels
+        ((add! (v f) (push (list v f) binds))
+         ;; Create a new LET* position variable bound to FORM and return its name.
+         (new-pos (form)
+           (let ((g (gensym "P")))
+             (add! g form)
+             g))
+         ;; Walk PAT against the list denoted by POS (a symbol in the LET*).
+         (walk (pat pos)
+           (cond
+             ;; End of pattern list
+             ((null pat) nil)
+             ;; Atom: dotted-cdr rest variable
+             ((symbolp pat) (add! pat pos))
+             ;; List: walk each element
+             ((consp pat)
+              (let ((p pat)
+                    (cur pos))  ;; cur tracks current-tail symbol
+                ;; &WHOLE comes first if present
+                (when (and (consp p) (eql (car p) '&whole))
+                  (add! (cadr p) cur)
+                  (setq p (cddr p)))
+                (block walk-loop
+                  (do ()
+                      ((or (null p) (symbolp p))
+                       ;; Dotted-cdr rest variable: (a b . rest)
+                       (when (symbolp p) (add! p cur)))
+                    (let ((elem (car p)))
+                      (cond
+                        ;; --- section markers ---
+                        ((eql elem '&optional)
+                         (walk-optional (cdr p) cur)
+                         (return-from walk-loop nil))
+                        ((or (eql elem '&rest) (eql elem '&body))
+                         (let ((rp (cadr p)))
+                           (if (symbolp rp)
+                               (add! rp cur)
+                             ;; Nested rest pattern — bind a temp first
+                             (let ((tmp (gensym "R")))
+                               (add! tmp cur)
+                               (walk rp tmp))))
+                         ;; Continue scanning for &key / &aux after &rest var
+                         (walk-after-rest (cddr p) cur)
+                         (return-from walk-loop nil))
+                        ((eql elem '&key)
+                         (walk-key (cdr p) cur)
+                         (return-from walk-loop nil))
+                        ((eql elem '&aux)
+                         (walk-aux (cdr p))
+                         (return-from walk-loop nil))
+                        ((eql elem '&allow-other-keys)
+                         (setq p (cdr p)))
+                        ;; --- required element ---
+                        (t
+                         (let ((head `(car ,cur))
+                               (next (new-pos `(cdr ,cur))))
+                           (cond
+                             ((symbolp elem) (add! elem head))
+                             ((consp elem)
+                              (let ((tmp (gensym "L")))
+                                (add! tmp head)
+                                (walk elem tmp)))
+                             (t (error "DESTRUCTURING-BIND: bad pattern element ~S"
+                                       elem)))
+                           (setq cur next)
+                           (setq p (cdr p))))))))))
+             (t (error "DESTRUCTURING-BIND: bad pattern ~S" pat))))
+
+         ;; &OPTIONAL section: SPECS is the tail of the pattern after &OPTIONAL.
+         ;; CUR is the current-position symbol.
+         (walk-optional (specs cur)
+           (dolist (spec specs)
+             (cond
+               ;; Transition to another section
+               ((eql spec '&rest) (return))
+               ((eql spec '&body) (return))
+               ((eql spec '&key)  (return))
+               ((eql spec '&aux)  (return))
+               ((eql spec '&allow-other-keys) nil)
+               ;; Optional binding
+               (t
+                (let (var default svar)
+                  (if (symbolp spec)
+                      (setq var spec default nil svar nil)
+                    (setq var     (car spec)
+                          default (if (cdr spec) (cadr spec) nil)
+                          svar    (if (cddr spec) (caddr spec) nil)))
+                  (add! var `(if (consp ,cur) (car ,cur) ,default))
+                  (when svar (add! svar `(consp ,cur)))
+                  (setq cur (new-pos `(if (consp ,cur) (cdr ,cur) nil))))))))
+
+         ;; After &REST we may have &KEY / &AUX
+         (walk-after-rest (rest-of-pattern rest-pos)
+           (when (consp rest-of-pattern)
+             (cond
+               ((eql (car rest-of-pattern) '&key)
+                (walk-key (cdr rest-of-pattern) rest-pos))
+               ((eql (car rest-of-pattern) '&allow-other-keys)
+                (walk-after-rest (cdr rest-of-pattern) rest-pos))
+               ((eql (car rest-of-pattern) '&aux)
+                (walk-aux (cdr rest-of-pattern))))))
+
+         ;; &KEY section: SPECS is the tail after &KEY; REST-POS is the
+         ;; keyword plist (the whole remaining arg list).
+         (walk-key (specs rest-pos)
+           (dolist (spec specs)
+             (cond
+               ((eql spec '&allow-other-keys) nil)
+               ((eql spec '&aux)
+                (walk-aux (cdr (member '&aux specs)))
+                (return))
+               ((symbolp spec)
+                ;; (foo) — key is :foo, variable is foo
+                (let ((kw `',(intern-keyword (symbol-name spec))))
+                  (add! spec `(getf ,rest-pos ,kw))))
+               ((consp spec)
+                (let* ((head    (car spec))
+                       (default (if (cdr spec) (cadr spec) nil))
+                       (svar    (if (cddr spec) (caddr spec) nil))
+                       kw var)
+                  (if (consp head)
+                      ;; ((:keyword var) default svar)
+                      (setq kw `',(car head) var (cadr head))
+                    ;; (var default svar) — keyword inferred from var name
+                    (setq kw `',(intern-keyword (symbol-name head)) var head))
+                  (add! var `(getf ,rest-pos ,kw ,default))
+                  (when svar
+                    ;; Supplied-p: T if the key actually appeared in the plist.
+                    ;; Use a unique sentinel to distinguish missing from NIL default.
+                    (let ((sentinel (gensym "KP")))
+                      (add! svar
+                            `(let ((,sentinel (list nil)))
+                               (not (eq (getf ,rest-pos ,kw ,sentinel)
+                                        ,sentinel))))))))
+               (t (error "DESTRUCTURING-BIND: bad &key spec ~S" spec)))))
+
+         ;; &AUX section: just bind without pulling from the form.
+         (walk-aux (specs)
+           (dolist (spec specs)
+             (if (symbolp spec)
+                 (add! spec nil)
+               (add! (car spec) (if (cdr spec) (cadr spec) nil))))))
+
+      (walk pattern (new-pos src)))
+    (nreverse binds)))
+
+(defmacro destructuring-bind (pattern form &body body)
+  ;; Expand to (LET* <bindings> <body>) where bindings are generated
+  ;; by the compile-time helper %DB-BINDINGS.
+  (let ((tmp (gensym "DSRC")))
+    `(let ((,tmp ,form))
+       (let* ,(%db-bindings pattern tmp)
+         ,@body))))
+
 ;;;; THE END

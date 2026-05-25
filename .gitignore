@@ -28,6 +28,7 @@ tests/test_control
 tests/test_seq_lib
 tests/test_strings
 tests/test_numeric_extras
+tests/test_destructuring
 
 *-Listing.xml
 *-Results.xml
