@@ -613,6 +613,225 @@ void kernel_COERCE(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *
+ *  Slice 6 numeric extras.                                              *
+ *                                                                       *
+ *  EXPT, SQRT, ISQRT, GCD, LCM, SIGNUM, LOGCOUNT, and the elementary    *
+ *  float transcendentals (EXP, LOG, SIN, COS, TAN, ATAN). These live    *
+ *  in the kernel because they need libm or 64-bit integer math we'd    *
+ *  rather not implement in Lisp.                                        *
+ * -------------------------------------------------------------------- */
+
+/* (EXPT base power) — integer^integer stays integer when possible.
+   Anything involving a float, or a negative integer power, promotes to
+   float and uses libm's pow(). */
+void kernel_EXPT(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref base = pop_mandatory_argument(function,&current);
+    Ref expo = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_number(base); check_number(expo);
+    results->count=1;
+    if(integerp(base) && integerp(expo) && integer_value(expo) >= 0){
+        /* Pure-integer fast path with overflow checking. */
+        word b = integer_value(base);
+        word e = integer_value(expo);
+        word r = 1;
+        while(e > 0){
+            if(e & 1){
+                if(__builtin_mul_overflow(r,b,&r)){
+                    ARITHMETIC_ERROR("Integer overflow in (EXPT %"WORD_FORMAT" %"WORD_FORMAT")",
+                                     integer_value(base), integer_value(expo));}}
+            e >>= 1;
+            if(e){
+                if(__builtin_mul_overflow(b,b,&b)){
+                    ARITHMETIC_ERROR("Integer overflow in (EXPT %"WORD_FORMAT" %"WORD_FORMAT")",
+                                     integer_value(base), integer_value(expo));}}}
+        results->values[0] = integer_from_word(r);
+    } else {
+        floating r = pow(as_floating(base), as_floating(expo));
+        results->values[0] = float_from_floating(r);}
+    close_live_pool(pool);}
+
+/* (SQRT x) — always returns a float. */
+void kernel_SQRT(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_number(x);
+    floating v = as_floating(x);
+    if(v < 0){ ARITHMETIC_ERROR("SQRT of negative number %g (complex not supported)",v); }
+    results->count=1;
+    results->values[0] = float_from_floating(sqrt(v));
+    close_live_pool(pool);}
+
+/* (ISQRT n) — integer square root: largest k with k*k <= n.  n must be a
+   non-negative integer. */
+void kernel_ISQRT(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref n = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!integerp(n)){ TYPE_ERROR(n,INTEGER_Class); }
+    word v = integer_value(n);
+    if(v < 0){ ARITHMETIC_ERROR("ISQRT: argument %"WORD_FORMAT" is negative",v); }
+    /* Newton's method; converges in <= ~32 iterations for 64-bit. */
+    word x = v;
+    word y = (x + 1) / 2;
+    while(y < x){ x = y; y = (x + v / x) / 2; }
+    results->count=1;
+    results->values[0] = integer_from_word(x);
+    close_live_pool(pool);}
+
+/* Helpers for GCD / LCM. */
+static word abs_word(word x){ return x < 0 ? -x : x; }
+static word gcd2(word a, word b){
+    a = abs_word(a); b = abs_word(b);
+    while(b){ word t = a % b; a = b; b = t; }
+    return a;}
+
+/* (GCD &rest integers) — greatest common divisor. (gcd) -> 0. */
+void kernel_GCD(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref tail = arguments;
+    word acc = 0;
+    while(consp(tail)){
+        Ref x = cons_car(tail);
+        if(!integerp(x)){ TYPE_ERROR(x,INTEGER_Class); }
+        acc = gcd2(acc, integer_value(x));
+        tail = cons_cdr(tail);}
+    results->count=1;
+    results->values[0] = integer_from_word(acc);
+    close_live_pool(pool);}
+
+/* (LCM &rest integers) — least common multiple. (lcm) -> 1. */
+void kernel_LCM(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref tail = arguments;
+    word acc = 1;
+    while(consp(tail)){
+        Ref x = cons_car(tail);
+        if(!integerp(x)){ TYPE_ERROR(x,INTEGER_Class); }
+        word v = integer_value(x);
+        if(v == 0){ acc = 0; break; }
+        word g = gcd2(acc, v);
+        word q = v / g;
+        word r = 0;
+        if(__builtin_mul_overflow(acc,q,&r)){
+            ARITHMETIC_ERROR("Integer overflow in LCM%s","");}
+        acc = abs_word(r);
+        tail = cons_cdr(tail);}
+    results->count=1;
+    results->values[0] = integer_from_word(acc);
+    close_live_pool(pool);}
+
+/* (SIGNUM x) — -1, 0, +1 of the same numeric type as x. */
+void kernel_SIGNUM(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_number(x);
+    results->count=1;
+    if(integerp(x)){
+        word v = integer_value(x);
+        results->values[0] = integer_from_word(v < 0 ? -1 : v > 0 ? 1 : 0);
+    } else {
+        floating v = float_value(x);
+        floating s = v < 0.0 ? -1.0 : v > 0.0 ? 1.0 : 0.0;
+        results->values[0] = float_from_floating(s);}
+    close_live_pool(pool);}
+
+/* (LOGCOUNT integer) — population count of |x| (CL ignores sign). */
+void kernel_LOGCOUNT(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!integerp(x)){ TYPE_ERROR(x,INTEGER_Class); }
+    word v = integer_value(x);
+    /* For negative x, CL says (logcount -1) is 0, (logcount -2) is 1 etc:
+       count the zero bits of the equivalent twos-complement. We treat that
+       as counting bits set in ~x for negatives. */
+    uword bits = v < 0 ? ~(uword)v : (uword)v;
+    word n = (word)__builtin_popcountl(bits);
+    results->count=1;
+    results->values[0] = integer_from_word(n);
+    close_live_pool(pool);}
+
+/* Float transcendentals — each accepts any number and returns a float. */
+#define FLOAT_TRANSCENDENTAL(NAME,CFUN)                                 \
+    void kernel_##NAME(Ref function,Ref arguments,MultipleValues* results){ \
+        uword pool=open_live_pool();                                    \
+        add_to_live_pool(function); add_to_live_pool(arguments);        \
+        Ref current=arguments;                                          \
+        Ref x = pop_mandatory_argument(function,&current);              \
+        check_no_more_arguments(function,current);                      \
+        check_number(x);                                                \
+        results->count=1;                                               \
+        results->values[0] = float_from_floating(CFUN(as_floating(x))); \
+        close_live_pool(pool);}
+
+FLOAT_TRANSCENDENTAL(EXP, exp)
+FLOAT_TRANSCENDENTAL(SIN, sin)
+FLOAT_TRANSCENDENTAL(COS, cos)
+FLOAT_TRANSCENDENTAL(TAN, tan)
+FLOAT_TRANSCENDENTAL(ASIN, asin)
+FLOAT_TRANSCENDENTAL(ACOS, acos)
+#undef FLOAT_TRANSCENDENTAL
+
+/* (LOG number &optional base) — natural log if no base; arbitrary base
+   computed as log(x)/log(base). */
+void kernel_LOG(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_number(x);
+    floating v = as_floating(x);
+    if(v <= 0.0){ ARITHMETIC_ERROR("LOG: non-positive argument %g",v); }
+    floating r = log(v);
+    if(consp(current)){
+        Ref b = pop_mandatory_argument(function,&current);
+        check_number(b);
+        floating bv = as_floating(b);
+        if(bv <= 0.0 || bv == 1.0){
+            ARITHMETIC_ERROR("LOG: invalid base %g",bv);}
+        r = r / log(bv);}
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = float_from_floating(r);
+    close_live_pool(pool);}
+
+/* (ATAN y &optional x) — one-arg form is atan(y); two-arg is atan2(y,x). */
+void kernel_ATAN(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref y = pop_mandatory_argument(function,&current);
+    check_number(y);
+    floating yv = as_floating(y);
+    floating r;
+    if(consp(current)){
+        Ref x = pop_mandatory_argument(function,&current);
+        check_number(x);
+        r = atan2(yv, as_floating(x));
+    } else {
+        r = atan(yv);}
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = float_from_floating(r);
+    close_live_pool(pool);}
+
+/* -------------------------------------------------------------------- *
  *  Registration.                                                        *
  *                                                                       *
  *  Mirrors the auto-generated kernel_initialize_built_in_functions().   *
@@ -669,7 +888,8 @@ void kernel_initialize_arithmetic(void){
 
     /* Bitwise */
     register_fn(S(LOGAND),         ll_xy, kernel_LOGAND);
-    register_fn(S(LOGOR),          ll_xy, kernel_LOGOR);
+    register_fn(S(LOGOR),          ll_xy, kernel_LOGOR);  /* old MACLISP name */
+    register_fn(S(LOGIOR),         ll_xy, kernel_LOGOR);  /* CL standard name */
     register_fn(S(LOGXOR),         ll_xy, kernel_LOGXOR);
     register_fn(S(LOGNOT),         ll_x,  kernel_LOGNOT);
     register_fn(S(ASH),            ll_xy, kernel_ASH);
@@ -679,4 +899,24 @@ void kernel_initialize_arithmetic(void){
     register_fn(S(FLOAT),   ll_x,  kernel_FLOAT);
     register_fn(S(INTEGER), ll_x,  kernel_INTEGER);
     register_fn(S(COERCE),  list(S(OBJECT),S(RESULT-TYPE),NULL), kernel_COERCE);
+
+    /* Slice 6 numeric extras. */
+    Ref ll_rest    = list(S(&REST),S(NUMBERS),NULL);
+    Ref ll_n_opt_b = list(S(NUMBER),S(&OPTIONAL),S(BASE),NULL);
+    Ref ll_y_opt_x = list(S(Y),S(&OPTIONAL),S(X),NULL);
+    register_fn(S(EXPT),     list(S(BASE),S(POWER),NULL), kernel_EXPT);
+    register_fn(S(SQRT),     ll_x,  kernel_SQRT);
+    register_fn(S(ISQRT),    ll_x,  kernel_ISQRT);
+    register_fn(S(GCD),      ll_rest, kernel_GCD);
+    register_fn(S(LCM),      ll_rest, kernel_LCM);
+    register_fn(S(SIGNUM),   ll_x,  kernel_SIGNUM);
+    register_fn(S(LOGCOUNT), ll_x,  kernel_LOGCOUNT);
+    register_fn(S(EXP),      ll_x,  kernel_EXP);
+    register_fn(S(LOG),      ll_n_opt_b, kernel_LOG);
+    register_fn(S(SIN),      ll_x,  kernel_SIN);
+    register_fn(S(COS),      ll_x,  kernel_COS);
+    register_fn(S(TAN),      ll_x,  kernel_TAN);
+    register_fn(S(ASIN),     ll_x,  kernel_ASIN);
+    register_fn(S(ACOS),     ll_x,  kernel_ACOS);
+    register_fn(S(ATAN),     ll_y_opt_x, kernel_ATAN);
 }

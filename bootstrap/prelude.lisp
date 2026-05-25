@@ -832,4 +832,90 @@
                          (if (funcall test old (funcall key c)) new c))))))
         (t (error "SUBSTITUTE: unsupported sequence type"))))
 
+;; -------------------------------------------------------------------- ;;
+;;  Numeric extras (slice 6).                                            ;;
+;;                                                                       ;;
+;;  EXPT / SQRT / ISQRT / GCD / LCM / SIGNUM / LOGCOUNT and the float    ;;
+;;  transcendentals are kernel-side; this layer adds the small helpers   ;;
+;;  that benefit from Lisp definitions: PI, PARSE-INTEGER, and the byte  ;;
+;;  field accessors LDB / DPB.                                           ;;
+;; -------------------------------------------------------------------- ;;
+
+(defparameter pi 3.141592653589793d0)
+
+(defun parse-integer (string &key (start 0) end (radix 10) junk-allowed)
+  ;; Return (values integer end-position). Skip leading whitespace; then
+  ;; optional sign; then digits in the given radix. If JUNK-ALLOWED is
+  ;; NIL and trailing junk is found, signal an error.
+  (let* ((s   (string string))
+         (e   (or end (string-length s)))
+         (i   start)
+         (sign 1)
+         (any-digit nil)
+         (val 0))
+    ;; Skip leading whitespace.
+    (do ()
+        ((or (>= i e)
+             (let ((c (char s i)))
+               (not (or (eql c #\Space) (eql c #\Tab) (eql c #\Newline))))))
+      (setq i (1+ i)))
+    ;; Optional sign.
+    (when (< i e)
+      (let ((c (char s i)))
+        (cond ((eql c #\+) (setq i (1+ i)))
+              ((eql c #\-) (setq sign -1) (setq i (1+ i))))))
+    ;; Digits.
+    (do ()
+        ((or (>= i e)
+             (null (digit-char-p (char s i) radix))))
+      (setq val       (+ (* val radix) (digit-char-p (char s i) radix))
+            any-digit t
+            i         (1+ i)))
+    (unless any-digit
+      (if junk-allowed
+          (return-from parse-integer (values nil i))
+          (error "PARSE-INTEGER: no digits in ~S" string)))
+    ;; Trailing-junk check.
+    (unless junk-allowed
+      (do ()
+          ((>= i e))
+        (let ((c (char s i)))
+          (unless (or (eql c #\Space) (eql c #\Tab) (eql c #\Newline))
+            (error "PARSE-INTEGER: junk at position ~D of ~S" i string))
+          (setq i (1+ i)))))
+    (values (* sign val) i)))
+
+;; ---- BYTE / LDB / DPB. -----------------------------------------------
+;;
+;; CL packages (size, position) into a single byte-specifier object.
+;; We represent it as a cons (size . position) — opaque to user code.
+
+(defun byte (size position) (cons size position))
+(defun byte-size     (b) (car b))
+(defun byte-position (b) (cdr b))
+
+(defun ldb (bytespec integer)
+  ;; Load byte: extract SIZE bits starting at POSITION.
+  (logand (ash integer (- (byte-position bytespec)))
+          (1- (ash 1 (byte-size bytespec)))))
+
+(defun dpb (newbyte bytespec integer)
+  ;; Deposit byte: replace the SIZE bits at POSITION in INTEGER with the
+  ;; low SIZE bits of NEWBYTE.
+  (let* ((mask (ash (1- (ash 1 (byte-size bytespec)))
+                    (byte-position bytespec))))
+    (logior (logand integer (lognot mask))
+            (logand (ash newbyte (byte-position bytespec)) mask))))
+
+(defun mask-field (bytespec integer)
+  (logand integer
+          (ash (1- (ash 1 (byte-size bytespec)))
+               (byte-position bytespec))))
+
+(defun deposit-field (newbyte bytespec integer)
+  (let* ((mask (ash (1- (ash 1 (byte-size bytespec)))
+                    (byte-position bytespec))))
+    (logior (logand integer  (lognot mask))
+            (logand newbyte  mask))))
+
 ;;;; THE END
