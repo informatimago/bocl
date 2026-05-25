@@ -1088,4 +1088,134 @@
        (let* ,(%db-bindings pattern tmp)
          ,@body))))
 
+;;;; -------------------------------------------------------------------- ;;;;
+;;;;  Slice 8 — DEFSTRUCT                                                 ;;;;
+;;;;  Kernel primitives used:                                             ;;;;
+;;;;    make-structure-class  structure-class-instance-slots              ;;;;
+;;;;    make-structure-instance  structure-get  structure-set  typep      ;;;;
+;;;;    set-symbol-function  sethash  gethash                             ;;;;
+;;;; -------------------------------------------------------------------- ;;;;
+
+;;; Private string-concatenation helper (no standard fn for this yet).
+(defun %string-append (&rest strings)
+  (let ((total 0))
+    (dolist (s strings) (setq total (+ total (string-length s))))
+    (let ((result (make-string total))
+          (pos 0))
+      (dolist (s strings result)
+        (dotimes (i (string-length s))
+          (char-set result pos (char s i))
+          (setq pos (1+ pos)))))))
+
+;;; Registries keyed by struct name (symbol).
+;;;   *defstruct-classes*    name → class object
+;;;   *defstruct-slot-specs* name → list of (slot-name initform read-only-p)
+;;;                                  for ALL slots (inherited + own)
+(defvar *defstruct-classes*    (make-hash-table :test 'eq))
+(defvar *defstruct-slot-specs* (make-hash-table :test 'eq))
+
+;;; Create a SETF-expander closure for a structure slot.
+;;; Called at load time; the lambda captures SLOT-NAME.
+(defun %make-struct-setter (slot-name)
+  (lambda (s v) (list 'structure-set v s (list 'quote slot-name))))
+
+;;; Parse one slot specification.
+;;; Returns (name initform read-only-p).
+(defun %parse-defstruct-slot (spec)
+  (cond ((symbolp spec)    (list spec nil nil))
+        ((null (cdr spec)) (list (car spec) nil nil))
+        (t (list (car spec)
+                 (cadr spec)
+                 (if (cddr spec) (getf (cddr spec) :read-only nil) nil)))))
+
+(defmacro defstruct (name-and-options &rest slot-specs)
+  ;; Supported structure options: :conc-name, :constructor, :copier,
+  ;;   :predicate, :include.
+  ;; Supported slot options: initform (positional), :read-only.
+  ;; NOTE: uses (set-symbol-function (lambda ...) 'name) rather than
+  ;; (defun name ...) so that the generated functions close over the
+  ;; lexically-bound class object.  (bocl DEFUN does not capture the
+  ;; lexical env; LAMBDA + SET-SYMBOL-FUNCTION does.)
+  (let* ((name     (if (consp name-and-options) (car name-and-options) name-and-options))
+         (options  (if (consp name-and-options) (cdr name-and-options) nil))
+         ;; :conc-name — default "<NAME>-"; nil means no prefix
+         (conc-str (let ((o (assq :conc-name options)))
+                     (cond ((null o)  (%string-append (symbol-name name) "-"))
+                           ((cadr o)  (symbol-name (cadr o)))
+                           (t ""))))
+         ;; :include parent
+         (include  (let ((o (assq :include options))) (if o (cadr o) nil)))
+         ;; :constructor — default MAKE-<NAME>; nil to suppress
+         (ctor-sym (let ((o (assq :constructor options)))
+                     (if o (cadr o)
+                         (intern (%string-append "MAKE-" (symbol-name name))))))
+         ;; :predicate — default <NAME>-P; nil to suppress
+         (pred-sym (let ((o (assq :predicate options)))
+                     (if o (cadr o)
+                         (intern (%string-append (symbol-name name) "-P")))))
+         ;; :copier — default COPY-<NAME>; nil to suppress
+         (copy-sym (let ((o (assq :copier options)))
+                     (if o (cadr o)
+                         (intern (%string-append "COPY-" (symbol-name name))))))
+         ;; Parse own slot specs; retrieve inherited slot specs
+         (own-specs (mapcar #'%parse-defstruct-slot slot-specs))
+         (inh-specs (if include (gethash include *defstruct-slot-specs*) nil))
+         ;; All slot specs: inherited first, then own
+         (all-specs (append inh-specs own-specs))
+         ;; New slot names only (for make-structure-class)
+         (own-names (mapcar #'car own-specs))
+         ;; (slot-name accessor-name initform read-only-p) for all slots
+         (acc-info  (mapcar (lambda (sp)
+                              (list (car sp)
+                                    (intern (%string-append conc-str
+                                                            (symbol-name (car sp))))
+                                    (cadr sp)
+                                    (caddr sp)))
+                            all-specs))
+         (cls-var   (gensym "SC")))
+    `(let* ((,cls-var (make-structure-class
+                        ',name
+                        ,(if include `(gethash ',include *defstruct-classes*) nil)
+                        0 ',own-names)))
+       ;; Register for future :include uses.
+       (sethash ',name *defstruct-classes*    ,cls-var)
+       (sethash ',name *defstruct-slot-specs* ',all-specs)
+       ;; Constructor
+       ,@(when ctor-sym
+           `((set-symbol-function
+              (lambda (&key ,@(mapcar (lambda (ai)
+                                        (if (caddr ai) (list (car ai) (caddr ai)) (car ai)))
+                                      acc-info))
+                (let ((%i (make-structure-instance ,cls-var)))
+                  ,@(mapcar (lambda (ai) `(structure-set ,(car ai) %i ',(car ai)))
+                            acc-info)
+                  %i))
+              ',ctor-sym)))
+       ;; Predicate
+       ,@(when pred-sym
+           `((set-symbol-function (lambda (o) (typep o ,cls-var)) ',pred-sym)))
+       ;; Accessors + mutable-slot setf expanders
+       ,@(let ((forms nil))
+           (dolist (ai acc-info)
+             (let ((sname (car ai))
+                   (aname (cadr ai))
+                   (ro    (cadddr ai)))
+               (push `(set-symbol-function
+                        (lambda (s) (structure-get s ',sname)) ',aname)
+                     forms)
+               (unless ro
+                 (push `(sethash ',aname *setf-expanders*
+                                 (%make-struct-setter ',sname))
+                       forms))))
+           (nreverse forms))
+       ;; Copier — copies all slots generically via the class slot alist
+       ,@(when copy-sym
+           `((set-symbol-function
+              (lambda (s)
+                (let ((%c (make-structure-instance ,cls-var)))
+                  (dolist (e (structure-class-instance-slots ,cls-var) %c)
+                    (structure-set (structure-get s (car e)) %c (car e)))))
+              ',copy-sym)))
+       ',name)))
+
 ;;;; THE END

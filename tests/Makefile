@@ -5,7 +5,7 @@ include ../sources/common.mk
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
 # PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions
-PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring
+PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring test_structures
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
@@ -75,7 +75,8 @@ all_SRCS = \
 	test_seq_lib.c \
 	test_strings.c \
 	test_numeric_extras.c \
-	test_destructuring.c
+	test_destructuring.c \
+	test_structures.c
 
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
@@ -255,3 +256,14 @@ test_destructuring: $(test_destructuring_SRCS:%.c=%.d) $(test_destructuring_SRCS
 run_test_destructuring:test_destructuring
 	@printf "# Testing %s\n" $^
 	$(VERBOSE) $(RUN) ./test_destructuring ;echo status=$$?
+
+test_structures_SRCS = test_structures.c simple_test.c
+test_structures_LIBS = -L../sources -lbocl
+
+test_structures: $(test_structures_SRCS:%.c=%.d) $(test_structures_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_structures_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_structures_SRCS:%.c=%.o) $(test_structures_LIBS)
+
+run_test_structures:test_structures
+	@printf "# Testing %s\n" $^
+	$(VERBOSE) $(RUN) ./test_structures ;echo status=$$?
