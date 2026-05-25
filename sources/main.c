@@ -6,6 +6,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sysexits.h>
+#include <unistd.h>
 #include "string_list.h"
 #include "kernel.h"
 #include "bocl.h"
@@ -44,6 +45,40 @@ static on_error_action_t on_error=on_error_exit;
 static string_list* initfiles=NULL;
 static string_list* expressions_and_loads=NULL;
 static char* package=NULL;
+
+
+/* Candidate RC file paths searched in order; first existing file wins.
+   A leading ~/ is expanded to $HOME/ at runtime. */
+static const char* rc_candidates[]={
+    "~/.bocl",
+    "~/.bocl.lisp",
+    "~/.config/bocl/init",
+    "~/.config/bocl/init.lisp",
+    "~/.common-lisp",
+    "~/.common-lisp.lisp",
+    "~/.config/common-lisp/init",
+    "~/.config/common-lisp/init.lisp",
+    NULL};
+
+/* Return a malloc'd copy of path with a leading ~/ replaced by $HOME/. */
+static char* expand_tilde(const char* path){
+    if(path[0]!='~' || path[1]!='/'){
+        return strdup(path);}
+    const char* home=getenv("HOME");
+    if(!home){ home=""; }
+    size_t len=strlen(home)+strlen(path); /* path has '~', replaced by home */
+    char* result=CHECK_POINTER(malloc(len+1));
+    snprintf(result,len+1,"%s%s",home,path+1); /* skip the '~' */
+    return result;}
+
+/* Return the first readable RC file from rc_candidates, malloc'd, or NULL. */
+static char* find_rc_file(void){
+    for(int i=0; rc_candidates[i]; i++){
+        char* path=expand_tilde(rc_candidates[i]);
+        if(access(path,R_OK)==0){
+            return path;}
+        free(path);}
+    return NULL;}
 
 
 #define PSOP(name) printf("%-30s = %s\n",#name,(name)?(name):"NULL")
@@ -193,7 +228,7 @@ static void process_options(int argc,char** argv){
     /* defaults: */
     all_encoding=NULL;
     terminal_encoding=NULL;
-    initfile=strdup("~/.boclrc");
+    initfile=NULL;
     on_error_action=strdup("exit");
     package=strdup("COMMON-LISP-USER");
     pname=argv[0];
@@ -330,7 +365,10 @@ int main(int argc,char** argv){
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
 
     if(!do_norc){
-        initfiles=string_list_cons(initfile,initfiles);}
+        char* rcfile=find_rc_file();
+        if(rcfile){
+            /* prepend so it loads before any -i files */
+            initfiles=string_list_cons(rcfile,initfiles);}}
     {do_string_list(ifile,initfiles){
             bocl_load_cstring(ifile);}}
     string_list_free(initfiles);
