@@ -1556,9 +1556,13 @@ Ref function_name(Ref funclo){
     return funclo->slots->function.lisp_name;}
 
 void values(Ref arguments,MultipleValues* results){
+    /* Pre-fix this loop never advanced `arguments` (missing
+       arguments = cdr(arguments)), so (values 10 20) produced
+       MULTIPLE_VALUES_LIMIT copies of 10 and blew up M-V-CALL. */
     results->count=0;
     while(consp(arguments) && (results->count<MULTIPLE_VALUES_LIMIT)){
-        results->values[results->count++]=car(arguments);}}
+        results->values[results->count++]=car(arguments);
+        arguments=cdr(arguments);}}
 
 void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){
     if(closurep(function_or_closure)){

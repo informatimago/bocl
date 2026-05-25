@@ -135,6 +135,11 @@ void kernel_TYPEP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     Ref par_class = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
+    /* Per CL, the type designator can be a symbol naming a class. The
+       underlying C typep wants a class object — look up if needed. */
+    if(symbolp(par_class)){
+        Ref cls = find_class(par_class);
+        if(!nullp(cls)){ par_class = cls; }}
     results->count=1;
     results->values[0] = as_boolean(typep(par_object, par_class));
     close_live_pool(pool);

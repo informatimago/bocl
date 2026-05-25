@@ -24,6 +24,7 @@ tests/test_reader_macros
 tests/test_macros
 tests/test_sequences
 tests/test_setf
+tests/test_control
 
 *-Listing.xml
 *-Results.xml

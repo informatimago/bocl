@@ -200,4 +200,194 @@
               dotimes-done))
          ,result))))
 
+;; -------------------------------------------------------------------- ;;
+;;  Control macros (slice 3): CASE / ECASE / TYPECASE / ETYPECASE,       ;;
+;;  MULTIPLE-VALUE-BIND / -LIST, DO / DO*, IGNORE-ERRORS, ASSERT,        ;;
+;;  CHECK-TYPE, RETURN, WITH-OPEN-FILE.                                  ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro case (keyform &rest clauses)
+  ;; (case kf (keys body...) ... [(otherwise|t body...)])
+  (let ((tmp (gensym "CASE-")))
+    `(let ((,tmp ,keyform))
+       (cond
+         ,@(mapcar
+            (lambda (clause)
+              (let ((keys (car clause))
+                    (body (cdr clause)))
+                (cond ((or (eq keys 'otherwise) (eq keys 't))
+                       `(t ,@body))
+                      ((listp keys)
+                       `((or ,@(mapcar (lambda (k) `(eql ,tmp ',k)) keys))
+                         ,@body))
+                      (t
+                       `((eql ,tmp ',keys) ,@body)))))
+            clauses)))))
+
+(defmacro ecase (keyform &rest clauses)
+  ;; Like CASE but signals if no clause matches; no OTHERWISE/T allowed.
+  (let ((tmp (gensym "ECASE-")))
+    `(let ((,tmp ,keyform))
+       (cond
+         ,@(mapcar
+            (lambda (clause)
+              (let ((keys (car clause))
+                    (body (cdr clause)))
+                (if (listp keys)
+                    `((or ,@(mapcar (lambda (k) `(eql ,tmp ',k)) keys))
+                      ,@body)
+                    `((eql ,tmp ',keys) ,@body))))
+            clauses)
+         (t (error "ECASE: no matching clause"))))))
+
+(defmacro typecase (keyform &rest clauses)
+  (let ((tmp (gensym "TYPECASE-")))
+    `(let ((,tmp ,keyform))
+       (cond
+         ,@(mapcar
+            (lambda (clause)
+              (let ((type (car clause))
+                    (body (cdr clause)))
+                (cond ((or (eq type 'otherwise) (eq type 't))
+                       `(t ,@body))
+                      (t
+                       `((typep ,tmp ',type) ,@body)))))
+            clauses)))))
+
+(defmacro etypecase (keyform &rest clauses)
+  (let ((tmp (gensym "ETYPECASE-")))
+    `(let ((,tmp ,keyform))
+       (cond
+         ,@(mapcar
+            (lambda (clause)
+              `((typep ,tmp ',(car clause)) ,@(cdr clause)))
+            clauses)
+         (t (error "ETYPECASE: no matching type clause"))))))
+
+;; -------------------------------------------------------------------- ;;
+;;  Multiple values.                                                     ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro multiple-value-bind (vars value-form &body body)
+  ;; (multiple-value-bind (a b c) form body...) — bind a, b, c to the
+  ;; first three values of `form`. Missing values bind to NIL via
+  ;; &optional defaulting.
+  `(multiple-value-call (lambda (&optional ,@vars) ,@body) ,value-form))
+
+(defmacro multiple-value-list (form)
+  `(multiple-value-call #'list ,form))
+
+(defmacro multiple-value-setq (vars form)
+  ;; (multiple-value-setq (a b c) form) — set a, b, c. Returns the
+  ;; primary value of form.
+  (let ((tmp-vars (mapcar (lambda (v) v (gensym "MVS-")) vars))
+        (primary  (gensym "MVS-PRIMARY-")))
+    `(let ((,primary nil))
+       (multiple-value-bind ,tmp-vars ,form
+         ,@(mapcar (lambda (v tv) `(setq ,v ,tv)) vars tmp-vars)
+         (setq ,primary ,(car tmp-vars)))
+       ,primary)))
+
+(defmacro nth-value (n form)
+  ;; Return the nth (0-based) value of FORM.
+  `(nth ,n (multiple-value-list ,form)))
+
+;; -------------------------------------------------------------------- ;;
+;;  Iteration: DO / DO*. Minimal — no DECLARE handling.                  ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro do (varlist endlist &body body)
+  ;; (DO ((var init [step]) ...) (test result...) body...)
+  (let ((loop (gensym "DO-LOOP-"))
+        (done (gensym "DO-DONE-")))
+    `(block nil
+       (let ,(mapcar (lambda (v)
+                       (if (consp v) (list (car v) (cadr v)) (list v nil)))
+                     varlist)
+         (tagbody
+            ,loop
+            (if ,(car endlist) (go ,done))
+            ,@body
+            ,@(mapcar
+               (lambda (v)
+                 (if (and (consp v) (consp (cddr v)))
+                     `(setq ,(car v) ,(caddr v))
+                     '(progn)))
+               varlist)
+            (go ,loop)
+            ,done)
+         ,@(cdr endlist)))))
+
+(defmacro do* (varlist endlist &body body)
+  ;; Same shape as DO but bindings are sequential and steps fire
+  ;; sequentially too.
+  (let ((loop (gensym "DO*-LOOP-"))
+        (done (gensym "DO*-DONE-")))
+    `(block nil
+       (let* ,(mapcar (lambda (v)
+                        (if (consp v) (list (car v) (cadr v)) (list v nil)))
+                      varlist)
+         (tagbody
+            ,loop
+            (if ,(car endlist) (go ,done))
+            ,@body
+            ,@(mapcar
+               (lambda (v)
+                 (if (and (consp v) (consp (cddr v)))
+                     `(setq ,(car v) ,(caddr v))
+                     '(progn)))
+               varlist)
+            (go ,loop)
+            ,done)
+         ,@(cdr endlist)))))
+
+;; -------------------------------------------------------------------- ;;
+;;  Error / assertion macros.                                            ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro ignore-errors (&body body)
+  ;; (handler-case (progn body) (error (c) (values nil c)))
+  ;; Without VALUES syntax for multiple values returned, fall back to
+  ;; (values nil c) which the kernel's VALUES built-in handles.
+  `(handler-case (progn ,@body)
+     (error (ignored-error-cond)
+       (values nil ignored-error-cond))))
+
+(defmacro assert (test-form &rest ignored)
+  ;; (assert test [(place...) datum args...]) — minimal version,
+  ;; just checks the test and errors with a default message. The
+  ;; CL spec's optional (places-to-fix datum args...) tail is
+  ;; accepted but ignored.
+  ignored
+  `(unless ,test-form
+     (error "Assertion failed")))
+
+(defmacro check-type (place type)
+  ;; (check-type place type [type-string])
+  `(unless (typep ,place ',type)
+     (error "Value does not match expected type")))
+
+(defmacro return (&optional value)
+  `(return-from nil ,value))
+
+;; -------------------------------------------------------------------- ;;
+;;  File-stream convenience.                                             ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro with-open-file (head &body body)
+  ;; (WITH-OPEN-FILE (var filespec &rest open-args) body...)
+  (let ((var       (first head))
+        (filespec  (second head))
+        (open-args (cddr head))
+        (abnormal  (gensym "WOF-ABORT-")))
+    `(let ((,var (open ,filespec ,@open-args))
+           (,abnormal t))
+       (unwind-protect
+            (multiple-value-prog1
+                (progn ,@body)
+              (setq ,abnormal nil))
+         (when ,var
+           ;; CL: pass :abort t when body aborted.
+           (close ,var))))))
+
 ;;;; THE END
