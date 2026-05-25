@@ -455,7 +455,12 @@ void kernel_SET_SYMBOL_PACKAGE(Ref function,Ref arguments,MultipleValues* result
     Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_symbol_package(par_new_package, par_symbol);
+    /* The C signature is set_symbol_package(symbol, new_package) — the
+       auto-generated wrapper had the arg order swapped, which silently
+       wrote the new-package pointer into the symbol's class-check slot
+       and then check_type'd it as a SYMBOL. (Hand-patched until the
+       generator is fixed.) */
+    results->values[0] = set_symbol_package(par_symbol, par_new_package);
     close_live_pool(pool);
 }
 
@@ -468,7 +473,7 @@ void kernel_SET_SYMBOL_VALUE(Ref function,Ref arguments,MultipleValues* results)
     Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_symbol_value(par_new_value, par_symbol);
+    results->values[0] = set_symbol_value(par_symbol, par_new_value);  /* swap: see kernel_SET_SYMBOL_PACKAGE */
     close_live_pool(pool);
 }
 
@@ -481,7 +486,7 @@ void kernel_SET_SYMBOL_FUNCTION(Ref function,Ref arguments,MultipleValues* resul
     Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_symbol_function(par_new_function, par_symbol);
+    results->values[0] = set_symbol_function(par_symbol, par_new_function);  /* swap: see kernel_SET_SYMBOL_PACKAGE */
     close_live_pool(pool);
 }
 
@@ -494,7 +499,7 @@ void kernel_SET_SYMBOL_PLIST(Ref function,Ref arguments,MultipleValues* results)
     Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_symbol_plist(par_new_plist, par_symbol);
+    results->values[0] = set_symbol_plist(par_symbol, par_new_plist);  /* swap: see kernel_SET_SYMBOL_PACKAGE */
     close_live_pool(pool);
 }
 

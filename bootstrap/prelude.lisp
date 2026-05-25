@@ -45,24 +45,77 @@
                      (cond ,@(cdr clauses))))))))
 
 ;; -------------------------------------------------------------------- ;;
-;;  Assignment macros.                                                   ;;
+;;  SETF — generic place assignment.                                     ;;
+;;                                                                       ;;
+;;  Each place form's operator is looked up in *SETF-EXPANDERS* (a       ;;
+;;  hash table). The expander is a function of (place-args... value)     ;;
+;;  that returns the equivalent setter call. Symbols use SETQ directly.  ;;
+;;                                                                       ;;
+;;  This is the simple form — place subforms may be evaluated more than  ;;
+;;  once by macros like INCF when the value expression refers to the     ;;
+;;  same place. Full GET-SETF-EXPANSION (with temp vars and             ;;
+;;  guaranteed single evaluation) comes later.                          ;;
+;; -------------------------------------------------------------------- ;;
+
+(defparameter *setf-expanders* (make-hash-table :test 'eq))
+
+(defmacro define-setf-expander (operator args value-args &body body)
+  ;; (define-setf-expander op (a b ...) (val) body...)
+  ;;   registers a lambda (a b ... val) → setter-form.
+  `(sethash ',operator *setf-expanders*
+            (lambda ,(append args value-args) ,@body)))
+
+(defmacro setf (&rest pairs)
+  (cond ((null pairs) nil)
+        ((null (cdr pairs))
+         (error "SETF: odd number of arguments"))
+        ((null (cddr pairs))
+         (let ((place (first pairs))
+               (value (second pairs)))
+           (cond ((symbolp place)
+                  `(setq ,place ,value))
+                 ((consp place)
+                  (let ((expander (gethash (car place) *setf-expanders*)))
+                    (if expander
+                        (apply expander (append (cdr place) (list value)))
+                        (error "SETF: no expander for place operator"))))
+                 (t (error "SETF: invalid place")))))
+        (t
+         `(progn (setf ,(first pairs) ,(second pairs))
+                 (setf ,@(cddr pairs))))))
+
+;; Built-in place expanders. The argument-order quirks of the underlying
+;; kernel setters are absorbed here, so SETF callers see the standard
+;; (setf (op ...) value) shape.
+(define-setf-expander car            (cell)         (val) `(rplaca ,cell ,val))
+(define-setf-expander cdr            (cell)         (val) `(rplacd ,cell ,val))
+(define-setf-expander first          (cell)         (val) `(rplaca ,cell ,val))
+(define-setf-expander rest           (cell)         (val) `(rplacd ,cell ,val))
+(define-setf-expander gethash        (k h)          (val) `(sethash ,k ,h ,val))
+(define-setf-expander symbol-value   (s)            (val) `(set-symbol-value ,val ,s))
+(define-setf-expander symbol-function (s)           (val) `(set-symbol-function ,val ,s))
+(define-setf-expander symbol-plist   (s)            (val) `(set-symbol-plist ,val ,s))
+(define-setf-expander svref          (vec idx)      (val) `(svref-set ,vec ,idx ,val))
+(define-setf-expander bit            (vec idx)      (val) `(bit-set ,vec ,idx ,val))
+(define-setf-expander nth            (n lst)        (val) `(rplaca (nthcdr ,n ,lst) ,val))
+
+;; -------------------------------------------------------------------- ;;
+;;  Assignment macros — now SETF-based, so they work on generic places.  ;;
 ;; -------------------------------------------------------------------- ;;
 
 (defmacro push (item place)
-  ;; Limited form: PLACE must be a symbol. General SETF wait for later.
-  `(setq ,place (cons ,item ,place)))
+  `(setf ,place (cons ,item ,place)))
 
 (defmacro pop (place)
-  ;; Same restriction: PLACE must be a symbol.
   `(let ((pop-tmp (car ,place)))
-     (setq ,place (cdr ,place))
+     (setf ,place (cdr ,place))
      pop-tmp))
 
 (defmacro incf (place &optional (delta 1))
-  `(setq ,place (+ ,place ,delta)))
+  `(setf ,place (+ ,place ,delta)))
 
 (defmacro decf (place &optional (delta 1))
-  `(setq ,place (- ,place ,delta)))
+  `(setf ,place (- ,place ,delta)))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Accessors: FIRST..TENTH, NTH, REST.                                  ;;

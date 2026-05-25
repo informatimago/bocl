@@ -5,7 +5,7 @@ include ../sources/common.mk
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
 # PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions
-PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences
+PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
@@ -39,6 +39,9 @@ test_macros_LIBS = -L../sources -lbocl
 test_sequences_SRCS = test_sequences.c simple_test.c
 test_sequences_LIBS = -L../sources -lbocl
 
+test_setf_SRCS = test_setf.c simple_test.c
+test_setf_LIBS = -L../sources -lbocl
+
 test_ci_SRCS = test_ci.c
 test_ci_LIBS =
 # $(test_ci_SRCS) \
@@ -54,7 +57,8 @@ all_SRCS = \
 	test_conditions.c \
 	test_reader_macros.c \
 	test_macros.c \
-	test_sequences.c
+	test_sequences.c \
+	test_setf.c
 
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
@@ -171,6 +175,14 @@ test_sequences: $(test_sequences_SRCS:%.c=%.d) $(test_sequences_SRCS:%.c=%.o) $(
 run_test_sequences:test_sequences
 	@printf "# Testing %s\n" $^
 	$(VERBOSE) $(RUN) ./test_sequences ;echo status=$$?
+
+test_setf: $(test_setf_SRCS:%.c=%.d) $(test_setf_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_setf_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_setf_SRCS:%.c=%.o) $(test_setf_LIBS)
+
+run_test_setf:test_setf
+	@printf "# Testing %s\n" $^
+	$(VERBOSE) $(RUN) ./test_setf ;echo status=$$?
 
 run_test_bocl: $(BOCL)
 	@printf "# Testing bocl\n"

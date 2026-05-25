@@ -80,16 +80,15 @@ Ref prin1(Ref object,Ref stream){
         return object;}
 
     if(vectorp(object)){
-        fprintf(out,"(");
-        prin1(car(object),stream);
-        object=cdr(object);
-        while(consp(object)){
-            fprintf(out," ");
-            prin1(car(object),stream);
-            object=cdr(object);}
-        if(!nullp(object)){
-            fprintf(out," . ");
-            prin1(object, stream);}
+        /* Pre-fix this branch used car/cdr on the vector and crashed at
+           "got VECTOR, expected LIST" the first time anyone called
+           (vector …). A vector prints as #(e1 e2 …). Vectors are
+           Array-backed under the hood, so iterate via array.elements. */
+        fprintf(out,"#(");
+        uword len = vector_length(object);
+        for(uword i=0; i<len; i++){
+            if(i>0){ fprintf(out," "); }
+            prin1(object->slots->array.elements->elements[i], stream);}
         fprintf(out,")");
         return object;}
 
