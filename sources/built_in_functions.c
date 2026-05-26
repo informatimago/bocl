@@ -1985,6 +1985,62 @@ void kernel_GET_OUTPUT_STREAM_STRING(Ref function,Ref arguments,MultipleValues* 
     close_live_pool(pool);
 }
 
+/* ---- Slice 13: CLOSE, WRITE-BYTE, READ-BYTE, stream predicates --------- */
+
+/* CLOSE stream &key abort → T */
+void kernel_CLOSE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_stream = pop_mandatory_argument(function,&current);
+    (void)pop_key_argument(function,&current,K(ABORT),NIL_Symbol); /* ignored */
+    results->count=1;
+    results->values[0]=stream_close_any(par_stream);
+    close_live_pool(pool);}
+
+/* WRITE-BYTE byte stream → byte */
+void kernel_WRITE_BYTE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_byte   = pop_mandatory_argument(function,&current);
+    Ref par_stream = pop_mandatory_argument(function,&current);
+    results->count=1;
+    results->values[0]=stream_write_byte(par_byte,par_stream);
+    close_live_pool(pool);}
+
+/* READ-BYTE stream &optional eof-error-p eof-value → integer | eof-value */
+void kernel_READ_BYTE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_stream      = pop_mandatory_argument(function,&current);
+    Ref par_eof_error_p = pop_optional_argument(function,&current,T_Symbol);
+    Ref par_eof_value   = pop_optional_argument(function,&current,NIL_Symbol);
+    results->count=1;
+    results->values[0]=stream_read_byte(par_stream,par_eof_error_p,par_eof_value);
+    close_live_pool(pool);}
+
+/* INPUT-STREAM-P stream → boolean */
+void kernel_INPUT_STREAM_P(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_stream = pop_mandatory_argument(function,&current);
+    results->count=1;
+    results->values[0]=stream_input_stream_p(par_stream)?T_Symbol:NIL_Symbol;
+    close_live_pool(pool);}
+
+/* OUTPUT-STREAM-P stream → boolean */
+void kernel_OUTPUT_STREAM_P(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_stream = pop_mandatory_argument(function,&current);
+    results->count=1;
+    results->values[0]=stream_output_stream_p(par_stream)?T_Symbol:NIL_Symbol;
+    close_live_pool(pool);}
+
 /* ---- Slice 10: WRITE-CHAR, WRITE-STRING, FRESH-LINE, UNREAD-CHAR ------- */
 
 void kernel_WRITE_CHAR(Ref function,Ref arguments,MultipleValues* results){
@@ -3020,6 +3076,22 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(ENV-SPECIAL-VARIABLE-P);
         Ref lambda_list=list(S(OBJECT),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ENV_SPECIAL_VARIABLE_P));}
+    /* Slice 13: CLOSE, byte I/O, stream predicates */
+    {   Ref fname=S(CLOSE);
+        Ref lambda_list=list(S(STREAM),S(&KEY),list(S(ABORT),NIL_Symbol,NULL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CLOSE));}
+    {   Ref fname=S(WRITE-BYTE);
+        Ref lambda_list=list(S(BYTE),S(STREAM),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_WRITE_BYTE));}
+    {   Ref fname=S(READ-BYTE);
+        Ref lambda_list=list(S(STREAM),S(&OPTIONAL),list(S(EOF-ERROR-P),T_Symbol,NULL),list(S(EOF-VALUE),NIL_Symbol,NULL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_READ_BYTE));}
+    {   Ref fname=S(INPUT-STREAM-P);
+        Ref lambda_list=list(S(STREAM),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_INPUT_STREAM_P));}
+    {   Ref fname=S(OUTPUT-STREAM-P);
+        Ref lambda_list=list(S(STREAM),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_OUTPUT_STREAM_P));}
     /* Slice 10: character-level I/O primitives */
     {   Ref fname=S(WRITE-CHAR);
         Ref lambda_list=list(S(CHAR),NULL);

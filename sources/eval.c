@@ -849,12 +849,16 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Frame frame;
             frame.type=frame_protect;
             int result=setjmp(frame.non_local_exit);
+            MultipleValues protect_results = {0};
             UNWIND(result){
                 UWBODY{
-                    evale(proform,environment,results);}
+                    evale(proform,environment,&protect_results);}
                 UWCLEANUP{
+                    MultipleValues tmp_results = {0};
                     dolist(subform,cleanup){
-                        evale(subform,environment,results);}}}}
+                        evale(subform,environment,&tmp_results);}}}
+            *results = protect_results;
+            PASS_VALUES();}
 
         /* (HANDLER-CASE form clause...) where each clause is
               (type-spec (var) body...)

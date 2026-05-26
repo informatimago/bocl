@@ -1492,7 +1492,86 @@
        (,name () nil))))
 
 ;;;; -----------------------------------------------------------------------
-;;;; Slice 10 — FORMAT, I/O library
+;;;; Slice 13 — printer control variables, WRITE, PPRINT, stream predicates
+;;;;
+;;;; Kernel built-ins added in this slice (C side):
+;;;;   close               — close a file stream
+;;;;   write-byte          — write a byte to a binary stream
+;;;;   read-byte           — read a byte from a binary stream
+;;;;   input-stream-p      — is stream readable?
+;;;;   output-stream-p     — is stream writable?
+;;;; -----------------------------------------------------------------------
+
+;; ---- *print-* control variables (defaults per CLHS) --------------------
+
+(defvar *print-escape*   t)
+(defvar *print-readably* nil)
+(defvar *print-length*   nil)
+(defvar *print-level*    nil)
+(defvar *print-pretty*   nil)
+(defvar *print-base*     10)
+(defvar *print-radix*    nil)
+(defvar *print-circle*   nil)
+(defvar *print-case*     :upcase)
+(defvar *print-gensym*   t)
+(defvar *print-array*    t)
+
+;; ---- *read-* control variables -----------------------------------------
+
+(defvar *read-base*                 10)
+(defvar *read-default-float-format* 'single-float)
+(defvar *read-eval*                 t)
+(defvar *read-suppress*             nil)
+
+;; ---- WRITE — full CL printer entry point (simplified) ------------------
+;;
+;; Bocl's printer currently ignores *print-level* / *print-length* / etc.,
+;; so WRITE is just a thin dispatch on :escape.
+
+(defun write (object &key (stream    *standard-output*)
+                          (escape    *print-escape*)
+                          (readably  *print-readably*)
+                          ;; honoured in future; accepted now so callers compile
+                          (radix     *print-radix*)
+                          (base      *print-base*)
+                          (circle    *print-circle*)
+                          (pretty    *print-pretty*)
+                          (level     *print-level*)
+                          (length    *print-length*)
+                          (case      *print-case*)
+                          (gensym    *print-gensym*)
+                          (array     *print-array*))
+  ;; radix/base/circle/pretty/level/length/case/gensym/array not yet wired up
+  (if (or readably escape)
+      (prin1 object stream)
+      (princ object stream))
+  object)
+
+;; ---- PPRINT — pretty-print (simplified: prin1 + terpri) ----------------
+
+(defun pprint (object &optional (stream *standard-output*))
+  (terpri stream)
+  (prin1 object stream)
+  (values))                          ; CL says no values
+
+;; ---- PRINT and PRIN1 already exist as kernel built-ins.
+;;      Expose PRINT as a proper Lisp function (optional stream). ----------
+
+;; (PRINT object &optional stream) is already a kernel built-in; it calls
+;; terpri then prin1 and returns OBJECT.  The kernel registration has it
+;; take exactly two args (object stream), but the stream defaults to
+;; *standard-output* at the C level.  No wrapper needed.
+
+;; ---- Prin1-to-string is a kernel built-in; ensure write-to-string
+;;      and princ-to-string honour *print-escape*. --------------------------
+
+;; Already defined in Slice 10 section; redefined here to use WRITE.
+;; These definitions shadow the earlier ones.
+(defun write-to-string (object &rest keys)
+  (with-output-to-string (s)
+    (apply #'write object :stream s keys)))
+
+;; ---- Slice 10 — FORMAT, I/O library
 ;;;;
 ;;;; Kernel built-ins added in this slice (C side):
 ;;;;   write-char           — write a character to a stream

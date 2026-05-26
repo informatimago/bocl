@@ -114,6 +114,49 @@ Ref stream_close(Ref stream){
         stream->slots->file_stream.stream=NULL;}
     return T_Symbol;}
 
+/* Close any stream — FILE-STREAM gets the full close; string / other
+   streams are treated as already closed (no-op). */
+Ref stream_close_any(Ref stream){
+    if(typep(stream,FILE_STREAM_Class)){ return stream_close(stream); }
+    return T_Symbol;}
+
+/* Retrieve the readable FILE* for an input stream, resolving *STANDARD-INPUT*
+   when the argument is T. */
+FILE* stream_input_cstream(Ref stream){
+    if(eql(stream,T_Symbol)){
+        Ref si=S(*STANDARD-INPUT*);
+        if(symbol_boundp(si)){
+            return stream_cstream(variable_value(si));}
+        else{
+            return stdin;}}
+    else{
+        return stream_cstream(stream);}}
+
+bool stream_input_stream_p(Ref stream){
+    if(!typep(stream,FILE_STREAM_Class)) return false;
+    direction_t d = stream->slots->file_stream.direction;
+    return d==direction_input || d==direction_io;}
+
+bool stream_output_stream_p(Ref stream){
+    if(!typep(stream,FILE_STREAM_Class)) return false;
+    direction_t d = stream->slots->file_stream.direction;
+    return d==direction_output || d==direction_io;}
+
+Ref stream_write_byte(Ref byte_ref, Ref stream){
+    FILE* out = stream_output_cstream(stream);
+    int b = (int)integer_value(byte_ref);
+    fputc(b, out);
+    return byte_ref;}
+
+Ref stream_read_byte(Ref stream, Ref eof_error_p, Ref eof_value){
+    FILE* in = stream_input_cstream(stream);
+    int c = fgetc(in);
+    if(c == EOF){
+        if(!nullp(eof_error_p) && eof_error_p != NIL_Symbol){
+            ERROR("READ-BYTE: end of file on stream%s", "");}
+        return eof_value;}
+    return integer_from_word((word)c);}
+
 
 
 void stream_initialize(void){
