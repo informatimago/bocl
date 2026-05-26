@@ -378,6 +378,33 @@ lambda-list parser. Tests:
 [tests/test_handler_bind.c](tests/test_handler_bind.c) and
 [tests/test_restarts.c](tests/test_restarts.c) — all green.
 
+**Slice 11 — LOOP macro (v0.0.33)**:
+Full `LOOP` macro with: iteration drivers `for/in`, `for/on`, `for/across`,
+`for/=then`, `for/from/to/below/by`; `repeat`; `while`/`until` guards;
+accumulation clauses `sum`, `count`, `maximize`, `minimize`, `collect`,
+`append`; termination tests `always`/`never`/`thereis`; auxiliary clauses
+`with`, `initially`, `finally`; named blocks with `named`/`return`;
+parallel `and` for-clauses. Implemented in `bootstrap/prelude.lisp`.
+GC live-pool fix: `structure_class_instance_direct_slots` and
+`structure_class_instance_slots` in `sources/structure.c` no longer close
+their pool before returning, preventing GC from sweeping the returned cons
+lists while the caller still holds them. Tests:
+[tests/test_loop.c](tests/test_loop.c) — 20 cases.
+
+**Slice 12 — list / assoc / tree utilities (v0.0.34)**:
+Association-list functions: `ASSOC`, `ASSOC-IF`, `ASSOC-IF-NOT`, `RASSOC`,
+`RASSOC-IF`, `RASSOC-IF-NOT`. List utilities: `LIST*`, `COPY-TREE`,
+`TAILP`, `NCONC` (variadic), `DELETE-IF`, `DELETE-IF-NOT`,
+`REMOVE-DUPLICATES`, `DELETE-DUPLICATES`. Tree operations: `SUBST`,
+`SUBST-IF`, `SUBST-IF-NOT`, `TREE-EQUAL`. Property lists: `GET`,
+`REMPROP`, `(SETF GET)`. Type predicates: `NUMBERP`, `INTEGERP`, `FLOATP`,
+`RATIONALP`, `REALP`, `COMPLEXP`, `CHARACTERP`, `VECTORP`, `ARRAYP`,
+`PACKAGEP`, `PATHNAMEP`, `STREAMP`, `HASH-TABLE-P`, `RANDOM-STATE-P`.
+Setf expanders for `SECOND`, `THIRD`, `FOURTH`, `CAAR`, `CADR`, `CDAR`,
+`CDDR`, `CADDR`, `CADDDR`, `AREF`. All implemented in
+`bootstrap/prelude.lisp`. Tests:
+[tests/test_list_utils.c](tests/test_list_utils.c) — 15 cases, all green.
+
 **Slice 10 — FORMAT + I/O primitives + GC overhaul (v0.0.31)**:
 `FORMAT` (directives `~A ~S ~% ~& ~~ ~D ~B ~O ~X ~R ~F ~E ~G ~I ~<…~>
 ~(…~) ~[…~]` and `~* ~? ~^`), `WRITE-STRING`, `WRITE-CHAR`,

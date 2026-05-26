@@ -90,13 +90,23 @@
 (define-setf-expander car            (cell)         (val) `(rplaca ,cell ,val))
 (define-setf-expander cdr            (cell)         (val) `(rplacd ,cell ,val))
 (define-setf-expander first          (cell)         (val) `(rplaca ,cell ,val))
+(define-setf-expander second         (cell)         (val) `(rplaca (cdr ,cell) ,val))
+(define-setf-expander third          (cell)         (val) `(rplaca (cddr ,cell) ,val))
+(define-setf-expander fourth         (cell)         (val) `(rplaca (cdddr ,cell) ,val))
 (define-setf-expander rest           (cell)         (val) `(rplacd ,cell ,val))
+(define-setf-expander caar           (cell)         (val) `(rplaca (car ,cell) ,val))
+(define-setf-expander cadr           (cell)         (val) `(rplaca (cdr ,cell) ,val))
+(define-setf-expander cdar           (cell)         (val) `(rplacd (car ,cell) ,val))
+(define-setf-expander cddr           (cell)         (val) `(rplacd (cdr ,cell) ,val))
+(define-setf-expander caddr          (cell)         (val) `(rplaca (cddr ,cell) ,val))
+(define-setf-expander cadddr         (cell)         (val) `(rplaca (cdddr ,cell) ,val))
 (define-setf-expander gethash        (k h)          (val) `(sethash ,k ,h ,val))
 (define-setf-expander symbol-value   (s)            (val) `(set-symbol-value ,val ,s))
 (define-setf-expander symbol-function (s)           (val) `(set-symbol-function ,val ,s))
 (define-setf-expander symbol-plist   (s)            (val) `(set-symbol-plist ,val ,s))
 (define-setf-expander svref          (vec idx)      (val) `(svref-set ,vec ,idx ,val))
 (define-setf-expander bit            (vec idx)      (val) `(bit-set ,vec ,idx ,val))
+(define-setf-expander aref           (vec idx)      (val) `(svref-set ,vec ,idx ,val))
 (define-setf-expander nth            (n lst)        (val) `(rplaca (nthcdr ,n ,lst) ,val))
 
 ;; -------------------------------------------------------------------- ;;
@@ -168,6 +178,22 @@
 (defun atom  (x) (if (consp x) nil t))
 (defun endp  (x) (if (consp x) nil t))   ;; same as null, on a proper list
 (defun listp (x) (or (null x) (consp x)))
+
+;; Type predicates — delegate to kernel TYPEP
+(defun numberp   (x) (typep x 'number))
+(defun integerp  (x) (typep x 'integer))
+(defun floatp    (x) (typep x 'float))
+(defun rationalp (x) (typep x 'rational))
+(defun realp     (x) (typep x 'real))
+(defun complexp  (x) (typep x 'complex))
+(defun characterp (x) (typep x 'character))
+(defun vectorp   (x) (typep x 'vector))
+(defun arrayp    (x) (typep x 'array))
+(defun packagep  (x) (typep x 'package))
+(defun pathnamep (x) (typep x 'pathname))
+(defun streamp   (x) (typep x 'stream))
+(defun hash-table-p (x) (typep x 'hash-table))
+(defun random-state-p (x) (typep x 'random-state))
 
 (defun zerop  (n) (= n 0))
 (defun plusp  (n) (> n 0))
@@ -675,6 +701,185 @@
 (defun acons (key value alist)
   ;; (ACONS k v a) ≡ (CONS (CONS k v) a)
   (cons (cons key value) alist))
+
+;; -------------------------------------------------------------------- ;;
+;;  Association lists (slice 12).                                        ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun assoc (item list &key (test #'eql) (key #'identity))
+  "Return the first pair in LIST whose CAR satisfies TEST with ITEM."
+  (dolist (pair list nil)
+    (when (and (consp pair)
+               (funcall test item (funcall key (car pair))))
+      (return pair))))
+
+(defun assoc-if (predicate list &key (key #'identity))
+  "Return the first pair in LIST whose CAR satisfies PREDICATE."
+  (dolist (pair list nil)
+    (when (and (consp pair)
+               (funcall predicate (funcall key (car pair))))
+      (return pair))))
+
+(defun assoc-if-not (predicate list &key (key #'identity))
+  "Return the first pair in LIST whose CAR does not satisfy PREDICATE."
+  (dolist (pair list nil)
+    (when (and (consp pair)
+               (not (funcall predicate (funcall key (car pair)))))
+      (return pair))))
+
+(defun rassoc (item list &key (test #'eql) (key #'identity))
+  "Return the first pair in LIST whose CDR satisfies TEST with ITEM."
+  (dolist (pair list nil)
+    (when (and (consp pair)
+               (funcall test item (funcall key (cdr pair))))
+      (return pair))))
+
+(defun rassoc-if (predicate list &key (key #'identity))
+  "Return the first pair in LIST whose CDR satisfies PREDICATE."
+  (dolist (pair list nil)
+    (when (and (consp pair)
+               (funcall predicate (funcall key (cdr pair))))
+      (return pair))))
+
+(defun rassoc-if-not (predicate list &key (key #'identity))
+  "Return the first pair in LIST whose CDR does not satisfy PREDICATE."
+  (dolist (pair list nil)
+    (when (and (consp pair)
+               (not (funcall predicate (funcall key (cdr pair)))))
+      (return pair))))
+
+;; -------------------------------------------------------------------- ;;
+;;  List utilities (slice 12).                                           ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun list* (&rest args)
+  "Construct a list with the last arg as the final CDR.
+   (LIST* a b c) => (CONS a (CONS b c)).  (LIST* x) => x."
+  (cond ((null args) nil)
+        ((null (cdr args)) (car args))
+        (t (cons (car args) (apply #'list* (cdr args))))))
+
+(defun copy-tree (tree)
+  "Recursive copy of a tree (copies all cons cells)."
+  (if (atom tree)
+      tree
+      (cons (copy-tree (car tree)) (copy-tree (cdr tree)))))
+
+(defun tailp (object list)
+  "T if OBJECT is EQ to some tail (including NIL) of LIST."
+  (do ((l list (cdr l)))
+      ((atom l) (eq object l))
+    (when (eq l object) (return t))))
+
+(defun nconc (&rest lists)
+  "Destructively concatenate LISTS.  Non-list first args are an error."
+  (cond ((null lists) nil)
+        ((null (cdr lists)) (car lists))
+        (t
+         (let ((head (car lists))
+               (rest (apply #'nconc (cdr lists))))
+           (if (null head)
+               rest
+               (do ((tail head (cdr tail)))
+                   ((null (cdr tail))
+                    (rplacd tail rest)
+                    head)))))))
+
+(defun delete-if (predicate list &key (key #'identity))
+  "Destructively remove elements satisfying PREDICATE."
+  (let ((head (cons nil list)))
+    (do ((prev head)
+         (curr list (cdr curr)))
+        ((null curr) (cdr head))
+      (if (funcall predicate (funcall key (car curr)))
+          (rplacd prev (cdr curr))
+          (setq prev curr)))))
+
+(defun delete-if-not (predicate list &key (key #'identity))
+  "Destructively keep only elements satisfying PREDICATE."
+  (delete-if (lambda (x) (not (funcall predicate x))) list :key key))
+
+(defun remove-duplicates (list &key (test #'eql) (key #'identity))
+  "Return a new list with duplicates removed (last occurrence kept)."
+  (let ((acc nil))
+    (dolist (x list (nreverse acc))
+      (unless (find (funcall key x) acc :test test :key key)
+        (push x acc)))))
+
+(defun delete-duplicates (list &key (test #'eql) (key #'identity))
+  "Destructive version of REMOVE-DUPLICATES."
+  (remove-duplicates list :test test :key key))
+
+;; -------------------------------------------------------------------- ;;
+;;  Tree operations (slice 12).                                          ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun subst (new old tree &key (test #'eql) (key #'identity))
+  "Copy TREE substituting NEW for every subtree EQL to OLD."
+  (cond ((funcall test old (funcall key tree)) new)
+        ((atom tree) tree)
+        (t (let ((new-car (subst new old (car tree) :test test :key key))
+                 (new-cdr (subst new old (cdr tree) :test test :key key)))
+             (if (and (eq new-car (car tree)) (eq new-cdr (cdr tree)))
+                 tree
+                 (cons new-car new-cdr))))))
+
+(defun subst-if (new predicate tree &key (key #'identity))
+  "Copy TREE substituting NEW for every subtree satisfying PREDICATE."
+  (cond ((funcall predicate (funcall key tree)) new)
+        ((atom tree) tree)
+        (t (let ((new-car (subst-if new predicate (car tree) :key key))
+                 (new-cdr (subst-if new predicate (cdr tree) :key key)))
+             (if (and (eq new-car (car tree)) (eq new-cdr (cdr tree)))
+                 tree
+                 (cons new-car new-cdr))))))
+
+(defun subst-if-not (new predicate tree &key (key #'identity))
+  "Copy TREE substituting NEW for every subtree NOT satisfying PREDICATE."
+  (subst-if new (lambda (x) (not (funcall predicate x))) tree :key key))
+
+(defun tree-equal (tree1 tree2 &key (test #'eql))
+  "T if TREE1 and TREE2 have the same shape and leaves (by TEST)."
+  (cond ((and (atom tree1) (atom tree2))
+         (funcall test tree1 tree2))
+        ((or  (atom tree1) (atom tree2)) nil)
+        (t (and (tree-equal (car tree1) (car tree2) :test test)
+                (tree-equal (cdr tree1) (cdr tree2) :test test)))))
+
+;; -------------------------------------------------------------------- ;;
+;;  Property lists (slice 12).                                           ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun get (symbol indicator &optional default)
+  "Return the value for INDICATOR on SYMBOL's property list, or DEFAULT."
+  (getf (symbol-plist symbol) indicator default))
+
+(defun remprop (symbol indicator)
+  "Remove INDICATOR and its value from SYMBOL's property list.
+   Returns T if the indicator was present, NIL otherwise."
+  ;; Build a fresh plist, skipping any (indicator value) pair found.
+  ;; We avoid the kernel REMF because its destructive in-place mutation
+  ;; doesn't update the symbol's plist pointer for single-pair plists.
+  (let ((found nil)
+        (acc   nil)
+        (pl    (symbol-plist symbol)))
+    (do ()
+        ((null pl))
+      (if (eq (car pl) indicator)
+          (setq found t
+                pl    (cddr pl))
+          (progn
+            (push (car  pl) acc)
+            (push (cadr pl) acc)
+            (setq pl (cddr pl)))))
+    (when found
+      (set-symbol-plist (nreverse acc) symbol))
+    found))
+
+;; (SETF (GET sym ind) val) — bocl simple-expander style.
+;; Note: kernel SET-SYMBOL-PLIST arg order is (new-plist symbol).
+(define-setf-expander get (symbol indicator) (val)
+  `(set-symbol-plist (putf (symbol-plist ,symbol) ,indicator ,val) ,symbol))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  String / character library (slice 5).                                ;;
