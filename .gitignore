@@ -29,6 +29,13 @@ tests/test_seq_lib
 tests/test_strings
 tests/test_numeric_extras
 tests/test_destructuring
+tests/test_structures
+tests/test_handler_bind
+tests/test_restarts
+tests/test_format
+tests/test_loop
+tests/test_list_utils
+tests/test_misc
 
 *-Listing.xml
 *-Results.xml

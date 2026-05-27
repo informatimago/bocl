@@ -6,6 +6,9 @@
 #include "stream.h"
 #include "reader.h"
 #include "printer.h"
+#include "filename.h"
+#include <time.h>
+#include <unistd.h>
 
 void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
@@ -2041,6 +2044,312 @@ void kernel_OUTPUT_STREAM_P(Ref function,Ref arguments,MultipleValues* results){
     results->values[0]=stream_output_stream_p(par_stream)?T_Symbol:NIL_Symbol;
     close_live_pool(pool);}
 
+/* ---- Slice 14: MAKE-ARRAY, array ops, RANDOM, file-system, timing ----- */
+
+/* (MAKE-ARRAY dimensions &key initial-element initial-contents element-type
+                               adjustable fill-pointer)
+   Only 1-dimensional simple vectors (VECTOR_Class) are supported. */
+void kernel_MAKE_ARRAY(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_dimensions    = pop_mandatory_argument(function,&current);
+    Ref par_init_element  = pop_key_argument(function,&current,K(INITIAL-ELEMENT),NIL_Symbol);
+    Ref par_init_contents = pop_key_argument(function,&current,K(INITIAL-CONTENTS),NIL_Symbol);
+    (void)pop_key_argument(function,&current,K(ELEMENT-TYPE),T_Symbol);
+    (void)pop_key_argument(function,&current,K(ADJUSTABLE),NIL_Symbol);
+    (void)pop_key_argument(function,&current,K(FILL-POINTER),NIL_Symbol);
+    word n;
+    if(integerp(par_dimensions)){
+        n=integer_value(par_dimensions);
+    } else if(consp(par_dimensions)&&integerp(car(par_dimensions))&&nullp(cdr(par_dimensions))){
+        n=integer_value(car(par_dimensions));
+    } else {
+        ERROR("MAKE-ARRAY: only 1-dimensional arrays supported (got %s)",
+              string_cstring(prin1_to_string(par_dimensions)));}
+    if(n<0){ ERROR("MAKE-ARRAY: negative dimension %ld",(long)n); }
+    Ref elements=NIL_Symbol;
+    if(!nullp(par_init_contents)){
+        elements=par_init_contents;
+    } else {
+        for(word i=n-1;i>=0;i--){
+            elements=cons(par_init_element,elements);}}
+    results->count=1;
+    results->values[0]=vector_new(elements);
+    close_live_pool(pool);}
+
+/* (ARRAY-RANK array) → 1  (only 1D supported) */
+void kernel_ARRAY_RANK(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_array=pop_mandatory_argument(function,&current);
+    check_type(par_array,VECTOR_Class);
+    results->count=1;
+    results->values[0]=integer_from_word(1);
+    close_live_pool(pool);}
+
+/* (ARRAY-DIMENSIONS array) → (size) */
+void kernel_ARRAY_DIMENSIONS(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_array=pop_mandatory_argument(function,&current);
+    check_type(par_array,VECTOR_Class);
+    uword len=par_array->slots->array.dimensions[0];
+    results->count=1;
+    results->values[0]=list(integer_from_uword(len),NULL);
+    close_live_pool(pool);}
+
+/* (ARRAY-TOTAL-SIZE array) → integer */
+void kernel_ARRAY_TOTAL_SIZE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_array=pop_mandatory_argument(function,&current);
+    check_type(par_array,VECTOR_Class);
+    uword len=par_array->slots->array.dimensions[0];
+    results->count=1;
+    results->values[0]=integer_from_uword(len);
+    close_live_pool(pool);}
+
+/* (ARRAY-IN-BOUNDS-P array &rest subscripts) → boolean */
+void kernel_ARRAY_IN_BOUNDS_P(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_array=pop_mandatory_argument(function,&current);
+    check_type(par_array,VECTOR_Class);
+    uword len=par_array->slots->array.dimensions[0];
+    bool ok=true;
+    if(!nullp(current)){
+        word idx=integer_value(car(current));
+        ok=(idx>=0)&&((uword)idx<len);}
+    results->count=1;
+    results->values[0]=as_boolean(ok);
+    close_live_pool(pool);}
+
+/* (ADJUSTABLE-ARRAY-P array) → nil  (simple vectors only) */
+void kernel_ADJUSTABLE_ARRAY_P(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    (void)pop_mandatory_argument(function,&arguments);
+    results->count=1;
+    results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (ARRAY-HAS-FILL-POINTER-P array) → nil */
+void kernel_ARRAY_HAS_FILL_POINTER_P(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    (void)pop_mandatory_argument(function,&arguments);
+    results->count=1;
+    results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (SIMPLE-VECTOR-P x) → boolean */
+void kernel_SIMPLE_VECTOR_P(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_x=pop_mandatory_argument(function,&current);
+    results->count=1;
+    results->values[0]=as_boolean(typep(par_x,VECTOR_Class));
+    close_live_pool(pool);}
+
+/* (MAKE-LIST n &key initial-element) → list of n elements */
+void kernel_MAKE_LIST(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_n    = pop_mandatory_argument(function,&current);
+    Ref par_init = pop_key_argument(function,&current,K(INITIAL-ELEMENT),NIL_Symbol);
+    word n=integer_value(par_n);
+    if(n<0){ ERROR("MAKE-LIST: negative size %ld",(long)n); }
+    Ref result=NIL_Symbol;
+    for(word i=0;i<n;i++){ result=cons(par_init,result); }
+    results->count=1;
+    results->values[0]=result;
+    close_live_pool(pool);}
+
+/* (COPY-SEQ sequence) → fresh copy */
+void kernel_COPY_SEQ(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_seq=pop_mandatory_argument(function,&current);
+    Ref out;
+    if(nullp(par_seq)||consp(par_seq)){
+        out=copy_list(par_seq);
+    } else if(typep(par_seq,STRING_Class)){
+        /* STRING must be checked before VECTOR because strings are subtype of vector */
+        char* cs=string_cstring(par_seq);
+        out=string_new_cstring(cs);
+        free(cs);
+    } else if(typep(par_seq,VECTOR_Class)){
+        uword len=par_seq->slots->array.dimensions[0];
+        Ref elems=NIL_Symbol;
+        for(word i=(word)len-1;i>=0;i--){
+            elems=cons(svref(par_seq,integer_from_word(i)),elems);}
+        out=vector_new(elems);
+    } else {
+        TYPE_ERROR(par_seq,SEQUENCE_Class);}
+    results->count=1;
+    results->values[0]=out;
+    close_live_pool(pool);}
+
+/* ---- RANDOM ------------------------------------------------------------ */
+
+/* Splitmix64 PRNG — fast, good quality, easy to implement. */
+static uint64_t bocl_random_seed=0;
+
+static uint64_t bocl_splitmix64(void){
+    if(!bocl_random_seed){ bocl_random_seed=(uint64_t)time(NULL); }
+    bocl_random_seed+=UINT64_C(0x9e3779b97f4a7c15);
+    uint64_t z=bocl_random_seed;
+    z=(z^(z>>30))*UINT64_C(0xbf58476d1ce4e5b9);
+    z=(z^(z>>27))*UINT64_C(0x94d049bb133111eb);
+    return z^(z>>31);}
+
+/* (RANDOM limit &optional state) → number in [0,limit) */
+void kernel_RANDOM(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_limit=pop_mandatory_argument(function,&current);
+    (void)pop_optional_argument(function,&current,NIL_Symbol); /* state — global only */
+    uint64_t r=bocl_splitmix64();
+    results->count=1;
+    if(integerp(par_limit)){
+        word lim=integer_value(par_limit);
+        if(lim<=0){ ERROR("RANDOM: limit must be a positive integer%s",""); }
+        results->values[0]=integer_from_word((word)(r%(uint64_t)lim));
+    } else if(floatp(par_limit)){
+        double lim=float_value(par_limit);
+        if(lim<=0.0){ ERROR("RANDOM: limit must be positive%s",""); }
+        results->values[0]=F((double)r/(double)UINT64_MAX*lim);
+    } else {
+        TYPE_ERROR(par_limit,NUMBER_Class);}
+    close_live_pool(pool);}
+
+/* (MAKE-RANDOM-STATE &optional state) → T (re-seeds global state) */
+void kernel_MAKE_RANDOM_STATE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_state=pop_optional_argument(function,&current,NIL_Symbol);
+    if(eql(par_state,T_Symbol)||nullp(par_state)){
+        bocl_random_seed=(uint64_t)time(NULL);
+    } else if(integerp(par_state)){
+        bocl_random_seed=(uint64_t)integer_value(par_state);}
+    results->count=1;
+    results->values[0]=T_Symbol; /* opaque handle = "the global state" */
+    close_live_pool(pool);}
+
+/* ---- File-system operations -------------------------------------------- */
+
+/* Coerce filespec (string or pathname) → malloc'd C path string. */
+static char* filespec_to_cpath(Ref filespec){
+    Ref path;
+    if(typep(filespec,PHYSICAL_PATHNAME_Class))  { path=filespec; }
+    else if(typep(filespec,STRING_Class))         { path=pathname(filespec); }
+    else { TYPE_ERROR(filespec,PHYSICAL_PATHNAME_Class); }
+    return string_cstring(namestring(path));}
+
+/* (PROBE-FILE filespec) → pathname or nil */
+void kernel_PROBE_FILE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_filespec=pop_mandatory_argument(function,&current);
+    char* cpath=filespec_to_cpath(par_filespec);
+    bool exists=(access(cpath,F_OK)==0);
+    free(cpath);
+    results->count=1;
+    if(exists){
+        results->values[0]=typep(par_filespec,PHYSICAL_PATHNAME_Class)
+                          ?par_filespec
+                          :pathname(par_filespec);
+    } else {
+        results->values[0]=NIL_Symbol;}
+    close_live_pool(pool);}
+
+/* (DELETE-FILE filespec) → T or error */
+void kernel_DELETE_FILE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_filespec=pop_mandatory_argument(function,&current);
+    char* cpath=filespec_to_cpath(par_filespec);
+    if(remove(cpath)!=0){ ERROR("DELETE-FILE: cannot delete %s",cpath); }
+    free(cpath);
+    results->count=1;
+    results->values[0]=T_Symbol;
+    close_live_pool(pool);}
+
+/* (RENAME-FILE old new) → new-name, old-truename, new-truename */
+void kernel_RENAME_FILE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_old=pop_mandatory_argument(function,&current);
+    Ref par_new=pop_mandatory_argument(function,&current);
+    char* cold=filespec_to_cpath(par_old);
+    char* cnew=filespec_to_cpath(par_new);
+    int rc=rename(cold,cnew);
+    free(cold); free(cnew);
+    if(rc!=0){ ERROR("RENAME-FILE: rename failed%s",""); }
+    Ref old_path=typep(par_old,PHYSICAL_PATHNAME_Class)?par_old:pathname(par_old);
+    Ref new_path=typep(par_new,PHYSICAL_PATHNAME_Class)?par_new:pathname(par_new);
+    results->count=3;
+    results->values[0]=new_path;
+    results->values[1]=old_path;
+    results->values[2]=new_path;
+    close_live_pool(pool);}
+
+/* ---- Timing ------------------------------------------------------------ */
+
+/* CL epoch offset: seconds between 1900-01-01 and 1970-01-01 = 2208988800 */
+#define BOCL_CL_EPOCH_OFFSET UINT64_C(2208988800)
+
+/* (GET-UNIVERSAL-TIME) → integer seconds since 1900-01-01 00:00:00 UTC */
+void kernel_GET_UNIVERSAL_TIME(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    check_no_more_arguments(function,arguments);
+    uint64_t t=(uint64_t)time(NULL)+BOCL_CL_EPOCH_OFFSET;
+    results->count=1;
+    results->values[0]=integer_from_word((word)t);
+    close_live_pool(pool);}
+
+/* (GET-INTERNAL-REAL-TIME) → integer microseconds since process start */
+void kernel_GET_INTERNAL_REAL_TIME(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    check_no_more_arguments(function,arguments);
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME,&ts);
+    uint64_t usec=(uint64_t)ts.tv_sec*1000000ULL+(uint64_t)ts.tv_nsec/1000ULL;
+    results->count=1;
+    results->values[0]=integer_from_word((word)usec);
+    close_live_pool(pool);}
+
+/* (GET-INTERNAL-RUN-TIME) → integer microseconds of CPU time */
+void kernel_GET_INTERNAL_RUN_TIME(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    check_no_more_arguments(function,arguments);
+    struct timespec ts;
+#ifdef CLOCK_PROCESS_CPUTIME_ID
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+#else
+    clock_gettime(CLOCK_REALTIME,&ts);
+#endif
+    uint64_t usec=(uint64_t)ts.tv_sec*1000000ULL+(uint64_t)ts.tv_nsec/1000ULL;
+    results->count=1;
+    results->values[0]=integer_from_word((word)usec);
+    close_live_pool(pool);}
+
 /* ---- Slice 10: WRITE-CHAR, WRITE-STRING, FRESH-LINE, UNREAD-CHAR ------- */
 
 void kernel_WRITE_CHAR(Ref function,Ref arguments,MultipleValues* results){
@@ -3092,6 +3401,66 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(OUTPUT-STREAM-P);
         Ref lambda_list=list(S(STREAM),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_OUTPUT_STREAM_P));}
+    /* Slice 14: MAKE-ARRAY, array ops, COPY-SEQ, MAKE-LIST, RANDOM, file-system, timing */
+    {   Ref fname=S(MAKE-ARRAY);
+        Ref lambda_list=list(S(DIMENSIONS),S(&KEY),
+                             list(S(INITIAL-ELEMENT),NIL_Symbol,NULL),
+                             list(S(INITIAL-CONTENTS),NIL_Symbol,NULL),
+                             list(S(ELEMENT-TYPE),T_Symbol,NULL),
+                             list(S(ADJUSTABLE),NIL_Symbol,NULL),
+                             list(S(FILL-POINTER),NIL_Symbol,NULL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_ARRAY));}
+    {   Ref fname=S(ARRAY-RANK);
+        Ref lambda_list=list(S(ARRAY),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ARRAY_RANK));}
+    {   Ref fname=S(ARRAY-DIMENSIONS);
+        Ref lambda_list=list(S(ARRAY),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ARRAY_DIMENSIONS));}
+    {   Ref fname=S(ARRAY-TOTAL-SIZE);
+        Ref lambda_list=list(S(ARRAY),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ARRAY_TOTAL_SIZE));}
+    {   Ref fname=S(ARRAY-IN-BOUNDS-P);
+        Ref lambda_list=list(S(ARRAY),S(&REST),S(SUBSCRIPTS),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ARRAY_IN_BOUNDS_P));}
+    {   Ref fname=S(ADJUSTABLE-ARRAY-P);
+        Ref lambda_list=list(S(ARRAY),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ADJUSTABLE_ARRAY_P));}
+    {   Ref fname=S(ARRAY-HAS-FILL-POINTER-P);
+        Ref lambda_list=list(S(ARRAY),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ARRAY_HAS_FILL_POINTER_P));}
+    {   Ref fname=S(SIMPLE-VECTOR-P);
+        Ref lambda_list=list(S(OBJECT),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SIMPLE_VECTOR_P));}
+    {   Ref fname=S(MAKE-LIST);
+        Ref lambda_list=list(S(SIZE),S(&KEY),list(S(INITIAL-ELEMENT),NIL_Symbol,NULL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_LIST));}
+    {   Ref fname=S(COPY-SEQ);
+        Ref lambda_list=list(S(SEQUENCE),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_COPY_SEQ));}
+    {   Ref fname=S(RANDOM);
+        Ref lambda_list=list(S(LIMIT),S(&OPTIONAL),list(S(STATE),NIL_Symbol,NULL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_RANDOM));}
+    {   Ref fname=S(MAKE-RANDOM-STATE);
+        Ref lambda_list=list(S(&OPTIONAL),list(S(STATE),NIL_Symbol,NULL),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_RANDOM_STATE));}
+    {   Ref fname=S(PROBE-FILE);
+        Ref lambda_list=list(S(FILESPEC),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_PROBE_FILE));}
+    {   Ref fname=S(DELETE-FILE);
+        Ref lambda_list=list(S(FILESPEC),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_DELETE_FILE));}
+    {   Ref fname=S(RENAME-FILE);
+        Ref lambda_list=list(S(OLD),S(NEW),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_RENAME_FILE));}
+    {   Ref fname=S(GET-UNIVERSAL-TIME);
+        Ref lambda_list=NIL_Symbol;
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_UNIVERSAL_TIME));}
+    {   Ref fname=S(GET-INTERNAL-REAL-TIME);
+        Ref lambda_list=NIL_Symbol;
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_INTERNAL_REAL_TIME));}
+    {   Ref fname=S(GET-INTERNAL-RUN-TIME);
+        Ref lambda_list=NIL_Symbol;
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_INTERNAL_RUN_TIME));}
     /* Slice 10: character-level I/O primitives */
     {   Ref fname=S(WRITE-CHAR);
         Ref lambda_list=list(S(CHAR),NULL);

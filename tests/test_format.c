@@ -1,3 +1,5 @@
+/* tests/test_format.c — CUnit tests for Slice 10: FORMAT, WRITE-STRING,
+   READ-FROM-STRING, WITH-OUTPUT-TO-STRING, PRINC-TO-STRING, WRITE-TO-STRING. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,9 +9,6 @@
 #include "kernel.h"
 #include "bocl.h"
 #include "macros.h"
-
-/* Slice 10 — FORMAT, WRITE-STRING, READ-FROM-STRING,
-   WITH-OUTPUT-TO-STRING, PRINC-TO-STRING, WRITE-TO-STRING. */
 
 TEST_SUITE_SETUP(fmt_init){
     kernel_initialize();
@@ -164,7 +163,7 @@ static void test_write_string(void){
     /* :end 3 takes only the first 3 characters. */
     TEST_EQ(equal, e("\"hel\""),
             e("(with-output-to-string (s)"
-              "  (write-string \"hello\" s :end 3)"));}
+              "  (write-string \"hello\" s :end 3))"));}
 
 TEST_INITIALIZE(test_format);
 TEST_SUITE(test_format, fmt_init, fmt_clean)

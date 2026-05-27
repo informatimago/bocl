@@ -405,6 +405,35 @@ Setf expanders for `SECOND`, `THIRD`, `FOURTH`, `CAAR`, `CADR`, `CDAR`,
 `bootstrap/prelude.lisp`. Tests:
 [tests/test_list_utils.c](tests/test_list_utils.c) — 15 cases, all green.
 
+**Slice 13 — UNWIND-PROTECT fix + CLOSE/byte-I/O + print vars (v0.0.35)**:
+`UNWIND-PROTECT` result-passing was broken: the protected-form result was
+overwritten by the cleanup forms. Fixed by separating `protect_results` from
+`tmp_results` and adding the missing `PASS_VALUES()` after the unwind block.
+`CLOSE` (`:abort` keyword ignored, idempotent on already-closed streams),
+`READ-BYTE`, `WRITE-BYTE`. Dynamic print variables `*PRINT-READABLY*`,
+`*PRINT-ESCAPE*`, `*PRINT-PRETTY*`, `*PRINT-CIRCLE*`, `*PRINT-BASE*`,
+`*PRINT-LEVEL*`, `*PRINT-LENGTH*`, `*PRINT-GENSYM*`, `*PRINT-RADIX*`,
+`*PRINT-CASE*`, `*PRINT-ARRAY*`, `*PRINT-LINES*`,
+`*PRINT-MISER-WIDTH*`, `*PRINT-RIGHT-MARGIN*`.
+`WRITE-TO-STRING` with full `&rest keys` interface honouring `:escape`.
+
+**Slice 14 — arrays, sequences, random, file-system, timing (v0.0.36)**:
+`MAKE-ARRAY` (1-D, `:initial-element`, `:initial-contents`),
+`ARRAY-RANK`, `ARRAY-DIMENSIONS`, `ARRAY-TOTAL-SIZE`,
+`ARRAY-IN-BOUNDS-P`, `ADJUSTABLE-ARRAY-P`, `ARRAY-HAS-FILL-POINTER-P`,
+`SIMPLE-VECTOR-P`. `MAKE-LIST` (`:initial-element`), `COPY-SEQ`.
+`RANDOM` (integer and float limits, splitmix64 PRNG),
+`MAKE-RANDOM-STATE`. `PROBE-FILE`, `DELETE-FILE`, `RENAME-FILE`.
+`GET-UNIVERSAL-TIME`, `GET-INTERNAL-REAL-TIME`, `GET-INTERNAL-RUN-TIME`,
+`INTERNAL-TIME-UNITS-PER-SECOND` (1 000 000 — microsecond resolution).
+`FILL`, `REPLACE`, `MISMATCH` in `bootstrap/prelude.lisp`.
+`CONCATENATE` extended to accept `VECTOR` / `SIMPLE-VECTOR` result-type.
+Bug-fix: removed duplicate `WRITE-TO-STRING` definition that shadowed the
+Slice-13 `&rest keys` version, causing `test_format` to hang.
+`arithmetic.c` clean-up: added full prototype declarations in `arithmetic.h`
+and eliminated two `-Wbad-function-cast` warnings.
+Tests: [tests/test_misc.c](tests/test_misc.c) — 14 cases, all green.
+
 **Slice 10 — FORMAT + I/O primitives + GC overhaul (v0.0.31)**:
 `FORMAT` (directives `~A ~S ~% ~& ~~ ~D ~B ~O ~X ~R ~F ~E ~G ~I ~<…~>
 ~(…~) ~[…~]` and `~* ~? ~^`), `WRITE-STRING`, `WRITE-CHAR`,

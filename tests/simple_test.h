@@ -83,9 +83,10 @@ void simple_test_finalize(unsigned int* failure_count);
 #define ST(eq,expected,expression) #eq "(" #expected "," #expression ")"
 
 #define TEST_EQ(eq,expected,expression)                                      \
-    do{ bool result=eq(expected,expression);                                \
+    do{ Ref __te_exp=(expected); Ref __te_val=(expression);                 \
+        bool result=eq(__te_exp,__te_val);                                  \
         simple_test_assert(__FILE__,__LINE__,ST(eq,expected,expression),    \
-                           eq,expected,expression,result);                  \
+                           eq,__te_exp,__te_val,result);                    \
         CU_assertImplementation((result), __LINE__,                         \
                                 ST(eq,expected,expression),                 \
                                 __FILE__, "", CU_FALSE);                    \

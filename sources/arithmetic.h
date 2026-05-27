@@ -2,12 +2,77 @@
 #define arithmetic_h
 #include "kernel.h"
 
-/* Phase 2 numeric primitives. All registered at startup by
-   kernel_initialize_arithmetic(). Each is a 2-arg or 1-arg kernel function
-   in the same KernelFunctionPtr shape as built_in_functions.c. The n-ary
-   forms (+ a b c …) etc. are provided on the Lisp side once the macro
-   system is up. */
+/* Phase 2 numeric primitives.  All registered at startup by
+   kernel_initialize_arithmetic().  Each is a KernelFunctionPtr. */
 
 void kernel_initialize_arithmetic(void);
+
+/* ---- arithmetic --------------------------------------------------------- */
+void kernel_PLUS           (Ref function, Ref arguments, MultipleValues* results);
+void kernel_TIMES          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_MINUS          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_DIVIDE         (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- comparisons -------------------------------------------------------- */
+void kernel_NUM_EQ         (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LT             (Ref function, Ref arguments, MultipleValues* results);
+void kernel_GT             (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LE             (Ref function, Ref arguments, MultipleValues* results);
+void kernel_GE             (Ref function, Ref arguments, MultipleValues* results);
+void kernel_NUM_NEQ        (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- predicates --------------------------------------------------------- */
+void kernel_ZEROP          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_PLUSP          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_MINUSP         (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ODDP           (Ref function, Ref arguments, MultipleValues* results);
+void kernel_EVENP          (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- single-arg arithmetic --------------------------------------------- */
+void kernel_ONE_PLUS       (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ONE_MINUS      (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ABS            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_MIN            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_MAX            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_SIGNUM         (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- integer division --------------------------------------------------- */
+void kernel_TRUNCATE       (Ref function, Ref arguments, MultipleValues* results);
+void kernel_FLOOR          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_CEILING        (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ROUND          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_MOD            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_REM            (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- bitwise / shift ---------------------------------------------------- */
+void kernel_LOGAND         (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LOGOR          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LOGXOR         (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LOGNOT         (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ASH            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_INTEGER_LENGTH (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LOGCOUNT       (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- coercion ----------------------------------------------------------- */
+void kernel_FLOAT          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_INTEGER        (Ref function, Ref arguments, MultipleValues* results);
+void kernel_COERCE         (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- powers / roots ----------------------------------------------------- */
+void kernel_EXPT           (Ref function, Ref arguments, MultipleValues* results);
+void kernel_SQRT           (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ISQRT          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_GCD            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LCM            (Ref function, Ref arguments, MultipleValues* results);
+
+/* ---- transcendentals ---------------------------------------------------- */
+void kernel_EXP            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LOG            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_SIN            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_COS            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_TAN            (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ASIN           (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ACOS           (Ref function, Ref arguments, MultipleValues* results);
+void kernel_ATAN           (Ref function, Ref arguments, MultipleValues* results);
 
 #endif

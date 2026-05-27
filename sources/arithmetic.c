@@ -10,7 +10,7 @@
 
 /* Coerce a Ref to floating, accepting INTEGER or FLOAT. */
 static floating as_floating(Ref x){
-    if(integerp(x)){ return (floating)integer_value(x); }
+    if(integerp(x)){ word iv = integer_value(x); return (floating)iv; }
     if(floatp(x))  { return float_value(x); }
     TYPE_ERROR(x,NUMBER_Class);}
 
@@ -575,7 +575,8 @@ void kernel_INTEGER(Ref function,Ref arguments,MultipleValues* results){
         floating v=float_value(x);
         if(v >= (floating)WORD_MAX || v <= (floating)WORD_MIN){
             ARITHMETIC_ERROR("Float %g does not fit in a kernel integer",v);}
-        results->values[0]=integer_from_word((word)trunc(v));}
+        double tv = trunc(v);
+        results->values[0]=integer_from_word((word)tv);}
     close_live_pool(pool);}
 
 /* A narrow COERCE: only the number classes for now. The full CL COERCE

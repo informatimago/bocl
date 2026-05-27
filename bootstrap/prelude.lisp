@@ -107,7 +107,19 @@
 (define-setf-expander svref          (vec idx)      (val) `(svref-set ,vec ,idx ,val))
 (define-setf-expander bit            (vec idx)      (val) `(bit-set ,vec ,idx ,val))
 (define-setf-expander aref           (vec idx)      (val) `(svref-set ,vec ,idx ,val))
+(define-setf-expander char           (str idx)      (val) `(set-char ,val ,str ,idx))
+(define-setf-expander schar          (str idx)      (val) `(set-char ,val ,str ,idx))
 (define-setf-expander nth            (n lst)        (val) `(rplaca (nthcdr ,n ,lst) ,val))
+;; ELT setter — dispatches on sequence type; uses gensyms to avoid
+;; multiple evaluation of sub-forms.
+(define-setf-expander elt (seq idx) (val)
+  (let ((s (gensym "S")) (i (gensym "I")) (v (gensym "V")))
+    `(let ((,s ,seq) (,i ,idx) (,v ,val))
+       (cond ((consp ,s)        (rplaca (nthcdr ,i ,s) ,v))
+             ((stringp ,s)      (set-char ,v ,s ,i))
+             ((vectorp ,s)      (svref-set ,s ,i ,v))
+             ((bit-vector-p ,s) (bit-set ,s ,i ,v))
+             (t (error "SETF ELT: not a sequence"))))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Assignment macros — now SETF-based, so they work on generic places.  ;;
@@ -1571,7 +1583,106 @@
   (with-output-to-string (s)
     (apply #'write object :stream s keys)))
 
-;; ---- Slice 10 — FORMAT, I/O library
+;;;; -----------------------------------------------------------------------
+;;;; Slice 14 — MAKE-ARRAY, RANDOM, file-system ops, timing, FILL/REPLACE
+;;;;
+;;;; Kernel built-ins added in this slice (C side):
+;;;;   make-array             — create 1-D vector (simple-vector)
+;;;;   array-rank             — always 1
+;;;;   array-dimensions       — (list size)
+;;;;   array-total-size       — element count
+;;;;   array-in-bounds-p      — bounds check
+;;;;   adjustable-array-p     — always nil
+;;;;   array-has-fill-pointer-p — always nil
+;;;;   simple-vector-p        — alias for vectorp
+;;;;   make-list              — build a fresh list of n elements
+;;;;   copy-seq               — shallow copy of any sequence
+;;;;   random                 — splitmix64 PRNG
+;;;;   make-random-state      — re-seed / return T
+;;;;   probe-file             — pathname or nil
+;;;;   delete-file            — remove(2)
+;;;;   rename-file            — rename(2), returns 3 values
+;;;;   get-universal-time     — seconds since 1900-01-01
+;;;;   get-internal-real-time — microseconds wall time
+;;;;   get-internal-run-time  — microseconds CPU time
+;;;; -----------------------------------------------------------------------
+
+;; ---- Timing constant ----------------------------------------------------
+
+(defconstant internal-time-units-per-second 1000000)
+
+;; ---- Random state -------------------------------------------------------
+
+(defvar *random-state* t)   ; T = the global kernel PRNG state
+
+;; ---- FILL ---------------------------------------------------------------
+;; (fill sequence item &key start end) → sequence (destructively modified)
+
+(defun fill (sequence item &key (start 0) end)
+  (let ((stop (or end (length sequence))))
+    (dotimes (i (- stop start) sequence)
+      (setf (elt sequence (+ start i)) item))))
+
+;; ---- REPLACE ------------------------------------------------------------
+;; (replace seq1 seq2 &key start1 end1 start2 end2) → seq1
+
+(defun replace (sequence1 sequence2
+                &key (start1 0) end1 (start2 0) end2)
+  (let* ((len1  (length sequence1))
+         (len2  (length sequence2))
+         (stop1 (min (or end1 len1) len1))
+         (stop2 (min (or end2 len2) len2))
+         (n     (min (- stop1 start1) (- stop2 start2))))
+    (dotimes (i n sequence1)
+      (setf (elt sequence1 (+ start1 i))
+            (elt sequence2 (+ start2 i))))))
+
+;; ---- MISMATCH -----------------------------------------------------------
+;; (mismatch seq1 seq2 &key test start1 end1 start2 end2) → index or nil
+
+(defun mismatch (sequence1 sequence2
+                 &key (test #'eql) (key #'identity)
+                      (start1 0) end1
+                      (start2 0) end2)
+  (let* ((len1  (length sequence1))
+         (len2  (length sequence2))
+         (stop1 (min (or end1 len1) len1))
+         (stop2 (min (or end2 len2) len2))
+         (n     (min (- stop1 start1) (- stop2 start2))))
+    (do ((i 0 (1+ i)))
+        ((= i n)
+         ;; Reached end of shorter range; mismatch if lengths differ
+         (if (= (- stop1 start1) (- stop2 start2))
+             nil
+             (+ start1 n)))
+      (unless (funcall test
+                       (funcall key (elt sequence1 (+ start1 i)))
+                       (funcall key (elt sequence2 (+ start2 i))))
+        (return (+ start1 i))))))
+
+;; ---- CONCATENATE (already in prelude but ensure vector support) ---------
+;; The existing CONCATENATE handles lists and strings; extend for vectors.
+;; We shadow it here with a version that also handles VECTOR result-type.
+(let ((old-concatenate (symbol-function 'concatenate)))
+  (defun concatenate (result-type &rest sequences)
+    (if (member result-type '(vector simple-vector))
+        (let* ((all (apply old-concatenate 'list sequences))
+               (v   (make-array (length all))))
+          (dotimes (i (length all) v)
+            (setf (aref v i) (elt all i))))
+        (apply old-concatenate result-type sequences))))
+
+;; ---- POSITION-IF / FIND-IF with :from-end (additional keyword) ---------
+;; The prelude versions above don't support :from-end; don't need to yet.
+
+;; ---- Duplicate write-to-string fix:
+;; The simple version defined in Slice 10 (which doesn't honour :escape etc.)
+;; is superseded by the Slice 13 version. Remove the stale shadow.
+;; Nothing to do here — DEFUN rewrites the binding, and the correct version
+;; is the one with &rest keys defined in the Slice 13 section above.
+
+;;;; -----------------------------------------------------------------------
+;;;; Slice 10 — FORMAT, I/O library
 ;;;;
 ;;;; Kernel built-ins added in this slice (C side):
 ;;;;   write-char           — write a character to a stream
@@ -1647,8 +1758,8 @@
 (defun princ-to-string (obj)
   (with-output-to-string (s) (princ obj s)))
 
-(defun write-to-string (obj)
-  (with-output-to-string (s) (prin1 obj s)))
+;; write-to-string is defined in the Slice 13 section above (with &rest keys).
+;; The simpler version that was here has been removed.
 
 ;; ---- READ-LINE ----------------------------------------------------------
 
