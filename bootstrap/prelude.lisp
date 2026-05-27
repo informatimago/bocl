@@ -106,9 +106,9 @@
 (define-setf-expander symbol-plist   (s)            (val) `(set-symbol-plist ,val ,s))
 (define-setf-expander svref          (vec idx)      (val) `(svref-set ,vec ,idx ,val))
 (define-setf-expander bit            (vec idx)      (val) `(bit-set ,vec ,idx ,val))
-(define-setf-expander aref           (vec idx)      (val) `(svref-set ,vec ,idx ,val))
-(define-setf-expander char           (str idx)      (val) `(set-char ,val ,str ,idx))
-(define-setf-expander schar          (str idx)      (val) `(set-char ,val ,str ,idx))
+(define-setf-expander aref           (array idx)    (val) `(aref-set ,val ,array ,idx))
+(define-setf-expander char           (str idx)      (val) `(char-set ,str ,idx ,val))
+(define-setf-expander schar          (str idx)      (val) `(char-set ,str ,idx ,val))
 (define-setf-expander nth            (n lst)        (val) `(rplaca (nthcdr ,n ,lst) ,val))
 ;; ELT setter — dispatches on sequence type; uses gensyms to avoid
 ;; multiple evaluation of sub-forms.
@@ -116,7 +116,7 @@
   (let ((s (gensym "S")) (i (gensym "I")) (v (gensym "V")))
     `(let ((,s ,seq) (,i ,idx) (,v ,val))
        (cond ((consp ,s)        (rplaca (nthcdr ,i ,s) ,v))
-             ((stringp ,s)      (set-char ,v ,s ,i))
+             ((stringp ,s)      (char-set ,v ,s ,i))
              ((vectorp ,s)      (svref-set ,s ,i ,v))
              ((bit-vector-p ,s) (bit-set ,s ,i ,v))
              (t (error "SETF ELT: not a sequence"))))))
@@ -2094,5 +2094,103 @@
              ,@clauses
              (go ,top))))
       (%loop-expand clauses)))
+
+;; -------------------------------------------------------------------- ;;
+;;  Slice 15: MAP, MAPL, NBUTLAST, LDIFF, GENTEMP,                      ;;
+;;            SUBTYPEP, WITH-OPEN-STREAM.                               ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro with-open-stream (head &body body)
+  ;; (WITH-OPEN-STREAM (var stream) body...) — execute BODY with VAR
+  ;; bound to STREAM; always close the stream on exit.
+  (let ((var    (first  head))
+        (stream (second head)))
+    `(let ((,var ,stream))
+       (unwind-protect (progn ,@body)
+         (when ,var (close ,var))))))
+
+(defun subtypep (type1 type2)
+  ;; Basic type-hierarchy query for bocl's type lattice.
+  ;; Returns (values subtypep certainp).
+  (cond
+    ((eq type1 type2)
+     (values t t))
+    ((eq type2 t)
+     (values t t))
+    ((eq type1 nil)
+     (values t t))
+    ((member type2 '(number cl:number))
+     (values (not (null (member type1 '(integer fixnum bignum
+                                        float ratio rational real)))) t))
+    ((member type2 '(real cl:real))
+     (values (not (null (member type1 '(integer fixnum bignum
+                                        float ratio rational)))) t))
+    ((member type2 '(rational cl:rational))
+     (values (not (null (member type1 '(integer fixnum bignum ratio)))) t))
+    ((member type2 '(integer cl:integer))
+     (values (not (null (member type1 '(fixnum bignum)))) t))
+    ((member type2 '(sequence cl:sequence))
+     (values (not (null (member type1 '(list cons null
+                                        string vector bit-vector
+                                        simple-vector)))) t))
+    ((member type2 '(list cl:list))
+     (values (not (null (member type1 '(cons null)))) t))
+    (t (values nil nil))))
+
+(defun map (result-type function &rest sequences)
+  ;; (MAP result-type function sequence+) — CL:MAP.
+  ;; RESULT-TYPE: NIL (side-effects only), LIST, VECTOR, STRING.
+  (let* ((len  (reduce #'min (mapcar #'length sequences)))
+         (vals (let ((acc nil))
+                 (dotimes (i len (nreverse acc))
+                   (push (apply function
+                                (mapcar (lambda (s) (elt s i)) sequences))
+                         acc)))))
+    (cond
+      ((null result-type) nil)
+      ((member result-type '(list cl:list))
+       vals)
+      ((member result-type '(string cl:string))
+       (let ((s (make-string len)))
+         (dotimes (i len s)
+           (setf (char s i) (nth i vals)))))
+      (t   ;; VECTOR, SIMPLE-VECTOR, etc.
+       (let ((v (make-array len)))
+         (dotimes (i len v)
+           (setf (aref v i) (nth i vals))))))))
+
+(defun mapl (function &rest lists)
+  ;; (MAPL function list+) — apply FUNCTION to successive sublists;
+  ;; return the original first list (like MAPC but sublist-based).
+  (let ((result (car lists)))
+    (do ((tails lists (mapcar #'cdr tails)))
+        ((some #'null tails) result)
+      (apply function tails))))
+
+(defun nbutlast (list &optional (n 1))
+  ;; Destructive BUTLAST: trim the last N elements from LIST in place.
+  (let* ((len  (length list))
+         (keep (- len n)))
+    (if (<= keep 0)
+        nil
+        (progn
+          (setf (cdr (nthcdr (1- keep) list)) nil)
+          list))))
+
+(defun ldiff (list object)
+  ;; Return a fresh list of LIST's elements that precede the tail OBJECT.
+  ;; If OBJECT is not eq to any tail of LIST, a copy of LIST is returned.
+  (let ((acc nil))
+    (do ((l list (cdr l)))
+        ((or (null l) (eq l object)) (nreverse acc))
+      (push (car l) acc))))
+
+(defvar *gentemp-counter* 0)
+
+(defun gentemp (&optional (prefix "T") (package *package*))
+  ;; Intern a unique symbol in PACKAGE.  Unlike GENSYM the symbol is
+  ;; interned; its name is PREFIX concatenated with a counter.
+  (intern (format nil "~A~D" prefix (incf *gentemp-counter*))
+          package))
 
 ;;;; THE END

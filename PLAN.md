@@ -417,6 +417,33 @@ overwritten by the cleanup forms. Fixed by separating `protect_results` from
 `*PRINT-MISER-WIDTH*`, `*PRINT-RIGHT-MARGIN*`.
 `WRITE-TO-STRING` with full `&rest keys` interface honouring `:escape`.
 
+**Slice 15 — TYPE-OF, AREF, CHAR/SCHAR, SLEEP, time ops, MAP, list utils (v0.0.38)**:
+`TYPE-OF` (returns a type specifier symbol for any object).
+`AREF` and `(SETF AREF)` (via `AREF-SET`) for 1-D simple-vectors.
+`CHAR`, `SCHAR`, `(SETF CHAR)` / `(SETF SCHAR)` (via `CHAR-SET`).
+`SLEEP` (non-negative real seconds, uses `nanosleep`).
+`LISTEN` (character available predicate, uses `select`).
+`CLEAR-INPUT` (discards buffered input, `fpurge`/`tcflush`).
+`DECODE-UNIVERSAL-TIME` (9 values: sec min hr day mon yr dow dst tz).
+`ENCODE-UNIVERSAL-TIME` (accepts optional time-zone offset).
+`MULTIPLE-VALUE-LIST` and `NTH-VALUE` macros in `bootstrap/prelude.lisp`
+(were missing despite being used by other macros).
+`WITH-OPEN-STREAM` macro.
+`SUBTYPEP` (basic type-hierarchy query; returns `(values subtypep certainp)`).
+`MAP` (general sequence mapping with NIL / LIST / VECTOR / STRING result-type).
+`MAPL` (maplist variant that returns the original first list).
+`NBUTLAST` (destructive butlast).
+`LDIFF` (fresh list of elements before a given tail).
+`GENTEMP` (intern a unique symbol, counter-based prefix).
+`setf` expanders for `AREF`, `CHAR`, `SCHAR` added to prelude.
+Bug-fix: removed duplicate (non-`static`) `kernel_CHAR_SET` declaration from
+`built_in_functions.h` / `built_in_functions.c` that conflicted with the
+`static` definition in `sequences.c`.
+fmemopen FILE\* leak fix: `string_output_stream_get_string()` now `fclose`s
+the backing FILE\* and marks the stream closed after consuming it, preventing
+accumulation of open FILE\* handles under repeated WITH-OUTPUT-TO-STRING use.
+Tests: [tests/test_slice15.c](tests/test_slice15.c) — 15 cases, all green.
+
 **Slice 14 — arrays, sequences, random, file-system, timing (v0.0.36)**:
 `MAKE-ARRAY` (1-D, `:initial-element`, `:initial-contents`),
 `ARRAY-RANK`, `ARRAY-DIMENSIONS`, `ARRAY-TOTAL-SIZE`,

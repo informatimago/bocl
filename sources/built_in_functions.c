@@ -9,6 +9,16 @@
 #include "filename.h"
 #include <time.h>
 #include <unistd.h>
+#include <sys/select.h>
+/* fpurge is a BSD/macOS extension — declare it if not already visible. */
+#ifdef __APPLE__
+#  include <stdio.h>   /* fpurge is declared here on macOS */
+   int fpurge(FILE *);
+#endif
+/* timegm is a BSD extension — provide declaration if needed. */
+#if !defined(timegm)
+   time_t timegm(struct tm *);
+#endif
 
 void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
@@ -2350,6 +2360,235 @@ void kernel_GET_INTERNAL_RUN_TIME(Ref function,Ref arguments,MultipleValues* res
     results->values[0]=integer_from_word((word)usec);
     close_live_pool(pool);}
 
+/* ---- Slice 15: TYPE-OF, AREF, CHAR, SLEEP, LISTEN, time ops ----------- */
+
+/* (TYPE-OF object) → type specifier symbol */
+void kernel_TYPE_OF(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_object = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    Ref type;
+    if(par_object==NIL_Symbol){
+        type=S(NULL);
+    } else if(par_object==T_Symbol){
+        type=S(BOOLEAN);
+    } else if(keywordp(par_object)){
+        type=S(KEYWORD);
+    } else if(symbolp(par_object)){
+        type=S(SYMBOL);
+    } else if(integerp(par_object)){
+        type=S(FIXNUM);
+    } else if(floatp(par_object)){
+        type=S(SINGLE-FLOAT);
+    } else if(characterp(par_object)){
+        type=S(CHARACTER);
+    } else if(typep(par_object,BIT_VECTOR_Class)){
+        type=S(SIMPLE-BIT-VECTOR);
+    } else if(stringp(par_object)){
+        type=S(SIMPLE-STRING);
+    } else if(vectorp(par_object)){
+        type=S(SIMPLE-VECTOR);
+    } else if(consp(par_object)){
+        type=S(CONS);
+    } else if(typep(par_object,HASH_TABLE_Class)){
+        type=S(HASH-TABLE);
+    } else if(typep(par_object,PACKAGE_Class)){
+        type=S(PACKAGE);
+    } else if(typep(par_object,STRING_STREAM_Class)){
+        type=S(STRING-STREAM);
+    } else if(typep(par_object,FILE_STREAM_Class)){
+        type=S(FILE-STREAM);
+    } else if(functionp(par_object)){
+        type=S(FUNCTION);
+    } else {
+        type=class_name(class_of(par_object));
+    }
+    results->count=1;
+    results->values[0]=type;
+    close_live_pool(pool);}
+
+/* (AREF array index) → element */
+void kernel_AREF(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_array = pop_mandatory_argument(function,&current);
+    Ref par_index = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    Ref result;
+    if(stringp(par_array)){
+        result=char_ref(par_array,par_index);
+    } else if(typep(par_array,BIT_VECTOR_Class)){
+        result=bit(par_array,par_index);
+    } else if(vectorp(par_array)){
+        result=svref(par_array,par_index);
+    } else {
+        ERROR("AREF: not an array: %s",
+              string_cstring(prin1_to_string(par_array)));}
+    results->count=1;
+    results->values[0]=result;
+    close_live_pool(pool);}
+
+/* (AREF-SET new-value array index) → new-value */
+void kernel_AREF_SET(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_new_value = pop_mandatory_argument(function,&current);
+    Ref par_array     = pop_mandatory_argument(function,&current);
+    Ref par_index     = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    Ref result;
+    if(stringp(par_array)){
+        result=char_set(par_new_value,par_array,par_index);
+    } else if(typep(par_array,BIT_VECTOR_Class)){
+        result=bit_set(par_array,par_index,par_new_value);
+    } else if(vectorp(par_array)){
+        result=svref_set(par_array,par_index,par_new_value);
+    } else {
+        ERROR("AREF-SET: not an array: %s",
+              string_cstring(prin1_to_string(par_array)));}
+    results->count=1;
+    results->values[0]=result;
+    close_live_pool(pool);}
+
+/* (SLEEP seconds) → NIL */
+void kernel_SLEEP(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_seconds = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    double secs = integerp(par_seconds)
+        ? (double)integer_value(par_seconds)
+        : (double)float_value(par_seconds);
+    if(secs > 0.0){
+        usleep((useconds_t)(secs * 1e6));}
+    results->count=1;
+    results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (LISTEN &optional stream) → T if input available, NIL otherwise */
+void kernel_LISTEN(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref def_stream = variable_value(S(*STANDARD-INPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    FILE* cstream = stream_input_cstream(par_stream);
+    int fd = fileno(cstream);
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(fd,&rfds);
+    struct timeval tv;
+    tv.tv_sec=0; tv.tv_usec=0;
+    int ret = select(fd+1,&rfds,NULL,NULL,&tv);
+    results->count=1;
+    results->values[0]=(ret>0)?T_Symbol:NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (CLEAR-INPUT &optional stream) → NIL */
+void kernel_CLEAR_INPUT(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref def_stream = variable_value(S(*STANDARD-INPUT*));
+    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    FILE* cstream = stream_input_cstream(par_stream);
+#ifdef __APPLE__
+    fpurge(cstream);
+#else
+    /* portable: drain without blocking — only if data available */
+    {   int fd=fileno(cstream);
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(fd,&rfds);
+        struct timeval tv; tv.tv_sec=0; tv.tv_usec=0;
+        while(select(fd+1,&rfds,NULL,NULL,&tv)>0){
+            (void)fgetc(cstream);
+            FD_ZERO(&rfds); FD_SET(fd,&rfds);
+            tv.tv_sec=0; tv.tv_usec=0;}}
+#endif
+    results->count=1;
+    results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (DECODE-UNIVERSAL-TIME universal-time &optional time-zone)
+   Returns 9 values: second minute hour date month year day daylight-saving-p zone */
+void kernel_DECODE_UNIVERSAL_TIME(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_ut = pop_mandatory_argument(function,&current);
+    Ref par_tz = pop_optional_argument(function,&current,UNBOUND_Object);
+    check_no_more_arguments(function,current);
+    uint64_t ut = (uint64_t)integer_value(par_ut);
+    time_t unix_t = (time_t)(ut - BOCL_CL_EPOCH_OFFSET);
+    struct tm tmbuf;
+    bool use_utc = (par_tz!=UNBOUND_Object && integerp(par_tz) && integer_value(par_tz)==0);
+    if(use_utc){
+        gmtime_r(&unix_t,&tmbuf);
+    } else {
+        localtime_r(&unix_t,&tmbuf);}
+    int cl_wday = (tmbuf.tm_wday+6)%7; /* CL: 0=Monday */
+    /* time-zone in CL = hours west of UTC = -offset_hours */
+    long tz_offset_sec;
+#if defined(_BSD_SOURCE) || defined(__USE_BSD) || defined(__APPLE__)
+    tz_offset_sec = tmbuf.tm_gmtoff;   /* seconds east */
+#else
+    extern long timezone; /* POSIX */
+    tz_offset_sec = -timezone;
+#endif
+    int cl_tz = (int)(-(tz_offset_sec/3600)); /* hours west */
+    results->count=9;
+    results->values[0]=integer_from_word((word)tmbuf.tm_sec);
+    results->values[1]=integer_from_word((word)tmbuf.tm_min);
+    results->values[2]=integer_from_word((word)tmbuf.tm_hour);
+    results->values[3]=integer_from_word((word)tmbuf.tm_mday);
+    results->values[4]=integer_from_word((word)(tmbuf.tm_mon+1));
+    results->values[5]=integer_from_word((word)(tmbuf.tm_year+1900));
+    results->values[6]=integer_from_word((word)cl_wday);
+    results->values[7]=(tmbuf.tm_isdst>0)?T_Symbol:NIL_Symbol;
+    results->values[8]=integer_from_word((word)cl_tz);
+    close_live_pool(pool);}
+
+/* (ENCODE-UNIVERSAL-TIME second minute hour date month year &optional time-zone)
+   Returns a CL universal time integer */
+void kernel_ENCODE_UNIVERSAL_TIME(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_second = pop_mandatory_argument(function,&current);
+    Ref par_minute = pop_mandatory_argument(function,&current);
+    Ref par_hour   = pop_mandatory_argument(function,&current);
+    Ref par_date   = pop_mandatory_argument(function,&current);
+    Ref par_month  = pop_mandatory_argument(function,&current);
+    Ref par_year   = pop_mandatory_argument(function,&current);
+    Ref par_tz     = pop_optional_argument(function,&current,UNBOUND_Object);
+    check_no_more_arguments(function,current);
+    struct tm t;
+    t.tm_sec  = (int)integer_value(par_second);
+    t.tm_min  = (int)integer_value(par_minute);
+    t.tm_hour = (int)integer_value(par_hour);
+    t.tm_mday = (int)integer_value(par_date);
+    t.tm_mon  = (int)integer_value(par_month)-1;
+    t.tm_year = (int)integer_value(par_year)-1900;
+    t.tm_isdst= -1;
+    time_t unix_t;
+    if(par_tz!=UNBOUND_Object && integerp(par_tz) && integer_value(par_tz)==0){
+        /* UTC */
+#ifdef __APPLE__
+        unix_t = timegm(&t);
+#else
+        unix_t = timegm(&t);
+#endif
+    } else {
+        unix_t = mktime(&t);}
+    uint64_t ut = (uint64_t)unix_t + BOCL_CL_EPOCH_OFFSET;
+    results->count=1;
+    results->values[0]=integer_from_word((word)ut);
+    close_live_pool(pool);}
+
 /* ---- Slice 10: WRITE-CHAR, WRITE-STRING, FRESH-LINE, UNREAD-CHAR ------- */
 
 void kernel_WRITE_CHAR(Ref function,Ref arguments,MultipleValues* results){
@@ -3477,5 +3716,30 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(KERNEL-FORMAT-RUN);
         Ref lambda_list=list(S(STREAM),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FORMAT_RUN));}
+    /* ---- Slice 15: TYPE-OF, AREF, CHAR-SET, SLEEP, time, stream ops ------ */
+    {   Ref fname=S(TYPE-OF);
+        Ref lambda_list=list(S(OBJECT),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_TYPE_OF));}
+    {   Ref fname=S(AREF);
+        Ref lambda_list=list(S(ARRAY),S(INDEX),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_AREF));}
+    {   Ref fname=S(AREF-SET);
+        Ref lambda_list=list(S(NEW-VALUE),S(ARRAY),S(INDEX),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_AREF_SET));}
+    {   Ref fname=S(SLEEP);
+        Ref lambda_list=list(S(SECONDS),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SLEEP));}
+    {   Ref fname=S(LISTEN);
+        Ref lambda_list=list(S(&OPTIONAL),S(STREAM),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_LISTEN));}
+    {   Ref fname=S(CLEAR-INPUT);
+        Ref lambda_list=list(S(&OPTIONAL),S(STREAM),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CLEAR_INPUT));}
+    {   Ref fname=S(DECODE-UNIVERSAL-TIME);
+        Ref lambda_list=list(S(UNIVERSAL-TIME),S(&OPTIONAL),S(TIME-ZONE),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_DECODE_UNIVERSAL_TIME));}
+    {   Ref fname=S(ENCODE-UNIVERSAL-TIME);
+        Ref lambda_list=list(S(SECOND),S(MINUTE),S(HOUR),S(DATE),S(MONTH),S(YEAR),S(&OPTIONAL),S(TIME-ZONE),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ENCODE_UNIVERSAL_TIME));}
 }
 /**** THE END ****/
