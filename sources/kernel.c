@@ -1406,6 +1406,9 @@ Ref stream_output_string(unused Ref element_type){
 
 Ref string_output_stream_get_string(Ref string_output_stream){
     FILE* cstream=string_output_stream->slots->file_stream.stream;
+    /* Guard: detect double-consume or use-after-close. */
+    if(!cstream){
+        STREAM_ERROR(string_output_stream);}
     fflush(cstream);
     long pos=ftell(cstream);
     /* int err=errno; */
@@ -1413,6 +1416,12 @@ Ref string_output_stream_get_string(Ref string_output_stream){
         STREAM_ERROR(string_output_stream); /* ,"OS Stream Error %d",err); */}
     Ref string=string_output_stream->slots->file_stream.string;
     string->slots->octet_array.dimensions[0]=CHECK_LONG_TO_UWORD(pos);
+    /* Close the fmemopen FILE* now — the stream is consumed; further writes
+       would be undefined per CL semantics.  Nulling the pointer prevents a
+       double-close if stream_close() is called later on this object. */
+    fclose(cstream);
+    string_output_stream->slots->file_stream.stream=NULL;
+    string_output_stream->slots->file_stream.is_open=false;
     return string;}
 
 Ref stream_pathname(Ref stream){
