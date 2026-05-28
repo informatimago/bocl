@@ -261,7 +261,7 @@ static void process_options(int argc,char** argv){
                       (*options[k].argument.variable.string)=argv[i];}
                   break;
               case elst:
-                  string_list_push(argv[i],options[k].argument.variable.list);
+                  string_list_push(strdup(argv[i]),options[k].argument.variable.list);
                   break;
               case load:
                   string_list_push(generate_load_form(argv[i]),options[k].argument.variable.list);
@@ -340,12 +340,7 @@ int main(int argc,char** argv){
     if(do_dump){
         memory_dump(stdout);}
 
-    if(do_batch){
-        /* TODO: update once packages are implemented: */
-        bocl_read_eval_cstring("(DEFPARAMETER *BATCH*  T)");}
-    else{
-        /* TODO: update once packages are implemented: */
-        bocl_read_eval_cstring("(DEFPARAMETER *BATCH*  NIL)");}
+    define_parameter(S(*BATCH*), do_batch ? T_Symbol : NIL_Symbol);
 
     define_parameter(S(*LOAD-VERBOSE*),S(NIL));
     define_parameter(S(*COMPILE-VERBOSE*),S(NIL));
@@ -383,8 +378,8 @@ int main(int argc,char** argv){
         bocl_in_package(bocl_read_cstring(package));}
 
     if(do_repl){
-        /* TODO: update once packages are implemented: */
-        /* Ref result=bocl_read_eval_cstring("(BOCL:REPL)"); */
+        /* When a Lisp-level REPL (e.g. BOCL:REPL) is available, call it
+           instead.  For now, use the C bocl_repl() entry point directly. */
         Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
                              variable_value(S(*STANDARD-OUTPUT*)));
         if(integerp(result)){

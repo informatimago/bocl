@@ -92,16 +92,18 @@ Ref pop(Ref* list){
 
 
 Ref last(Ref list){
-    // TODO: check_class(list,LIST_Class); // move NIL_Symbol to the NULL_Class !
+    /* NIL_Symbol has class NULL_Class (a subclass of LIST_Class), so
+       check_type handles both NIL and proper/dotted lists correctly. */
+    check_type(list,LIST_Class);
     Ref next;
     if(consp(list)){
         while(consp(next=cons_cdr(list))){
             list=next;}
         return list;}
-    else if(nullp(list)){
-        return list;}
     else{
-        TYPE_ERROR(list,LIST_Class);}}
+        /* NIL: check_type above already accepted it (NULL_Class ⊂ LIST_Class);
+           consp returned false, so fall through and return NIL. */
+        return list;}}
 
 Ref delete(Ref object,Ref list){
     if(nullp(list)){

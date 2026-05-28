@@ -898,6 +898,12 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref body_form = cons(PROGN_Symbol, body);
                 push(list(type_class, var, body_form, NULL), &clauses);}}
             clauses = nreverse(clauses);
+            /* Protect the clause list from GC for the entire HANDLER-CASE
+               dynamic extent.  It lives only in a C-stack Frame (not a GC
+               root), so any allocation triggered while evaluating the
+               protected form (including those in type_error/signal_condition)
+               could otherwise sweep it.  Mirrors HANDLER-BIND's pattern. */
+            add_to_live_pool(clauses);
 
             Frame frame;
             frame.type = frame_handler;

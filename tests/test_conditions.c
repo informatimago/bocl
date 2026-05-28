@@ -72,6 +72,17 @@ static void test_signal_existing_condition(void){
               "  (error (c) (simple-condition-format-control c)))");
     TEST_EQ(equal, T("pre-built"), r);}
 
+static void test_handler_case_catches_type_error_from_car(void){
+    /* type_error() in C built-ins signals SIMPLE-TYPE-ERROR, which is a
+       subclass of ERROR.  A (handler-case ... (error ...)) clause must
+       intercept it rather than falling through to the C exit path. */
+    Ref r = e("(handler-case (car 5) (error (e) 'caught))");
+    TEST_EQ(eql, S(CAUGHT), r);}
+
+static void test_handler_case_catches_type_error_from_last(void){
+    Ref r = e("(handler-case (last 7) (error (e) 'caught))");
+    TEST_EQ(eql, S(CAUGHT), r);}
+
 TEST_INITIALIZE(test_conditions);
 TEST_SUITE(test_conditions, cond_init, cond_clean)
     TEST_CASE( "handler-case catches",      test_handler_case_catches_error)
@@ -82,4 +93,6 @@ TEST_SUITE(test_conditions, cond_init, cond_clean)
     TEST_CASE( "signal unhandled -> nil",   test_signal_returns_nil_when_unhandled)
     TEST_CASE( "make-condition + p",        test_make_condition_and_conditionp)
     TEST_CASE( "signal pre-built",          test_signal_existing_condition)
+    TEST_CASE( "type-error from car",       test_handler_case_catches_type_error_from_car)
+    TEST_CASE( "type-error from last",      test_handler_case_catches_type_error_from_last)
     TEST_FINALIZE()

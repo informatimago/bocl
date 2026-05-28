@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <sysexits.h>
 #include <stdnoreturn.h>
 #include <limits.h>
@@ -11,6 +12,8 @@
 #include "variable.h"
 #include "stream.h"
 #include "printer.h"
+#include "conditions.h"
+#include "eval.h"
 
 /* Error Handling */
 
@@ -34,7 +37,12 @@ _Noreturn void fatal(const char* fname,const char* message_format,...){
     exit(EX_SOFTWARE);}
 
 _Noreturn void error(const char* fname,const char* message_format,...){
-    // TODO: Implement error() with the error handling system.
+    /* C-level terminal fallback: print to stderr and exit.
+       The Lisp-level (ERROR ...) is handled by kernel_ERROR in conditions.c,
+       which signals a SIMPLE-ERROR and only calls this function if no handler
+       matched.  Direct C callers (bounds checks, size overflows, …) also land
+       here; to make those catchable from Lisp, route through kernel_ERROR
+       rather than the C ERROR() macro. */
     va_list ap;
     fprintf(stderr,"\nIn %s:\n",fname);
     va_start(ap,message_format);
@@ -48,9 +56,37 @@ _Noreturn void error(const char* fname,const char* message_format,...){
 
 
 _Noreturn void type_error(const char* fname,Ref object,Ref class){
-    // TODO: Implement type_error() with the error handling system.
     char* got=string_cstring(object->class->slots->class.name->slots->symbol.name);
     char* exp=string_cstring(        class->slots->class.name->slots->symbol.name);
+
+    /* Signal a SIMPLE-TYPE-ERROR through the Lisp handler system so that
+       HANDLER-CASE / HANDLER-BIND can catch type errors raised from C built-ins.
+
+       Bootstrap guard: SIMPLE_TYPE_ERROR_Class->class is NULL while class
+       objects are still being initialised; skip signalling in that window.
+
+       Re-entry safety: no static flag is used because signal_condition uses
+       longjmp for HANDLER-CASE (the type_error frame is gone before any handler
+       body runs) and deactivates HANDLER-BIND frames while they execute, so
+       a type error raised inside a handler cannot recurse back here via the
+       same handler. */
+    if (SIMPLE_TYPE_ERROR_Class->class != NULL) {
+        uword pool = open_live_pool();
+        char msg[512];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+        snprintf(msg, sizeof(msg),
+                 "In %s: TYPE ERROR: expected %s, got %s", fname, exp, got);
+#pragma GCC diagnostic pop
+        Ref fmt  = string_new_cstring(msg);
+        add_to_live_pool(fmt);
+        Ref cond = make_simple_condition(SIMPLE_TYPE_ERROR_Class, fmt, NIL_Symbol);
+        add_to_live_pool(cond);
+        signal_condition(cond, eval_global_environment());
+        /* signal_condition returned — no handler matched; fall through to exit. */
+        close_live_pool(pool);
+    }
+
     fprintf(stderr,"\nIn %s:\n",fname);
     fprintf(stderr,"TYPE ERROR: got an object of class %s, expected an object of class %s\n\n",got,exp);
     free(exp);

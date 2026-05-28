@@ -29,7 +29,6 @@ octet* octet_upcase(octet* string){
 
 
 Ref char_ref(Ref string,Ref index){
-    /* TODO: use (array-dimensions string 0) */
     uword len = string_length(string);
     word  i   = integer_value(index);
     if((0<=i)&&((uword)i<len)){
@@ -38,7 +37,6 @@ Ref char_ref(Ref string,Ref index){
         OUT_OF_BOUNDS(string,integer_from_uword(len),index);}}
 
 Ref char_set(Ref string,Ref index,Ref new_char){
-    /* TODO: use (array-dimensions string 0) */
     uword len  = string_length(string);
     word  i    = integer_value(index);
     octet code = (octet)integer_value(character_code(new_char));
