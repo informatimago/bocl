@@ -417,6 +417,15 @@ overwritten by the cleanup forms. Fixed by separating `protect_results` from
 `*PRINT-MISER-WIDTH*`, `*PRINT-RIGHT-MARGIN*`.
 `WRITE-TO-STRING` with full `&rest keys` interface honouring `:escape`.
 
+**Slice 16 — char comparisons, generic subseq, coerce, string concatenate (v0.0.39)**:
+`CHAR=`, `CHAR/=`, `CHAR<`, `CHAR>`, `CHAR<=`, `CHAR>=` (exact case-sensitive character comparisons).
+`CHAR-LESSP`, `CHAR-GREATERP`, `CHAR-NOT-GREATERP`, `CHAR-NOT-LESSP`, `CHAR-NOT-EQUAL` (case-insensitive variants).
+`DIGIT-CHAR` (convert integer weight to digit character in given radix).
+`SUBSEQ` extended to handle strings (via `SUBSEQ-STRING`) and vectors.
+`COERCE` Lisp wrapper around C `kernel_COERCE` adding sequence type conversions:
+LIST→VECTOR, VECTOR→LIST, LIST→STRING, STRING→LIST, STRING→VECTOR, and identity cases.
+`CONCATENATE` extended for `STRING` result-type.
+
 **Slice 15 — TYPE-OF, AREF, CHAR/SCHAR, SLEEP, time ops, MAP, list utils (v0.0.38)**:
 `TYPE-OF` (returns a type specifier symbol for any object).
 `AREF` and `(SETF AREF)` (via `AREF-SET`) for 1-D simple-vectors.

@@ -603,14 +603,25 @@
             (setq i (+ i 1)))))))
 
 (defun subseq (sequence start &optional end)
-  ;; Minimal — list only. STRING / VECTOR specialisations later.
-  (let ((rem (nthcdr start sequence))
-        (acc nil)
-        (count (if end (- end start) -1)))
-    (do ((i 0 (+ i 1)))
-        ((or (null rem) (and (>= count 0) (= i count))) (nreverse acc))
-      (push (car rem) acc)
-      (setq rem (cdr rem)))))
+  ;; Generic SUBSEQ: lists, strings, and vectors.
+  (cond
+    ((stringp sequence)
+     (subseq-string sequence start (or end (string-length sequence))))
+    ((vectorp sequence)
+     (let* ((len (or end (vector-length sequence)))
+            (count (- len start))
+            (out (make-array count)))
+       (dotimes (i count out)
+         (setf (aref out i) (svref sequence (+ start i))))))
+    (t
+     ;; list path (original implementation)
+     (let ((rem (nthcdr start sequence))
+           (acc nil)
+           (count (if end (- end start) -1)))
+       (do ((i 0 (+ i 1)))
+           ((or (null rem) (and (>= count 0) (= i count))) (nreverse acc))
+         (push (car rem) acc)
+         (setq rem (cdr rem)))))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Concatenation — list result-type only for now.                       ;;
@@ -934,6 +945,13 @@
 (defun alphanumericp (char)
   (or (alpha-char-p char) (digit-char-p char)))
 
+(defun digit-char (weight &optional (radix 10))
+  ;; Return the character representing WEIGHT in RADIX, or NIL if impossible.
+  (when (and (>= weight 0) (< weight radix) (<= radix 36))
+    (if (< weight 10)
+        (code-char (+ weight (char-code #\0)))
+        (code-char (+ (- weight 10) (char-code #\A))))))
+
 (defun char-upcase (char)
   (if (lower-case-p char)
       (code-char (- (char-code char) 32))
@@ -947,6 +965,23 @@
 (defun char-equal (c1 c2)
   ;; case-insensitive character compare.
   (eql (char-code (char-upcase c1)) (char-code (char-upcase c2))))
+
+;; ---- Exact (case-sensitive) character comparisons. -------------------
+
+(defun char= (c1 c2)   (eql (char-code c1) (char-code c2)))
+(defun char/= (c1 c2)  (not (eql (char-code c1) (char-code c2))))
+(defun char<  (c1 c2)  (< (char-code c1) (char-code c2)))
+(defun char>  (c1 c2)  (> (char-code c1) (char-code c2)))
+(defun char<= (c1 c2)  (<= (char-code c1) (char-code c2)))
+(defun char>= (c1 c2)  (>= (char-code c1) (char-code c2)))
+
+;; ---- Case-insensitive character comparisons. -------------------------
+
+(defun char-lessp      (c1 c2) (char< (char-downcase c1) (char-downcase c2)))
+(defun char-greaterp   (c1 c2) (char> (char-downcase c1) (char-downcase c2)))
+(defun char-not-greaterp (c1 c2) (char<= (char-downcase c1) (char-downcase c2)))
+(defun char-not-lessp    (c1 c2) (char>= (char-downcase c1) (char-downcase c2)))
+(defun char-not-equal    (c1 c2) (char/= (char-downcase c1) (char-downcase c2)))
 
 ;; ---- STRING coercion designator. -------------------------------------
 
@@ -1660,17 +1695,26 @@
                        (funcall key (elt sequence2 (+ start2 i))))
         (return (+ start1 i))))))
 
-;; ---- CONCATENATE (already in prelude but ensure vector support) ---------
-;; The existing CONCATENATE handles lists and strings; extend for vectors.
-;; We shadow it here with a version that also handles VECTOR result-type.
-(let ((old-concatenate (symbol-function 'concatenate)))
-  (defun concatenate (result-type &rest sequences)
-    (if (member result-type '(vector simple-vector))
-        (let* ((all (apply old-concatenate 'list sequences))
-               (v   (make-array (length all))))
-          (dotimes (i (length all) v)
-            (setf (aref v i) (elt all i))))
-        (apply old-concatenate result-type sequences))))
+;; ---- CONCATENATE (already in prelude but ensure vector and string support) ---
+;; We shadow it here with a version that also handles VECTOR and STRING
+;; result-types.  Store the old binding in a global to work around bocl's
+;; lack of closure capture over LET bindings.
+(defvar *%old-concatenate* (symbol-function 'concatenate))
+(defun concatenate (result-type &rest sequences)
+  (cond
+    ((member result-type '(vector simple-vector))
+     (let* ((all (apply *%old-concatenate* 'list sequences))
+            (v   (make-array (length all))))
+       (dotimes (i (length all) v)
+         (setf (aref v i) (elt all i)))))
+    ((member result-type '(string cl:string simple-string))
+     ;; Flatten all sequences to a list of characters, then build a string.
+     (let* ((all (apply *%old-concatenate* 'list sequences))
+            (len (length all))
+            (s   (make-string len)))
+       (dotimes (i len s)
+         (char-set s i (nth i all)))))
+    (t (apply *%old-concatenate* result-type sequences))))
 
 ;; ---- POSITION-IF / FIND-IF with :from-end (additional keyword) ---------
 ;; The prelude versions above don't support :from-end; don't need to yet.
@@ -2192,5 +2236,65 @@
   ;; interned; its name is PREFIX concatenated with a counter.
   (intern (format nil "~A~D" prefix (incf *gentemp-counter*))
           package))
+
+;;;; -----------------------------------------------------------------------
+;;;; Slice 16 — coerce sequence types
+;;;;
+;;;; The C kernel_COERCE handles numeric types only.  We wrap it here with
+;;;; a Lisp-level COERCE that handles sequence conversions.
+;;;;
+
+;; Store old coerce in a global to avoid closure-capture issues in bocl.
+(defvar *%old-coerce* (symbol-function 'coerce))
+(defun coerce (object result-type)
+  ;; Extend the C kernel's numeric COERCE with sequence conversions.
+  ;; NOTE: in bocl, (vectorp string) is T, so string branches MUST precede
+  ;; vector branches.
+  (cond
+    ;; String identity
+    ((and (stringp object) (member result-type '(string cl:string simple-string)))
+     object)
+    ;; String → list
+    ((and (stringp object) (member result-type '(list cl:list)))
+     (let ((acc nil))
+       (dotimes (i (string-length object) (nreverse acc))
+         (push (char object i) acc))))
+    ;; String → vector
+    ((and (stringp object) (member result-type '(vector simple-vector)))
+     (let* ((len (string-length object))
+            (v   (make-array len)))
+       (dotimes (i len v)
+         (setf (aref v i) (char object i)))))
+    ;; List → vector
+    ((and (listp object) (member result-type '(vector simple-vector)))
+     (let* ((len (length object))
+            (v   (make-array len)))
+       (dotimes (i len v)
+         (setf (aref v i) (nth i object)))))
+    ;; List → string
+    ((and (listp object) (member result-type '(string cl:string simple-string)))
+     (let* ((len (length object))
+            (s   (make-string len)))
+       (dotimes (i len s)
+         (char-set s i (nth i object)))))
+    ;; List identity
+    ((and (listp object) (member result-type '(list cl:list)))
+     object)
+    ;; Vector identity
+    ((and (vectorp object) (member result-type '(vector simple-vector)))
+     object)
+    ;; Vector → list
+    ((and (vectorp object) (member result-type '(list cl:list)))
+     (let ((acc nil))
+       (dotimes (i (vector-length object) (nreverse acc))
+         (push (svref object i) acc))))
+    ;; Vector → string
+    ((and (vectorp object) (member result-type '(string cl:string simple-string)))
+     (let* ((len (vector-length object))
+            (s   (make-string len)))
+       (dotimes (i len s)
+         (char-set s i (svref object i)))))
+    ;; Fall through to kernel for numeric coercions
+    (t (funcall *%old-coerce* object result-type))))
 
 ;;;; THE END
