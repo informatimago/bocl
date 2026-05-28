@@ -417,6 +417,15 @@ overwritten by the cleanup forms. Fixed by separating `protect_results` from
 `*PRINT-MISER-WIDTH*`, `*PRINT-RIGHT-MARGIN*`.
 `WRITE-TO-STRING` with full `&rest keys` interface honouring `:escape`.
 
+**Slice 17 — generic sequences, -if-not variants, pathname accessors, map-into (v0.0.40)**:
+`EVERY`, `SOME` extended to strings and vectors.
+`FIND-IF`, `FIND`, `POSITION-IF`, `POSITION`, `COUNT-IF`, `COUNT`, `REMOVE-IF`, `REMOVE` all genericised to handle lists, strings, and vectors via `ELT`/`LENGTH`.
+`FIND-IF-NOT`, `POSITION-IF-NOT`, `COUNT-IF-NOT`, `REMOVE-IF-NOT` — new -if-not variants delegating to their -if counterparts.
+`SORT`/`STABLE-SORT` extended: vector input coerced to list, sorted, written back.
+Pathname accessors: `PATHNAME-NAME`, `PATHNAME-TYPE`, `PATHNAME-DIRECTORY`, `PATHNAME-HOST`, `PATHNAME-DEVICE`, `PATHNAME-VERSION`, `FILE-NAMESTRING`, `DIRECTORY-NAMESTRING`, `HOST-NAMESTRING`, `ENOUGH-NAMESTRING`, `MERGE-PATHNAMES`, `MAKE-PATHNAME` (all POSIX string-based, no C changes needed).
+`MAP-INTO`.
+`WITH-STANDARD-IO-SYNTAX` macro.
+
 **Slice 16 — char comparisons, generic subseq, coerce, string concatenate (v0.0.39)**:
 `CHAR=`, `CHAR/=`, `CHAR<`, `CHAR>`, `CHAR<=`, `CHAR>=` (exact case-sensitive character comparisons).
 `CHAR-LESSP`, `CHAR-GREATERP`, `CHAR-NOT-GREATERP`, `CHAR-NOT-LESSP`, `CHAR-NOT-EQUAL` (case-insensitive variants).

@@ -509,51 +509,102 @@
       (return l))))
 
 (defun find-if (predicate sequence &key (key #'identity))
-  (dolist (x sequence nil)
-    (when (funcall predicate (funcall key x))
-      (return-from find-if x))))
+  (if (listp sequence)
+      (dolist (x sequence nil)
+        (when (funcall predicate (funcall key x))
+          (return-from find-if x)))
+      (dotimes (i (length sequence) nil)
+        (let ((x (elt sequence i)))
+          (when (funcall predicate (funcall key x))
+            (return-from find-if x))))))
 
 (defun find (item sequence &key (test #'eql) (key #'identity))
   (find-if (lambda (x) (funcall test item x)) sequence :key key))
 
+(defun find-if-not (predicate sequence &key (key #'identity))
+  (find-if (lambda (x) (not (funcall predicate x))) sequence :key key))
+
 (defun position-if (predicate sequence &key (key #'identity))
-  (let ((i 0))
-    (dolist (x sequence nil)
-      (when (funcall predicate (funcall key x))
-        (return-from position-if i))
-      (setq i (+ i 1)))))
+  (if (listp sequence)
+      (let ((i 0))
+        (dolist (x sequence nil)
+          (when (funcall predicate (funcall key x))
+            (return-from position-if i))
+          (setq i (+ i 1))))
+      (dotimes (i (length sequence) nil)
+        (when (funcall predicate (funcall key (elt sequence i)))
+          (return-from position-if i)))))
 
 (defun position (item sequence &key (test #'eql) (key #'identity))
   (position-if (lambda (x) (funcall test item x)) sequence :key key))
 
+(defun position-if-not (predicate sequence &key (key #'identity))
+  (position-if (lambda (x) (not (funcall predicate x))) sequence :key key))
+
 (defun count-if (predicate sequence &key (key #'identity))
-  (let ((n 0))
-    (dolist (x sequence n)
-      (when (funcall predicate (funcall key x))
-        (setq n (+ n 1))))))
+  (if (listp sequence)
+      (let ((n 0))
+        (dolist (x sequence n)
+          (when (funcall predicate (funcall key x))
+            (setq n (+ n 1)))))
+      (let ((n 0))
+        (dotimes (i (length sequence) n)
+          (when (funcall predicate (funcall key (elt sequence i)))
+            (setq n (+ n 1)))))))
 
 (defun count (item sequence &key (test #'eql) (key #'identity))
   (count-if (lambda (x) (funcall test item x)) sequence :key key))
 
+(defun count-if-not (predicate sequence &key (key #'identity))
+  (count-if (lambda (x) (not (funcall predicate x))) sequence :key key))
+
 (defun remove-if (predicate sequence &key (key #'identity))
-  (let ((acc nil))
-    (dolist (x sequence (nreverse acc))
-      (unless (funcall predicate (funcall key x))
-        (push x acc)))))
+  (cond
+    ((listp sequence)
+     (let ((acc nil))
+       (dolist (x sequence (nreverse acc))
+         (unless (funcall predicate (funcall key x))
+           (push x acc)))))
+    ((stringp sequence)
+     (let ((acc nil))
+       (dotimes (i (string-length sequence))
+         (let ((x (char sequence i)))
+           (unless (funcall predicate (funcall key x))
+             (push x acc))))
+       (coerce (nreverse acc) 'string)))
+    ((vectorp sequence)
+     (let ((acc nil))
+       (dotimes (i (vector-length sequence))
+         (let ((x (svref sequence i)))
+           (unless (funcall predicate (funcall key x))
+             (push x acc))))
+       (coerce (nreverse acc) 'vector)))
+    (t (error "REMOVE-IF: not a sequence"))))
 
 (defun remove (item sequence &key (test #'eql) (key #'identity))
   (remove-if (lambda (x) (funcall test item x)) sequence :key key))
 
+(defun remove-if-not (predicate sequence &key (key #'identity))
+  (remove-if (lambda (x) (not (funcall predicate x))) sequence :key key))
+
 (defun some (predicate sequence)
   "Return the first true value of (PREDICATE element) over SEQUENCE, or NIL."
-  (dolist (x sequence nil)
-    (let ((v (funcall predicate x)))
-      (when v (return v)))))
+  (if (listp sequence)
+      (dolist (x sequence nil)
+        (let ((v (funcall predicate x)))
+          (when v (return v))))
+      (dotimes (i (length sequence) nil)
+        (let ((v (funcall predicate (elt sequence i))))
+          (when v (return-from some v))))))
 
 (defun every (predicate sequence)
   "Return T if (PREDICATE element) is true for every element of SEQUENCE."
-  (dolist (x sequence t)
-    (unless (funcall predicate x) (return nil))))
+  (if (listp sequence)
+      (dolist (x sequence t)
+        (unless (funcall predicate x) (return nil)))
+      (dotimes (i (length sequence) t)
+        (unless (funcall predicate (elt sequence i))
+          (return-from every nil)))))
 
 (defun notany (predicate sequence)
   "Return T if (PREDICATE element) is false for every element of SEQUENCE."
@@ -669,20 +720,32 @@
       (setq fast (cddr fast)))
     (values (nreverse acc) slow)))
 
+(defvar *%old-sort*
+  (lambda (sequence less &key (key #'identity))
+    ;; List-only merge sort (original implementation).
+    (let ((cmp (if (eq key #'identity)
+                   less
+                   (lambda (x y) (funcall less (funcall key x) (funcall key y))))))
+      (labels ((rec (lst)
+                 (cond ((null lst) nil)
+                       ((null (cdr lst)) lst)
+                       (t
+                        (multiple-value-bind (l r) (%list-split lst)
+                          (%merge cmp (rec l) (rec r)))))))
+        (rec sequence)))))
+
 (defun sort (sequence less &key (key #'identity))
-  ;; Destructive-style call signature (kept compatible — but we
-  ;; allocate fresh cons cells, so SEQUENCE may or may not be reused).
-  ;; KEY is applied via a wrapper that ignores it during comparison.
-  (let ((cmp (if (eq key #'identity)
-                 less
-                 (lambda (x y) (funcall less (funcall key x) (funcall key y))))))
-    (labels ((rec (lst)
-               (cond ((null lst) nil)
-                     ((null (cdr lst)) lst)
-                     (t
-                      (multiple-value-bind (l r) (%list-split lst)
-                        (%merge cmp (rec l) (rec r)))))))
-      (rec sequence))))
+  ;; Generic SORT: handles lists and vectors.
+  (cond
+    ((listp sequence)
+     (funcall *%old-sort* sequence less :key key))
+    ((vectorp sequence)
+     (let* ((n (vector-length sequence))
+            (lst (coerce sequence 'list))
+            (sorted (funcall *%old-sort* lst less :key key)))
+       (dotimes (i n sequence)
+         (setf (aref sequence i) (nth i sorted)))))
+    (t (error "SORT: not a sequence"))))
 
 (defun stable-sort (sequence less &key (key #'identity))
   ;; Merge sort is naturally stable.
@@ -2296,5 +2359,138 @@
          (char-set s i (svref object i)))))
     ;; Fall through to kernel for numeric coercions
     (t (funcall *%old-coerce* object result-type))))
+
+;;;; Slice 17 — generic sequences, -if-not variants, pathname accessors, map-into
+;;;;
+;;;; Generic sequence functions (every, some, find-if, position-if, count-if,
+;;;; remove-if and their siblings) were already updated in-place above to
+;;;; handle lists, strings, and vectors.  This section adds:
+;;;;   • pathname component accessors (pure Lisp string parsing of POSIX paths)
+;;;;   • SORT / STABLE-SORT extended to handle vectors (also updated in-place above)
+;;;;   • MAP-INTO
+;;;;   • WITH-STANDARD-IO-SYNTAX macro
+;;;;
+
+;; -------------------------------------------------------------------- ;;
+;;  Pathname component accessors (POSIX path string parsing).           ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun %path-dir-end (s)
+  ;; Return the index of the last #\/ in S, or -1 if none.
+  (let ((last -1))
+    (dotimes (i (string-length s) last)
+      (when (eql (char s i) #\/) (setq last i)))))
+
+(defun %path-dot-pos (base)
+  ;; Position of the last #\. in BASE after position 0, or -1 if none.
+  ;; Ignores a leading dot (hidden files like ".hidden").
+  (let ((last -1))
+    (do ((i 1 (+ i 1)))
+        ((>= i (string-length base)) last)
+      (when (eql (char base i) #\.) (setq last i)))))
+
+(defun pathname-directory (pathname)
+  ;; Return the directory as a string like "/usr/local/" or "".
+  (let* ((s (if (stringp pathname) pathname (namestring pathname)))
+         (pos (%path-dir-end s)))
+    (if (< pos 0) "" (subseq s 0 (+ pos 1)))))
+
+(defun file-namestring (pathname)
+  ;; Return the base-name part (name + type, e.g. "foo.lisp").
+  (let* ((s (if (stringp pathname) pathname (namestring pathname)))
+         (pos (%path-dir-end s)))
+    (subseq s (+ pos 1))))
+
+(defun pathname-name (pathname)
+  ;; Return the name component (without extension), e.g. "foo".
+  (let* ((base (file-namestring pathname))
+         (dot  (%path-dot-pos base)))
+    (if (< dot 0)
+        (if (string= base "") nil base)
+        (subseq base 0 dot))))
+
+(defun pathname-type (pathname)
+  ;; Return the type (extension) component, e.g. "lisp", or NIL.
+  (let* ((base (file-namestring pathname))
+         (dot  (%path-dot-pos base)))
+    (if (< dot 0)
+        nil
+        (subseq base (+ dot 1)))))
+
+(defun pathname-host    (p) (setq p nil) nil)
+(defun pathname-device  (p) (setq p nil) nil)
+(defun pathname-version (p) (setq p nil) nil)
+
+(defun directory-namestring (pathname)
+  (pathname-directory pathname))
+
+(defun host-namestring (p)
+  (setq p nil) "")
+
+(defun enough-namestring (pathname &optional defaults)
+  (setq defaults nil)
+  (if (stringp pathname) pathname (namestring pathname)))
+
+(defun merge-pathnames (pathname &optional (defaults "") default-version)
+  ;; If PATHNAME is absolute (starts with /), return it unchanged.
+  ;; Otherwise prepend DEFAULTS's directory.
+  (setq default-version nil)
+  (let ((s (if (stringp pathname) pathname (namestring pathname)))
+        (d (if (stringp defaults) defaults (namestring defaults))))
+    (if (and (> (string-length s) 0) (eql (char s 0) #\/))
+        (pathname s)
+        (pathname (concatenate 'string (pathname-directory d) s)))))
+
+(defun make-pathname (&key host device directory name type version defaults)
+  ;; Build a pathname string from components.
+  (setq host nil device nil version nil defaults nil)
+  (let* ((dir-s
+          (cond ((null directory) "")
+                ((stringp directory) directory)
+                ((listp directory)
+                 ;; CL form: (:absolute "usr" "local") -> "/usr/local/"
+                 ;;           (:relative "foo" "bar")  -> "foo/bar/"
+                 (let* ((abs (eq (car directory) :absolute))
+                        (parts (cdr directory))
+                        (result (if abs "/" "")))
+                   (dolist (part parts result)
+                     (setq result (concatenate 'string result part "/")))))
+                (t "")))
+         (name-s (or name ""))
+         (type-s (if type (concatenate 'string "." type) "")))
+    (pathname (concatenate 'string dir-s name-s type-s))))
+
+;; -------------------------------------------------------------------- ;;
+;;  MAP-INTO                                                             ;;
+;; -------------------------------------------------------------------- ;;
+
+(defun map-into (result-sequence function &rest sequences)
+  ;; Write (apply function (nth-element-of-each-sequence i)) into
+  ;; result-sequence[i].  Returns result-sequence.  Stops at the
+  ;; shortest sequence (including result-sequence itself).
+  (let ((n (reduce #'min (cons (length result-sequence)
+                               (mapcar #'length sequences)))))
+    (dotimes (i n result-sequence)
+      (setf (elt result-sequence i)
+            (apply function (mapcar (lambda (s) (elt s i)) sequences))))))
+
+;; -------------------------------------------------------------------- ;;
+;;  WITH-STANDARD-IO-SYNTAX                                             ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro with-standard-io-syntax (&body body)
+  ;; Bind all *print-* variables to their CL standard initial values.
+  `(let ((*print-base*     10)
+         (*print-radix*    nil)
+         (*print-escape*   t)
+         (*print-readably* nil)
+         (*print-pretty*   nil)
+         (*print-level*    nil)
+         (*print-length*   nil)
+         (*print-circle*   nil)
+         (*print-gensym*   t)
+         (*print-array*    t)
+         (*print-case*     :upcase))
+     ,@body))
 
 ;;;; THE END
