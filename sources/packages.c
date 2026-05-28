@@ -269,6 +269,34 @@ static void kernel_PACKAGE(Ref function, Ref arguments, MultipleValues* results)
     results->values[0] = as_boolean(typep(obj, PACKAGE_Class));
     close_live_pool(pool);}
 
+static void kernel_PACKAGE_SYMBOLS(Ref function, Ref arguments, MultipleValues* results){
+    /* (PACKAGE-SYMBOLS package-designator) → list of all interned symbols */
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref pkg_des = nullp(current) ? current_package() : pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    Ref pkg = package_find(pkg_des);
+    if(nullp(pkg)){ ERROR("PACKAGE-SYMBOLS: no such package %s",
+                          string_cstring(prin1_to_string(pkg_des))); }
+    results->count = 1;
+    results->values[0] = pkg->slots->package.symbols;
+    close_live_pool(pool);}
+
+static void kernel_PACKAGE_EXPORTED_SYMBOLS(Ref function, Ref arguments, MultipleValues* results){
+    /* (PACKAGE-EXPORTED-SYMBOLS package-designator) → list of exported symbols */
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref pkg_des = nullp(current) ? current_package() : pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    Ref pkg = package_find(pkg_des);
+    if(nullp(pkg)){ ERROR("PACKAGE-EXPORTED-SYMBOLS: no such package %s",
+                          string_cstring(prin1_to_string(pkg_des))); }
+    results->count = 1;
+    results->values[0] = pkg->slots->package.exported;
+    close_live_pool(pool);}
+
 static void kernel_LIST_ALL_PACKAGES(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
@@ -314,6 +342,8 @@ void kernel_initialize_packages(void){
     register_fn(S(EXPORT),             list(S(SYMBOLS),NULL),                       kernel_EXPORT);
     register_fn(S(INTERN),             list(S(NAME),NULL),                          kp_INTERN);
     register_fn(S(FIND-SYMBOL),        list(S(NAME),NULL),                          kp_FIND_SYMBOL);
-    register_fn(S(PACKAGEP),           list(S(OBJECT),NULL),                        kernel_PACKAGE);
-    register_fn(S(LIST-ALL-PACKAGES),  NIL_Symbol,                                  kernel_LIST_ALL_PACKAGES);
+    register_fn(S(PACKAGEP),                    list(S(OBJECT),NULL),  kernel_PACKAGE);
+    register_fn(S(LIST-ALL-PACKAGES),           NIL_Symbol,            kernel_LIST_ALL_PACKAGES);
+    register_fn(S(PACKAGE-SYMBOLS),             list(S(PACKAGE),NULL), kernel_PACKAGE_SYMBOLS);
+    register_fn(S(PACKAGE-EXPORTED-SYMBOLS),    list(S(PACKAGE),NULL), kernel_PACKAGE_EXPORTED_SYMBOLS);
 }

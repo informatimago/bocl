@@ -537,8 +537,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref var;
                     if(consp(binding)){
                         name=car(binding);
-                        value=evale(cadr(binding),environment,results);}
-                    else{
+                        value=evale(cadr(binding),environment,results);
+                        add_to_live_pool(value); /* protect across env_make_lexical_variable */
+                    } else {
                         name=binding;
                         value=NIL_Symbol;}
                     if(special_variable_p(name) || !nullp(memq(name,specials))){
@@ -601,6 +602,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     if(consp(binding)){
                         name=car(binding);
                         value=evale(cadr(binding),environment,results);
+                        add_to_live_pool(value); /* protect across env_make_lexical_variable */
                     } else {
                         name=binding;
                         value=NIL_Symbol;}
@@ -772,14 +774,20 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             eval_counters.MULTIPLE_VALUE_CALL++;
             check_arg_count_min(arguments,1);
             Ref function=evale(car(arguments),environment,results);
+            add_to_live_pool(function); /* protect across subsequent evale calls */
             Ref forms=cdr(arguments);
-            COLLECTING(args);
-            dolist(subform,forms){
-                results->count=0;
-                evale(subform,environment,results);
-                for(uword i=0;i<results->count;i++){
-                    COLLECT(args,results->values[i]);}}
-            kernel_apply(function,args,results);
+            {uword mvc_pool=open_live_pool();
+             COLLECTING(args);
+             dolist(subform,forms){
+                 add_to_live_pool(args); /* protect accumulated list across evale */
+                 results->count=0;
+                 evale(subform,environment,results);
+                 for(uword i=0;i<results->count;i++){
+                     add_to_live_pool(results->values[i]); /* protect value before cons */
+                     COLLECT(args,results->values[i]);}}
+             add_to_live_pool(args); /* protect before kernel_apply */
+             kernel_apply(function,args,results);
+             close_live_pool(mvc_pool);}
             PASS_VALUES();}
 
         if(operator==MULTIPLE_VALUE_PROG1_Symbol){
@@ -932,29 +940,41 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count_min(arguments,1);
             Ref raw_bindings = car(arguments);
             Ref body         = cdr(arguments);
-            /* Evaluate each handler form and build list of (type-class . fn). */
-            COLLECTING(bindings);
-            dolist(clause, raw_bindings){
-                if(!consp(clause) || !consp(cdr(clause))){
-                    ERROR("HANDLER-BIND: malformed binding %s",
-                          string_cstring(prin1_to_string(clause)));}
-                Ref type_spec  = car(clause);
-                Ref fn_form    = cadr(clause);
-                Ref type_class = symbolp(type_spec) ? find_class(type_spec) : type_spec;
-                if(!typep(type_class,T_Class)){
-                    ERROR("HANDLER-BIND: unknown type %s",
-                          string_cstring(prin1_to_string(type_spec)));}
-                MultipleValues fn_results;
-                evale(fn_form, environment, &fn_results);
-                Ref fn = fn_results.values[0];
-                COLLECT(bindings, cons(type_class, fn));}
-            bindings = nreverse(bindings);
+            /* Evaluate each handler form and build list of (type-class . fn).
+               Use a pool frame to protect the accumulating list and each
+               evaluated value across allocations. */
+            Ref hb_bindings = NIL_Symbol;
+            {uword hb_pool=open_live_pool();
+             Ref hb_tail = NIL_Symbol;
+             dolist(clause, raw_bindings){
+                 add_to_live_pool(hb_bindings); /* protect accumulated list */
+                 if(!consp(clause) || !consp(cdr(clause))){
+                     ERROR("HANDLER-BIND: malformed binding %s",
+                           string_cstring(prin1_to_string(clause)));}
+                 Ref type_spec  = car(clause);
+                 Ref fn_form    = cadr(clause);
+                 Ref type_class = symbolp(type_spec) ? find_class(type_spec) : type_spec;
+                 add_to_live_pool(type_class); /* protect across evale */
+                 if(!typep(type_class,T_Class)){
+                     ERROR("HANDLER-BIND: unknown type %s",
+                           string_cstring(prin1_to_string(type_spec)));}
+                 MultipleValues fn_results;
+                 evale(fn_form, environment, &fn_results);
+                 Ref fn = fn_results.values[0];
+                 add_to_live_pool(fn);        /* protect fn before cons */
+                 add_to_live_pool(type_class);/* re-protect type_class before cons */
+                 Ref cell = cons(cons(type_class, fn), NIL_Symbol);
+                 add_to_live_pool(cell);
+                 if(nullp(hb_bindings)){ hb_bindings = cell; hb_tail = cell; }
+                 else{ rplacd(hb_tail, cell); hb_tail = cell; }}
+             close_live_pool(hb_pool);}
+            add_to_live_pool(hb_bindings);
             /* Push a frame_handler_bind frame, eval body, pop frame.
                The UNWIND/UWBODY macro handles push (step 1) and pop (step 4)
                automatically.  No manual push_frame/pop_frame here. */
             Frame frame;
             frame.type = frame_handler_bind;
-            frame.parameters.handler_bind.bindings = bindings;
+            frame.parameters.handler_bind.bindings = hb_bindings;
             frame.results = results;
             int code = setjmp(frame.non_local_exit);
             UNWIND(code){
@@ -1219,11 +1239,16 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             PASS_VALUES();}
 
         /* Function call: evaluate the arguments in order, then apply. */
-        {COLLECTING(args);
+        {uword fc_pool=open_live_pool();
+         COLLECTING(args);
          {dolist(subform,arguments){
+                 add_to_live_pool(args);           /* protect accumulated list across evale */
                  Ref value=evale(subform,environment,results);
+                 add_to_live_pool(value);          /* protect value before cons in COLLECT */
                  COLLECT(args,value);}}
+         add_to_live_pool(args);                   /* protect before kernel_apply */
          kernel_apply(function,args,results);
+         close_live_pool(fc_pool);
          PASS_VALUES();}}
 
     else if(consp(operator) && eql(LAMBDA_Symbol,car(operator))){
@@ -1233,11 +1258,17 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         Ref body=cddr(operator);
         Ref fn=function_new(LAMBDA_Symbol,params,body);
         Ref closure=closure_new(fn,environment);
-        COLLECTING(args);
-        {dolist(subform,arguments){
-                Ref value=evale(subform,environment,results);
-                COLLECT(args,value);}}
-        kernel_apply(closure,args,results);
+        add_to_live_pool(closure); /* protect across evale calls */
+        {uword lc_pool=open_live_pool();
+         COLLECTING(args);
+         {dolist(subform,arguments){
+                 add_to_live_pool(args);           /* protect accumulated list across evale */
+                 Ref value=evale(subform,environment,results);
+                 add_to_live_pool(value);          /* protect value before cons in COLLECT */
+                 COLLECT(args,value);}}
+         add_to_live_pool(args);                   /* protect before kernel_apply */
+         kernel_apply(closure,args,results);
+         close_live_pool(lc_pool);}
         PASS_VALUES();}
 
     else{

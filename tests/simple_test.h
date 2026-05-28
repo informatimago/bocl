@@ -19,6 +19,7 @@
 #endif
 
 #include "kernel.h"
+#include "memory.h"
 
 typedef bool (*eq_pr)(Ref,Ref);
 void simple_test_assert(const char* file, int line, const char* expression, eq_pr eq,Ref expected, Ref value, bool result);
@@ -83,13 +84,16 @@ void simple_test_finalize(unsigned int* failure_count);
 #define ST(eq,expected,expression) #eq "(" #expected "," #expression ")"
 
 #define TEST_EQ(eq,expected,expression)                                      \
-    do{ Ref __te_exp=(expected); Ref __te_val=(expression);                 \
+    do{ uword __te_pool=open_live_pool();                                    \
+        Ref __te_exp=(expected); add_to_live_pool(__te_exp);                \
+        Ref __te_val=(expression);                                          \
         bool result=eq(__te_exp,__te_val);                                  \
         simple_test_assert(__FILE__,__LINE__,ST(eq,expected,expression),    \
                            eq,__te_exp,__te_val,result);                    \
         CU_assertImplementation((result), __LINE__,                         \
                                 ST(eq,expected,expression),                 \
                                 __FILE__, "", CU_FALSE);                    \
+        close_live_pool(__te_pool);                                         \
     }while(0)
 
 #endif

@@ -1181,5 +1181,16 @@ void kernel_initialize_structure_functions(void){
     LOCAL_SYMBOL_MACRO_Class         = make_structure_class(S(LOCAL_SYMBOL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(EXPANSION),NULL));
     GLOBAL_MACRO_Class               = make_structure_class(S(GLOBAL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),NULL));
     LOCAL_MACRO_Class                = make_structure_class(S(LOCAL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),NULL));
+    /* Pin all structure classes in the GC root set so they are never collected. */
+    push(LEXICAL_VARIABLE_Class,        &kernel_classes);
+    push(CONSTANT_VARIABLE_Class,       &kernel_classes);
+    push(GLOBAL_SPECIAL_VARIABLE_Class, &kernel_classes);
+    push(LOCAL_SPECIAL_VARIABLE_Class,  &kernel_classes);
+    push(GLOBAL_FUNCTION_Class,         &kernel_classes);
+    push(LOCAL_FUNCTION_Class,          &kernel_classes);
+    push(GLOBAL_SYMBOL_MACRO_Class,     &kernel_classes);
+    push(LOCAL_SYMBOL_MACRO_Class,      &kernel_classes);
+    push(GLOBAL_MACRO_Class,            &kernel_classes);
+    push(LOCAL_MACRO_Class,             &kernel_classes);
 }
 /**** THE END ****/

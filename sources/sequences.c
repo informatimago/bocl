@@ -60,21 +60,36 @@ static void map_walk(Ref fn, Ref lists, tuple_visitor visit, void* ctx){
          while(consp(it)){
              if(!consp(cons_car(it))){ return; }
              it = cons_cdr(it);}}
-        /* Build the tuple of cars and advance the lists. */
+        /* Build the tuple of cars and advance the lists.
+           push() closes its own GC pool, so the newly built cons cells are
+           NOT in the live pool after each call.  Pin tuple and out after
+           every push so a GC triggered by the next allocation cannot collect
+           the partially-built lists. */
+        /* Pin fn, lists and the incrementally-built tuple/out across the
+           allocations that build them and the kernel_apply call.  push()
+           closes its own GC frame so the resulting cons cells are NOT in
+           the live pool after each call; re-pin them immediately.
+           We also keep the pool open across kernel_apply and visit because
+           collect_visit calls cons(), which can trigger GC. */
+        uword mw_pool = open_live_pool();
+        add_to_live_pool(fn);
+        add_to_live_pool(lists);
         Ref tuple = NIL_Symbol;
-        {Ref out = NIL_Symbol;
-         Ref it = lists;
+        Ref out   = NIL_Symbol;
+        {Ref it = lists;
          while(consp(it)){
-             push(cons_car(cons_car(it)), &tuple);
-             push(cons_cdr(cons_car(it)), &out);
+             push(cons_car(cons_car(it)), &tuple); add_to_live_pool(tuple);
+             push(cons_cdr(cons_car(it)), &out);   add_to_live_pool(out);
              it = cons_cdr(it);}
          tuple = nreverse(tuple);
-         out = nreverse(out);
+         out   = nreverse(out);
          lists = out;}
         MultipleValues r = {0};
         kernel_apply(fn, tuple, &r);
         Ref result = (r.count > 0) ? r.values[0] : NIL_Symbol;
-        visit(result, ctx);}}
+        add_to_live_pool(result);
+        visit(result, ctx);
+        close_live_pool(mw_pool);}}
 
 /* MAPCAR — collect the results. */
 typedef struct {

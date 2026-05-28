@@ -1379,9 +1379,15 @@ Ref stream_input_string(Ref string,Ref start,Ref end){
         ERROR("END = %"WORD_FORMAT" is before START = %"WORD_FORMAT"",iend,istart);}
     char* buffer = (char*)string_octets(string)+istart;
     size_t size = CHECK_WORD_TO_SIZE(iend-istart);
-    FILE* memstream=fmemopen(buffer,size,"r");
+    /* fmemopen(_, 0, _) is undefined / fails on some platforms (e.g. macOS).
+       Work around: open a 1-byte stream then immediately seek to EOF.        */
+    static char empty_byte = '\0';
+    FILE* memstream = (size > 0)
+        ? fmemopen(buffer, size, "r")
+        : fmemopen(&empty_byte, 1, "r");
     if(!memstream){
         ERROR("Cannot create the STRING-STREAM for a string of length %"WORD_FORMAT"",size);}
+    if(size == 0){ fseek(memstream, 0, SEEK_END); }
     Ref stream=string_stream_new(memstream);
     stream->slots->file_stream.direction=direction_input;
     stream->slots->file_stream.string=string;

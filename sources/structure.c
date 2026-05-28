@@ -26,7 +26,12 @@ Ref structure_class_instance_direct_slots(Ref structure_class){
             +(uword)integer_value(structure_class->slots->structure_class.offset);
     Ref alist = NIL_Symbol;
     dolist(sname,structure_class->slots->structure_class.slot_names){
-        push(cons(sname,integer_from_uword(offset)),&alist);
+        /* Do NOT use push() here — push() closes the live pool, which would
+           remove the growing alist from GC protection.  A direct cons() call
+           leaves the result in the pool so GC cannot collect it between
+           iterations (the previous alist value is reachable through the new
+           pair's CDR slot and is therefore protected transitively).          */
+        alist=cons(cons(sname,integer_from_uword(offset)),alist);
         offset++;}
     (void)pool; /* pool intentionally left open — caller closes it after use */
     return alist;}

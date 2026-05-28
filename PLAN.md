@@ -417,6 +417,16 @@ overwritten by the cleanup forms. Fixed by separating `protect_results` from
 `*PRINT-MISER-WIDTH*`, `*PRINT-RIGHT-MARGIN*`.
 `WRITE-TO-STRING` with full `&rest keys` interface honouring `:escape`.
 
+**Slice 18 — LOOP when/unless/if, generic REDUCE, DO-SYMBOLS, stream extras (v0.0.41)**:
+LOOP conditional sub-clauses: `WHEN`, `UNLESS`, and `IF`/`ELSE` for `COLLECT`, `DO`, `RETURN`, and `SUM` actions.
+Generic `REDUCE` over lists, vectors, strings; `:from-end`, `:initial-value`, and `:key` keyword support.
+`DO-SYMBOLS`, `DO-EXTERNAL-SYMBOLS`, `DO-ALL-SYMBOLS` package-iteration macros.
+Stream extras: `LISTEN` (implemented in prelude via `PEEK-CHAR`), `READ-CHAR-NO-HANG`, `CHAR-READY-P`.
+GC bug fix: `structure_class_instance_direct_slots` used `push()` inside a `dolist` loop; `push()` closes its own live pool, stranding the growing alist outside GC protection between iterations.  Fixed by replacing `push(x, &alist)` with `alist = cons(x, alist)` so the accumulator stays pool-visible throughout.
+Bug fix: `variable_value(S(NIL))` / `variable_value(S(T))` in `built_in_functions.c` replaced with direct `NIL_Symbol` / `T_Symbol` — NIL and T are not ordinary variables in bocl.
+Bug fix: `fmemopen(buf, 0, "r")` returns NULL on macOS; empty string-streams now use a 1-byte static buffer seeked to EOF.
+Tests: [tests/test_slice18.c](tests/test_slice18.c) — 19 cases, all green.
+
 **Slice 17 — generic sequences, -if-not variants, pathname accessors, map-into (v0.0.40)**:
 `EVERY`, `SOME` extended to strings and vectors.
 `FIND-IF`, `FIND`, `POSITION-IF`, `POSITION`, `COUNT-IF`, `COUNT`, `REMOVE-IF`, `REMOVE` all genericised to handle lists, strings, and vectors via `ELT`/`LENGTH`.

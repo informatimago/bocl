@@ -476,10 +476,20 @@
 ;;  later by changing these definitions.                                ;;
 ;; -------------------------------------------------------------------- ;;
 
-(defun reduce (function sequence &key (initial-value nil iv-supplied) from-end)
-  ;; FROM-END is honoured by reversing first; not the most efficient but
-  ;; minimal-and-correct.
-  (let ((seq (if from-end (reverse sequence) sequence)))
+(defun reduce (function sequence &key (initial-value nil iv-supplied) from-end (key #'identity))
+  ;; Generic REDUCE: works on lists, strings, and vectors.
+  ;; FROM-END reverses the element order; KEY is applied to each element
+  ;; before it is passed to FUNCTION.
+  (let* ((n   (length sequence))
+         (lst (if (listp sequence)
+                  sequence
+                  ;; Collect elements via index (works for strings + vectors).
+                  (let ((acc nil))
+                    (dotimes (i n (nreverse acc))
+                      (push (elt sequence i) acc)))))
+         (seq (if from-end (reverse lst) lst))
+         ;; Apply key to each element.
+         (seq (mapcar (lambda (x) (funcall key x)) seq)))
     (cond
       ((null seq)
        (if iv-supplied initial-value (funcall function)))
@@ -1950,6 +1960,7 @@
 
 (defun %loop-kw-p (x)
   (%lkw x "NAMED" "WITH" "FOR" "AS" "REPEAT" "WHILE" "UNTIL"
+          "WHEN" "UNLESS" "IF" "AND" "ELSE" "END"
           "DO" "DOING"
           "COLLECT" "COLLECTING" "APPEND" "APPENDING"
           "NCONC" "NCONCING" "SUM" "SUMMING" "COUNT" "COUNTING"
@@ -1960,9 +1971,13 @@
   (not (some #'%loop-kw-p clauses)))
 
 (defun %loop-accum-init (kind)
-  (if (member kind '(:sum :count)) 0 nil))
+  ;; :collect-body / :append-body / etc. are conditionally updated in body;
+  ;; their init is still nil (0 for sum/count).
+  (if (member kind '(:sum :count :sum-body :count-body)) 0 nil))
 
 (defun %loop-accum-step (kind var expr)
+  ;; Kinds ending in -body are handled inline in the loop body (via WHEN/UNLESS);
+  ;; returning nil here suppresses double-generation.
   (case kind
     (:collect  `(setq ,var (cons ,expr ,var)))
     (:append   `(setq ,var (append ,var ,expr)))
@@ -1970,7 +1985,11 @@
     (:sum      `(incf ,var ,expr))
     (:count    `(when ,expr (incf ,var)))
     (:maximize `(let ((%v ,expr)) (when (or (null ,var) (> %v ,var)) (setq ,var %v))))
-    (:minimize `(let ((%v ,expr)) (when (or (null ,var) (< %v ,var)) (setq ,var %v))))))
+    (:minimize `(let ((%v ,expr)) (when (or (null ,var) (< %v ,var)) (setq ,var %v))))
+    ;; -body variants: their update is already in body; return nil to skip here.
+    ((:collect-body :append-body :nconc-body :sum-body :count-body
+      :maximize-body :minimize-body)
+     nil)))
 
 (defun %loop-expand (all-clauses)
   (let ((rest     all-clauses)
@@ -1984,7 +2003,9 @@
         (finally   nil)
         (accums    nil)   ; (kind result-var expr) — first in = last pushed; nreverse
         (always-f  nil)
+        (always-set nil) ; T if an ALWAYS clause was seen (always-f may be NIL)
         (never-f   nil)
+        (never-set  nil) ; T if a NEVER clause was seen (never-f may be NIL)
         (thereis-f nil)
         (return-f  nil)
         (return-set nil))
@@ -2055,6 +2076,7 @@
                          (downp (%lkw dir "DOWNFROM"))
                          (end-f nil)
                          (incl  t)
+                         (by-supplied nil)
                          (step  (if downp -1 1)))
                     (push (list v start) letb)
                     (do () ((or (null rest)
@@ -2066,7 +2088,10 @@
                           ((%lkw sub "BELOW")       (setq end-f (pop!) incl  nil))
                           ((%lkw sub "DOWNTO")      (setq end-f (pop!) incl  t  downp t))
                           ((%lkw sub "ABOVE")       (setq end-f (pop!) incl  nil downp t))
-                          ((%lkw sub "BY")          (setq step  (pop!))))))
+                          ((%lkw sub "BY")          (setq step  (pop!) by-supplied t)))))
+                    ;; If DOWNTO/ABOVE was found but no BY was given, default step = -1
+                    (unless by-supplied
+                      (setq step (if downp -1 1)))
                     (when end-f
                       (push (if downp
                                 (if incl `(< ,v ,end-f)  `(<= ,v ,end-f))
@@ -2129,8 +2154,8 @@
                (when (try! "INTO") (setq iv (pop!)))
                (push (list :minimize (or iv (gensym "MN-")) e) accums)))
             ;; ALWAYS / NEVER / THEREIS
-            ((%lkw kw "ALWAYS")   (setq always-f  (pop!)))
-            ((%lkw kw "NEVER")    (setq never-f   (pop!)))
+            ((%lkw kw "ALWAYS")   (setq always-f  (pop!) always-set  t))
+            ((%lkw kw "NEVER")    (setq never-f   (pop!) never-set   t))
             ((%lkw kw "THEREIS")  (setq thereis-f (pop!)))
             ;; RETURN
             ((%lkw kw "RETURN")
@@ -2140,6 +2165,135 @@
              (setq initially (append initially (take-body))))
             ((%lkw kw "FINALLY")
              (setq finally (append finally (take-body))))
+            ;; WHEN / UNLESS / IF cond sub-clause [AND sub-clause ...]
+            ;; The sub-clause may be: DO, RETURN, COLLECT, APPEND, SUM,
+            ;; COUNT, MAXIMIZE, MINIMIZE.  AND chains more sub-clauses
+            ;; under the same condition.  ELSE introduces an alternative.
+            ((%lkw kw "WHEN" "UNLESS" "IF")
+             (let* ((cond-expr (pop!))
+                    (negate (%lkw kw "UNLESS")))
+               (when (%lkw (pk) "THEN") (pop!)) ; optional THEN after IF
+               ;; Inner helper: parse one sub-clause guarded by cond-expr.
+               ;; Returns a list of body forms.
+               ;; shared-var: when parsing IF ... collect ... ELSE collect ...,
+               ;; both sides share the same accumulation variable so the loop
+               ;; builds one unified result list.
+               (let ((shared-var nil))
+                 (labels
+                   ((parse-guarded-sub (neg cond reuse-var)
+                      ;; REUSE-VAR: if non-nil, the ELSE collect shares this var.
+                      (let ((sub (pop!)))
+                        (cond
+                          ;; RETURN
+                          ((%lkw sub "RETURN")
+                           (let ((val (pop!)))
+                             (list (if neg
+                                       `(unless ,cond (return-from ,(or name nil) ,val))
+                                       `(when ,cond (return-from ,(or name nil) ,val))))))
+                          ;; DO / DOING
+                          ((%lkw sub "DO" "DOING")
+                           (let ((forms (take-body)))
+                             (list (if neg
+                                       `(unless ,cond ,@forms)
+                                       `(when ,cond ,@forms)))))
+                          ;; COLLECT / COLLECTING
+                          ((%lkw sub "COLLECT" "COLLECTING")
+                           (let* ((e  (pop!))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  ;; Reuse shared var for ELSE branch so both
+                                  ;; halves accumulate into the same list.
+                                  (v  (or reuse-var iv (gensym "C-"))))
+                             (setq shared-var v) ; remember for possible ELSE
+                             (unless reuse-var
+                               (push (list :collect-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond (setq ,v (cons ,e ,v)))
+                                       `(when ,cond (setq ,v (cons ,e ,v)))))))
+                          ;; APPEND / APPENDING
+                          ((%lkw sub "APPEND" "APPENDING")
+                           (let* ((e (pop!))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  (v  (or reuse-var iv (gensym "A-"))))
+                             (setq shared-var v)
+                             (unless reuse-var
+                               (push (list :append-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond (setq ,v (append ,v ,e)))
+                                       `(when ,cond (setq ,v (append ,v ,e)))))))
+                          ;; SUM / SUMMING
+                          ((%lkw sub "SUM" "SUMMING")
+                           (let* ((e (pop!))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  (v  (or reuse-var iv (gensym "S-"))))
+                             (setq shared-var v)
+                             (unless reuse-var
+                               (push (list :sum-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond (incf ,v ,e))
+                                       `(when ,cond (incf ,v ,e))))))
+                          ;; COUNT / COUNTING
+                          ((%lkw sub "COUNT" "COUNTING")
+                           (let* ((e (pop!))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  (v  (or reuse-var iv (gensym "K-"))))
+                             (setq shared-var v)
+                             (unless reuse-var
+                               (push (list :count-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond (when ,e (incf ,v)))
+                                       `(when ,cond (when ,e (incf ,v)))))))
+                          ;; MAXIMIZE / MAXIMIZING
+                          ((%lkw sub "MAXIMIZE" "MAXIMIZING")
+                           (let* ((e (pop!))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  (v  (or reuse-var iv (gensym "MX-"))))
+                             (setq shared-var v)
+                             (unless reuse-var
+                               (push (list :maximize-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond
+                                          (let ((%mv ,e))
+                                            (when (or (null ,v) (> %mv ,v)) (setq ,v %mv))))
+                                       `(when ,cond
+                                          (let ((%mv ,e))
+                                            (when (or (null ,v) (> %mv ,v)) (setq ,v %mv))))))))
+                          ;; MINIMIZE / MINIMIZING
+                          ((%lkw sub "MINIMIZE" "MINIMIZING")
+                           (let* ((e (pop!))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  (v  (or reuse-var iv (gensym "MN-"))))
+                             (setq shared-var v)
+                             (unless reuse-var
+                               (push (list :minimize-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond
+                                          (let ((%nv ,e))
+                                            (when (or (null ,v) (< %nv ,v)) (setq ,v %nv))))
+                                       `(when ,cond
+                                          (let ((%nv ,e))
+                                            (when (or (null ,v) (< %nv ,v)) (setq ,v %nv))))))))
+                          (t
+                           (error "LOOP WHEN/UNLESS: unhandled sub-clause ~S" sub))))))
+                   ;; Parse first sub-clause (no reuse-var for the IF/WHEN branch)
+                   (setq body (append body (parse-guarded-sub negate cond-expr nil)))
+                   ;; AND chains more sub-clauses under the same condition.
+                   (do () ((not (%lkw (pk) "AND")))
+                     (pop!) ; consume AND
+                     (setq body (append body (parse-guarded-sub negate cond-expr nil))))
+                   ;; ELSE introduces a negated branch. For COLLECT/SUM etc.,
+                   ;; reuse the shared-var so both halves fill one accumulator.
+                   (when (%lkw (pk) "ELSE")
+                     (pop!) ; consume ELSE
+                     (setq body (append body (parse-guarded-sub (not negate) cond-expr shared-var)))
+                     (do () ((not (%lkw (pk) "AND")))
+                       (pop!)
+                       (setq body (append body (parse-guarded-sub (not negate) cond-expr shared-var)))))
+                   ;; END terminates a WHEN/UNLESS/IF block.
+                   (when (%lkw (pk) "END") (pop!))))))
+            ;; AND at top level (outside WHEN) — absorb so it doesn't error
+            ((%lkw kw "AND") nil) ; parallel FOR clauses already handle AND
+            ;; END at top level — ignore (close of a WHEN block)
+            ((%lkw kw "END") nil)
             (t
              (error "LOOP: unknown clause keyword: ~S" kw))))))
     ;; --- code generation ---
@@ -2155,9 +2309,12 @@
                                  (nreverse tests)))
            (setup-forms  (nreverse setups))
            (step-forms   (nreverse steps))
-           (accum-forms  (mapcar (lambda (a)
-                                   (%loop-accum-step (first a) (second a) (third a)))
-                                 accums))
+           ;; accum-forms: skip nil results from -body kinds (their updates
+           ;; are already in `body` from the WHEN/UNLESS clause handling).
+           (accum-forms  (let ((fs nil))
+                           (dolist (a accums (nreverse fs))
+                             (let ((f (%loop-accum-step (first a) (second a) (third a))))
+                               (when f (push f fs))))))
            (always-chk   (when always-f
                            `((unless ,always-f (return-from ,(or name nil) nil)))))
            (never-chk    (when never-f
@@ -2170,10 +2327,13 @@
            (result-expr  (cond (return-set return-f)
                                (primary
                                 (let ((k (first primary)) (rv (second primary)))
-                                  (if (eq k :collect) `(nreverse ,rv) rv)))
-                               (always-f  t)
-                               (never-f   t)
-                               (t         nil))))
+                                  ;; both :collect and :collect-body use nreverse
+                                  (if (member k '(:collect :collect-body))
+                                      `(nreverse ,rv)
+                                      rv)))
+                               (always-set  t) ; vacuously T when loop never runs
+                               (never-set   t) ; vacuously T when loop never runs
+                               (t           nil))))
       `(block ,(or name nil)
          (let* (,@let*-binds ,@accum-binds)
            (tagbody
@@ -2492,5 +2652,75 @@
          (*print-array*    t)
          (*print-case*     :upcase))
      ,@body))
+
+;;;; -----------------------------------------------------------------------
+;;;; Slice 18 — LOOP WHEN/UNLESS/IF, generic REDUCE, stream extras,
+;;;;            DO-SYMBOLS / DO-ALL-SYMBOLS / DO-EXTERNAL-SYMBOLS
+;;;;
+
+;; ---- FRESH-LINE (kernel registers it; this is a thin Lisp alias) ----------
+;; The kernel built-in FRESH-LINE is already registered; nothing to add here.
+;; Verify it's accessible:
+;;   (fresh-line) → T (newline was output) or NIL (already at column 0)
+
+;; ---- UNREAD-CHAR (kernel built-in — already registered) -------------------
+;; (unread-char char &optional stream) — push CHAR back onto STREAM.
+;; The kernel already registers it; nothing more needed here.
+
+;; ---- LISTEN ---------------------------------------------------------------
+;; LISTEN checks whether a character is immediately available on STREAM.
+;; We implement it via PEEK-CHAR: if PEEK-CHAR returns a character (eof-value
+;; NIL, eof-error-p NIL) the stream has input; if it returns NIL we're at EOF
+;; or there is no character ready.  For string-input-streams this is exact;
+;; for interactive/file streams this may block briefly but is correct.
+
+(defun listen (&optional (stream *standard-input*))
+  (not (null (peek-char nil stream nil nil))))
+
+;; ---- READ-CHAR-NO-HANG / CHAR-READY-P ------------------------------------
+;; Implement in terms of LISTEN (defined just above).
+
+(defun read-char-no-hang (&optional (stream *standard-input*)
+                           (eof-error-p t) eof-value recursive-p)
+  ;; Return a character if one is immediately available; NIL otherwise;
+  ;; or EOF-VALUE (or error) at end-of-file.
+  (if (listen stream)
+      (kernel-read-char stream eof-error-p eof-value recursive-p)
+      nil))
+
+(defun char-ready-p (&optional (stream *standard-input*))
+  ;; T if a character is available on STREAM without blocking.
+  (listen stream))
+
+;; ---- DO-SYMBOLS, DO-ALL-SYMBOLS, DO-EXTERNAL-SYMBOLS ---------------------
+
+(defmacro do-symbols (varspec &body body)
+  ;; (DO-SYMBOLS (var [package [result]]) body...)
+  ;; Bind VAR to each symbol accessible in PACKAGE (default *package*).
+  ;; Returns RESULT (default NIL).
+  (let ((var     (first  varspec))
+        (package (or (second varspec) '*package*))
+        (result  (third  varspec)))
+    `(dolist (,var (package-symbols ,package) ,result)
+       ,@body)))
+
+(defmacro do-external-symbols (varspec &body body)
+  ;; (DO-EXTERNAL-SYMBOLS (var [package [result]]) body...)
+  ;; Bind VAR to each symbol exported from PACKAGE.
+  (let ((var     (first  varspec))
+        (package (or (second varspec) '*package*))
+        (result  (third  varspec)))
+    `(dolist (,var (package-exported-symbols ,package) ,result)
+       ,@body)))
+
+(defmacro do-all-symbols (varspec &body body)
+  ;; (DO-ALL-SYMBOLS (var [result]) body...)
+  ;; Bind VAR to every symbol accessible in every package.
+  (let ((var    (first  varspec))
+        (result (second varspec))
+        (pkg%   (gensym "PKG-")))
+    `(dolist (,pkg% (list-all-packages) ,result)
+       (do-symbols (,var ,pkg%)
+         ,@body))))
 
 ;;;; THE END

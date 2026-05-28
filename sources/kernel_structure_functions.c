@@ -10,6 +10,7 @@ Ref env_make_lexical_variable(Ref par_name, Ref par_value){
     add_to_live_pool(par_name);
     add_to_live_pool(par_value);
     Ref instance = make_structure_instance(LEXICAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
@@ -23,6 +24,7 @@ Ref env_lexical_variable(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(LEXICAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
@@ -33,6 +35,7 @@ Ref copy_lexical_variable(Ref par_lexical_variable_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_lexical_variable_instance);
     Ref instance = make_structure_instance(LEXICAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(LEXICAL_VARIABLE_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -89,6 +92,7 @@ Ref env_make_constant_variable(Ref par_name, Ref par_value){
     add_to_live_pool(par_name);
     add_to_live_pool(par_value);
     Ref instance = make_structure_instance(CONSTANT_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(CONSTANT_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of CONSTANT-VARIABLE"); }
@@ -102,6 +106,7 @@ Ref env_constant_variable(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(CONSTANT_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(CONSTANT_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of CONSTANT-VARIABLE"); }
@@ -112,6 +117,7 @@ Ref copy_constant_variable(Ref par_constant_variable_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_constant_variable_instance);
     Ref instance = make_structure_instance(CONSTANT_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(CONSTANT_VARIABLE_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -168,6 +174,7 @@ Ref env_make_global_special_variable(Ref par_name, Ref par_value){
     add_to_live_pool(par_name);
     add_to_live_pool(par_value);
     Ref instance = make_structure_instance(GLOBAL_SPECIAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_SPECIAL_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-SPECIAL-VARIABLE"); }
@@ -181,6 +188,7 @@ Ref env_global_special_variable(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(GLOBAL_SPECIAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_SPECIAL_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-SPECIAL-VARIABLE"); }
@@ -191,6 +199,7 @@ Ref copy_global_special_variable(Ref par_global_special_variable_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_global_special_variable_instance);
     Ref instance = make_structure_instance(GLOBAL_SPECIAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(GLOBAL_SPECIAL_VARIABLE_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -248,6 +257,7 @@ Ref env_make_local_special_variable(Ref par_name, Ref par_saved_boundp, Ref par_
     add_to_live_pool(par_saved_boundp);
     add_to_live_pool(par_saved_value);
     Ref instance = make_structure_instance(LOCAL_SPECIAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_SPECIAL_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
@@ -264,6 +274,7 @@ Ref env_local_special_variable(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(LOCAL_SPECIAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_SPECIAL_VARIABLE_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-SPECIAL-VARIABLE"); }
@@ -274,6 +285,7 @@ Ref copy_local_special_variable(Ref par_local_special_variable_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_local_special_variable_instance);
     Ref instance = make_structure_instance(LOCAL_SPECIAL_VARIABLE_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(LOCAL_SPECIAL_VARIABLE_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -353,6 +365,7 @@ Ref env_make_global_function(Ref par_name, Ref par_lambda_list, Ref par_body, Re
     add_to_live_pool(par_body);
     add_to_live_pool(par_compiler_macro);
     Ref instance = make_structure_instance(GLOBAL_FUNCTION_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_FUNCTION_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-FUNCTION"); }
@@ -372,6 +385,7 @@ Ref env_global_function(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(GLOBAL_FUNCTION_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_FUNCTION_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-FUNCTION"); }
@@ -382,6 +396,7 @@ Ref copy_global_function(Ref par_global_function_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_global_function_instance);
     Ref instance = make_structure_instance(GLOBAL_FUNCTION_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(GLOBAL_FUNCTION_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -481,6 +496,7 @@ Ref env_make_local_function(Ref par_name, Ref par_lambda_list, Ref par_body){
     add_to_live_pool(par_lambda_list);
     add_to_live_pool(par_body);
     Ref instance = make_structure_instance(LOCAL_FUNCTION_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_FUNCTION_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-FUNCTION"); }
@@ -497,6 +513,7 @@ Ref env_local_function(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(LOCAL_FUNCTION_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_FUNCTION_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-FUNCTION"); }
@@ -507,6 +524,7 @@ Ref copy_local_function(Ref par_local_function_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_local_function_instance);
     Ref instance = make_structure_instance(LOCAL_FUNCTION_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(LOCAL_FUNCTION_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -584,6 +602,7 @@ Ref env_make_global_symbol_macro(Ref par_name, Ref par_expansion){
     add_to_live_pool(par_name);
     add_to_live_pool(par_expansion);
     Ref instance = make_structure_instance(GLOBAL_SYMBOL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_SYMBOL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-SYMBOL-MACRO"); }
@@ -597,6 +616,7 @@ Ref env_global_symbol_macro(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(GLOBAL_SYMBOL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_SYMBOL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-SYMBOL-MACRO"); }
@@ -607,6 +627,7 @@ Ref copy_global_symbol_macro(Ref par_global_symbol_macro_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_global_symbol_macro_instance);
     Ref instance = make_structure_instance(GLOBAL_SYMBOL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(GLOBAL_SYMBOL_MACRO_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -663,6 +684,7 @@ Ref env_make_local_symbol_macro(Ref par_name, Ref par_expansion){
     add_to_live_pool(par_name);
     add_to_live_pool(par_expansion);
     Ref instance = make_structure_instance(LOCAL_SYMBOL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_SYMBOL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-SYMBOL-MACRO"); }
@@ -676,6 +698,7 @@ Ref env_local_symbol_macro(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(LOCAL_SYMBOL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_SYMBOL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-SYMBOL-MACRO"); }
@@ -686,6 +709,7 @@ Ref copy_local_symbol_macro(Ref par_local_symbol_macro_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_local_symbol_macro_instance);
     Ref instance = make_structure_instance(LOCAL_SYMBOL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(LOCAL_SYMBOL_MACRO_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -743,6 +767,7 @@ Ref env_make_global_macro(Ref par_name, Ref par_lambda_list, Ref par_body){
     add_to_live_pool(par_lambda_list);
     add_to_live_pool(par_body);
     Ref instance = make_structure_instance(GLOBAL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-MACRO"); }
@@ -759,6 +784,7 @@ Ref env_global_macro(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(GLOBAL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(GLOBAL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of GLOBAL-MACRO"); }
@@ -769,6 +795,7 @@ Ref copy_global_macro(Ref par_global_macro_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_global_macro_instance);
     Ref instance = make_structure_instance(GLOBAL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(GLOBAL_MACRO_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);
@@ -847,6 +874,7 @@ Ref env_make_local_macro(Ref par_name, Ref par_lambda_list, Ref par_body){
     add_to_live_pool(par_lambda_list);
     add_to_live_pool(par_body);
     Ref instance = make_structure_instance(LOCAL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-MACRO"); }
@@ -863,6 +891,7 @@ Ref env_local_macro(Ref par_name){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     Ref instance = make_structure_instance(LOCAL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref pos = structure_class_instance_slots(LOCAL_MACRO_Class);
     {   Ref entry = assq(S(NAME),pos);
         if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LOCAL-MACRO"); }
@@ -873,6 +902,7 @@ Ref copy_local_macro(Ref par_local_macro_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_local_macro_instance);
     Ref instance = make_structure_instance(LOCAL_MACRO_Class);
+    add_to_live_pool(instance);
     Ref size = structure_class_instance_size(LOCAL_MACRO_Class);
     for(word i = integer_value(size)-1;0<=i;i--){
         Ref index = integer_from_word(i);

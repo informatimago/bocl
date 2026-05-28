@@ -147,9 +147,10 @@ static void test_with(void){
 
 /* ---- initially / finally ---- */
 static void test_initially_finally(void){
+    /* initially uses push so r stays a proper list; setq would make a dotted list */
     TEST_EQ(equal, e("'(ended 3 2 1 started)"),
             e("(let ((r nil))"
-              "  (loop initially (setq r 'started)"
+              "  (loop initially (push 'started r)"
               "        for i from 1 to 3"
               "        do (push i r)"
               "        finally (push 'ended r))"

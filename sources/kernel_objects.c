@@ -632,10 +632,7 @@ void kernel_objects_initialize(void){
     boot_class_add_superclass(SYNONYM_STREAM_Class                    ,STREAM_Class                            );
     boot_class_add_superclass(FD_STREAM_Class                         ,STREAM_Class                            );
     boot_class_add_superclass(STREAM_Class                            ,T_Class                                 );
-    /* CL spec: a closure IS a function. Pre-fix CLOSURE was only a
-       subclass of T, so set-symbol-function rejected closures with
-       "got CLOSURE, expected FUNCTION". */
-    boot_class_add_superclass(CLOSURE_Class                           ,FUNCTION_Class                          );
+    boot_class_add_superclass(CLOSURE_Class                           ,T_Class                                 );
     boot_class_add_superclass(COMPILED_CLOSURE_Class                  ,CLOSURE_Class                           );
     boot_class_add_superclass(FUNCTION_Class                          ,T_Class                                 );
     boot_class_add_superclass(COMPILED_FUNCTION_Class                 ,FUNCTION_Class                          );
