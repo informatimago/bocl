@@ -2723,4 +2723,820 @@
        (do-symbols (,var ,pkg%)
          ,@body))))
 
+;;;; ========================================================================
+;;;; Slice 19 prerequisites — operators needed by CLOS
+;;;; ========================================================================
+
+(defmacro rotatef (&rest places)
+  ;; (rotatef p1 p2 ... pn) — rotate values left: p1←p2, ..., pn←old-p1.
+  ;; With 0 or 1 places: no-op.  Returns NIL.
+  (if (< (length places) 2)
+      nil
+      (let ((temps (mapcar (lambda (p) p (gensym "ROT-")) places)))
+        `(let ,(mapcar #'list temps places)
+           ,@(mapcar (lambda (place temp) `(setf ,place ,temp))
+                     places
+                     (append (cdr temps) (list (car temps))))
+           nil))))
+
+(defmacro pushnew (item place &rest keys)
+  ;; Push ITEM onto PLACE unless already a MEMBER.  Keys (:test :key) passed to MEMBER.
+  (let ((g (gensym "PN-")))
+    `(let ((,g ,item))
+       (unless (member ,g ,place ,@keys)
+         (push ,g ,place))
+       ,place)))
+
+(defun get-properties (plist indicator-list)
+  ;; Search PLIST for any key in INDICATOR-LIST.
+  ;; Returns (values indicator value tail) for first match, else (nil nil nil).
+  (loop
+    (when (null plist) (return (values nil nil nil)))
+    (let ((key (car plist)) (val (cadr plist)))
+      (when (member key indicator-list :test #'eq)
+        (return (values key val plist)))
+      (setq plist (cddr plist)))))
+
+(defun mapappend (fn list)
+  ;; (mapappend fn list) = (apply #'append (mapcar fn list))
+  (apply #'append (mapcar fn list)))
+
+(defparameter lambda-list-keywords
+  '(&optional &rest &key &allow-other-keys &aux &body &whole &environment))
+
+;;; Minimal MAKE-ARRAY — creates a 1-D simple vector of SIZE elements.
+;;; Uses the VECTOR built-in which takes &rest elements.
+;;; Full MAKE-ARRAY (multi-dimensional, displaced, fill-pointer) is deferred.
+(defun make-array (size &key (initial-element nil))
+  (let ((elts nil))
+    (dotimes (i size)
+      (push initial-element elts))
+    (apply #'vector (nreverse elts))))
+
+;;;; ========================================================================
+;;;; Slice 19 — Minimal CLOS
+;;;; ========================================================================
+;;;; An interpreter-level CLOS implementation — no compiler needed.
+;;;; Classes, generic functions, and methods are all represented as
+;;;; ordinary Lisp objects (DEFSTRUCTs) and closures.
+;;;;
+;;;; Supported:
+;;;;   DEFCLASS, MAKE-INSTANCE, SLOT-VALUE / (SETF SLOT-VALUE),
+;;;;   SLOT-BOUNDP, SLOT-MAKUNBOUND, DEFGENERIC, DEFMETHOD,
+;;;;   CALL-NEXT-METHOD, NEXT-METHOD-P, CLASS-OF (extended),
+;;;;   FIND-CLASS (extended), TYPEP (extended), CLASS-NAME,
+;;;;   STANDARD-OBJECT-P, WITH-SLOTS, WITH-ACCESSORS, PRINT-OBJECT.
+;;;; ========================================================================
+
+;;; ---- 1. Unbound-slot sentinel -------------------------------------------
+
+(defparameter *%unbound* (list '%clos-unbound)
+  "Sentinel stored in slot vectors for slots that have not been initialised.")
+
+;;; ---- 2. Internal representation structs ----------------------------------
+
+(defstruct (%obj (:predicate %obj-p) (:copier nil))
+  class    ; %cls object — the runtime class
+  slots)   ; simple-vector; *%unbound* marks each unbound slot
+
+(defstruct (%cls (:predicate %cls-p) (:copier nil))
+  name          ; symbol
+  dsupers       ; list of %cls objects (direct superclasses)
+  dslots        ; list of slot-spec plists from DEFCLASS
+  eslots        ; list of effective slot plists: (:name :location :initargs
+                ;    :initform :initfunction :allocation :readers :writers)
+  cpl           ; class precedence list (list of %cls, most-specific first)
+  dsubs)        ; list of %cls objects (direct subclasses)
+
+(defstruct (%mth (:predicate %mth-p) (:copier nil))
+  qualifiers    ; list of qualifier symbols, nil for primary
+  specializers  ; list, one per required arg: %cls | kernel-class-symbol | t
+  function)     ; the underlying lambda
+
+(defstruct (%gf (:predicate %gf-p) (:copier nil))
+  name          ; symbol
+  lambda-list   ; lambda-list as stored by DEFGENERIC
+  methods)      ; list of %mth objects
+
+;;; ---- 3. Registries -------------------------------------------------------
+
+(defparameter *%classes* (make-hash-table))  ; symbol -> %cls
+
+(defparameter *%gfs* (make-hash-table))      ; symbol -> %gf
+
+;;; Save kernel versions before overriding.
+(defparameter *%kernel-find-class* (symbol-function 'find-class))
+(defparameter *%kernel-class-of*   (symbol-function 'class-of))
+(defparameter *%kernel-typep*      (symbol-function 'typep))
+
+;;; Structure class objects for %cls and %obj — needed so we can check types
+;;; WITHOUT going through our overridden TYPEP (which would cause infinite recursion,
+;;; since DEFSTRUCT predicates call TYPEP internally).
+;;; We get the class by looking up *defstruct-classes* which DEFSTRUCT populates.
+(defparameter *%cls-sc* (gethash '%cls *defstruct-classes*)
+  "Kernel structure class for CLOS class objects (%cls instances).")
+(defparameter *%obj-sc* (gethash '%obj *defstruct-classes*)
+  "Kernel structure class for CLOS instances (%obj instances).")
+
+;;; Safe predicates that use the KERNEL typep — no circularity.
+(defun %is-cls (x) (funcall *%kernel-typep* x *%cls-sc*))
+(defun %is-obj (x) (funcall *%kernel-typep* x *%obj-sc*))
+
+;;; ---- 4. FIND-CLASS override ----------------------------------------------
+
+(defun find-class (name &optional errorp environment)
+  "Return the class named NAME.
+  Checks user-defined CLOS classes first, then kernel built-in classes.
+  Returns NIL if not found and ERRORP is nil (default)."
+  environment  ; ignored
+  (let ((user-cls (gethash name *%classes*)))
+    (if user-cls
+        user-cls
+        ;; Try the kernel registry.  find_class(C) returns C NULL (not NIL_Symbol)
+        ;; when the name is unknown — use %clos-null-p (a C helper) to detect it.
+        (let ((k (funcall *%kernel-find-class* name)))
+          (if (%clos-null-p k)
+              (when errorp (error "No class named ~S" name))
+              k)))))
+
+(define-setf-expander find-class (name) (new-class)
+  `(%set-find-class ,new-class ,name))
+
+(defun %set-find-class (new-class name &optional errorp environment)
+  errorp environment  ; ignored
+  (if new-class
+      (sethash name *%classes* new-class)
+      (remhash name *%classes*))
+  new-class)
+
+;;; ---- 5. CLASS-OF override -----------------------------------------------
+
+(defun class-of (object)
+  "Return the class of OBJECT; handles CLOS instances and kernel primitives."
+  (if (%is-obj object)
+      (%obj-class object)
+      (funcall *%kernel-class-of* object)))
+
+;;; ---- 6. CLASS-NAME -------------------------------------------------------
+
+(defun class-name (class)
+  "Return the name of CLASS."
+  (if (%is-cls class)
+      (%cls-name class)
+      nil))
+
+(define-setf-expander class-name (class) (new-name)
+  `(progn (when (%is-cls ,class) (setf (%cls-name ,class) ,new-name)) ,new-name))
+
+;;; ---- 7. Predicates -------------------------------------------------------
+
+(defun standard-object-p (object)
+  "Return T if OBJECT is an instance of a user-defined CLOS class."
+  (%is-obj object))
+
+(defun standard-class-p (class)
+  "Return T if CLASS is a CLOS class object created by DEFCLASS."
+  (%is-cls class))
+
+;;; ---- 8. TYPEP override ---------------------------------------------------
+
+(defun typep (object type &optional environment)
+  "Extended TYPEP: also handles user-defined CLOS classes.
+  Uses *%kernel-typep* for the circularity-safe checks."
+  environment  ; ignored
+  (cond
+    ((eq type t) t)
+    ((eq type nil) nil)
+    ;; Direct %cls object as type — use kernel typep to detect it (no circularity)
+    ((%is-cls type)
+     (and (%is-obj object)
+          (not (null (member type (%cls-cpl (%obj-class object)))))))
+    ;; Symbol — check user classes first, then kernel
+    ((symbolp type)
+     (let ((cls (gethash type *%classes*)))
+       (if (%is-cls cls)
+           (and (%is-obj object)
+                (not (null (member cls (%cls-cpl (%obj-class object))))))
+           (funcall *%kernel-typep* object type))))
+    ;; Compound type specifier — delegate to kernel
+    (t (funcall *%kernel-typep* object type))))
+
+;;; ---- 9. SLOT-VALUE and friends ------------------------------------------
+
+(defun %find-eslot (cls slot-name)
+  "Find an effective slot plist for SLOT-NAME in class CLS, or NIL."
+  (find slot-name (%cls-eslots cls) :key (lambda (s) (getf s :name))))
+
+(defun slot-value (object slot-name)
+  "Return the value of slot SLOT-NAME in OBJECT."
+  (unless (%is-obj object)
+    (error "SLOT-VALUE: ~S is not a CLOS instance" object))
+  (let* ((cls (%obj-class object))
+         (eslot (%find-eslot cls slot-name)))
+    (unless eslot
+      (error "SLOT-VALUE: class ~S has no slot named ~S" (%cls-name cls) slot-name))
+    (let ((val (svref (%obj-slots object) (getf eslot :location))))
+      (if (eq val *%unbound*)
+          (error "Unbound slot ~S in object of class ~S" slot-name (%cls-name cls))
+          val))))
+
+(defun %set-slot-value (new-value object slot-name)
+  "Set slot SLOT-NAME of OBJECT to NEW-VALUE."
+  (unless (%is-obj object)
+    (error "(SETF SLOT-VALUE): ~S is not a CLOS instance" object))
+  (let* ((cls (%obj-class object))
+         (eslot (%find-eslot cls slot-name)))
+    (unless eslot
+      (error "(SETF SLOT-VALUE): class ~S has no slot named ~S" (%cls-name cls) slot-name))
+    (setf (svref (%obj-slots object) (getf eslot :location)) new-value)
+    new-value))
+
+(define-setf-expander slot-value (object slot-name) (new-value)
+  `(%set-slot-value ,new-value ,object ,slot-name))
+
+(defun slot-boundp (object slot-name)
+  "Return T if slot SLOT-NAME in OBJECT has been bound."
+  (unless (%is-obj object)
+    (error "SLOT-BOUNDP: ~S is not a CLOS instance" object))
+  (let* ((cls (%obj-class object))
+         (eslot (%find-eslot cls slot-name)))
+    (unless eslot
+      (error "SLOT-BOUNDP: class ~S has no slot ~S" (%cls-name cls) slot-name))
+    (not (eq (svref (%obj-slots object) (getf eslot :location)) *%unbound*))))
+
+(defun slot-makunbound (object slot-name)
+  "Make slot SLOT-NAME in OBJECT unbound."
+  (unless (%is-obj object)
+    (error "SLOT-MAKUNBOUND: ~S is not a CLOS instance" object))
+  (let* ((cls (%obj-class object))
+         (eslot (%find-eslot cls slot-name)))
+    (unless eslot
+      (error "SLOT-MAKUNBOUND: class ~S has no slot ~S" (%cls-name cls) slot-name))
+    (setf (svref (%obj-slots object) (getf eslot :location)) *%unbound*)
+    object))
+
+(defun slot-exists-p (object slot-name)
+  "Return T if OBJECT's class defines a slot named SLOT-NAME."
+  (and (%is-obj object)
+       (not (null (%find-eslot (%obj-class object) slot-name)))))
+
+;;; ---- 10. Class Precedence List computation (AMOP algorithm) -------------
+
+(defun %cls-all-supers (cls)
+  "Return a list of all superclasses of CLS (including indirect) without duplicates."
+  (let ((result nil))
+    (labels ((collect (c)
+               (dolist (super (%cls-dsupers c))
+                 (when (%is-cls super)
+                   (unless (member super result)
+                     (push super result)
+                     (collect super))))))
+      (collect cls))
+    result))
+
+(defun %compute-cpl (cls)
+  "Compute the class precedence list for CLS using the AMOP linearisation algorithm."
+  (let* ((all-classes (cons cls (%cls-all-supers cls)))
+         ;; Local-precedence ordering pairs: (A B) means A must precede B.
+         (pairs (delete-duplicates
+                 (mapappend (lambda (c)
+                              (let ((ds (remove-if-not #'%is-cls (%cls-dsupers c))))
+                                (mapcar #'list (cons c ds) ds)))
+                            all-classes)
+                 :test #'equal))
+         (result nil)
+         (remaining all-classes)
+         (remaining-pairs pairs))
+    (loop
+      (when (null remaining) (return (nreverse result)))
+      ;; Candidates: classes with no predecessor in remaining-pairs
+      (let ((candidates (remove-if
+                          (lambda (c) (find c remaining-pairs :key #'cadr))
+                          remaining)))
+        (when (null candidates)
+          (error "DEFCLASS ~S: circular class hierarchy" (%cls-name cls)))
+        ;; Prefer the class that appears first in the last-added class's dsupers
+        (let ((next
+                (or (and result
+                         (find-if (lambda (c) (member c candidates))
+                                  (remove-if-not #'%is-cls (%cls-dsupers (car result)))))
+                    (car candidates))))
+          (push next result)
+          (setq remaining (remove next remaining))
+          (setq remaining-pairs
+                (remove-if (lambda (p) (eq (car p) next)) remaining-pairs)))))))
+
+;;; ---- 11. Effective slot computation -------------------------------------
+
+(defun %compute-eslots (cls)
+  "Compute the effective slot definitions for CLS from its CPL.
+  Each effective slot is a plist:
+    (:name :location :initargs :initform :initfunction :allocation :readers :writers)"
+  (let ((result nil)
+        (seen (make-hash-table))
+        (loc 0))
+    (dolist (c (%cls-cpl cls))
+      (dolist (dslot (%cls-dslots c))
+        (let ((name (getf dslot :name)))
+          (unless (gethash name seen)
+            (sethash name seen t)
+            (let* ((alloc (or (getf dslot :allocation) :instance))
+                   (eslot (list :name name
+                                :location loc
+                                :initargs  (getf dslot :initargs)
+                                :initform  (getf dslot :initform)
+                                :initfunction (getf dslot :initfunction)
+                                :allocation alloc
+                                :readers (getf dslot :readers)
+                                :writers (getf dslot :writers))))
+              (when (eq alloc :instance) (incf loc))
+              (push eslot result))))))
+    (nreverse result)))
+
+;;; ---- 12. Slot spec parsing -----------------------------------------------
+
+(defun %parse-slot-spec (spec)
+  "Parse a slot spec from DEFCLASS into a normalised plist.
+  spec ::= symbol | (symbol [:option value]*)"
+  (if (symbolp spec)
+      (list :name spec :initargs nil :initform nil :initfunction nil
+            :allocation :instance :readers nil :writers nil)
+      ;; Use COND instead of CASE to avoid the macro-expansion cons-sharing
+      ;; issue that corrupts %parse-slot-spec's body after GC.
+      (let ((name (car spec))
+            (initargs nil) (readers nil) (writers nil)
+            (initform nil) (initfunction nil) (allocation :instance)
+            (rest (cdr spec)))
+        (loop
+          (when (null rest) (return nil))
+          (let ((key (car rest)) (val (cadr rest)))
+            (cond ((eq key :initarg)    (push val initargs))
+                  ((eq key :reader)     (push val readers))
+                  ((eq key :writer)     (push val writers))
+                  ((eq key :accessor)   (push val readers)
+                                        (push (list 'setf val) writers))
+                  ((eq key :initform)   (setq initform val
+                                               ;; Capture the initform value in a closure (no EVAL needed)
+                                               initfunction (let ((v val)) (lambda () v))))
+                  ((eq key :allocation) (setq allocation val))))
+          (setq rest (cddr rest)))
+        (list :name name
+              :initargs (nreverse initargs)
+              :readers  (nreverse readers)
+              :writers  (nreverse writers)
+              :initform initform
+              :initfunction initfunction
+              :allocation allocation))))
+
+;;; ---- 13. Class creation --------------------------------------------------
+
+(defun ensure-clos-class (name dsuper-names dslot-specs)
+  "Create or update the CLOS class named NAME.
+  DSUPER-NAMES: list of symbols.  DSLOT-SPECS: list of parsed slot plists."
+  ;; Resolve direct superclasses — default to standard-object if empty
+  (let* ((supers
+           (mapcar (lambda (sn)
+                     (or (gethash sn *%classes*)
+                         (error "DEFCLASS ~S: superclass ~S not found" name sn)))
+                   dsuper-names))
+         ;; Get or create the class object
+         (cls (or (gethash name *%classes*)
+                  (let ((c (make-%cls :name name :dsupers nil :dslots nil
+                                      :eslots nil :cpl nil :dsubs nil)))
+                    (sethash name *%classes* c)
+                    c))))
+    (setf (%cls-dsupers cls) supers)
+    (setf (%cls-dslots  cls) dslot-specs)
+    ;; Compute CPL and effective slots
+    (setf (%cls-cpl   cls) (%compute-cpl cls))
+    (setf (%cls-eslots cls) (%compute-eslots cls))
+    ;; Register as subclass of each direct superclass
+    (dolist (super supers)
+      (when (%is-cls super)
+        (pushnew cls (%cls-dsubs super))))
+    cls))
+
+;;; ---- 14. DEFCLASS macro --------------------------------------------------
+
+(defmacro defclass (name direct-superclasses direct-slots &rest options)
+  "Define a new CLOS class.
+  Supports slot options: :initarg :initform :accessor :reader :writer :allocation.
+  Class option :documentation is accepted but ignored."
+  options  ; ignored
+  (let* ((dsuper-names (if (null direct-superclasses) '(standard-object) direct-superclasses))
+         ;; Pre-expand slot specs to extract accessor/reader/writer definitions
+         (parsed-slots (mapcar (lambda (s) (%parse-slot-spec s)) direct-slots))
+         (reader-forms nil)
+         (writer-forms nil))
+    ;; Collect reader/writer method definitions
+    (dolist (pslot parsed-slots)
+      (let ((sname (getf pslot :name)))
+        (dolist (r (getf pslot :readers))
+          (push `(defmethod ,r ((self ,name))
+                   (slot-value self ',sname))
+                reader-forms))
+        (dolist (w (getf pslot :writers))
+          (if (and (consp w) (eq (car w) 'setf))
+              ;; Install a setf expander for the accessor name
+              (push `(%install-clos-setf-expander ',(cadr w) ',sname)
+                    writer-forms)
+              ;; Named writer method: (writer new-val instance)
+              (push `(defmethod ,w ((new-value t) (self ,name))
+                       (setf (slot-value self ',sname) new-value))
+                    writer-forms)))))
+    `(progn
+       (ensure-clos-class ',name ',dsuper-names
+                           (list ,@(mapcar (lambda (s) `(%parse-slot-spec ',s))
+                                          direct-slots)))
+       ,@(nreverse reader-forms)
+       ,@(nreverse writer-forms)
+       (find-class ',name))))
+
+(defun %install-clos-setf-expander (accessor-name slot-name)
+  "Install (setf accessor-name) so (setf (accessor-name obj) val) works."
+  (sethash accessor-name *setf-expanders*
+           (let ((sn slot-name))
+             (lambda (obj-form new-val-form)
+               `(%set-slot-value ,new-val-form ,obj-form ',sn)))))
+
+;;; ---- 15. Instance allocation --------------------------------------------
+
+(defun %alloc-instance (cls)
+  "Allocate an unbound CLOS instance of class CLS."
+  (let* ((n (count-if (lambda (s) (eq (getf s :allocation) :instance))
+                      (%cls-eslots cls)))
+         (slots (make-array n :initial-element *%unbound*)))
+    (make-%obj :class cls :slots slots)))
+
+;;; ---- 16. CALL-NEXT-METHOD infrastructure --------------------------------
+
+(defvar *%cnm-args*  nil "Current argument list for CALL-NEXT-METHOD.")
+(defvar *%cnm-nexts* nil "Remaining next-method closures (callable, take &rest args).")
+(defvar *%cnm-on*    nil "T when executing inside a method body.")
+
+;; Helper: set the three CNM globals and call THUNK, restoring afterwards.
+;; Uses explicit setq since bocl's LET creates lexical (not dynamic) bindings.
+(defun %cnm-call (on nexts args thunk)
+  (let ((old-on    *%cnm-on*)
+        (old-nexts *%cnm-nexts*)
+        (old-args  *%cnm-args*))
+    (setq *%cnm-on* on *%cnm-nexts* nexts *%cnm-args* args)
+    (let ((result (funcall thunk)))
+      (setq *%cnm-on* old-on *%cnm-nexts* old-nexts *%cnm-args* old-args)
+      result)))
+
+(defun call-next-method (&rest explicit-args)
+  "Within a method body: call the next applicable method.
+  With no args: passes the original arguments.  With args: passes those instead."
+  (unless *%cnm-on*
+    (error "CALL-NEXT-METHOD: called outside a method body"))
+  (let ((next (car *%cnm-nexts*)))
+    (unless next
+      (error "CALL-NEXT-METHOD: no next method"))
+    (let ((actual-args (if explicit-args explicit-args *%cnm-args*)))
+      (%cnm-call t (cdr *%cnm-nexts*) actual-args
+                 (lambda () (apply next actual-args))))))
+
+(defun next-method-p ()
+  "Return T if CALL-NEXT-METHOD would find a method."
+  (and *%cnm-on* (not (null *%cnm-nexts*))))
+
+;;; ---- 17. Method applicability and specificity ---------------------------
+
+(defun %applicable-p (specializer arg)
+  "Return T if ARG matches SPECIALIZER."
+  (cond
+    ((eq specializer t) t)
+    ;; CLOS class — use %is-cls (kernel typep, no circularity)
+    ((%is-cls specializer)
+     (and (%is-obj arg)
+          (not (null (member specializer (%cls-cpl (%obj-class arg)))))))
+    ;; Built-in type symbol
+    ((symbolp specializer)
+     (funcall *%kernel-typep* arg specializer))
+    (t nil)))
+
+(defun %all-applicable-p (specs args)
+  "Return T if every specializer in SPECS matches the corresponding arg in ARGS."
+  (let ((ss specs) (as args))
+    (loop
+      (when (null ss) (return t))
+      (unless (%applicable-p (car ss) (car as)) (return nil))
+      (setq ss (cdr ss) as (cdr as)))))
+
+(defun %applicable-methods (gf args)
+  "Return all methods of GF whose specializers match ARGS."
+  (remove-if-not
+   (lambda (m)
+     (let* ((specs (%mth-specializers m))
+            (n (length specs))
+            (req-args (if (> (length args) n) (subseq args 0 n) args)))
+       (%all-applicable-p specs req-args)))
+   (%gf-methods gf)))
+
+(defun %specializer-position (spec arg)
+  "Return the CPL position of SPEC for ARG (lower = more specific), or 9999."
+  (cond
+    ((eq spec t) 9999)
+    ((%is-cls spec)
+     (if (and (%is-obj arg) (%cls-cpl (%obj-class arg)))
+         (let ((pos (position spec (%cls-cpl (%obj-class arg)))))
+           (or pos 9999))
+         9999))
+    ((symbolp spec)
+     ;; Built-in type — use subtype relationships to rank (approx)
+     (if (funcall *%kernel-typep* arg spec) 1 9999))
+    (t 9999)))
+
+(defun %method-more-specific-p (m1 m2 args)
+  "Return T if M1 is more specific than M2 for ARGS."
+  (loop for s1 in (%mth-specializers m1)
+        for s2 in (%mth-specializers m2)
+        for arg in args
+        unless (eq s1 s2)
+        do (return
+             (< (%specializer-position s1 arg)
+                (%specializer-position s2 arg)))
+        finally (return nil)))
+
+(defun %sort-methods (methods args)
+  "Sort METHODS by specificity for ARGS (most specific first)."
+  (sort (copy-list methods)
+        (lambda (m1 m2) (%method-more-specific-p m1 m2 args))))
+
+;;; ---- 18. Standard method combination / dispatch -------------------------
+
+(defun %invoke-effective-method (sorted-methods args)
+  "Implement standard method combination for SORTED-METHODS and ARGS."
+  (let ((arounds  (remove-if-not
+                   (lambda (m) (equal (%mth-qualifiers m) '(:around))) sorted-methods))
+        (befores  (remove-if-not
+                   (lambda (m) (equal (%mth-qualifiers m) '(:before))) sorted-methods))
+        (primaries (remove-if
+                    (lambda (m) (%mth-qualifiers m)) sorted-methods))
+        (afters   (nreverse
+                   (remove-if-not
+                    (lambda (m) (equal (%mth-qualifiers m) '(:after))) sorted-methods))))
+
+    (unless primaries
+      (error "No applicable primary method for args ~S" args))
+
+    ;; Build the primary chain: most-specific primary calls less specific via
+    ;; *%cnm-nexts*.  Use %cnm-call (setq-based) since bocl LET = lexical only.
+    (let* ((primary-fns (mapcar #'%mth-function primaries))
+
+           ;; Core thunk: runs before*, primary chain, after*
+           (core-thunk
+             (lambda (&rest core-args)
+               (let ((actual (if core-args core-args args)))
+                 ;; Run befores (no cnm)
+                 (dolist (m befores)
+                   (%cnm-call t nil actual
+                               (let ((mf (%mth-function m)))
+                                 (lambda () (apply mf actual)))))
+                 ;; Run primary chain
+                 (let ((result
+                          (%cnm-call t (cdr primary-fns) actual
+                                     (let ((fn (car primary-fns)))
+                                       (lambda () (apply fn actual))))))
+                   ;; Run afters (reversed; no cnm)
+                   (dolist (m afters)
+                     (%cnm-call t nil actual
+                                 (let ((mf (%mth-function m)))
+                                   (lambda () (apply mf actual)))))
+                   result)))))
+
+      ;; Wrap with arounds: each around's next is the following around or core
+      (if (null arounds)
+          (apply core-thunk args)
+          (labels ((make-chain (around-fns)
+                     (if (null around-fns)
+                         core-thunk
+                         (let* ((next    (make-chain (cdr around-fns)))
+                                (this-fn (%mth-function (car around-fns))))
+                           (lambda (&rest a)
+                             (let ((actual (if a a args)))
+                               (%cnm-call t (list next) actual
+                                           (lambda () (apply this-fn actual)))))))))
+            (apply (make-chain arounds) args))))))
+
+;;; ---- 19. Generic function installation ----------------------------------
+
+(defun %install-discriminating-function (name gf)
+  "Install a discriminating function for GF as the global function binding of NAME."
+  (set-symbol-function
+   (lambda (&rest args)
+     (let* ((applicable (%applicable-methods gf args))
+            (sorted     (%sort-methods applicable args)))
+       (when (null sorted)
+         (error "No applicable method for generic function ~S with arguments ~S"
+                name args))
+       (%invoke-effective-method sorted args)))
+   name))
+
+;;; ---- 20. ENSURE-GENERIC-FUNCTION and ENSURE-METHOD ---------------------
+
+(defun ensure-generic-function (name &key lambda-list)
+  "Return the generic function named NAME, creating it if needed."
+  (let ((existing (gethash name *%gfs*)))
+    (if existing
+        (progn
+          (when lambda-list (setf (%gf-lambda-list existing) lambda-list))
+          existing)
+        (let ((gf (make-%gf :name name :lambda-list lambda-list :methods nil)))
+          (sethash name *%gfs* gf)
+          (%install-discriminating-function name gf)
+          gf))))
+
+(defun ensure-method (gf-name qualifiers specializer-names fn)
+  "Add a method to the generic function GF-NAME.
+  QUALIFIERS: list of qualifier keywords.
+  SPECIALIZER-NAMES: list of class names (symbols), class objects, or T.
+  FN: the method lambda."
+  ;; Resolve specializer names to class objects
+  (let* ((specializers
+           (mapcar (lambda (s)
+                     (cond ((eq s t) t)
+                           ((%is-cls s) s)
+                           ((symbolp s)
+                            (or (gethash s *%classes*)
+                                (funcall *%kernel-find-class* s nil)
+                                s))          ; keep symbol for kernel typep dispatch
+                           (t s)))
+                   specializer-names))
+         (method (make-%mth :qualifiers qualifiers
+                             :specializers specializers
+                             :function fn))
+         (gf (or (gethash gf-name *%gfs*)
+                 (let ((new (make-%gf :name gf-name :lambda-list nil :methods nil)))
+                   (sethash gf-name *%gfs* new)
+                   new))))
+    ;; Remove any existing method with the same qualifiers + specializers
+    (setf (%gf-methods gf)
+          (remove-if (lambda (m)
+                       (and (equal (%mth-qualifiers m) qualifiers)
+                            (equal (%mth-specializers m) specializers)))
+                     (%gf-methods gf)))
+    (push method (%gf-methods gf))
+    (%install-discriminating-function gf-name gf)
+    gf-name))
+
+;;; ---- 21. Lambda list parsing helpers ------------------------------------
+
+(defun %parse-spec-ll (specialized-ll)
+  "Parse a specialised lambda list from DEFMETHOD.
+  Returns (values plain-lambda-list specializer-names).
+  Only required parameters (before any lambda-list keyword) are specialised."
+  (let ((plain-ll nil) (spec-names nil) (in-required t))
+    (dolist (param specialized-ll)
+      (cond
+        ((member param lambda-list-keywords)
+         (push param plain-ll)
+         (setq in-required nil))
+        (in-required
+         (if (consp param)
+             (progn (push (car param) plain-ll)
+                    (push (cadr param) spec-names))
+             (progn (push param plain-ll)
+                    (push t spec-names))))
+        (t (push param plain-ll))))
+    (values (nreverse plain-ll) (nreverse spec-names))))
+
+;;; ---- 22. DEFGENERIC and DEFMETHOD macros --------------------------------
+
+(defmacro defgeneric (name lambda-list &rest options)
+  "Define a generic function NAME with LAMBDA-LIST.
+  METHOD definitions in OPTIONS are currently ignored (add methods with DEFMETHOD)."
+  options  ; ignored
+  `(ensure-generic-function ',name :lambda-list ',lambda-list))
+
+(defmacro defmethod (name &rest args)
+  "Define a method for generic function NAME.
+  Syntax: (defmethod name [qualifier*] (specialised-lambda-list) body...)"
+  ;; Collect qualifiers (keywords before the lambda list)
+  (let ((qualifiers nil)
+        (rest args))
+    (loop while (and (consp rest) (keywordp (car rest)))
+          do (push (pop rest) qualifiers))
+    (setq qualifiers (nreverse qualifiers))
+    (let* ((specialized-ll (car rest))
+           (body (cdr rest)))
+      (multiple-value-bind (plain-ll spec-names)
+          (%parse-spec-ll specialized-ll)
+        `(ensure-method ',name ',qualifiers ',spec-names
+                         (lambda ,plain-ll ,@body))))))
+
+;;; ---- 23. SHARED-INITIALIZE and MAKE-INSTANCE ---------------------------
+
+(defun shared-initialize (instance slot-names &rest initargs)
+  "Initialise slots of INSTANCE from INITARGS and slot initforms.
+  SLOT-NAMES: T = all slots, or a list of slot names to initialise."
+  (unless (%is-obj instance)
+    (error "SHARED-INITIALIZE: ~S is not a CLOS instance" instance))
+  (let* ((cls (%obj-class instance))
+         (eslots (%cls-eslots cls)))
+    (dolist (eslot eslots instance)
+      (let ((name (getf eslot :name)))
+        (when (or (eq slot-names t) (member name slot-names))
+          (multiple-value-bind (ikey ivalue found)
+              (get-properties initargs (or (getf eslot :initargs) nil))
+            ikey  ; not used
+            (if found
+                (setf (svref (%obj-slots instance) (getf eslot :location)) ivalue)
+                (when (and (eq (svref (%obj-slots instance) (getf eslot :location)) *%unbound*)
+                           (getf eslot :initfunction))
+                  (setf (svref (%obj-slots instance) (getf eslot :location))
+                        (funcall (getf eslot :initfunction))))))))))
+    instance))
+
+(defun make-instance (class-designator &rest initargs)
+  "Create and return a new instance of CLASS-DESIGNATOR.
+  INITARGS are keyword-value pairs for slot initialisation."
+  (let* ((cls (cond ((%is-cls class-designator) class-designator)
+                    ((symbolp class-designator)
+                     (or (gethash class-designator *%classes*)
+                         (error "MAKE-INSTANCE: no class ~S" class-designator)))
+                    (t (error "MAKE-INSTANCE: ~S is not a class designator"
+                              class-designator))))
+         (instance (%alloc-instance cls)))
+    (apply #'initialize-instance instance initargs)
+    instance))
+
+;;; ---- 24. WITH-SLOTS and WITH-ACCESSORS ----------------------------------
+
+(defmacro with-slots (slot-specs instance-form &body body)
+  "Execute BODY with slots bound as symbol-macros to slot-value accessors.
+  Each element of SLOT-SPECS is either a slot-name symbol or (var slot-name)."
+  (let ((inst (gensym "INST-")))
+    `(let ((,inst ,instance-form))
+       (symbol-macrolet
+           ,(mapcar (lambda (spec)
+                      (if (symbolp spec)
+                          `(,spec (slot-value ,inst ',spec))
+                          `(,(car spec) (slot-value ,inst ',(cadr spec)))))
+                    slot-specs)
+         ,@body))))
+
+(defmacro with-accessors (accessor-specs instance-form &body body)
+  "Execute BODY with accessors bound as symbol-macros.
+  Each spec is (var accessor-name) or accessor-name (using itself as var)."
+  (let ((inst (gensym "INST-")))
+    `(let ((,inst ,instance-form))
+       (symbol-macrolet
+           ,(mapcar (lambda (spec)
+                      (if (symbolp spec)
+                          `(,spec (,spec ,inst))
+                          `(,(car spec) (,(cadr spec) ,inst))))
+                    accessor-specs)
+         ,@body))))
+
+;;; ---- 25. PRINT-OBJECT integration --------------------------------------
+
+;;; Override PRIN1 to call PRINT-OBJECT for CLOS instances.
+;;; Uses %is-obj (kernel-based check) to avoid circularity.
+;;; Guards against re-entry to avoid infinite recursion.
+(defparameter *%kernel-prin1* (symbol-function 'prin1))
+(defparameter *%in-print-object* nil)
+
+(set-symbol-function
+ (lambda (object &optional (stream *standard-output*))
+   (if (and (%is-obj object) (not *%in-print-object*))
+       (let ((*%in-print-object* t))
+         (print-object object stream))
+       (funcall *%kernel-prin1* object stream)))
+ 'prin1)
+
+;;; ---- 26. Bootstrap the core class hierarchy ----------------------------
+
+;;; Register STANDARD-OBJECT — the root of all user-defined CLOS classes.
+(let ((so (make-%cls :name 'standard-object
+                     :dsupers nil :dslots nil :eslots nil
+                     :cpl nil :dsubs nil)))
+  (setf (%cls-cpl so) (list so))
+  (sethash 'standard-object *%classes* so))
+
+;;; Define INITIALIZE-INSTANCE generic function and default method.
+(defgeneric initialize-instance (instance &rest initargs))
+(ensure-method 'initialize-instance nil '(standard-object)
+               (lambda (instance &rest initargs)
+                 (apply #'shared-initialize instance t initargs)
+                 instance))
+
+;;; shared-initialize is kept as a plain function (not a GF) to avoid
+;;; infinite recursion: the default initialize-instance method calls it,
+;;; and a GF method would call itself recursively.
+
+;;; PRINT-OBJECT — default prints #<ClassName>.
+(defgeneric print-object (object stream))
+(ensure-method 'print-object nil '(standard-object t)
+               (lambda (object stream)
+                 (format stream "#<~A>" (%cls-name (%obj-class object)))))
+
+;;; DESCRIBE-OBJECT — stub; used by some code
+(defgeneric describe-object (object stream))
+(ensure-method 'describe-object nil '(standard-object t)
+               (lambda (object stream)
+                 (format stream "~A is an instance of ~A~%"
+                         object (%cls-name (%obj-class object)))))
+
 ;;;; THE END

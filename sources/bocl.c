@@ -125,11 +125,25 @@ static void kernel_APPEND(unused Ref function, Ref arguments, MultipleValues* re
     results->values[0]=bocl_append(arguments);
     close_live_pool(pool);}
 
+/* (%clos-null-p x) — returns T if X is C NULL (not a valid Lisp object),
+   NIL otherwise.  Used to distinguish kernel find-class returning C NULL
+   (class not found) from returning a real class object. */
+static void kernel_CLOS_NULL_P(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref x=cons_car(arguments);
+    results->count=1;
+    results->values[0]=(x==NULL)?T_Symbol:NIL_Symbol;
+    close_live_pool(pool);}
+
 void bocl_register_load(void){
     Ref fname=S(LOAD);
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
     Ref af=S(APPEND);
-    set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));}
+    set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
+    /* Helper for CLOS: detect C NULL (returned by kernel find-class for unknown names). */
+    Ref cn=symbol_intern_cstring("%CLOS-NULL-P");
+    set_symbol_function(cn,built_in_function_new(cn,list(S(X),NULL),kernel_CLOS_NULL_P));}
 
 void bocl_call(Ref fname,Ref arguments){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));

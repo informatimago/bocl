@@ -5,7 +5,7 @@ include ../sources/common.mk
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
 # PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions
-PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring test_structures test_handler_bind test_restarts test_format test_loop test_list_utils test_misc test_slice15 test_slice16 test_slice17 test_slice18
+PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring test_structures test_handler_bind test_restarts test_format test_loop test_list_utils test_misc test_slice15 test_slice16 test_slice17 test_slice18 test_clos
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 
@@ -382,3 +382,14 @@ test_slice18: $(test_slice18_SRCS:%.c=%.d) $(test_slice18_SRCS:%.c=%.o) $(LIBBOC
 run_test_slice18:test_slice18
 	@printf "# Testing %s\n" $^
 	$(VERBOSE) $(RUN) ./test_slice18 ;echo status=$$?
+
+test_clos_SRCS = test_clos.c simple_test.c
+test_clos_LIBS = -L../sources -lbocl
+
+test_clos: $(test_clos_SRCS:%.c=%.d) $(test_clos_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_clos_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_clos_SRCS:%.c=%.o) $(test_clos_LIBS)
+
+run_test_clos:test_clos
+	@printf "# Testing %s\n" $^
+	$(VERBOSE) $(RUN) ./test_clos ;echo status=$$?

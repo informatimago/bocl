@@ -472,7 +472,7 @@ void kernel_SET_SYMBOL_VALUE(Ref function,Ref arguments,MultipleValues* results)
     Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_symbol_value(par_new_value, par_symbol);
+    results->values[0] = set_symbol_value(par_symbol, par_new_value);
     close_live_pool(pool);
 }
 
@@ -485,7 +485,7 @@ void kernel_SET_SYMBOL_FUNCTION(Ref function,Ref arguments,MultipleValues* resul
     Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_symbol_function(par_new_function, par_symbol);
+    results->values[0] = set_symbol_function(par_symbol, par_new_function);
     close_live_pool(pool);
 }
 
@@ -498,7 +498,7 @@ void kernel_SET_SYMBOL_PLIST(Ref function,Ref arguments,MultipleValues* results)
     Ref par_symbol = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = set_symbol_plist(par_new_plist, par_symbol);
+    results->values[0] = set_symbol_plist(par_symbol, par_new_plist);
     close_live_pool(pool);
 }
 
