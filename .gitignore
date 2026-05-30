@@ -36,6 +36,15 @@ tests/test_format
 tests/test_loop
 tests/test_list_utils
 tests/test_misc
+tests/test_slice15
+tests/test_slice16
+tests/test_slice17
+tests/test_slice18
+tests/test_slice20
+tests/test_slice21
+tests/test_slice22
+tests/test_slice23
+tests/test_clos
 
 *-Listing.xml
 *-Results.xml
