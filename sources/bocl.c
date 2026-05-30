@@ -466,6 +466,7 @@ static void kernel_CLEAR_INPUT(unused Ref function, Ref arguments, MultipleValue
     results->values[0]=NIL_Symbol;
     close_live_pool(pool);}
 
+
 void bocl_register_load(void){
     Ref fname=S(LOAD);
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
@@ -556,6 +557,12 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("RANDOM"),ll_rand,kernel_RANDOM_FN));
         set_symbol_function(symbol_intern_cstring("MAKE-RANDOM-STATE"),
             built_in_function_new(symbol_intern_cstring("MAKE-RANDOM-STATE"),ll_rand2,kernel_MAKE_RANDOM_STATE));
+        /* Slice 24 — KERNEL-FORMAT-RUN (stream ctrl-string start end args) */
+        Ref ll_fmt=list(S(STREAM),symbol_intern_cstring("CTRL"),
+                        symbol_intern_cstring("START"),symbol_intern_cstring("END"),
+                        symbol_intern_cstring("ARGS"),NULL);
+        Ref frf=symbol_intern_cstring("KERNEL-FORMAT-RUN");
+        set_symbol_function(frf,built_in_function_new(frf,ll_fmt,kernel_FORMAT_RUN));
     }}
 
 void bocl_call(Ref fname,Ref arguments){

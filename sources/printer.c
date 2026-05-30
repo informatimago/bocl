@@ -198,7 +198,7 @@ Ref bocl_fresh_line(Ref stream){
 /* Write integer N in RADIX to OUT.  ATSIGNP forces a '+' prefix on
    non-negative values.  Returns nothing.  Radix must be 2..36. */
 static void fmt_write_integer(FILE* out, word n, int radix, bool atsignp){
-    if(n==0){ fputc('0',out); return;}
+    if(n==0){ if(atsignp) fputc('+',out); fputc('0',out); return;}
     char tmp[128]; int len=0;
     bool neg=(n<0);
     uword v = neg ? (uword)(-(n+1))+1 : (uword)n;   /* safe abs */
@@ -361,8 +361,12 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
                   list_arg=sub_args;}
               if(close_pos!=(uword)-1) i=close_pos+2; /* skip ~} */
               break;}
-          case '}': break;   /* end of ~{~} — handled by caller */
+          case '}': goto done; /* end of ~{~} — stop this invocation */
+          case '^': {  /* ~^ — escape upward: stop if no more args remain */
+              if(nullp(*args_ptr)) goto done;
+              break;}
           default:  break;}} /* unknown — silently ignore */
+done:
     return *args_ptr;}
 
 void kernel_FORMAT_RUN(Ref function,Ref arguments,MultipleValues* results){
