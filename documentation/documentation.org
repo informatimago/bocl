@@ -2,7 +2,7 @@
 
 #+AUTHOR: Pascal J. Bourguignon
 #+EMAIL: pjb@informatimago.com
-#+DATE: Sat Jun  5 19:25:00 CEST 2021
+#+DATE: Sat May 30 09:29:34 CEST 2026
 #+TITLE: Documentation of the BOCL Bootstrap Common Lisp Implementation
 
 * Prologue                                                         :noexport:
@@ -220,8 +220,6 @@ The &key parameters are bound in the order of appearance,
 independently of the order of the key value pairs in the argument
 list.  Only the first occurence of a given key is used in the argument
 list.
-
-
 
 ** 4. Types and Classes
 
@@ -822,24 +820,6 @@ Results:
         parse-integer/i))
 #+END_EXAMPLE
 
-** The REPL
-
-The REPL is a standard REPL.
-
-*** Function QUIT
-
-Syntax:
-
-    QUIT (&optional (status 0)) => non-local-exit
-
-Arguments and Values:
-
-    status -- an integer
-
-Description:
-
-    Exits the =bocl= process, with the given STATUS.
-
 ** External-format
 
 External-formats can be:
@@ -878,23 +858,60 @@ Encoding or decoding errors can only occur with a code>127 given with
 Note: kernel:stream-external-format accept only (:crlf :cr :lf) as
 line-termination; the mapping is done in the CL layer.
 
+
+Unicode and UTF-8 is out of scope for version 1.
+
 #+BEGIN_EXAMPLE
 (:us-ascii :crlf #\SUB)     Write the #\SUB character instead.
 (:us-ascii :crlf :error)    Signal an error.
 (:us-ascii :crlf nil)       Ignore and skip the invalid character.
 #+END_EXAMPLE
 
-* The Meta-Object Protocol -- MOP
+** The REPL
 
-TBD
+The REPL is a standard REPL.
 
-* Gray Streams
+*** Function QUIT
 
-TBD
+Syntax:
 
-* Another System Definition Facility -- ASDF
+    QUIT (&optional (status 0)) => non-local-exit
 
-TBD
+Arguments and Values:
+
+    status -- an integer
+
+Description:
+
+    Exits the =bocl= process, with the given STATUS.
+
+** The debugger
+
+A debugger will be specified later.
+
+At minimum, the debugger must print a backtrace and the bindings of
+the current frame, and allow the selection of the restarts, or abort
+to the toplevel or quit.
+
+** The Meta-Object Protocol -- MOP
+
+Not in the scope of version 1.
+
+** Gray Streams
+
+Not in the scope of version 1.
+
+** Another System Definition Facility -- ASDF
+
+ASDF 3 should be packaged and integrated with the bocl implementation.
+https://asdf.common-lisp.dev
+https://github.com/fare/asdf
+
+Normally, ASDF is mostly a conforming Common Lisp program, should it
+should be loadable and utilisable directly, but it has extensions that
+can wrap around implementations specific features and behavior, so it
+may be useful to provide some level of integration (#+bocl specific
+entries in asdf, and bocl extensions specific to better support asdf).
 
 * Epilogue                                                         :noexport:
 
