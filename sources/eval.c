@@ -1529,6 +1529,8 @@ static void eval_body_in_block(Ref function,Ref block_name,Ref body,Ref environm
     UNWIND(code){
         UWBODY{
             {dolist(form,body){
+                    /* Skip (declare ...) forms — declarations, not code. */
+                    if(consp(form) && eql(DECLARE_Symbol,cons_car(form))) continue;
                     evale(form,environment,results);}}}
         UWCLEANUP{}}
     (void)function;}

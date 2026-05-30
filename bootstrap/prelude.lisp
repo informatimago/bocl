@@ -4538,4 +4538,265 @@
 ;;; ---- INTERNAL-TIME-UNITS-PER-SECOND -------------------------------------
 ;;; Already defined in prelude as (defconstant internal-time-units-per-second 1000000).
 
-;;;; THE END
+;;;; ========================================================================
+;;;; Slice 25 — environment queries, module system, number conversions,
+;;;;   compiler stubs, stream predicates, DEFSETF, MACRO-FUNCTION,
+;;;;   WITH-HASH-TABLE-ITERATOR, and standard variable completions.
+;;;; ========================================================================
+
+;;; ---- RATIONAL / RATIONALIZE -----------------------------------------------
+;;; bocl has no distinct rational/ratio type.  Integers stay as integers;
+;;; floats are returned as-is (no exact rational approximation).
+
+(defun rational (x)
+  "Convert X to a rational.  In bocl: identity for integers; floats returned
+  as-is since bocl has no ratio type."
+  (if (integerp x) x
+      (if (floatp x) x
+          (error "RATIONAL: ~S is not a real number" x))))
+
+(defun rationalize (x)
+  "Like RATIONAL but may return a simpler rational.  In bocl: same as RATIONAL."
+  (rational x))
+
+;;; ---- *MODULES* / PROVIDE / REQUIRE ----------------------------------------
+
+(defvar *modules* nil
+  "List of (string) names of modules that have been loaded via PROVIDE.")
+
+(defun provide (module-name)
+  "Record MODULE-NAME as a loaded module.  Returns MODULE-NAME."
+  (let ((name (string module-name)))
+    (pushnew name *modules* :test #'string=)
+    module-name))
+
+(defun require (module-name &optional pathnames)
+  "Load MODULE-NAME unless already provided.  PATHNAMES may be a path or a list of paths."
+  (let ((name (string module-name)))
+    (unless (member name *modules* :test #'string=)
+      (cond
+        (pathnames
+         (dolist (p (if (listp pathnames) pathnames (list pathnames)))
+           (load p)))
+        (t (error "REQUIRE: module ~S not loaded and no pathname given" module-name)))))
+  module-name)
+
+;;; ---- Load-time dynamic variables -----------------------------------------
+
+(defvar *load-pathname* nil
+  "Pathname of the file currently being loaded, or NIL.")
+(defvar *load-truename* nil
+  "Truename of the file currently being loaded, or NIL.")
+(defvar *compile-file-pathname* nil
+  "Pathname of the file currently being compiled, or NIL.")
+(defvar *compile-file-truename* nil
+  "Truename of the file currently being compiled, or NIL.")
+
+;;; ---- Site name -----------------------------------------------------------
+
+(defun short-site-name ()
+  "Return a string identifying the site, or NIL."
+  nil)
+
+(defun long-site-name ()
+  "Return a string identifying the site, or NIL."
+  nil)
+
+;;; ---- Stream predicates ---------------------------------------------------
+;;; STREAMP, INPUT-STREAM-P, OUTPUT-STREAM-P already in kernel.
+;;; bocl has STRING-STREAM and FILE-STREAM kernel classes; use TYPEP.
+
+(defun string-stream-p (stream)
+  "Return T if STREAM is a string (in-memory) stream."
+  (typep stream 'string-stream))
+
+(defun file-stream-p (stream)
+  "Return T if STREAM is a file (disk) stream.
+  In bocl, string-stream is a subclass of file-stream; we exclude string streams."
+  (and (typep stream 'file-stream)
+       (not (typep stream 'string-stream))))
+
+(defun synonym-stream-p (stream)
+  "Return T if STREAM is a synonym stream.  In bocl: always NIL."
+  (declare (ignore stream)) nil)
+
+(defun broadcast-stream-p (stream)
+  "Return T if STREAM is a broadcast stream.  In bocl: always NIL."
+  (declare (ignore stream)) nil)
+
+(defun concatenated-stream-p (stream)
+  "Return T if STREAM is a concatenated stream.  In bocl: always NIL."
+  (declare (ignore stream)) nil)
+
+(defun two-way-stream-p (stream)
+  "Return T if STREAM is a two-way stream.  In bocl: always NIL."
+  (declare (ignore stream)) nil)
+
+(defun echo-stream-p (stream)
+  "Return T if STREAM is an echo stream.  In bocl: always NIL."
+  (declare (ignore stream)) nil)
+
+;;; ---- MACRO-FUNCTION / (SETF MACRO-FUNCTION) ------------------------------
+;;; In bocl, DEFMACRO stores the expansion function on the symbol's plist
+;;; under the key $MACRO (the symbol named "$MACRO" in the kernel).
+
+(defun macro-function (symbol &optional environment)
+  "Return the macro-expansion function for SYMBOL, or NIL if not a macro."
+  (declare (ignore environment))
+  (get symbol '$macro))
+
+;;; (setf macro-function) — bocl's defun doesn't support (setf name) form yet.
+;;; Use set-symbol-macro-function directly via the plist.
+(defun set-symbol-macro-function (symbol fn)
+  "Set SYMBOL's macro expansion function to FN."
+  (setf (get symbol '$macro) fn)
+  fn)
+
+;;; SPECIAL-OPERATOR-P — kernel special forms.
+(defun special-operator-p (symbol)
+  "Return T if SYMBOL names a special operator."
+  (if (member symbol '(block catch eval-when flet function go if labels
+                       let let* load-time-value locally macrolet multiple-value-call
+                       multiple-value-prog1 progn progv quote return-from setq
+                       symbol-macrolet tagbody the throw unwind-protect))
+      t nil))
+
+;;; COMPILER-MACRO-FUNCTION — bocl has no compiler macros.
+(defun compiler-macro-function (name &optional environment)
+  "Return the compiler-macro function for NAME, or NIL.  bocl: always NIL."
+  (declare (ignore name environment)) nil)
+
+(defmacro define-compiler-macro (name lambda-list &body body)
+  "Define a compiler macro.  In bocl: silently ignored (no compiler)."
+  (declare (ignore lambda-list body))
+  `',name)
+
+;;; ---- DEFSETF ---------------------------------------------------------------
+;;; Short form: (defsetf accessor update-fn)
+;;; Long form:  (defsetf accessor lambda-list (store-var) &body body)
+
+(defmacro defsetf (access-fn &rest rest)
+  "Define a setf expansion for ACCESS-FN.
+  Short form: (defsetf acc update-fn &optional doc)
+  Long form:  (defsetf acc (params) (store-var) body...)"
+  (cond
+    ;; Short form: second arg is a symbol (the update function name)
+    ((symbolp (car rest))
+     (let ((update-fn (car rest)))
+       `(define-setf-expander ,access-fn (&rest %args%)
+          (let ((%store% (gensym "STORE-")))
+            (values nil %args% (list %store%)
+                    (list* ',update-fn (append %args% (list %store%)))
+                    (cons ',access-fn %args%))))))
+    ;; Long form: second arg is a lambda-list
+    (t
+     (let* ((lambda-list (car rest))
+            (store-vars  (cadr rest))
+            (body        (cddr rest)))
+       `(define-setf-expander ,access-fn ,lambda-list
+          (let ,(mapcar (lambda (v) `(,v (gensym ,(string v)))) store-vars)
+            (values nil
+                    (list ,@(remove-if (lambda (s) (member s lambda-list-keywords)) lambda-list))
+                    (list ,@store-vars)
+                    (progn ,@body)
+                    (list ',access-fn
+                          ,@(remove-if (lambda (s) (member s lambda-list-keywords)) lambda-list)))))))))
+
+;;; ---- WITH-HASH-TABLE-ITERATOR -----------------------------------------------
+
+(defmacro with-hash-table-iterator (name-and-table &body body)
+  "Establish an iterator NAME over HASH-TABLE.
+  Call syntax: (with-hash-table-iterator (name table) body...).
+  NAME is a local function of no arguments; each call returns
+  (values more-p key value).  When the table is exhausted, returns (values NIL)."
+  (let ((name       (car  name-and-table))
+        (hash-table (cadr name-and-table))
+        (keys-var   (gensym "KEYS-"))
+        (table-var  (gensym "HT-")))
+    `(let* ((,table-var ,hash-table)
+            (,keys-var  (hash-table-keys ,table-var)))
+       (flet ((,name ()
+                (if (null ,keys-var)
+                    (values nil nil nil)
+                    (let* ((k (car ,keys-var))
+                           (v (gethash k ,table-var)))
+                      (setq ,keys-var (cdr ,keys-var))
+                      (values t k v)))))
+         ,@body))))
+
+;;; ---- GET-SETF-EXPANSION ---------------------------------------------------
+
+(defun get-setf-expansion (place &optional environment)
+  "Return the five-value setf expansion for PLACE."
+  (declare (ignore environment))
+  ;; Delegate to the existing SETF macro infrastructure.
+  ;; We re-use the setf-expander lookup from the SETF macro.
+  (if (symbolp place)
+      ;; Simple variable
+      (let ((store (gensym "STORE-")))
+        (values nil nil (list store) `(setq ,place ,store) place))
+      ;; Compound place — look up the expander
+      (let* ((op (car place))
+             (args (cdr place))
+             (expander (get op '%setf-expander)))
+        (if expander
+            (apply expander args)
+            (error "GET-SETF-EXPANSION: no setf expander for ~S" op)))))
+
+;;; ---- DEFINE-SYMBOL-MACRO --------------------------------------------------
+;;; Installs a global symbol macro so every reference to SYMBOL
+;;; expands to EXPANSION.
+
+(defmacro define-symbol-macro (symbol expansion)
+  "Define SYMBOL as a global symbol macro expanding to EXPANSION."
+  `(progn
+     ;; Store the expansion in the symbol's plist under %symbol-macro.
+     (setf (get ',symbol '%symbol-macro) ',expansion)
+     ',symbol))
+
+;;; ---- LOAD-LOGICAL-PATHNAME-TRANSLATIONS ----------------------------------
+
+(defun load-logical-pathname-translations (host)
+  "Load logical pathname translations for HOST.  Stub: always returns NIL."
+  (declare (ignore host)) nil)
+
+;;; ---- LOGICAL-PATHNAME stubs -----------------------------------------------
+
+(defun logical-pathname (pathspec)
+  "Convert PATHSPEC to a logical pathname.  In bocl: signal error (no logical pathnames)."
+  (error "LOGICAL-PATHNAME: bocl does not support logical pathnames (got ~S)" pathspec))
+
+(defun translate-logical-pathname (pathname &key)
+  "Translate a logical pathname to a physical pathname.  Stub."
+  pathname)
+
+;;; ---- COMPILE-FILE-PATHNAME -----------------------------------------------
+
+(defun compile-file-pathname (input-file &key (output-file nil) &allow-other-keys)
+  "Return the pathname that COMPILE-FILE would write to.  In bocl: stub."
+  (declare (ignore output-file))
+  input-file)
+
+;;; ---- *PRINT-PPRINT-DISPATCH* ---------------------------------------------
+
+(defvar *print-pprint-dispatch* nil
+  "The current pprint dispatch table.  In bocl: NIL (no pretty printer).")
+
+(defun set-pprint-dispatch (type-specifier function &optional priority table)
+  "Install FUNCTION as the pprint dispatch for TYPE-SPECIFIER.  Stub."
+  (declare (ignore type-specifier function priority table)) nil)
+
+(defun copy-pprint-dispatch (&optional table)
+  "Return a copy of the pprint dispatch table.  Stub: returns NIL."
+  (declare (ignore table)) nil)
+
+;;; ---- MAKE-BROADCAST-STREAM etc. stubs ------------------------------------
+;;; Broadcast, concatenated, synonym, echo, two-way streams are already
+;;; stubbed in the stream-constructors section above; no additional stubs needed.
+
+;;; ---- *GENSYM-COUNTER* extension ------------------------------------------
+;;; GENSYM is already a kernel function.  *GENSYM-COUNTER* is the standard
+;;; variable that controls its counter; bocl maintains it internally.
+;;; Expose it as a Lisp variable synced with the kernel if needed.
+
+;;;; THE END OF SLICE 25

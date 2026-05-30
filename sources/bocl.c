@@ -11,6 +11,10 @@
 #include "packages.h"
 #include <time.h>
 #include <sys/time.h>
+#include <sys/utsname.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stdlib.h>
 
 
 Ref bocl_eval(Ref sexp){
@@ -466,6 +470,99 @@ static void kernel_CLEAR_INPUT(unused Ref function, Ref arguments, MultipleValue
     results->values[0]=NIL_Symbol;
     close_live_pool(pool);}
 
+/* ---- Slice 25: environment, PARSE-FLOAT, COMPILE stubs -------------------*/
+
+/* Helper: get uname struct; return false on failure. */
+static bool get_uname(struct utsname* u){ return uname(u)==0; }
+
+/* (MACHINE-TYPE) → sysname from uname, e.g. "Darwin" */
+static void kernel_MACHINE_TYPE(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    struct utsname u;
+    Ref s = get_uname(&u) ? string_new_cstring(u.machine) : string_new_cstring("unknown");
+    results->count=1; results->values[0]=s;
+    close_live_pool(pool);}
+
+/* (MACHINE-INSTANCE) → hostname */
+static void kernel_MACHINE_INSTANCE(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    char buf[256]=""; gethostname(buf,sizeof(buf)-1);
+    results->count=1; results->values[0]=string_new_cstring(buf);
+    close_live_pool(pool);}
+
+/* (MACHINE-VERSION) → uname version field */
+static void kernel_MACHINE_VERSION(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    struct utsname u;
+    Ref s = get_uname(&u) ? string_new_cstring(u.version) : string_new_cstring("0");
+    results->count=1; results->values[0]=s;
+    close_live_pool(pool);}
+
+/* (SOFTWARE-TYPE) → OS name, e.g. "Darwin" or "Linux" */
+static void kernel_SOFTWARE_TYPE(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    struct utsname u;
+    Ref s = get_uname(&u) ? string_new_cstring(u.sysname) : string_new_cstring("unknown");
+    results->count=1; results->values[0]=s;
+    close_live_pool(pool);}
+
+/* (SOFTWARE-VERSION) → OS release string */
+static void kernel_SOFTWARE_VERSION(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    struct utsname u;
+    Ref s = get_uname(&u) ? string_new_cstring(u.release) : string_new_cstring("0");
+    results->count=1; results->values[0]=s;
+    close_live_pool(pool);}
+
+/* (PARSE-FLOAT string &key start end junk-allowed) → float
+   Simplified: ignores :start/:end/:junk-allowed, uses strtod on the whole string. */
+static void kernel_PARSE_FLOAT(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref str_ref=cons_car(arguments);
+    if(!stringp(str_ref)){ ERROR("PARSE-FLOAT: argument is not a string%s",""); }
+    char* cstr=string_cstring(str_ref);
+    char* endp=NULL; errno=0;
+    double val=strtod(cstr,&endp);
+    if(errno!=0||endp==cstr){
+        ERROR("PARSE-FLOAT: cannot parse ~S as a float",str_ref); }
+    results->count=1; results->values[0]=float_from_floating(val);
+    close_live_pool(pool);}
+
+/* (COMPILE name definition) → (values name warnings-p failure-p)
+   Stub: bocl is an interpreter; just return (values name nil nil). */
+static void kernel_COMPILE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref name=cons_car(arguments);
+    results->count=3;
+    results->values[0]=name;
+    results->values[1]=NIL_Symbol;  /* warnings-p */
+    results->values[2]=NIL_Symbol;  /* failure-p */
+    close_live_pool(pool);}
+
+/* (COMPILE-FILE input-file &key ...) → (values output-file warnings errors)
+   Stub: signal an error; bocl has no compiler. */
+static void kernel_COMPILE_FILE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    (void)arguments;
+    results->count=3;
+    results->values[0]=NIL_Symbol;
+    results->values[1]=NIL_Symbol;
+    results->values[2]=T_Symbol;    /* failure: bocl has no compiler */
+    close_live_pool(pool);}
+
+/* (DISASSEMBLE fn) → NIL — bocl is an interpreter, nothing to disassemble. */
+static void kernel_DISASSEMBLE(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    results->count=1; results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (ED &optional x) → NIL stub. */
+static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    results->count=1; results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* ---- end Slice 25 C functions --------------------------------------------*/
 
 void bocl_register_load(void){
     Ref fname=S(LOAD);
@@ -563,6 +660,36 @@ void bocl_register_load(void){
                         symbol_intern_cstring("ARGS"),NULL);
         Ref frf=symbol_intern_cstring("KERNEL-FORMAT-RUN");
         set_symbol_function(frf,built_in_function_new(frf,ll_fmt,kernel_FORMAT_RUN));
+    }
+    /* Slice 25 — environment, PARSE-FLOAT, compiler stubs. */
+    {   Ref ll_0=list(NULL);
+        Ref ll_s=list(symbol_intern_cstring("STRING"),
+                      S(&REST),symbol_intern_cstring("KEYS"),NULL);
+        Ref ll_n=list(symbol_intern_cstring("NAME"),
+                      S(&OPTIONAL),symbol_intern_cstring("DEFINITION"),NULL);
+        Ref ll_f=list(symbol_intern_cstring("INPUT-FILE"),
+                      S(&REST),symbol_intern_cstring("KEYS"),NULL);
+        Ref ll_x=list(S(&OPTIONAL),S(X),NULL);
+        set_symbol_function(symbol_intern_cstring("MACHINE-TYPE"),
+            built_in_function_new(symbol_intern_cstring("MACHINE-TYPE"),ll_0,kernel_MACHINE_TYPE));
+        set_symbol_function(symbol_intern_cstring("MACHINE-INSTANCE"),
+            built_in_function_new(symbol_intern_cstring("MACHINE-INSTANCE"),ll_0,kernel_MACHINE_INSTANCE));
+        set_symbol_function(symbol_intern_cstring("MACHINE-VERSION"),
+            built_in_function_new(symbol_intern_cstring("MACHINE-VERSION"),ll_0,kernel_MACHINE_VERSION));
+        set_symbol_function(symbol_intern_cstring("SOFTWARE-TYPE"),
+            built_in_function_new(symbol_intern_cstring("SOFTWARE-TYPE"),ll_0,kernel_SOFTWARE_TYPE));
+        set_symbol_function(symbol_intern_cstring("SOFTWARE-VERSION"),
+            built_in_function_new(symbol_intern_cstring("SOFTWARE-VERSION"),ll_0,kernel_SOFTWARE_VERSION));
+        set_symbol_function(symbol_intern_cstring("PARSE-FLOAT"),
+            built_in_function_new(symbol_intern_cstring("PARSE-FLOAT"),ll_s,kernel_PARSE_FLOAT));
+        set_symbol_function(symbol_intern_cstring("COMPILE"),
+            built_in_function_new(symbol_intern_cstring("COMPILE"),ll_n,kernel_COMPILE));
+        set_symbol_function(symbol_intern_cstring("COMPILE-FILE"),
+            built_in_function_new(symbol_intern_cstring("COMPILE-FILE"),ll_f,kernel_COMPILE_FILE));
+        set_symbol_function(symbol_intern_cstring("DISASSEMBLE"),
+            built_in_function_new(symbol_intern_cstring("DISASSEMBLE"),ll_x,kernel_DISASSEMBLE));
+        set_symbol_function(symbol_intern_cstring("ED"),
+            built_in_function_new(symbol_intern_cstring("ED"),ll_x,kernel_ED));
     }}
 
 void bocl_call(Ref fname,Ref arguments){
