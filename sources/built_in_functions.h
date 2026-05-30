@@ -192,6 +192,11 @@ void kernel_ENVIRONMENT_FIND_BLOCK(Ref function,Ref arguments,MultipleValues* re
 void kernel_ENVIRONMENT_FIND_CATCH(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_SPECIAL_VARIABLE_P(Ref function,Ref arguments,MultipleValues* results);
 
+/* Slice 23 */
+void kernel_MAKE_LIST(Ref function,Ref arguments,MultipleValues* results);
+void kernel_AREF    (Ref function,Ref arguments,MultipleValues* results);
+void kernel_AREF_SET(Ref function,Ref arguments,MultipleValues* results);
+
 void kernel_initialize_built_in_functions(void);
 
 #endif

@@ -7,6 +7,14 @@
 #include "reader.h"
 #include "printer.h"
 
+/* Forward declarations for Slice 23 helpers (defined in bostring.c / bit_vector.c / vector.c). */
+extern Ref char_ref(Ref string, Ref index);
+extern Ref char_set(Ref string, Ref index, Ref new_char);
+extern Ref bit(Ref vector, Ref index);
+extern Ref bit_set(Ref vector, Ref index, Ref new_bit);
+extern Ref svref(Ref vector, Ref index);
+extern Ref svref_set(Ref vector, Ref index, Ref new_object);
+
 void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
@@ -1491,6 +1499,68 @@ void kernel_SVREF_SET(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);
 }
 
+/* ---- Slice 23: MAKE-LIST, AREF, AREF-SET -------------------------------- */
+
+/* (MAKE-LIST n &key initial-element) — build a list of N elements. */
+void kernel_MAKE_LIST(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref n_ref   = pop_mandatory_argument(function,&current);
+    Ref init    = NIL_Symbol;
+    /* Parse :initial-element keyword */
+    while(consp(current)){
+        Ref k=cons_car(current); current=cons_cdr(current);
+        Ref v=consp(current)?cons_car(current):NIL_Symbol; if(consp(current)) current=cons_cdr(current);
+        if(eql(k,keyword_intern_cstring("INITIAL-ELEMENT"))) init=v;}
+    word n=integer_value(n_ref);
+    if(n<0){ ERROR("MAKE-LIST: negative length %"WORD_FORMAT,n); }
+    Ref result=NIL_Symbol;
+    add_to_live_pool(init);
+    for(word i=0;i<n;i++){
+        result=cons(init,result);
+        add_to_live_pool(result);}
+    results->count=1;
+    results->values[0]=result;
+    close_live_pool(pool);}
+
+/* (AREF array index) — generic 1-D array element access.
+   Dispatches on the array type: vectors, strings, bit-vectors. */
+void kernel_AREF(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref arr  = pop_mandatory_argument(function,&current);
+    Ref idx  = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    Ref val;
+    if(typep(arr,VECTOR_Class)){         val = svref(arr,idx); }
+    else if(typep(arr,STRING_Class)){    val = char_ref(arr,idx); }
+    else if(typep(arr,BIT_VECTOR_Class)){ val = bit(arr,idx); }
+    else { TYPE_ERROR(arr,ARRAY_Class); val=NIL_Symbol; }
+    results->count=1;
+    results->values[0]=val;
+    close_live_pool(pool);}
+
+/* (AREF-SET value array index) — setter for AREF (used by (setf (aref …))). */
+void kernel_AREF_SET(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref val  = pop_mandatory_argument(function,&current);
+    Ref arr  = pop_mandatory_argument(function,&current);
+    Ref idx  = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(typep(arr,VECTOR_Class)){          svref_set(arr,idx,val); }
+    else if(typep(arr,STRING_Class)){
+        /* char_set takes (string, index, character) */
+        char_set(arr,idx,val);}
+    else if(typep(arr,BIT_VECTOR_Class)){ bit_set(arr,idx,val); }
+    else { TYPE_ERROR(arr,ARRAY_Class); }
+    results->count=1;
+    results->values[0]=val;
+    close_live_pool(pool);}
+
 void kernel_BIT_VECTOR_P(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
@@ -2960,5 +3030,15 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(ENV-SPECIAL-VARIABLE-P);
         Ref lambda_list=list(S(OBJECT),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ENV_SPECIAL_VARIABLE_P));}
+    /* Slice 23 — MAKE-LIST, AREF, AREF-SET. */
+    {   Ref fname=S(MAKE-LIST);
+        Ref lambda_list=list(S(N),S(&REST),S(KEYS),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_LIST));}
+    {   Ref fname=S(AREF);
+        Ref lambda_list=list(S(ARRAY),S(INDEX),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_AREF));}
+    {   Ref fname=S(AREF-SET);
+        Ref lambda_list=list(S(VALUE),S(ARRAY),S(INDEX),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_AREF_SET));}
 }
 /**** THE END ****/

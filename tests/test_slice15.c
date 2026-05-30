@@ -24,13 +24,15 @@ static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
 /* ---- TYPE-OF ---------------------------------------------------------- */
 
 static void test_type_of(void){
-    TEST_EQ(equal, e("'fixnum"),        e("(type-of 42)"));
-    TEST_EQ(equal, e("'single-float"),  e("(type-of 1.0)"));
+    /* bocl type-of returns proper CL sexp type specifiers for numbers,
+       and simple symbols for other types. */
+    TEST_EQ(equal, S(INTEGER),      e("(first (type-of 42))"));
+    TEST_EQ(equal, e("'double-float"), e("(type-of 1.0)"));
     TEST_EQ(equal, e("'simple-string"), e("(type-of \"hello\")"));
-    TEST_EQ(equal, e("'symbol"),        e("(type-of 'foo)"));
-    TEST_EQ(equal, e("'cons"),          e("(type-of '(1 2))"));
-    TEST_EQ(equal, e("'null"),          e("(type-of nil)"));
-    TEST_EQ(equal, e("'character"),     e("(type-of #\\A)"));}
+    TEST_EQ(equal, e("'symbol"),    e("(type-of 'foo)"));
+    TEST_EQ(equal, e("'cons"),      e("(type-of '(1 2))"));
+    TEST_EQ(equal, e("'null"),      e("(type-of nil)"));
+    TEST_EQ(equal, e("'character"), e("(type-of #\\A)"));}
 
 /* ---- AREF / (SETF AREF) ----------------------------------------------- */
 

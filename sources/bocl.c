@@ -9,6 +9,8 @@
 #include "macros.h"
 #include "eval.h"
 #include "packages.h"
+#include <time.h>
+#include <sys/time.h>
 
 
 Ref bocl_eval(Ref sexp){
@@ -351,6 +353,119 @@ static void kernel_ARRAY_ELEMENT_TYPE(unused Ref function, Ref arguments, Multip
 /* Note: INPUT-STREAM-P, OUTPUT-STREAM-P, OPEN-STREAM-P are already in
    built_in_functions.c — not duplicated here. */
 
+/* ---- Slice 23: timing, write-string, sleep, clear-input, random ------- */
+
+/* splitmix64 PRNG — fast, good quality, no external state needed. */
+static uint64_t prng_state = 0x12345678ABCDEF01ULL;
+
+static uint64_t splitmix64(void){
+    uint64_t z = (prng_state += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);}
+
+/* (RANDOM limit &optional random-state) — uniform in [0,limit). */
+static void kernel_RANDOM_FN(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref limit=cons_car(arguments);
+    uint64_t r=splitmix64();
+    Ref val;
+    if(integerp(limit)){
+        word lv=integer_value(limit);
+        if(lv<=0){ ERROR("RANDOM: limit must be positive%s",""); }
+        val=integer_from_word((word)(r%(uint64_t)lv));
+    } else if(floatp(limit)){
+        floating lv=float_value(limit);
+        if(lv<=0.0){ ERROR("RANDOM: limit must be positive%s",""); }
+        val=float_from_floating(((floating)(r>>11)/(floating)(1ULL<<53))*lv);
+    } else {
+        TYPE_ERROR(limit,NUMBER_Class); val=NIL_Symbol;}
+    results->count=1;
+    results->values[0]=val;
+    close_live_pool(pool);}
+
+/* (MAKE-RANDOM-STATE &optional state) — return T (use global PRNG). */
+static void kernel_MAKE_RANDOM_STATE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    results->count=1;
+    results->values[0]=T_Symbol;  /* bocl uses a global PRNG; T = current state */
+    close_live_pool(pool);}
+
+/* CL universal time = seconds since 1900-01-01 00:00:00 UTC.
+   Unix epoch is 1970-01-01 = 70 years after 1900. */
+#define SECONDS_FROM_1900_TO_1970  2208988800UL
+
+static void kernel_GET_UNIVERSAL_TIME(unused Ref function, Ref arguments, MultipleValues* results){
+    add_to_live_pool(arguments);
+    results->count=1;
+    results->values[0]=integer_from_uword((uword)time(NULL)+(uword)SECONDS_FROM_1900_TO_1970);}
+
+static void kernel_GET_INTERNAL_REAL_TIME(unused Ref function, Ref arguments, MultipleValues* results){
+    add_to_live_pool(arguments);
+    struct timeval tv; gettimeofday(&tv,NULL);
+    uword us=(uword)tv.tv_sec*1000000UL+(uword)tv.tv_usec;
+    results->count=1;
+    results->values[0]=integer_from_uword(us);}
+
+static void kernel_GET_INTERNAL_RUN_TIME(unused Ref function, Ref arguments, MultipleValues* results){
+    add_to_live_pool(arguments);
+    struct timespec ts; clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&ts);
+    uword us=(uword)ts.tv_sec*1000000UL+(uword)ts.tv_nsec/1000UL;
+    results->count=1;
+    results->values[0]=integer_from_uword(us);}
+
+/* (WRITE-STRING string &optional stream &key start end)
+   Also used as (KERNEL-WRITE-STRING string stream start end) — positional. */
+static void kernel_WRITE_STRING(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref str    = cons_car(current); current=cons_cdr(current);
+    Ref stream = NIL_Symbol;
+    Ref start  = NIL_Symbol;
+    Ref end    = NIL_Symbol;
+    if(consp(current)){
+        stream=cons_car(current); current=cons_cdr(current);
+        /* Accept both keyword (:start/:end) and positional (start end) forms. */
+        if(consp(current)){
+            Ref x=cons_car(current);
+            if(keywordp(x)){
+                /* Keyword args: skip :start/:end labels, take values. */
+                while(consp(current)){
+                    Ref k=cons_car(current); current=cons_cdr(current);
+                    Ref v=consp(current)?cons_car(current):NIL_Symbol; if(consp(current)) current=cons_cdr(current);
+                    if(eql(k,keyword_intern_cstring("START"))) start=v;
+                    else if(eql(k,keyword_intern_cstring("END"))) end=v;}
+            } else {
+                /* Positional: start then end. */
+                start=x; current=cons_cdr(current);
+                if(consp(current)){ end=cons_car(current);}}}}
+    if(nullp(stream)) stream=variable_value(S(*STANDARD-OUTPUT*));
+    results->count=1;
+    results->values[0]=bocl_write_string(str,stream,start,end);
+    close_live_pool(pool);}
+
+/* (SLEEP seconds) — non-blocking sleep using nanosleep. */
+static void kernel_SLEEP(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref secs_ref=cons_car(current);
+    double s=floatp(secs_ref)?float_value(secs_ref):(double)integer_value(secs_ref);
+    if(s>0.0){
+        struct timespec ts;
+        ts.tv_sec=(time_t)s;
+        ts.tv_nsec=(long)((s-(double)ts.tv_sec)*1e9);
+        nanosleep(&ts,NULL);}
+    results->count=1;
+    results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (CLEAR-INPUT &optional stream) — discard buffered input. */
+static void kernel_CLEAR_INPUT(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    results->count=1;
+    results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
 void bocl_register_load(void){
     Ref fname=S(LOAD);
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
@@ -409,6 +524,38 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("ARRAY-ELEMENT-TYPE"),ll_arr,kernel_ARRAY_ELEMENT_TYPE));
         /* INPUT-STREAM-P, OUTPUT-STREAM-P, OPEN-STREAM-P already registered
            in kernel_initialize_built_in_functions() — skip here. */
+    }
+    /* Slice 23 — timing, write-string, sleep, clear-input. */
+    {   Ref ll_e   = list(S(&REST),symbol_intern_cstring("ARGS"),NULL);
+        Ref ll_x   = list(S(X),NULL);
+        Ref ll_str = list(symbol_intern_cstring("STRING"),S(&REST),symbol_intern_cstring("OPTS"),NULL);
+        Ref ll_s_o = list(S(SECONDS),NULL);
+        Ref ll_si  = list(S(STREAM),S(&OPTIONAL),NULL);
+        set_symbol_function(symbol_intern_cstring("GET-UNIVERSAL-TIME"),
+            built_in_function_new(symbol_intern_cstring("GET-UNIVERSAL-TIME"),ll_e,kernel_GET_UNIVERSAL_TIME));
+        set_symbol_function(symbol_intern_cstring("GET-INTERNAL-REAL-TIME"),
+            built_in_function_new(symbol_intern_cstring("GET-INTERNAL-REAL-TIME"),ll_e,kernel_GET_INTERNAL_REAL_TIME));
+        set_symbol_function(symbol_intern_cstring("GET-INTERNAL-RUN-TIME"),
+            built_in_function_new(symbol_intern_cstring("GET-INTERNAL-RUN-TIME"),ll_e,kernel_GET_INTERNAL_RUN_TIME));
+        set_symbol_function(symbol_intern_cstring("WRITE-STRING"),
+            built_in_function_new(symbol_intern_cstring("WRITE-STRING"),ll_str,kernel_WRITE_STRING));
+        /* The prelude's write-string calls kernel-write-string internally.
+           Register it with positional (string stream start end) args. */
+        Ref ll_ws4=list(symbol_intern_cstring("STRING"),S(STREAM),
+                        symbol_intern_cstring("START"),symbol_intern_cstring("END"),NULL);
+        set_symbol_function(symbol_intern_cstring("KERNEL-WRITE-STRING"),
+            built_in_function_new(symbol_intern_cstring("KERNEL-WRITE-STRING"),ll_ws4,kernel_WRITE_STRING));
+        set_symbol_function(symbol_intern_cstring("SLEEP"),
+            built_in_function_new(symbol_intern_cstring("SLEEP"),ll_s_o,kernel_SLEEP));
+        set_symbol_function(symbol_intern_cstring("CLEAR-INPUT"),
+            built_in_function_new(symbol_intern_cstring("CLEAR-INPUT"),ll_si,kernel_CLEAR_INPUT));
+        /* RANDOM / MAKE-RANDOM-STATE */
+        Ref ll_rand=list(symbol_intern_cstring("LIMIT"),S(&OPTIONAL),symbol_intern_cstring("STATE"),NULL);
+        Ref ll_rand2=list(S(&OPTIONAL),symbol_intern_cstring("STATE"),NULL);
+        set_symbol_function(symbol_intern_cstring("RANDOM"),
+            built_in_function_new(symbol_intern_cstring("RANDOM"),ll_rand,kernel_RANDOM_FN));
+        set_symbol_function(symbol_intern_cstring("MAKE-RANDOM-STATE"),
+            built_in_function_new(symbol_intern_cstring("MAKE-RANDOM-STATE"),ll_rand2,kernel_MAKE_RANDOM_STATE));
     }}
 
 void bocl_call(Ref fname,Ref arguments){

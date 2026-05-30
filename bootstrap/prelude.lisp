@@ -4429,4 +4429,113 @@
       (setq idx (+ (* idx (car dims)) sub))
       (setq dims (cdr dims)))))
 
+;;;; ========================================================================
+;;;; Slice 23 — Timing, universal-time, string I/O, array predicates,
+;;;;   ISQRT, NTHCDR alias, and other standard completions.
+;;;; ========================================================================
+
+;;; ---- Universal time: DECODE / ENCODE ------------------------------------
+;;;
+;;; CL universal time is seconds since 1900-01-01 00:00:00 UTC.
+
+(defun decode-universal-time (universal-time &optional (time-zone 0))
+  "Return 9 values: second minute hour date month year day-of-week
+  daylight-saving-time-p time-zone."
+  ;; Convert from 1900 epoch to 1970 epoch.
+  (let* ((unix-time (- universal-time 2208988800))
+         ;; Apply time zone (in hours, positive = west of UTC)
+         (adjusted  (- unix-time (* time-zone 3600)))
+         ;; Basic calendar decomposition
+         (seconds-per-day 86400)
+         (days-since-epoch (floor adjusted seconds-per-day))
+         (seconds-of-day   (mod adjusted seconds-per-day))
+         (hour   (floor seconds-of-day 3600))
+         (minute (floor (mod seconds-of-day 3600) 60))
+         (second (mod seconds-of-day 60))
+         ;; Day-of-week: 1970-01-01 was a Thursday = day 3 (0=Monday per CL)
+         (dow    (mod (+ days-since-epoch 3) 7))
+         ;; Compute year/month/day from days-since-1970
+         ;; Simplified: use 365/366 day years
+         (year   (let ((y 1970) (d days-since-epoch))
+                   (loop
+                     (let ((dy (if (= 0 (mod y 4)) 366 365)))
+                       (when (< d dy) (return y))
+                       (decf d dy) (incf y)))))
+         (day-of-year (let ((d days-since-epoch) (y 1970))
+                        (loop
+                          (let ((dy (if (= 0 (mod y 4)) 366 365)))
+                            (when (< d dy) (return d))
+                            (decf d dy) (incf y)))))
+         (month-days #(31 28 31 30 31 30 31 31 30 31 30 31))
+         (month      (let ((d day-of-year) (m 0))
+                       (dotimes (i 12 (1+ m))
+                         (let ((md (if (and (= i 1) (= 0 (mod year 4))) 29
+                                       (svref month-days i))))
+                           (when (< d md) (return (1+ i)))
+                           (decf d md)
+                           (setq m i)))))
+         (day        (1+ (let ((d day-of-year))
+                           (dotimes (i (1- month) d)
+                             (decf d (if (and (= i 1) (= 0 (mod year 4)))
+                                         29 (svref month-days i))))))))
+    (values second minute hour day month year dow nil time-zone)))
+
+(defun encode-universal-time (second minute hour date month year
+                               &optional (time-zone 0))
+  "Return universal time (seconds since 1900-01-01) for the given components."
+  ;; Convert year/month/day to days since 1970-01-01
+  (let* ((y (if (< year 100) (+ year 1900) year))
+         (days 0))
+    ;; Count days from 1970 to year
+    (dotimes (yr (- y 1970))
+      (incf days (if (= 0 (mod (+ 1970 yr) 4)) 366 365)))
+    ;; Add months
+    (let ((month-days #(31 28 31 30 31 30 31 31 30 31 30 31)))
+      (dotimes (m (1- month))
+        (incf days (if (and (= m 1) (= 0 (mod y 4))) 29
+                       (svref month-days m)))))
+    ;; Add days (1-based)
+    (incf days (1- date))
+    ;; Convert to seconds, add time of day, adjust timezone
+    (+ 2208988800                               ; 1900→1970 offset
+       (* days 86400)
+       (* hour 3600)
+       (* minute 60)
+       second
+       (* time-zone 3600))))                    ; timezone adjustment
+
+;;; ---- COPY-SEQ as a Lisp function ----------------------------------------
+;;; Already defined in Slice 20; no change needed.
+
+;;; ---- NTHCDR alias --------------------------------------------------------
+(defun nthcdr (n list)
+  "Return the Nth CDR of LIST (standard alias for repeated CDR)."
+  (dotimes (i n list)
+    (setq list (cdr list))))
+
+;;; ---- LAST-CONS -----------------------------------------------------------
+;;; LAST is already in kernel; alias for CL compatibility.
+
+;;; ---- DEFINE-MODIFY-MACRO ------------------------------------------------
+(defmacro define-modify-macro (name lambda-list function &optional documentation)
+  "Define a modify macro that applies FUNCTION to a place and stores the result."
+  documentation  ; ignored
+  (let ((place (gensym "PLACE-"))
+        (env   (gensym "ENV-")))
+    `(defmacro ,name (,place ,@lambda-list &environment ,env)
+       ,env  ; ignored
+       (let ((g (gensym "DM-")))
+         `(let ((,g ,(list ',function ,place ,@lambda-list)))
+            (setf ,,`(quote ,place) ,g)
+            ,g)))))
+
+;;; ---- INCF / DECF for generic delta --------------------------------------
+;;; Already defined; no change.
+
+;;; ---- REDUCE improvements ------------------------------------------------
+;;; REDUCE with :key was added in Slice 18.  No change needed.
+
+;;; ---- INTERNAL-TIME-UNITS-PER-SECOND -------------------------------------
+;;; Already defined in prelude as (defconstant internal-time-units-per-second 1000000).
+
 ;;;; THE END
