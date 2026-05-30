@@ -29,7 +29,7 @@ Common Lisp functions may be implemented entirely in C, in which case,
 they should also implement a conforming behavior wit respect to the
 Common Lisp standard.  But it is also possible that the actual public
 lisp function is implemented in the Common Lisp layer above the
-kernel, in which case the C version may be more lax (as long as the 
+kernel, in which case the C version may be more lax (as long as the
 Common Lisp wrapper ensure conformance.
 
 
@@ -38,26 +38,37 @@ rest of the Common Lisp implementation is written in Common Lisp,
 above the C kernel layer. It should be validated, notably its
 conformance with respect to the Common Lisp standard, but absence of
 bugs and error, notably when processing limits or uncommon cases.
- 
+
 The varions Common Lisp declaring limits of the implementation should
 be checked and validated, to ensure that a program relying on them can
 work conformingly without encountering problems.
 
 
-3- Some Common Lisp functions may or have to have implementation
+3- while we'll rely on ansi-test to validate conformance of the bocl
+implementation, important semantic aspect may have been
+missed. Therefore this step of the code review will start from the
+hyperspec, reading the normative sections of each chapter and
+dictionary pages, and verifying the bocl implementation with respect
+to the specified
+elements. https://www.lispworks.com/documentation/HyperSpec/Front/Contents.htm
+start with the "Introduction" chapter which explains how to read the
+rest of the hyperspec.
+
+
+4- Some Common Lisp functions may or have to have implementation
 specific behaviors, as specified by the Common Lisp standard.  Verify
 that such implementation specific behavior is not gratuituous, and
 that it is correctly documented in the section
 "Implementation-Dependent Features" of `documentation.org`
 
 
-4- Extensions: bocl will provide a few extensions as documented.
+5- Extensions: bocl will provide a few extensions as documented.
 Verify that they're correctly docummented in the section
 "Extensions to Common Lisp as specified by ANSI INCITS 226-1994 (S20018)"
 of `documentation.org`
 
 
-5- validation of the results of the ansi-tests. Once the ansi-tests
+6- validation of the results of the ansi-tests. Once the ansi-tests
 can run, their results must be verified and validated, and may signal
 conformance problems or bugs.
 
