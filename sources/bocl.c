@@ -172,6 +172,185 @@ static void kernel_CLOS_REGISTER(unused Ref function, Ref arguments, MultipleVal
     results->values[0]=T_Symbol;
     close_live_pool(pool);}
 
+/* ---- Slice 22 kernel built-ins ------------------------------------------ */
+
+#include <sys/stat.h>
+#include <unistd.h>
+
+/* (CLOSE stream &key abort) — close a stream; returns T. */
+static void kernel_CLOSE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref stream=cons_car(arguments);
+    /* :abort keyword is accepted but ignored — we always close */
+    results->count=1;
+    results->values[0]=stream_close_any(stream);
+    close_live_pool(pool);}
+
+/* (READ-BYTE stream &optional eof-error-p eof-value) */
+static void kernel_READ_BYTE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref stream      = cons_car(current); current=cons_cdr(current);
+    Ref eof_errorp  = consp(current)?cons_car(current):T_Symbol; if(consp(current)) current=cons_cdr(current);
+    Ref eof_value   = consp(current)?cons_car(current):NIL_Symbol;
+    results->count=1;
+    results->values[0]=stream_read_byte(stream,eof_errorp,eof_value);
+    close_live_pool(pool);}
+
+/* (WRITE-BYTE byte stream) */
+static void kernel_WRITE_BYTE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref byte_val = cons_car(current); current=cons_cdr(current);
+    Ref stream   = cons_car(current);
+    results->count=1;
+    results->values[0]=stream_write_byte(byte_val, stream);
+    close_live_pool(pool);}
+
+/* (PROBE-FILE filespec) — returns the truename or NIL if not found. */
+static void kernel_PROBE_FILE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref filespec=cons_car(arguments);
+    Ref name_ref;
+    if(typep(filespec,STRING_Class)){
+        name_ref=filespec;
+    } else {
+        name_ref=namestring(filespec);}
+    char* path=string_cstring(name_ref);
+    struct stat st;
+    bool exists=(stat(path,&st)==0);
+    free(path);
+    results->count=1;
+    results->values[0]=exists?name_ref:NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (DELETE-FILE filespec) — delete a file; errors if it can't. */
+static void kernel_DELETE_FILE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref filespec=cons_car(arguments);
+    Ref name_ref=typep(filespec,STRING_Class)?filespec:namestring(filespec);
+    char* path=string_cstring(name_ref);
+    int rc=remove(path);
+    free(path);
+    if(rc!=0){ ERROR("DELETE-FILE: failed to delete%s",""); }
+    results->count=1;
+    results->values[0]=T_Symbol;
+    close_live_pool(pool);}
+
+/* (RENAME-FILE filespec new-name) — rename a file; returns 3 values. */
+static void kernel_RENAME_FILE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref from=cons_car(current); current=cons_cdr(current);
+    Ref to=cons_car(current);
+    Ref from_str=typep(from,STRING_Class)?from:namestring(from);
+    Ref to_str  =typep(to,  STRING_Class)?to  :namestring(to);
+    char* fp=string_cstring(from_str);
+    char* tp=string_cstring(to_str);
+    int rc=rename(fp,tp);
+    free(fp); free(tp);
+    if(rc!=0){ ERROR("RENAME-FILE: failed to rename%s",""); }
+    results->count=3;
+    results->values[0]=from_str;
+    results->values[1]=to_str;
+    results->values[2]=to_str;
+    close_live_pool(pool);}
+
+/* (WILD-PATHNAME-P pathname &optional field-key) — stub: returns NIL. */
+static void kernel_WILD_PATHNAME_P(unused Ref function, Ref arguments, MultipleValues* results){
+    add_to_live_pool(arguments);
+    results->count=1;
+    results->values[0]=NIL_Symbol;}
+
+/* (TYPE-OF object) — return a type specifier for OBJECT. */
+static void kernel_TYPE_OF(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref obj=cons_car(arguments);
+    Ref type;
+    if(nullp(obj)){                  type=S(NULL); }
+    else if(obj==T_Symbol){          type=symbol_intern_cstring("BOOLEAN"); }
+    else if(integerp(obj)){
+        /* Return (integer lo hi) as a proper Lisp list — the most specific
+           standard range bucket for this value. */
+        word v=integer_value(obj);
+        Ref lo,hi;
+        if(v>=0 && v<=255){
+            lo=I(0); hi=I(255);
+        } else if(v>=-128 && v<=127){
+            lo=I(-128); hi=I(127);
+        } else {
+            /* Full signed-word range */
+            lo=integer_from_word(WORD_MIN); hi=integer_from_word(WORD_MAX);}
+        type=list(S(INTEGER),lo,hi,NULL); }
+    else if(floatp(obj)){            type=symbol_intern_cstring("DOUBLE-FLOAT"); }
+    else if(symbolp(obj)){
+        if(keywordp(obj))             type=S(KEYWORD);
+        else                          type=S(SYMBOL); }
+    else if(typep(obj,CONS_Class)){  type=S(CONS); }
+    else if(typep(obj,STRING_Class)){ type=symbol_intern_cstring("SIMPLE-STRING"); }
+    else if(typep(obj,BIT_VECTOR_Class)){ type=symbol_intern_cstring("SIMPLE-BIT-VECTOR"); }
+    else if(typep(obj,VECTOR_Class)){ type=symbol_intern_cstring("SIMPLE-VECTOR"); }
+    else if(typep(obj,CHARACTER_Class)){ type=S(CHARACTER); }
+    else if(typep(obj,HASH_TABLE_Class)){ type=symbol_intern_cstring("HASH-TABLE"); }
+    else if(typep(obj,PACKAGE_Class)){ type=S(PACKAGE); }
+    else if(typep(obj,FUNCTION_Class)){ type=S(FUNCTION); }
+    else if(closurep(obj)){          type=S(FUNCTION); }
+    else if(typep(obj,PATHNAME_Class)){ type=S(PATHNAME); }
+    else if(typep(obj,FILE_STREAM_Class)){ type=symbol_intern_cstring("FILE-STREAM"); }
+    else if(typep(obj,STRING_STREAM_Class)){ type=symbol_intern_cstring("STRING-STREAM"); }
+    else if(typep(obj,RANDOM_STATE_Class)){ type=symbol_intern_cstring("RANDOM-STATE"); }
+    else if(clos_instance_p(obj)){
+        /* CLOS instance — return the class name */
+        Ref cls_of=class_of(obj);
+        type=(clos_class_p(cls_of)&&structure_get(cls_of,symbol_intern_cstring("NAME"))!=NIL_Symbol)
+             ? structure_get(cls_of,symbol_intern_cstring("NAME"))
+             : symbol_intern_cstring("STANDARD-OBJECT");}
+    else if(structurep(obj)){
+        /* Structure instance — return the structure class name */
+        type=obj->class->slots->structure_class.name;}
+    else{                            type=S(T); }
+    results->count=1;
+    results->values[0]=type;
+    close_live_pool(pool);}
+
+/* (INT-CHAR integer) — return the character with the given code. */
+static void kernel_INT_CHAR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref n=cons_car(arguments);
+    check_type(n,INTEGER_Class);
+    word code=integer_value(n);
+    if(code<0||code>255){ ERROR("INT-CHAR: code out of range%s",""); }
+    results->count=1;
+    results->values[0]=octet_character((octet)code);
+    close_live_pool(pool);}
+
+/* (ARRAY-DIMENSIONS array) — return a list of the array's dimensions. */
+static void kernel_ARRAY_DIMENSIONS(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref arr=cons_car(arguments);
+    Ref dims;
+    if(typep(arr,VECTOR_Class)||typep(arr,STRING_Class)||typep(arr,BIT_VECTOR_Class)){
+        /* 1-D: single dimension */
+        uword len;
+        if(typep(arr,STRING_Class))         len=string_length(arr);
+        else if(typep(arr,BIT_VECTOR_Class)) len=bit_vector_length(arr);
+        else                                 len=arr->slots->array.dimensions[0];
+        dims=list(integer_from_uword(len),NULL);
+    } else {
+        dims=NIL_Symbol;}
+    results->count=1;
+    results->values[0]=dims;
+    close_live_pool(pool);}
+
+/* (ARRAY-ELEMENT-TYPE array) — return T (bocl uses uniform typed arrays). */
+static void kernel_ARRAY_ELEMENT_TYPE(unused Ref function, Ref arguments, MultipleValues* results){
+    add_to_live_pool(arguments);
+    results->count=1;
+    results->values[0]=S(T);}
+
+/* Note: INPUT-STREAM-P, OUTPUT-STREAM-P, OPEN-STREAM-P are already in
+   built_in_functions.c — not duplicated here. */
+
 void bocl_register_load(void){
     Ref fname=S(LOAD);
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
@@ -194,7 +373,43 @@ void bocl_register_load(void){
     {   Ref wc_fn = symbol_intern_cstring("WRITE-CHAR");
         Ref wc_ll = list(symbol_intern_cstring("CHARACTER"),
                          S(&OPTIONAL), symbol_intern_cstring("STREAM"), NULL);
-        set_symbol_function(wc_fn,built_in_function_new(wc_fn,wc_ll,kernel_WRITE_CHAR));}}
+        set_symbol_function(wc_fn,built_in_function_new(wc_fn,wc_ll,kernel_WRITE_CHAR));}
+    /* Slice 22 — I/O, pathnames, type-of, array, stream predicates. */
+    {   Ref ll_s=list(S(STREAM),NULL);
+        Ref ll_s_opt=list(S(STREAM),S(&REST),symbol_intern_cstring("KEYS"),NULL);
+        Ref ll_b_s=list(symbol_intern_cstring("BYTE"),S(STREAM),NULL);
+        Ref ll_s_o2=list(S(STREAM),S(&OPTIONAL),symbol_intern_cstring("EOF-ERROR-P"),symbol_intern_cstring("EOF-VALUE"),NULL);
+        Ref ll_x=list(S(X),NULL);
+        Ref ll_obj=list(symbol_intern_cstring("OBJECT"),NULL);
+        Ref ll_arr=list(symbol_intern_cstring("ARRAY"),NULL);
+        Ref ll_f=list(symbol_intern_cstring("FILESPEC"),NULL);
+        Ref ll_f2=list(symbol_intern_cstring("FILESPEC"),symbol_intern_cstring("NEW-NAME"),NULL);
+        Ref ll_f_o=list(symbol_intern_cstring("PATHNAME"),S(&OPTIONAL),symbol_intern_cstring("FIELD"),NULL);
+        set_symbol_function(symbol_intern_cstring("CLOSE"),
+            built_in_function_new(symbol_intern_cstring("CLOSE"),ll_s_opt,kernel_CLOSE));
+        set_symbol_function(symbol_intern_cstring("READ-BYTE"),
+            built_in_function_new(symbol_intern_cstring("READ-BYTE"),ll_s_o2,kernel_READ_BYTE));
+        set_symbol_function(symbol_intern_cstring("WRITE-BYTE"),
+            built_in_function_new(symbol_intern_cstring("WRITE-BYTE"),ll_b_s,kernel_WRITE_BYTE));
+        set_symbol_function(symbol_intern_cstring("PROBE-FILE"),
+            built_in_function_new(symbol_intern_cstring("PROBE-FILE"),ll_f,kernel_PROBE_FILE));
+        set_symbol_function(symbol_intern_cstring("DELETE-FILE"),
+            built_in_function_new(symbol_intern_cstring("DELETE-FILE"),ll_f,kernel_DELETE_FILE));
+        set_symbol_function(symbol_intern_cstring("RENAME-FILE"),
+            built_in_function_new(symbol_intern_cstring("RENAME-FILE"),ll_f2,kernel_RENAME_FILE));
+        set_symbol_function(symbol_intern_cstring("WILD-PATHNAME-P"),
+            built_in_function_new(symbol_intern_cstring("WILD-PATHNAME-P"),ll_f_o,kernel_WILD_PATHNAME_P));
+        set_symbol_function(symbol_intern_cstring("TYPE-OF"),
+            built_in_function_new(symbol_intern_cstring("TYPE-OF"),ll_obj,kernel_TYPE_OF));
+        set_symbol_function(symbol_intern_cstring("INT-CHAR"),
+            built_in_function_new(symbol_intern_cstring("INT-CHAR"),ll_x,kernel_INT_CHAR));
+        set_symbol_function(symbol_intern_cstring("ARRAY-DIMENSIONS"),
+            built_in_function_new(symbol_intern_cstring("ARRAY-DIMENSIONS"),ll_arr,kernel_ARRAY_DIMENSIONS));
+        set_symbol_function(symbol_intern_cstring("ARRAY-ELEMENT-TYPE"),
+            built_in_function_new(symbol_intern_cstring("ARRAY-ELEMENT-TYPE"),ll_arr,kernel_ARRAY_ELEMENT_TYPE));
+        /* INPUT-STREAM-P, OUTPUT-STREAM-P, OPEN-STREAM-P already registered
+           in kernel_initialize_built_in_functions() — skip here. */
+    }}
 
 void bocl_call(Ref fname,Ref arguments){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));

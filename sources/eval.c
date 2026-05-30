@@ -554,17 +554,19 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     environment_add_variable(var,new_environment);}}
              environment=new_environment;
              if(has_dynamic_binding){
-                 /* unwind-protect the body evaluation */
+                 /* Evaluate the body then restore special bindings.
+                  * UWCLEANUP handles non-local exits; after the UNWIND block
+                  * (normal-return path only) we restore explicitly.
+                  * This gives LET the correct CL special-variable semantics. */
                  Frame frame;
                  frame.type=frame_protect;
                  int result=setjmp(frame.non_local_exit);
                  UNWIND(result){
                      UWBODY{
-                         /* evaluate the body */
                          dolist(subform,body){
                              evale(subform,environment,results);}}
                      UWCLEANUP{
-                         /* restore the dynamic bindings */
+                         /* restore on non-local exit */
                          {dolist(binding,bindings){
                                  Ref name=consp(binding)?car(binding):binding;
                                  Ref var=environment_find_variable(name,environment);
@@ -574,8 +576,17 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                                  if(is_true(env_local_special_variable_saved_boundp(var))){
                                      set_symbol_value(name,env_local_special_variable_saved_value(var));}
                                  else{
-                                     symbol_make_unbound(name);}}}}}}
-             else{
+                                     symbol_make_unbound(name);}}}}}
+                 /* Normal-return restore: UWCLEANUP didn't run for normal exit.
+                  * Non-local exits throw via unwind_next_frame so never reach here. */
+                 {dolist(binding,bindings){
+                         Ref name=consp(binding)?car(binding):binding;
+                         Ref var=environment_find_variable(name,new_environment);
+                         if(env_local_special_variable_p(var)){
+                             if(is_true(env_local_special_variable_saved_boundp(var))){
+                                 set_symbol_value(name,env_local_special_variable_saved_value(var));}
+                             else{ symbol_make_unbound(name);}}}}
+             } else {
                  dolist(subform,body){
                      evale(subform,environment,results);}}
              environment=environment_next_environment(environment);
@@ -591,28 +602,62 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count_min(arguments,1);
             Ref bindings=car(arguments);
             Ref body=cdr(arguments);
-            /* Skip DECLAREs at the head of body. */
+            /* Collect SPECIAL declarations; ignore all other declare forms. */
+            Ref specials_star=NIL_Symbol;
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
-                pop(&body);}
+                Ref decl=pop(&body);
+                if(eql(SPECIAL_Symbol,caadr(decl))){
+                    dolist(sym,cdadr(decl)){ push(sym,&specials_star);}}}
             Ref new_environment=environment_new(environment,NIL_Symbol);
             environment=new_environment;
+            bool has_dynamic_star=false;
             {dolist(binding,bindings){
                     Ref name;
                     Ref value;
                     if(consp(binding)){
                         name=car(binding);
                         value=evale(cadr(binding),environment,results);
-                        add_to_live_pool(value); /* protect across env_make_lexical_variable */
+                        add_to_live_pool(value);
                     } else {
                         name=binding;
                         value=NIL_Symbol;}
                     if(!symbolp(name)){
                         ERROR("LET*: %s is not a symbol",
                               string_cstring(prin1_to_string(name)));}
-                    Ref var=env_make_lexical_variable(name,value);
-                    environment_add_variable(var,environment);}}
-            {dolist(subform,body){
-                    evale(subform,environment,results);}}
+                    if(special_variable_p(name)||!nullp(memq(name,specials_star))){
+                        has_dynamic_star=true;
+                        bool saved_boundp=symbol_boundp(name);
+                        Ref saved_value=saved_boundp?symbol_value(name):NIL_Symbol;
+                        Ref var=env_make_local_special_variable(name,as_boolean(saved_boundp),saved_value);
+                        environment_add_variable(var,environment);
+                        set_symbol_value(name,value);
+                    } else {
+                        Ref var=env_make_lexical_variable(name,value);
+                        environment_add_variable(var,environment);}}}
+            if(has_dynamic_star){
+                Frame frame;
+                frame.type=frame_protect;
+                int result=setjmp(frame.non_local_exit);
+                UNWIND(result){
+                    UWBODY{ dolist(subform,body){ evale(subform,environment,results);}}
+                    UWCLEANUP{
+                        {dolist(binding,bindings){
+                                Ref name=consp(binding)?car(binding):binding;
+                                Ref var=environment_find_variable(name,new_environment);
+                                if(env_local_special_variable_p(var)){
+                                    if(is_true(env_local_special_variable_saved_boundp(var))){
+                                        set_symbol_value(name,env_local_special_variable_saved_value(var));}
+                                    else{ symbol_make_unbound(name);}}}}}}
+                /* Normal-return restore (see LET comment). */
+                {dolist(binding,bindings){
+                        Ref name=consp(binding)?car(binding):binding;
+                        Ref var=environment_find_variable(name,new_environment);
+                        if(env_local_special_variable_p(var)){
+                            if(is_true(env_local_special_variable_saved_boundp(var))){
+                                set_symbol_value(name,env_local_special_variable_saved_value(var));}
+                            else{ symbol_make_unbound(name);}}}}
+            } else {
+                dolist(subform,body){ evale(subform,environment,results);}}
             environment=environment_next_environment(environment);
             PASS_VALUES();}
 
@@ -635,17 +680,16 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     else{
                         symbol_make_unbound(name);}}}
              environment=new_environment;
-             /* unwind-protect the body evaluation */
+             /* Evaluate body; restore specials on both normal and non-local exit. */
              Frame frame;
              frame.type=frame_protect;
              int result=setjmp(frame.non_local_exit);
              UNWIND(result){
                  UWBODY{
-                     /* evaluate the body */
                      {dolist(subform,body){
                              evale(subform,environment,results);}}}
                  UWCLEANUP{
-                     /* restore the dynamic bindings */
+                     /* restore on non-local exit */
                      {dolist(name,symbols){
                              Ref var=environment_find_variable(name,environment);
                              if(!env_local_special_variable_p(var)){
@@ -655,6 +699,13 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                                  set_symbol_value(name,env_local_special_variable_saved_value(var));}
                              else{
                                  symbol_make_unbound(name);}}}}}
+             /* Normal-return restore. */
+             {dolist(name,symbols){
+                     Ref var=environment_find_variable(name,new_environment);
+                     if(env_local_special_variable_p(var)){
+                         if(is_true(env_local_special_variable_saved_boundp(var))){
+                             set_symbol_value(name,env_local_special_variable_saved_value(var));}
+                         else{ symbol_make_unbound(name);}}}}
              environment=environment_next_environment(environment);
              PASS_VALUES();}
 

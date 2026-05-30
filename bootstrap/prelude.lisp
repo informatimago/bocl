@@ -2767,11 +2767,18 @@
 ;;; Minimal MAKE-ARRAY — creates a 1-D simple vector of SIZE elements.
 ;;; Uses the VECTOR built-in which takes &rest elements.
 ;;; Full MAKE-ARRAY (multi-dimensional, displaced, fill-pointer) is deferred.
-(defun make-array (size &key (initial-element nil))
-  (let ((elts nil))
-    (dotimes (i size)
-      (push initial-element elts))
-    (apply #'vector (nreverse elts))))
+(defun make-array (size &key (initial-element nil) initial-contents
+                             element-type adjustable fill-pointer)
+  "Create a 1-D simple vector of SIZE elements.
+  Supports :initial-element and :initial-contents.
+  :element-type, :adjustable and :fill-pointer are accepted but ignored."
+  element-type adjustable fill-pointer   ; accepted, ignored
+  (if initial-contents
+      (apply #'vector (coerce initial-contents 'list))
+      (let ((elts nil))
+        (dotimes (i size)
+          (push initial-element elts))
+        (apply #'vector (nreverse elts)))))
 
 ;;;; ========================================================================
 ;;;; Slice 19 — Minimal CLOS
@@ -4153,5 +4160,273 @@
   object doc-type  nil)   ; stub
 
 ;;; (setf documentation) not supported in bocl (defun doesn't allow setf names).
+
+;;;; ========================================================================
+;;;; Slice 22 — I/O built-ins, list set operations, hash utilities,
+;;;;   TYPE-OF, array operations, bit-vector ops, LOOP-FINISH, misc.
+;;;; ========================================================================
+
+;;; ---- List set operations -------------------------------------------------
+
+(defun copy-alist (alist)
+  "Return a fresh copy of ALIST — cons cells are new, keys and values shared."
+  (mapcar (lambda (pair)
+            (if (consp pair) (cons (car pair) (cdr pair)) pair))
+          alist))
+
+(defun set-exclusive-or (list1 list2 &key (test #'eql) (key #'identity))
+  "Return the symmetric set difference of LIST1 and LIST2."
+  (append (set-difference list1 list2 :test test :key key)
+          (set-difference list2 list1 :test test :key key)))
+
+(defun nset-exclusive-or (list1 list2 &key (test #'eql) (key #'identity))
+  "Destructive version of SET-EXCLUSIVE-OR."
+  (set-exclusive-or list1 list2 :test test :key key))
+
+(defun nintersection (list1 list2 &key (test #'eql) (key #'identity))
+  "Destructive INTERSECTION — modifies LIST1."
+  (intersection list1 list2 :test test :key key))
+
+(defun nset-difference (list1 list2 &key (test #'eql) (key #'identity))
+  "Destructive SET-DIFFERENCE — modifies LIST1."
+  (set-difference list1 list2 :test test :key key))
+
+(defun nunion (list1 list2 &key (test #'eql) (key #'identity))
+  "Destructive UNION — may modify LIST1 or LIST2."
+  (union list1 list2 :test test :key key))
+
+;;; ---- Hash-table utilities -----------------------------------------------
+
+(defun hash-table-keys (table)
+  "Return a list of all keys in HASH-TABLE."
+  (let ((keys nil))
+    (maphash (lambda (k v) v (push k keys)) table)
+    keys))
+
+(defun hash-table-values (table)
+  "Return a list of all values in HASH-TABLE."
+  (let ((vals nil))
+    (maphash (lambda (k v) k (push v vals)) table)
+    vals))
+
+(defun hash-table-alist (table)
+  "Return an association list of (key . value) pairs from TABLE."
+  (let ((result nil))
+    (maphash (lambda (k v) (push (cons k v) result)) table)
+    result))
+
+;;; ---- Stream utilities ---------------------------------------------------
+
+(defun read-sequence (sequence stream &key (start 0) end)
+  "Read elements from STREAM into SEQUENCE[START..END].
+  Returns the index of the first element not updated."
+  (let* ((len (length sequence))
+         (e   (or end len)))
+    (dotimes (i (- e start) e)
+      (let ((elem (read-byte stream nil nil)))
+        (when (null elem) (return (+ start i)))
+        (setf (elt sequence (+ start i))
+              (if (characterp (elt sequence 0))
+                  (code-char elem) elem))))
+    e))
+
+(defun write-sequence (sequence stream &key (start 0) end)
+  "Write SEQUENCE[START..END] to STREAM.  Returns SEQUENCE."
+  (let ((e (or end (length sequence))))
+    (dotimes (i (- e start) sequence)
+      (let ((elem (elt sequence (+ start i))))
+        (if (characterp elem)
+            (write-char elem stream)
+            (write-byte elem stream))))))
+
+;;; ---- Broadcast / compound stream constructors (stubs) ------------------
+
+(defun make-broadcast-stream (&rest streams)
+  "Return a stream that broadcasts output to all STREAMS.
+  In bocl: returns *standard-output* if no streams, else the first stream."
+  (if streams (car streams) (make-string-output-stream)))
+
+(defun make-concatenated-stream (&rest streams)
+  "Return a stream that reads from STREAMS in sequence.
+  Stub: returns the first stream or an empty string stream."
+  (if streams (car streams) (make-string-input-stream "")))
+
+(defun make-echo-stream (input-stream output-stream)
+  "Return a stream that reads from INPUT-STREAM and echoes to OUTPUT-STREAM.
+  Stub: returns INPUT-STREAM."
+  output-stream input-stream)
+
+(defun make-synonym-stream (symbol)
+  "Return a stream that is a synonym for the stream in SYMBOL's value.
+  Stub: returns the current value of SYMBOL."
+  (symbol-value symbol))
+
+(defun make-two-way-stream (input-stream output-stream)
+  "Return a two-way stream combining INPUT-STREAM and OUTPUT-STREAM.
+  Stub: returns INPUT-STREAM."
+  output-stream input-stream)
+
+;;; ---- Array utilities ----------------------------------------------------
+
+(defun array-total-size (array)
+  "Return the total number of elements in ARRAY."
+  (reduce #'* (array-dimensions array) :initial-value 1))
+
+(defun array-rank (array)
+  "Return the number of dimensions of ARRAY."
+  (length (array-dimensions array)))
+
+(defun array-in-bounds-p (array &rest subscripts)
+  "Return T if SUBSCRIPTS are valid indices into ARRAY."
+  (let ((dims (array-dimensions array))
+        (result t))
+    (let ((ss subscripts) (ds dims))
+      (loop
+        (when (or (null ss) (null ds)) (return))
+        (unless (and (>= (car ss) 0) (< (car ss) (car ds)))
+          (setq result nil) (return))
+        (setq ss (cdr ss) ds (cdr ds))))
+    result))
+
+(defun array-has-fill-pointer-p (array)
+  "Return T if ARRAY has a fill pointer.  Bocl arrays don't; always NIL."
+  array nil)
+
+(defun adjustable-array-p (array)
+  "Return T if ARRAY is adjustable.  Bocl arrays aren't; always NIL."
+  array nil)
+
+(defun simple-vector-p (object)
+  "Return T if OBJECT is a simple (non-adjustable, no fill-pointer) vector."
+  (vectorp object))
+
+(defun vector-fill (vector item &key (start 0) end)
+  "Fill elements of VECTOR with ITEM."
+  (fill vector item :start start :end end))
+
+(defun vector-push (new-element vector)
+  "Push NEW-ELEMENT onto VECTOR (fill-pointer based).  Stub: unsupported."
+  new-element vector
+  (error "VECTOR-PUSH: adjustable arrays not supported in bocl"))
+
+(defun vector-pop (vector)
+  "Pop last element from VECTOR (fill-pointer based).  Stub: unsupported."
+  vector
+  (error "VECTOR-POP: adjustable arrays not supported in bocl"))
+
+(defun vector-push-extend (new-element vector &optional extension)
+  "Extend VECTOR and push.  Stub: unsupported."
+  new-element vector extension
+  (error "VECTOR-PUSH-EXTEND: adjustable arrays not supported in bocl"))
+
+;;; ---- Bit-vector operations ----------------------------------------------
+
+;; Bit-vector operations — the kernel's BIT accessor has a struct-layout
+;; mismatch (Array vs OctetArray) that causes it to return wrong values.
+;; These stubs accept the args and raise a clear error for now.
+(defun %bv-unimplemented (name &rest args)
+  args  ; ignored
+  (error "Bit-vector operation ~S not yet supported in bocl (kernel bug)" name))
+(defun bit-and   (v1 v2 &optional r) r (%bv-unimplemented 'bit-and   v1 v2))
+(defun bit-or    (v1 v2 &optional r) r (%bv-unimplemented 'bit-or    v1 v2))
+(defun bit-xor   (v1 v2 &optional r) r (%bv-unimplemented 'bit-xor   v1 v2))
+(defun bit-eqv   (v1 v2 &optional r) r (%bv-unimplemented 'bit-eqv   v1 v2))
+(defun bit-nand  (v1 v2 &optional r) r (%bv-unimplemented 'bit-nand  v1 v2))
+(defun bit-nor   (v1 v2 &optional r) r (%bv-unimplemented 'bit-nor   v1 v2))
+(defun bit-andc1 (v1 v2 &optional r) r (%bv-unimplemented 'bit-andc1 v1 v2))
+(defun bit-andc2 (v1 v2 &optional r) r (%bv-unimplemented 'bit-andc2 v1 v2))
+(defun bit-orc1  (v1 v2 &optional r) r (%bv-unimplemented 'bit-orc1  v1 v2))
+(defun bit-orc2  (v1 v2 &optional r) r (%bv-unimplemented 'bit-orc2  v1 v2))
+(defun bit-not   (v   &optional r)   r (%bv-unimplemented 'bit-not   v))
+
+;;; ---- LOOP-FINISH --------------------------------------------------------
+
+;;; LOOP-FINISH is a macro that terminates the LOOP iteration at the named loop
+;;; end tag.  In bocl's simple-loop form: wrap the tag in a block and use
+;;; return.  For keyword-LOOP, it's already supported via named/RETURN.
+;;;
+;;; The simplest implementation: LOOP-FINISH is a macro that calls RETURN from
+;;; the enclosing LOOP block (which is wrapped in (block nil ...)).
+
+(defmacro loop-finish ()
+  "Terminate the immediately enclosing LOOP form, returning the accumulated
+  result (or NIL for simple loops)."
+  '(return nil))
+
+;;; ---- Pathname utilities --------------------------------------------------
+
+(defun wild-pathname-p (pathname &optional field)
+  "Return T if PATHNAME contains wildcard characters.
+  Stub in bocl — wildcards not supported; always returns NIL."
+  pathname field nil)
+
+(defun pathname-match-p (pathname wildcard)
+  "Return T if PATHNAME matches the WILDCARD pattern.  Stub: always NIL."
+  pathname wildcard nil)
+
+(defun translate-pathname (source from-wildcard to-wildcard)
+  "Translate PATHNAME from FROM-WILDCARD to TO-WILDCARD.  Stub: returns SOURCE."
+  from-wildcard to-wildcard source)
+
+;;; ---- Type utilities -------------------------------------------------------
+
+;;; Extend TYPE-OF for CLOS instances (complement the C implementation).
+;;; The C kernel_TYPE_OF handles most cases; for CLOS instances it returns
+;;; the class name symbol.  This Lisp wrapper is not needed but documents intent.
+
+;;; TYPECASE / ETYPECASE already use TYPEP so they work with CLOS classes.
+
+;;; ---- Character utilities -------------------------------------------------
+
+(defun char-name (char)
+  "Return the name of CHARACTER as a string, or NIL."
+  (case (char-code char)
+    (0   "Null")     (7  "Bell")    (8  "Backspace")
+    (9   "Tab")      (10 "Newline") (11 "Page")
+    (12  "Page")     (13 "Return")  (27 "Escape")
+    (32  "Space")    (127 "Rubout") (t nil)))
+
+(defun name-char (name)
+  "Return the character with the given NAME, or NIL."
+  (let ((n (string-upcase (string name))))
+    (cond ((string= n "NULL")      (code-char 0))
+          ((string= n "BELL")      (code-char 7))
+          ((string= n "BACKSPACE") (code-char 8))
+          ((string= n "TAB")       (code-char 9))
+          ((string= n "NEWLINE")   (code-char 10))
+          ((string= n "RETURN")    (code-char 13))
+          ((string= n "ESCAPE")    (code-char 27))
+          ((string= n "SPACE")     (code-char 32))
+          ((string= n "RUBOUT")    (code-char 127))
+          ((string= n "DELETE")    (code-char 127))
+          (t nil))))
+
+;;; ---- Miscellaneous -------------------------------------------------------
+
+(defun make-load-form (object &optional environment)
+  "Return a form that reconstructs OBJECT.  Stub — signals an error."
+  environment
+  (error "MAKE-LOAD-FORM: not supported for ~S" object))
+
+(defun make-load-form-saving-slots (object &key slot-names environment)
+  "Return forms to reconstruct OBJECT via slot-value.  Stub."
+  slot-names environment
+  (error "MAKE-LOAD-FORM-SAVING-SLOTS: not supported for ~S" object))
+
+(defun upgraded-array-element-type (type &optional env)
+  "Return T — bocl has a single uniform array element type."
+  type env t)
+
+(defun row-major-aref (array index)
+  "Access element at ROW-MAJOR linear INDEX in ARRAY."
+  (svref array index))
+
+(defun array-row-major-index (array &rest subscripts)
+  "Compute the row-major linear index from SUBSCRIPTS."
+  (let ((dims (array-dimensions array))
+        (idx 0))
+    (dolist (sub subscripts idx)
+      (setq idx (+ (* idx (car dims)) sub))
+      (setq dims (cdr dims)))))
 
 ;;;; THE END
