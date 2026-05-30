@@ -117,6 +117,17 @@ static void kernel_LOAD(unused Ref function, Ref arguments, MultipleValues* resu
 /* APPEND is needed by backquote-expanded code; the kernel previously only
    shipped NCONC. */
 extern Ref bocl_append(Ref lists);
+extern Ref bocl_write_char(Ref ch, Ref stream);
+
+static void kernel_WRITE_CHAR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref ch=cons_car(current); current=cons_cdr(current);
+    Ref stream=consp(current)?cons_car(current):variable_value(S(*STANDARD-OUTPUT*));
+    results->count=1;
+    results->values[0]=bocl_write_char(ch,stream);
+    close_live_pool(pool);}
 
 static void kernel_APPEND(unused Ref function, Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -136,6 +147,31 @@ static void kernel_CLOS_NULL_P(unused Ref function, Ref arguments, MultipleValue
     results->values[0]=(x==NULL)?T_Symbol:NIL_Symbol;
     close_live_pool(pool);}
 
+/* (%clos-obj-p x) — T if X is a CLOS instance (%obj struct), bypassing bridge. */
+static void kernel_CLOS_OBJ_P(unused Ref function, Ref arguments, MultipleValues* results){
+    Ref x=cons_car(arguments);
+    results->count=1;
+    results->values[0]=clos_instance_p(x)?T_Symbol:NIL_Symbol;}
+
+/* (%clos-cls-p x) — T if X is a CLOS class object (%cls struct). */
+static void kernel_CLOS_CLS_P(unused Ref function, Ref arguments, MultipleValues* results){
+    Ref x=cons_car(arguments);
+    results->count=1;
+    results->values[0]=clos_class_p(x)?T_Symbol:NIL_Symbol;}
+
+/* (%clos-register obj-struct-class cls-struct-class) — wires up the CLOS
+   type bridge so class_of() and subclassp() understand CLOS instances. */
+static void kernel_CLOS_REGISTER(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref obj_sc=cons_car(current); current=cons_cdr(current);
+    Ref cls_sc=cons_car(current);
+    clos_register_bridge(obj_sc, cls_sc);
+    results->count=1;
+    results->values[0]=T_Symbol;
+    close_live_pool(pool);}
+
 void bocl_register_load(void){
     Ref fname=S(LOAD);
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
@@ -143,7 +179,22 @@ void bocl_register_load(void){
     set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
     /* Helper for CLOS: detect C NULL (returned by kernel find-class for unknown names). */
     Ref cn=symbol_intern_cstring("%CLOS-NULL-P");
-    set_symbol_function(cn,built_in_function_new(cn,list(S(X),NULL),kernel_CLOS_NULL_P));}
+    set_symbol_function(cn,built_in_function_new(cn,list(S(X),NULL),kernel_CLOS_NULL_P));
+    /* Predicates that bypass the class_of bridge — needed after %clos-register. */
+    Ref cop=symbol_intern_cstring("%CLOS-OBJ-P");
+    set_symbol_function(cop,built_in_function_new(cop,list(S(X),NULL),kernel_CLOS_OBJ_P));
+    Ref ccp=symbol_intern_cstring("%CLOS-CLS-P");
+    set_symbol_function(ccp,built_in_function_new(ccp,list(S(X),NULL),kernel_CLOS_CLS_P));
+    /* Wire the CLOS type bridge: call from prelude after defining %obj/%cls structs. */
+    Ref cr=symbol_intern_cstring("%CLOS-REGISTER");
+    set_symbol_function(cr,built_in_function_new(cr,
+        list(symbol_intern_cstring("OBJ-SC"),symbol_intern_cstring("CLS-SC"),NULL),
+        kernel_CLOS_REGISTER));
+    /* WRITE-CHAR — expose bocl_write_char as a Lisp built-in. */
+    {   Ref wc_fn = symbol_intern_cstring("WRITE-CHAR");
+        Ref wc_ll = list(symbol_intern_cstring("CHARACTER"),
+                         S(&OPTIONAL), symbol_intern_cstring("STREAM"), NULL);
+        set_symbol_function(wc_fn,built_in_function_new(wc_fn,wc_ll,kernel_WRITE_CHAR));}}
 
 void bocl_call(Ref fname,Ref arguments){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));

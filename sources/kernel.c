@@ -864,7 +864,35 @@ Class* make_boot_Class(){
 Ref class_new(Ref name){
     return Object_new(CLASS_Class,(Slots*)Class_slots(name,NIL_Symbol));}
 
+/* ---- CLOS type-bridge -------------------------------------------------------
+ * When Slice 19 (CLOS) is loaded, these two variables are set by calling
+ * (%clos-register obj-struct-class cls-struct-class) from prelude.lisp.
+ * Once set, class_of() and subclassp() understand CLOS instances/classes.
+ * --------------------------------------------------------------------------- */
+static Ref clos_obj_sc  = NULL;  /* structure class for %obj (CLOS instances) */
+static Ref clos_cls_sc  = NULL;  /* structure class for %cls (CLOS class objects) */
+static Ref sym_cpl      = NULL;  /* the 'CPL slot of %cls */
+static uword clos_obj_class_slot_idx = 0; /* index of 'class slot in %obj storage */
+
+void clos_register_bridge(Ref obj_sc, Ref cls_sc){
+    clos_obj_sc = obj_sc;
+    clos_cls_sc = cls_sc;
+    /* Cache slot index: 'class is the FIRST user slot in %obj after BLOCK_HEADER. */
+    clos_obj_class_slot_idx = 0;  /* %obj: (defstruct (%obj) class slots) — class=0 */
+    sym_cpl     = symbol_intern_cstring("CPL");}
+
+bool clos_instance_p(Ref obj){
+    return clos_obj_sc != NULL && obj != NULL && obj->class == clos_obj_sc;}
+
+bool clos_class_p(Ref cls){
+    return clos_cls_sc != NULL && cls != NULL && cls->class == clos_cls_sc;}
+
 Ref class_of(Ref object){
+    /* For CLOS instances (%obj structs), return the CLOS class stored in
+     * the 'class slot (index 0 in the structure's slot vector).
+     * Direct array access avoids allocating via structure_get. */
+    if(clos_obj_sc != NULL && object != NULL && object->class == clos_obj_sc){
+        return object->slots->vector_of_object.elements[clos_obj_class_slot_idx];}
     return object->class;}
 
 bool classp(Ref object){
@@ -887,8 +915,8 @@ void class_add_superclass(Ref class, Ref superclass){
     else{
         class->slots->class.direct_superclasses=cons(superclass,NIL_Symbol);}}
 
-
 Ref find_class(Ref name){
+    /* Search the kernel class list only (no Lisp call to avoid recursion). */
     {dolist(class,kernel_classes){
             if(eql(class->slots->class.name,name)){
                 return class;}}}
@@ -897,6 +925,13 @@ Ref find_class(Ref name){
 bool subclassp(Ref class,Ref superclass){
     if(class==superclass){
         return true;}
+    /* Handle CLOS class objects (%cls): walk the CPL list. */
+    if(clos_class_p(class) && sym_cpl != NULL){
+        Ref cpl = structure_get(class, sym_cpl);
+        while(consp(cpl)){
+            if(cons_car(cpl) == superclass){ return true; }
+            cpl = cons_cdr(cpl);}
+        return false;}
     Ref direct_superclasses=class->slots->class.direct_superclasses;
     while(consp(direct_superclasses)){
         Ref direct_superclass=cons_car(direct_superclasses);

@@ -887,9 +887,24 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref type_spec=car(clause);
                 Ref varlist  =cadr(clause);
                 Ref body     =cddr(clause);
-                /* Resolve type_spec to a class object. */
-                Ref type_class = symbolp(type_spec) ? find_class(type_spec) : type_spec;
-                if(!typep(type_class,T_Class)){
+                /* Resolve type_spec to a class object.
+                 * Kernel classes take priority; if not found, try Lisp find-class
+                 * (which searches CLOS *%classes* for user-defined conditions). */
+                Ref type_class;
+                if(symbolp(type_spec)){
+                    type_class = find_class(type_spec);   /* kernel lookup */
+                    if(type_class == NULL){
+                        /* Not a kernel class — try the CLOS class registry. */
+                        Ref lisp_fc = symbol_function(S(FIND-CLASS));
+                        if(lisp_fc != NULL && lisp_fc != UNBOUND_Object &&
+                           (closurep(lisp_fc)||functionp(lisp_fc)||built_in_function_p(lisp_fc))){
+                            MultipleValues fc_res = {0};
+                            kernel_apply(lisp_fc, list(type_spec, NULL), &fc_res);
+                            type_class = (fc_res.count > 0) ? fc_res.values[0] : NULL;}}}
+                else {
+                    type_class = type_spec;}
+                if((type_class == NULL || type_class == NIL_Symbol) ||
+                   (!typep(type_class,T_Class) && !clos_class_p(type_class))){
                     ERROR("HANDLER-CASE: unknown type %s",
                           string_cstring(prin1_to_string(type_spec)));}
                 /* varlist must be () or (var). */

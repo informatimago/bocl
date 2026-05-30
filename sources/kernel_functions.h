@@ -13,6 +13,10 @@ Ref class_of(Ref par_object);
 Ref find_class(Ref par_class_name);
 bool subclassp(Ref par_class, Ref par_superclass);
 bool typep(Ref par_object, Ref par_class);
+/* CLOS type bridge — called from prelude to enable CLOS condition dispatch. */
+void clos_register_bridge(Ref obj_struct_class, Ref cls_struct_class);
+bool clos_instance_p(Ref object);
+bool clos_class_p(Ref cls);
 void check_type(Ref par_object, Ref par_class);
 void check_class(Ref par_object, Ref par_class);
 Ref built_in_class_new(Ref par_name);

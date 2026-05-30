@@ -110,8 +110,24 @@ static Ref build_condition(Ref default_class, Ref arguments){
         if(consp(rest)){
             ERROR("Extra arguments after %s","an already-built condition");}
         return datum;}
+    /* Accept CLOS instances (from DEFINE-CONDITION) as conditions directly. */
+    if(clos_instance_p(datum)){
+        if(consp(rest)){
+            ERROR("Extra arguments after %s","a CLOS condition instance");}
+        return datum;}
     if(typep(datum, STRING_Class)){
         return make_simple_condition(default_class, datum, rest);}
+    /* Also accept a CLOS class designator (symbol naming a DEFINE-CONDITION class)
+     * followed by initargs: (error 'my-error :msg "oops"). */
+    if(symbolp(datum)){
+        /* Try to make a condition instance from the class name + initargs. */
+        Ref lisp_make = symbol_function(symbol_intern_cstring("MAKE-INSTANCE"));
+        if(lisp_make != NULL && lisp_make != UNBOUND_Object){
+            MultipleValues mi_res = {0};
+            kernel_apply(lisp_make, cons(datum, rest), &mi_res);
+            if(mi_res.count > 0 && mi_res.values[0] != NULL &&
+               clos_instance_p(mi_res.values[0])){
+                return mi_res.values[0];}}}
     ERROR("Unsupported datum type to ERROR / SIGNAL / WARN: %s",
           string_cstring(prin1_to_string(datum)));}
 

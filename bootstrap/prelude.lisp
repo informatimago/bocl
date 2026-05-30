@@ -2842,6 +2842,18 @@
 (defun %is-cls (x) (funcall *%kernel-typep* x *%cls-sc*))
 (defun %is-obj (x) (funcall *%kernel-typep* x *%obj-sc*))
 
+;;; Register the CLOS type bridge so the C kernel can dispatch CLOS conditions.
+;;; After this, C class_of(clos-instance) returns the CLOS class, and
+;;; C subclassp(clos-class, other) walks the CPL.
+;;; IMPORTANT: After registration, %is-obj and %is-cls must use the bypass
+;;; predicates (%clos-obj-p, %clos-cls-p) because *%kernel-typep* calls
+;;; class_of which now returns the CLOS class, not the struct class.
+(%clos-register *%obj-sc* *%cls-sc*)
+
+;;; Switch to bypass predicates — these check x->class directly, not class_of.
+(set-symbol-function (lambda (x) (%clos-obj-p x)) '%is-obj)
+(set-symbol-function (lambda (x) (%clos-cls-p x)) '%is-cls)
+
 ;;; ---- 4. FIND-CLASS override ----------------------------------------------
 
 (defun find-class (name &optional errorp environment)
@@ -3881,5 +3893,265 @@
 ;;; STRING — already defined in prelude (string.lisp section, Slice 5).
 ;;; NCONC — already in prelude (Slice 12).
 ;;; PPRINT — already a stub.
+
+;;;; ========================================================================
+;;;; Slice 21 — DEFINE-CONDITION, I/O additions, exploration utilities,
+;;;;   stream predicates, and miscellaneous standard functions.
+;;;; ========================================================================
+
+;;; ---- DEFINE-CONDITION -----------------------------------------------------
+;;;
+;;; Creates a CLOS class that integrates with bocl's C signal system.
+;;; After (%clos-register ...) was called above, CLOS instances are:
+;;;   - Recognized by C class_of() → returns the CLOS class
+;;;   - Dispatchable by C signal_condition() via the updated subclassp()
+;;;   - Catchable by HANDLER-CASE via the updated eval.c clause resolver
+;;;   - Acceptable by (error ...) via the updated build_condition()
+;;;
+;;; DEFINE-CONDITION inherits from CONDITION (a CLOS alias for standard-object)
+;;; by default, or from user-specified superclasses.
+
+;;; Standard condition names must NOT be defined as new CLOS classes because
+;;; they would shadow the kernel condition classes and break handler dispatch.
+;;; The kernel already has: CONDITION, SIMPLE-CONDITION, ERROR, WARNING,
+;;; SIMPLE-ERROR, SIMPLE-WARNING, SIMPLE-TYPE-ERROR etc.
+;;;
+;;; For DEFINE-CONDITION to work with standard superclasses (like ERROR),
+;;; HANDLER-CASE now looks up kernel classes first, then CLOS classes.
+;;; So (handler-case ... (error ...)) continues to catch kernel errors.
+;;;
+;;; We define ONLY purely user-facing condition classes that DON'T shadow
+;;; existing kernel classes:
+(defclass program-error    (standard-object) () )
+(defclass control-error    (standard-object) () )
+(defclass cell-error       (standard-object) ((name :initarg :name :accessor cell-error-name)))
+(defclass unbound-variable (cell-error)      () )
+(defclass undefined-function (cell-error)    () )
+(defclass arithmetic-error (standard-object)
+  ((operation :initarg :operation :accessor arithmetic-error-operation)
+   (operands  :initarg :operands  :accessor arithmetic-error-operands)))
+(defclass division-by-zero         (arithmetic-error) ())
+(defclass floating-point-overflow  (arithmetic-error) ())
+(defclass floating-point-underflow (arithmetic-error) ())
+(defclass floating-point-inexact   (arithmetic-error) ())
+(defclass stream-error             (standard-object)
+  ((stream :initarg :stream :accessor stream-error-stream)))
+(defclass end-of-file              (stream-error) ())
+(defclass file-error               (standard-object)
+  ((pathname :initarg :pathname :accessor file-error-pathname)))
+(defclass package-error            (standard-object) ((package :initarg :package)))
+(defclass parse-error              (standard-object) ())
+(defclass reader-error             (parse-error stream-error) ())
+(defclass print-not-readable       (standard-object)
+  ((object :initarg :object :accessor print-not-readable-object)))
+(defclass storage-condition        (standard-object) ())
+(defclass style-warning            (standard-object) ())
+
+(defmacro define-condition (name superclasses slots &rest options)
+  "Define a condition class NAME inheriting from SUPERCLASSES.
+  Works like DEFCLASS but defaults the superclass to ERROR if none given.
+  Supports :REPORT option (stored as a report function for DESCRIBE).
+  The resulting instances integrate with HANDLER-CASE and SIGNAL."
+  (let* ((actual-supers
+           (if (null superclasses)
+               (list 'error)
+               superclasses))
+         (slot-specs (mapcar (lambda (s)
+                               ;; Normalize :condition-accessor -> :accessor for CLOS
+                               s)
+                             slots))
+         ;; Extract :report option
+         (report-option (assq :report options))
+         (report-fn     (cadr report-option))
+         (defclass-options (remove-if (lambda (o) (eq (car o) :report)) options)))
+    `(progn
+       (defclass ,name ,actual-supers ,slot-specs ,@defclass-options)
+       ,@(when report-fn
+           `((defmethod print-object ((condition ,name) stream)
+               (cond ((functionp ,report-fn) (funcall ,report-fn condition stream))
+                     ((stringp ,report-fn)   (write-string ,report-fn stream))
+                     (t (call-next-method))))))
+       ',name)))
+
+;;; ---- Condition utilities --------------------------------------------------
+
+;;; CONDITIONP already exists as kernel built-in (returns T for kernel conds).
+;;; Extend it for CLOS conditions:
+(let ((old-conditionp (symbol-function 'conditionp)))
+  (set-symbol-function
+   (lambda (x)
+     (or (funcall old-conditionp x)
+         (and (%is-obj x)
+              (typep x 'condition))))
+   'conditionp))
+
+;;; Re-export condition-p and simple-condition-p to use the extended conditionp:
+(set-symbol-function (symbol-function 'conditionp) 'condition-p)
+
+(defun simple-condition-p (c)
+  (and (conditionp c) (typep c 'simple-condition)))
+
+;;; MAKE-CONDITION — prefer CLOS class lookup, fall back to kernel.
+(let ((old-make-condition (symbol-function 'make-condition)))
+  (set-symbol-function
+   (lambda (type &rest initargs)
+     (let ((cls (find-class type nil)))
+       (if (and cls (%is-cls cls))
+           (apply #'make-instance cls initargs)
+           (apply old-make-condition type initargs))))
+   'make-condition))
+
+;;; CONDITION-REPORT — get the report string for a condition.
+(defun condition-report-string (condition)
+  "Return a human-readable report string for CONDITION."
+  (with-output-to-string (s)
+    (print-object condition s)))
+
+;;; ---- Write-char is now a kernel built-in (see bocl.c). -------------------
+
+;;; ---- Stream predicates ----------------------------------------------------
+
+(defun input-stream-p (stream)
+  "Return T if STREAM can be read from."
+  (handler-case
+      (progn (peek-char nil stream nil nil) t)
+    (error () nil)))
+
+(defun output-stream-p (stream)
+  "Return T if STREAM can be written to."
+  ;; In bocl we check via stream type
+  (and (streamp stream) t))   ; approximate: all streams support output for now
+
+(defun open-stream-p (stream)
+  "Return T if STREAM is open."
+  (and (streamp stream) t))  ; bocl doesn't track closed state robustly yet
+
+(defun interactive-stream-p (stream)
+  "Return T if STREAM is connected to a terminal."
+  ;; Approximate: stdin is interactive if it's *terminal-io* or *standard-input*
+  (eq stream *terminal-io*))
+
+(defun stream-element-type (stream)
+  "Return the element type of STREAM."
+  stream 'character)  ; bocl streams are character streams
+
+;;; ---- Exploration utilities ------------------------------------------------
+
+(defun apropos-list (string &optional package)
+  "Return a list of symbols whose names contain STRING.
+  NOTE: In bocl, package isolation is limited; this searches the kernel obarray."
+  package   ; ignored — all symbols share one obarray
+  (let ((result nil)
+        (target (string-upcase (string string))))
+    ;; Iterate over obarray symbols via do-symbols with COMMON-LISP package
+    (handler-case
+        (do-symbols (sym (find-package "COMMON-LISP"))
+          (when (search target (symbol-name sym))
+            (pushnew sym result)))
+      (error () nil))
+    (sort result (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
+
+(defun apropos (string &optional package)
+  "Print all symbols whose names contain STRING."
+  (dolist (sym (apropos-list string package))
+    (format t "~&~S" sym)
+    (when (fboundp sym) (format t " [function]"))
+    (when (boundp sym)  (format t " [variable]")))
+  (values))
+
+(defun describe (object &optional (stream *standard-output*))
+  "Print a description of OBJECT."
+  (if (%is-obj object)
+      (progn
+        (format stream "~&~S is an instance of ~A~%"
+                object (%cls-name (%obj-class object)))
+        (dolist (eslot (%cls-eslots (%obj-class object)))
+          (let ((name (getf eslot :name)))
+            (format stream "  ~A: " name)
+            (if (slot-boundp object name)
+                (format stream "~S~%" (slot-value object name))
+                (format stream "[unbound]~%")))))
+      (format stream "~&~S~%" object))
+  (values))
+
+;;; ---- STRING conversion utilities -----------------------------------------
+
+(defun number-to-string (number &optional (base 10))
+  "Convert NUMBER to its string representation in BASE."
+  (if (= base 10)
+      (princ-to-string number)
+      (if (integerp number)
+          (with-output-to-string (s)
+            (when (< number 0) (write-char #\- s) (setq number (- number)))
+            (labels ((emit (n)
+                       (when (>= n base) (emit (floor n base)))
+                       (write-char (digit-char (mod n base) base) s)))
+              (emit number)))
+          (princ-to-string number))))
+
+(defun string-to-number (string &key (base 10) (start 0) end junk-allowed)
+  "Parse a number from STRING.  Returns the number or NIL if unparseable."
+  end  ; ignored — uses whole string
+  (handler-case
+      (parse-integer string :start start :radix base :junk-allowed junk-allowed)
+    (error () nil)))
+
+;;; ---- WRITE-CHAR wrapper ---------------------------------------------------
+
+;;; write-char is now registered as a kernel built-in in bocl.c.
+;;; Add a Lisp-level wrapper that handles *standard-output* default:
+
+;;; ---- ENSURE-DIRECTORIES-EXIST --------------------------------------------
+
+(defun ensure-directories-exist (pathname &key verbose)
+  "Create all directories in PATHNAME's directory component if needed.
+  Returns (values pathname created-p).  Currently a stub — bocl has no mkdir."
+  verbose
+  (values pathname nil))
+
+;;; ---- DIRECTORY -----------------------------------------------------------
+
+(defun directory (pathspec &key)
+  "Return a list of pathnames matching PATHSPEC.
+  Stub in bocl — returns NIL (no glob support yet)."
+  pathspec nil)
+
+;;; ---- Missing numeric utilities -------------------------------------------
+
+;;; Float limits — bocl uses IEEE 754 double (DBL_MAX ~= 1.8e308).
+;;; These are approximate and map single/short to double since bocl has one float type.
+(defconstant most-positive-double-float   1.7976931348623157e+308)
+(defconstant most-negative-double-float  -1.7976931348623157e+308)
+(defconstant least-positive-double-float  2.2250738585072014e-308)  ; smallest normalised
+(defconstant least-negative-double-float -2.2250738585072014e-308)
+(defconstant least-positive-normalized-double-float 2.2250738585072014e-308)
+(defconstant least-negative-normalized-double-float -2.2250738585072014e-308)
+(defconstant most-positive-single-float   most-positive-double-float)
+(defconstant most-negative-single-float   most-negative-double-float)
+(defconstant least-positive-single-float  least-positive-double-float)
+(defconstant least-negative-single-float  least-negative-double-float)
+(defconstant most-positive-short-float    most-positive-double-float)
+(defconstant most-negative-short-float    most-negative-double-float)
+(defconstant least-positive-short-float   least-positive-double-float)
+(defconstant least-negative-short-float   least-negative-double-float)
+(defconstant least-positive-normalized-single-float least-positive-double-float)
+(defconstant least-negative-normalized-single-float least-negative-double-float)
+
+;;; ---- Standard array/call limits ------------------------------------------
+
+(defconstant array-rank-limit       8)
+(defconstant array-dimension-limit  (expt 2 24))
+(defconstant array-total-size-limit (expt 2 24))
+(defconstant call-arguments-limit   4096)
+
+;;; ---- DOCUMENTATION -------------------------------------------------------
+
+(defvar *documentation-table* (make-hash-table))
+
+(defun documentation (object doc-type)
+  "Return the documentation string for OBJECT of type DOC-TYPE."
+  object doc-type  nil)   ; stub
+
+;;; (setf documentation) not supported in bocl (defun doesn't allow setf names).
 
 ;;;; THE END
