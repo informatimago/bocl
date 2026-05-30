@@ -75,4 +75,14 @@ void kernel_ASIN           (Ref function, Ref arguments, MultipleValues* results
 void kernel_ACOS           (Ref function, Ref arguments, MultipleValues* results);
 void kernel_ATAN           (Ref function, Ref arguments, MultipleValues* results);
 
+/* ---- Slice 20: float introspection + LOGBITP ----------------------------- */
+void kernel_DECODE_FLOAT        (Ref function, Ref arguments, MultipleValues* results);
+void kernel_INTEGER_DECODE_FLOAT(Ref function, Ref arguments, MultipleValues* results);
+void kernel_FLOAT_RADIX         (Ref function, Ref arguments, MultipleValues* results);
+void kernel_FLOAT_DIGITS        (Ref function, Ref arguments, MultipleValues* results);
+void kernel_FLOAT_PRECISION     (Ref function, Ref arguments, MultipleValues* results);
+void kernel_FLOAT_SIGN          (Ref function, Ref arguments, MultipleValues* results);
+void kernel_SCALE_FLOAT         (Ref function, Ref arguments, MultipleValues* results);
+void kernel_LOGBITP             (Ref function, Ref arguments, MultipleValues* results);
+
 #endif

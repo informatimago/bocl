@@ -1,4 +1,5 @@
 #include <math.h>
+#include <float.h>
 #include <stdbool.h>
 #include "arithmetic.h"
 #include "kernel.h"
@@ -833,6 +834,143 @@ void kernel_ATAN(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *
+ *  Slice 20 — Float introspection and misc numeric built-ins            *
+ * -------------------------------------------------------------------- */
+
+/* (DECODE-FLOAT float) → (values significand exponent sign)
+   significand in [0.5, 1.0), same type as float.
+   exponent is an integer.  sign is ±1.0 (float). */
+void kernel_DECODE_FLOAT(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!floatp(x)){ TYPE_ERROR(x,FLOAT_Class); }
+    floating v = float_value(x);
+    int e = 0;
+    floating sig = frexp(v, &e);          /* |sig| in [0.5,1.0) */
+    floating sign = (v < 0.0 || (v==0.0 && signbit(v))) ? -1.0 : 1.0;
+    results->count=3;
+    results->values[0] = float_from_floating(sig);
+    results->values[1] = integer_from_word((word)e);
+    results->values[2] = float_from_floating(sign);
+    close_live_pool(pool);}
+
+/* (INTEGER-DECODE-FLOAT float) → (values significand exponent sign)
+   significand is an integer, exponent is an integer, sign is ±1. */
+void kernel_INTEGER_DECODE_FLOAT(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!floatp(x)){ TYPE_ERROR(x,FLOAT_Class); }
+    floating v = float_value(x);
+    int e = 0;
+    floating sig = frexp(v, &e);
+    /* significand as integer: sig * 2^FLOAT-DIGITS */
+    int digits = DBL_MANT_DIG;            /* 53 for double */
+    long long isig = (long long)(fabs(sig) * (1LL << digits));
+    int sign = (v < 0.0) ? -1 : 1;
+    results->count=3;
+    results->values[0] = integer_from_word((word)isig);
+    results->values[1] = integer_from_word((word)(e - digits));
+    results->values[2] = integer_from_word((word)sign);
+    close_live_pool(pool);}
+
+/* (FLOAT-RADIX float) → 2 (always for IEEE 754 double). */
+void kernel_FLOAT_RADIX(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!floatp(x)){ TYPE_ERROR(x,FLOAT_Class); }
+    results->count=1;
+    results->values[0] = integer_from_word(2);
+    close_live_pool(pool);}
+
+/* (FLOAT-DIGITS float) → 53 for double (number of significand bits). */
+void kernel_FLOAT_DIGITS(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!floatp(x)){ TYPE_ERROR(x,FLOAT_Class); }
+    results->count=1;
+    results->values[0] = integer_from_word(DBL_MANT_DIG);  /* 53 */
+    close_live_pool(pool);}
+
+/* (FLOAT-PRECISION float) → same as FLOAT-DIGITS for normalized. */
+void kernel_FLOAT_PRECISION(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!floatp(x)){ TYPE_ERROR(x,FLOAT_Class); }
+    floating v = float_value(x);
+    /* Subnormal: fewer bits. */
+    int p = (v == 0.0) ? 0 : DBL_MANT_DIG;
+    results->count=1;
+    results->values[0] = integer_from_word((word)p);
+    close_live_pool(pool);}
+
+/* (FLOAT-SIGN float &optional float2) — sign of float, optionally applied to float2. */
+void kernel_FLOAT_SIGN(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    if(!floatp(x)){ TYPE_ERROR(x,FLOAT_Class); }
+    floating xv = float_value(x);
+    floating sign = (xv < 0.0 || (xv==0.0 && signbit(xv))) ? -1.0 : 1.0;
+    floating r;
+    if(consp(current)){
+        Ref y = pop_mandatory_argument(function,&current);
+        if(!floatp(y)){ TYPE_ERROR(y,FLOAT_Class); }
+        r = copysign(fabs(float_value(y)), sign);
+    } else {
+        r = sign;}
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = float_from_floating(r);
+    close_live_pool(pool);}
+
+/* (SCALE-FLOAT float exponent) — float * 2^exponent. */
+void kernel_SCALE_FLOAT(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x = pop_mandatory_argument(function,&current);
+    Ref e = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!floatp(x))   { TYPE_ERROR(x,FLOAT_Class); }
+    if(!integerp(e)) { TYPE_ERROR(e,INTEGER_Class); }
+    results->count=1;
+    results->values[0] = float_from_floating(ldexp(float_value(x),(int)integer_value(e)));
+    close_live_pool(pool);}
+
+/* (LOGBITP index integer) — true if bit INDEX of INTEGER is set. */
+void kernel_LOGBITP(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref idx = pop_mandatory_argument(function,&current);
+    Ref n   = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!integerp(idx)){ TYPE_ERROR(idx,INTEGER_Class); }
+    if(!integerp(n))  { TYPE_ERROR(n,INTEGER_Class); }
+    word i = integer_value(idx);
+    word v = integer_value(n);
+    bool bit = (i < 0) ? false : (i >= (word)(sizeof(word)*8)) ? (v<0) : ((v>>i)&1);
+    results->count=1;
+    results->values[0] = bit ? T_Symbol : NIL_Symbol;
+    close_live_pool(pool);}
+
+/* -------------------------------------------------------------------- *
  *  Registration.                                                        *
  *                                                                       *
  *  Mirrors the auto-generated kernel_initialize_built_in_functions().   *
@@ -920,4 +1058,16 @@ void kernel_initialize_arithmetic(void){
     register_fn(S(ASIN),     ll_x,  kernel_ASIN);
     register_fn(S(ACOS),     ll_x,  kernel_ACOS);
     register_fn(S(ATAN),     ll_y_opt_x, kernel_ATAN);
+
+    /* Slice 20 — float introspection. */
+    Ref ll_f_opt_f2 = list(S(FLOAT),S(&OPTIONAL),S(FLOAT2),NULL);
+    Ref ll_f_e      = list(S(FLOAT),S(EXPONENT),NULL);
+    register_fn(S(DECODE-FLOAT),         ll_x,     kernel_DECODE_FLOAT);
+    register_fn(S(INTEGER-DECODE-FLOAT), ll_x,     kernel_INTEGER_DECODE_FLOAT);
+    register_fn(S(FLOAT-RADIX),          ll_x,     kernel_FLOAT_RADIX);
+    register_fn(S(FLOAT-DIGITS),         ll_x,     kernel_FLOAT_DIGITS);
+    register_fn(S(FLOAT-PRECISION),      ll_x,     kernel_FLOAT_PRECISION);
+    register_fn(S(FLOAT-SIGN),           ll_f_opt_f2, kernel_FLOAT_SIGN);
+    register_fn(S(SCALE-FLOAT),          ll_f_e,   kernel_SCALE_FLOAT);
+    register_fn(S(LOGBITP), list(S(INDEX),S(INTEGER),NULL), kernel_LOGBITP);
 }
