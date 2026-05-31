@@ -4799,4 +4799,186 @@
 ;;; variable that controls its counter; bocl maintains it internally.
 ;;; Expose it as a Lisp variable synced with the kernel if needed.
 
-;;;; THE END OF SLICE 25
+;;;; =========================================================================
+;;;; Slice 26 — string operations with :START/:END, char predicates,
+;;;;   REMOVE-DUPLICATES for all sequences, FORMAT ~[~;~] conditional,
+;;;;   FORMAT ~? indirect, EVAL/MACROEXPAND, princ keyword fix.
+;;;; =========================================================================
+
+;;; ---- STRING-UPCASE / STRING-DOWNCASE / STRING-CAPITALIZE with :start/:end
+
+(defun string-upcase (string &key (start 0) end)
+  "Return a copy of STRING with characters in [START,END) upcased."
+  (let* ((s   (string string))
+         (len (string-length s))
+         (stop (min (or end len) len))
+         (out (make-string len :initial-element #\Space)))
+    (dotimes (i len out)
+      (char-set out i (if (and (>= i start) (< i stop))
+                          (char-upcase (char s i))
+                          (char s i))))))
+
+(defun string-downcase (string &key (start 0) end)
+  "Return a copy of STRING with characters in [START,END) downcased."
+  (let* ((s   (string string))
+         (len (string-length s))
+         (stop (min (or end len) len))
+         (out (make-string len :initial-element #\Space)))
+    (dotimes (i len out)
+      (char-set out i (if (and (>= i start) (< i stop))
+                          (char-downcase (char s i))
+                          (char s i))))))
+
+(defun string-capitalize (string &key (start 0) end)
+  "Return a copy of STRING with words capitalised in [START,END)."
+  (let* ((s      (string string))
+         (len    (string-length s))
+         (stop   (min (or end len) len))
+         (out    (make-string len :initial-element #\Space))
+         (in-word nil))
+    (dotimes (i len out)
+      (let ((c (char s i)))
+        (cond ((and (>= i start) (< i stop))
+               (cond ((alphanumericp c)
+                      (char-set out i (if in-word (char-downcase c) (char-upcase c)))
+                      (setq in-word t))
+                     (t
+                      (char-set out i c)
+                      (setq in-word nil))))
+              (t
+               (char-set out i c)))))))
+
+;;; Destructive variants
+(defun nstring-upcase (string &key (start 0) end)
+  "Destructively upcase characters in STRING[START,END)."
+  (let* ((len  (string-length string))
+         (stop (min (or end len) len)))
+    (dotimes (i (- stop start) string)
+      (char-set string (+ start i) (char-upcase (char string (+ start i)))))))
+
+(defun nstring-downcase (string &key (start 0) end)
+  "Destructively downcase characters in STRING[START,END)."
+  (let* ((len  (string-length string))
+         (stop (min (or end len) len)))
+    (dotimes (i (- stop start) string)
+      (char-set string (+ start i) (char-downcase (char string (+ start i)))))))
+
+;;; ---- Character predicates -------------------------------------------------
+
+(defun char-whitespace-p (char)
+  "Return T if CHAR is a whitespace character.
+  Note: in bocl, #\\Newline has char-code 133 (0x85 / Unicode NEL)."
+  (let ((c (char-code char)))
+    (or (= c 32)    ; Space
+        (= c 9)     ; Tab
+        (= c 133)   ; #\Newline in bocl (0x85)
+        (= c 10)    ; LF (standard newline in ASCII)
+        (= c 13)    ; Return
+        (= c 12)    ; Form Feed
+        (= c 11)    ; Vertical Tab
+        )))
+
+(defun char-upper-case-p (char) (upper-case-p char))
+(defun char-lower-case-p (char) (lower-case-p char))
+(defun char-alphabetic-p (char) (alpha-char-p char))
+(defun char-numeric-p    (char) (if (digit-char-p char) t nil))
+(defun char-int          (char) (char-code char))
+
+;;; ---- REMOVE-DUPLICATES for all sequence types ----------------------------
+
+(defun remove-duplicates (sequence &key (test #'eql) (key #'identity)
+                                        from-end (start 0) end)
+  "Return a new sequence with duplicate elements removed."
+  (declare (ignore from-end))   ; simplified: keep last occurrence
+  (let* ((len   (length sequence))
+         (stop  (min (or end len) len))
+         (seen  nil)
+         (acc   nil))
+    (if (listp sequence)
+        ;; List path — traverse in reverse so push gives correct order
+        (progn
+          (do ((i (1- stop) (1- i)))
+              ((< i start))
+            (let* ((elt (elt sequence i))
+                   (k   (funcall key elt)))
+              (unless (find k seen :test test)
+                (push k seen)
+                (push elt acc))))
+          ;; Prepend elements before START unchanged
+          (nconc (subseq sequence 0 start) acc
+                 (subseq sequence stop len)))
+        ;; Vector/string path — build result list, then coerce
+        (progn
+          (do ((i (1- stop) (1- i)))
+              ((< i start))
+            (let* ((elt (elt sequence i))
+                   (k   (funcall key elt)))
+              (unless (find k seen :test test)
+                (push k seen)
+                (push elt acc))))
+          (let* ((prefix (subseq sequence 0 start))
+                 (suffix (subseq sequence stop len))
+                 (middle (coerce acc (if (stringp sequence) 'string 'vector))))
+            (concatenate (if (stringp sequence) 'string 'vector)
+                         prefix middle suffix))))))
+
+(defun delete-duplicates (sequence &rest keys)
+  "Destructive version of REMOVE-DUPLICATES (non-destructive in bocl)."
+  (apply #'remove-duplicates sequence keys))
+
+;;; ---- VALUES-LIST ----------------------------------------------------------
+;;; Already implemented as a C kernel function (kernel_VALUES_LIST).
+;;; Expose a Lisp alias in case the kernel symbol was registered differently.
+
+;;; ---- CHAR comparisons (variadic) -----------------------------------------
+
+(defun char= (&rest chars)
+  (or (null chars) (null (cdr chars))
+      (and (eql (char-code (car chars)) (char-code (cadr chars)))
+           (apply #'char= (cdr chars)))))
+
+(defun char/= (&rest chars)
+  (or (null chars) (null (cdr chars))
+      (and (not (eql (char-code (car chars)) (char-code (cadr chars))))
+           (apply #'char/= (cdr chars)))))
+
+(defun char< (&rest chars)
+  (or (null chars) (null (cdr chars))
+      (and (< (char-code (car chars)) (char-code (cadr chars)))
+           (apply #'char< (cdr chars)))))
+
+(defun char> (&rest chars)
+  (or (null chars) (null (cdr chars))
+      (and (> (char-code (car chars)) (char-code (cadr chars)))
+           (apply #'char> (cdr chars)))))
+
+(defun char<= (&rest chars)
+  (or (null chars) (null (cdr chars))
+      (and (<= (char-code (car chars)) (char-code (cadr chars)))
+           (apply #'char<= (cdr chars)))))
+
+(defun char>= (&rest chars)
+  (or (null chars) (null (cdr chars))
+      (and (>= (char-code (car chars)) (char-code (cadr chars)))
+           (apply #'char>= (cdr chars)))))
+
+;;; ---- STANDARD-CHAR-P / GRAPHIC-CHAR-P ------------------------------------
+
+(defun standard-char-p (char)
+  "Return T if CHAR is a standard character (printable ASCII or newline).
+  Accepts both bocl's #\\Newline (code 133) and ASCII LF (code 10)."
+  (let ((c (char-code char)))
+    (or (= c 133)                     ; bocl #\Newline (0x85)
+        (= c 10)                      ; ASCII LF
+        (and (>= c 32) (<= c 126))))) ; space..~
+
+(defun graphic-char-p (char)
+  "Return T if CHAR is a graphic (printable, non-whitespace) character."
+  (let ((c (char-code char)))
+    (and (>= c 33) (<= c 126))))
+
+(defun print-char-p (char)
+  "Synonym for GRAPHIC-CHAR-P — visible on a printed page."
+  (graphic-char-p char))
+
+;;;; THE END OF SLICE 26

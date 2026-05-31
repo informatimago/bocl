@@ -46,6 +46,7 @@ tests/test_slice22
 tests/test_slice23
 tests/test_slice24
 tests/test_slice25
+tests/test_slice26
 tests/test_clos
 
 *-Listing.xml

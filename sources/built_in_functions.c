@@ -806,7 +806,12 @@ void kernel_FUNCTIONP(Ref function,Ref arguments,MultipleValues* results){
     Ref par_object = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = as_boolean(functionp(par_object));
+    /* CL FUNCTIONP returns T for any callable: interpreted function,
+       closure, or built-in function. */
+    results->values[0] = as_boolean(
+        functionp(par_object)         /* Function (interpreted) */
+        || closurep(par_object)       /* Closure (lambda/let capture) */
+        || built_in_function_p(par_object)); /* C built-in */
     close_live_pool(pool);
 }
 

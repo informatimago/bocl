@@ -1760,6 +1760,15 @@ static void kernel_initialize_features(void){
     define_parameter(S(*LOAD-PRINT*),            S(NIL));
     define_parameter(S(*COMPILE-VERBOSE*),       S(NIL));
     define_parameter(S(*COMPILE-PRINT*),         S(NIL));
+
+    /* These are referenced by EVAL-WHEN dispatch in eval.c and must be
+       bound before any EVAL-WHEN form is processed (including in user files
+       loaded via COMPILE-FILE). The Lisp prelude re-defvar's them to the
+       same NIL value, which is a no-op thanks to define_variable semantics. */
+    define_variable(S(*LOAD-PATHNAME*),          NIL_Symbol);
+    define_variable(S(*LOAD-TRUENAME*),          NIL_Symbol);
+    define_variable(S(*COMPILE-FILE-PATHNAME*),  NIL_Symbol);
+    define_variable(S(*COMPILE-FILE-TRUENAME*),  NIL_Symbol);
 }
 
 void kernel_initialize(void){

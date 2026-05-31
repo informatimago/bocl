@@ -73,12 +73,82 @@ static void test_rationalize(void){
     TEST_EQ(eql, I(5),    e("(rationalize 5)"));
     TEST_EQ(eql, T_Symbol, e("(realp (rationalize 1.5))"));}
 
-/* ---- COMPILE stub -------------------------------------------------------- */
+/* ---- COMPILE (minimal compilation) ------------------------------------- */
 
-static void test_compile_stub(void){
-    /* compile returns 3 values; the third (failure-p) is NIL (no failure) */
+static void test_compile(void){
+    /* (compile nil lambda-form) returns a callable function */
+    TEST_EQ(eql, T_Symbol,
+            e("(functionp (compile nil '(lambda (x) (* x 2))))"));
+    /* the compiled function can be called */
+    TEST_EQ(eql, I(42),
+            e("(funcall (compile nil '(lambda (x) (* x 2))) 21)"));
+    /* failure-p (third value) is NIL */
     TEST_EQ(eql, NIL_Symbol,
-            e("(nth-value 2 (compile nil (lambda (x) (* x 2))))"));}
+            e("(nth-value 2 (compile nil '(lambda (x) x)))"));
+    /* (compile 'name) returns name */
+    TEST_EQ(eql, e("'car"),
+            e("(compile 'car)"));
+    /* (compile nil fn) where fn is already a function returns that function */
+    TEST_EQ(eql, T_Symbol,
+            e("(functionp (compile nil #'car))")); }
+
+/* ---- EVAL ---------------------------------------------------------------- */
+
+static void test_eval(void){
+    TEST_EQ(eql, I(42), e("(eval 42)"));
+    TEST_EQ(eql, I(3),  e("(eval '(+ 1 2))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(eval '(and t t))"));
+    /* eval sees top-level definitions */
+    TEST_EQ(eql, I(99),
+            e("(progn (eval '(defvar *eval-test-var* 99)) *eval-test-var*)"));}
+
+/* ---- MACROEXPAND-1 / MACROEXPAND ---------------------------------------- */
+
+static void test_macroexpand(void){
+    /* macroexpand-1 of a macro call returns (values expansion t) */
+    TEST_EQ(eql, T_Symbol,
+            e("(nth-value 1 (macroexpand-1 '(when t 42)))"));
+    /* expansion of WHEN — use EQUAL since two fresh cons lists won't be EQL */
+    TEST_EQ(equal, e("'(if t (progn 42))"),
+            e("(macroexpand-1 '(when t 42))"));
+    /* macroexpand-1 of a non-macro returns (values form nil) */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(nth-value 1 (macroexpand-1 '(car x)))"));
+    /* macroexpand fully expands */
+    TEST_EQ(eql, T_Symbol,
+            e("(let ((exp (macroexpand '(when t (when nil 1)))))"
+              "  (and (consp exp) (eq 'if (car exp))))"));}
+
+/* ---- COMPILE-FILE eval-when semantics ----------------------------------- */
+/* The test file /tmp/bocl-s25-cf-test.lisp contains:
+ *   (eval-when (:compile-toplevel) (defvar *cf-s25-ct* t))
+ *   (eval-when (:execute)          (defvar *cf-s25-ex* t))
+ * It is created by the test suite setup or pre-exists on disk. */
+
+static void write_cf_test_file(void){
+    /* Write directly from C to avoid bocl file I/O issues. */
+    FILE* f = fopen("/tmp/bocl-s25-cf-test.lisp", "w");
+    if(f){
+        fputs("(eval-when (:compile-toplevel) (defvar *cf-s25-ct* t))\n", f);
+        fputs("(eval-when (:execute) (defvar *cf-s25-ex* t))\n", f);
+        fclose(f);}}
+
+static void test_compile_file_eval_when(void){
+    write_cf_test_file();
+    /* compile-file: :COMPILE-TOPLEVEL fires, :EXECUTE does not */
+    e("(compile-file \"/tmp/bocl-s25-cf-test.lisp\")");
+    TEST_EQ(eql, T_Symbol,
+            e("(boundp '*cf-s25-ct*)"));      /* :compile-toplevel fired */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(boundp '*cf-s25-ex*)"));      /* :execute did NOT fire */
+    /* load: :EXECUTE fires, :COMPILE-TOPLEVEL does not */
+    e("(when (boundp '*cf-s25-ct*) (makunbound '*cf-s25-ct*))");
+    e("(load \"/tmp/bocl-s25-cf-test.lisp\")");
+    TEST_EQ(eql, NIL_Symbol,
+            e("(boundp '*cf-s25-ct*)"));      /* :compile-toplevel did NOT fire */
+    TEST_EQ(eql, T_Symbol,
+            e("(boundp '*cf-s25-ex*)"));      /* :execute fired */ }
 
 /* ---- PROVIDE / REQUIRE / *MODULES* -------------------------------------- */
 
@@ -187,7 +257,10 @@ TEST_SUITE(test_slice25, s25_init, s25_fini)
     TEST_CASE("parse-float",               test_parse_float)
     TEST_CASE("rational/rationalize",      test_rational)
     TEST_CASE("rationalize",               test_rationalize)
-    TEST_CASE("compile stub",              test_compile_stub)
+    TEST_CASE("compile",                   test_compile)
+    TEST_CASE("eval",                      test_eval)
+    TEST_CASE("macroexpand",               test_macroexpand)
+    TEST_CASE("compile-file eval-when",    test_compile_file_eval_when)
     TEST_CASE("provide/require/*modules*", test_provide_require)
     TEST_CASE("string-stream-p",           test_string_stream_p)
     TEST_CASE("file-stream-p",             test_file_stream_p)

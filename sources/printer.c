@@ -128,7 +128,12 @@ Ref princ(Ref object,Ref stream){
     /*     fprintf(out,"NIL"); */
     /*     return object;} */
 
-    if(keywordp(object)||symbolp(object)){
+    if(keywordp(object)){
+        fputc(':',out);
+        princ(symbol_name(object),stream);
+        return object;}
+
+    if(symbolp(object)){
         princ(symbol_name(object),stream);
         return object;}
 
@@ -362,6 +367,71 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               if(close_pos!=(uword)-1) i=close_pos+2; /* skip ~} */
               break;}
           case '}': goto done; /* end of ~{~} — stop this invocation */
+          case '[': {
+              /* ~[clause0~;clause1~;...~] — select clause by integer arg.
+                 ~:[false~;true~] — boolean: use arg as T/NIL.
+                 ~@[clause~]     — if arg non-nil, format clause (leave arg). */
+              if(atsignp){
+                  /* ~@[clause~] — format clause only if next arg is non-nil */
+                  Ref test_arg = consp(*args_ptr) ? car(*args_ptr) : NIL_Symbol;
+                  /* find matching ~] */
+                  uword cls = i;
+                  while(cls < end && !(ctrl[cls]=='~' && cls+1<end &&
+                         toupper((unsigned char)ctrl[cls+1])==']'))
+                      cls++;
+                  if(!nullp(test_arg)){
+                      /* do NOT consume the arg — leave it for the clause */
+                      bocl_format_run(stream,ctrl_string,i,cls,args_ptr);}
+                  else{
+                      fmt_pop(args_ptr);}  /* skip the arg */
+                  i = (cls < end) ? cls+2 : end;
+              } else if(colonp){
+                  /* ~:[false~;true~] */
+                  Ref bool_arg = fmt_pop(args_ptr);
+                  /* find ~; and ~] */
+                  uword semi=i; while(semi<end && !(ctrl[semi]=='~' && semi+1<end && ctrl[semi+1]==';')) semi++;
+                  uword close=semi+2; while(close<end && !(ctrl[close]=='~' && close+1<end && toupper((unsigned char)ctrl[close+1])==']')) close++;
+                  if(nullp(bool_arg)){
+                      bocl_format_run(stream,ctrl_string,i,semi,args_ptr);
+                  } else {
+                      bocl_format_run(stream,ctrl_string,semi+2,close,args_ptr);}
+                  i=(close<end)?close+2:end;
+              } else {
+                  /* ~[c0~;c1~;...~] — pick clause N (integer arg) */
+                  Ref n_ref = fmt_pop(args_ptr);
+                  word n = integerp(n_ref) ? integer_value(n_ref) : 0;
+                  /* We need to collect clause boundaries */
+                  /* Simple approach: walk and count ~; separators */
+                  uword close_bracket=i;
+                  /* reparse: find all ~; and ~] at this nesting level */
+                  /* For simplicity, iterate to find the n-th clause */
+                  uword pos=i;
+                  uword sel_start=i, sel_end=i;
+                  bool  found=false;
+                  word  idx=0;
+                  uword seg_start=i;
+                  while(pos<end){
+                      if(ctrl[pos]=='~' && pos+1<end){
+                          char dc=(char)toupper((unsigned char)ctrl[pos+1]);
+                          if(dc==';'){
+                              if(idx==n){ sel_start=seg_start; sel_end=pos; found=true; }
+                              idx++; pos+=2; seg_start=pos; continue;}
+                          if(dc==']'){
+                              if(idx==n){ sel_start=seg_start; sel_end=pos; found=true; }
+                              close_bracket=pos; pos+=2; break;}}
+                      pos++;}
+                  if(found) bocl_format_run(stream,ctrl_string,sel_start,sel_end,args_ptr);
+                  i=close_bracket<end?close_bracket+2:end;}
+              break;}
+          case ']': goto done; /* end of ~[~] */
+          case '?': {
+              /* ~? — indirect: pop ctrl-string and args-list from arg stack */
+              Ref sub_ctrl = fmt_pop(args_ptr);
+              Ref sub_args = fmt_pop(args_ptr);
+              if(stringp(sub_ctrl)){
+                  uword sc_len=string_length(sub_ctrl);
+                  bocl_format_run(stream,sub_ctrl,0,sc_len,&sub_args);}
+              break;}
           case '^': {  /* ~^ — escape upward: stop if no more args remain */
               if(nullp(*args_ptr)) goto done;
               break;}

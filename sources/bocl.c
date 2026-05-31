@@ -73,9 +73,17 @@ Ref bocl_load_cstring(const char* path){
                              NIL_Symbol,        /* if-exists: irrelevant for :input */
                              K(ERROR),          /* if-does-not-exist */
                              K(DEFAULT));
+    /* Bind *LOAD-PATHNAME* / *LOAD-TRUENAME* for the duration of this load.
+       EVAL-WHEN :LOAD-TOPLEVEL checks these (in eval.c). */
+    Ref pn_obj = stream_pathname(inp);
+    Ref old_load_pn = variable_value(S(*LOAD-PATHNAME*));
+    Ref old_load_tn = variable_value(S(*LOAD-TRUENAME*));
+    set_symbol_value(S(*LOAD-PATHNAME*), pn_obj);
+    set_symbol_value(S(*LOAD-TRUENAME*), pn_obj);
+
     if(do_verbose){
         princ(T(";; Loading "),out);
-        princ(pathname(inp),out);
+        princ(pn_obj,out);
         terpri(out);
         stream_finish_output(out);}
     /* kernel_read on EOF returns the stream itself (we pass `inp` as the
@@ -91,9 +99,13 @@ Ref bocl_load_cstring(const char* path){
     stream_close(inp);
     if(do_verbose){
         princ(T(";; Loaded "),out);
-        princ(pathname(inp),out);
+        princ(pn_obj,out);
         terpri(out);
         stream_finish_output(out);}
+
+    /* Restore *LOAD-PATHNAME* bindings. */
+    set_symbol_value(S(*LOAD-PATHNAME*), old_load_pn);
+    set_symbol_value(S(*LOAD-TRUENAME*), old_load_tn);
 
     return T_Symbol;}
 
@@ -528,26 +540,145 @@ static void kernel_PARSE_FLOAT(unused Ref function, Ref arguments, MultipleValue
     results->count=1; results->values[0]=float_from_floating(val);
     close_live_pool(pool);}
 
-/* (COMPILE name definition) → (values name warnings-p failure-p)
-   Stub: bocl is an interpreter; just return (values name nil nil). */
+/* ---- Slice 25b: EVAL, MACROEXPAND-1, MACROEXPAND, proper COMPILE ---------*/
+
+/* (EVAL form) — evaluate FORM in the global environment. */
+static void kernel_EVAL(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref form=cons_car(arguments);
+    evale(form, eval_global_environment(), results);
+    (void)pool;  /* pool closed inside evale */
+    close_live_pool(pool);}
+
+/* (MACROEXPAND-1 form &optional env) → (values expanded-form expanded-p)
+   Performs one step of macro expansion.  ENV is ignored (global only). */
+static void kernel_MACROEXPAND_1(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref form=cons_car(arguments);
+    bool expanded=false;
+    if(consp(form)){
+        Ref op=cons_car(form);
+        if(symbolp(op)){
+            Ref macro_fn=getf(symbol_plist(op),S($MACRO),NIL_Symbol);
+            if(!nullp(macro_fn)){
+                Ref macro_args=cons_cdr(form);
+                MultipleValues mac={0};
+                kernel_apply(macro_fn,macro_args,&mac);
+                form=(mac.count>0)?mac.values[0]:NIL_Symbol;
+                expanded=true;}}}
+    results->count=2;
+    results->values[0]=form;
+    results->values[1]=expanded?T_Symbol:NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (MACROEXPAND form &optional env) → (values fully-expanded-form expanded-p)
+   Repeatedly applies MACROEXPAND-1 until no further expansion is possible. */
+static void kernel_MACROEXPAND(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref form=cons_car(arguments);
+    bool any=false;
+    for(;;){
+        bool this_step=false;
+        if(consp(form)){
+            Ref op=cons_car(form);
+            if(symbolp(op)){
+                Ref macro_fn=getf(symbol_plist(op),S($MACRO),NIL_Symbol);
+                if(!nullp(macro_fn)){
+                    Ref macro_args=cons_cdr(form);
+                    MultipleValues mac={0};
+                    kernel_apply(macro_fn,macro_args,&mac);
+                    form=(mac.count>0)?mac.values[0]:NIL_Symbol;
+                    this_step=true; any=true;}}}
+        if(!this_step) break;}
+    results->count=2;
+    results->values[0]=form;
+    results->values[1]=any?T_Symbol:NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (COMPILE name &optional definition) → (values name/fn warnings-p failure-p)
+   Minimal compilation per CLHS 3.2.2:
+   – (compile nil lambda-form) : evaluate lambda-form → function
+   – (compile nil fn)          : fn is already a function; return it
+   – (compile 'name)           : already compiled; return name
+   – (compile 'name lambda)    : evaluate lambda, install as name's function */
 static void kernel_COMPILE(unused Ref function, Ref arguments, MultipleValues* results){
     uword pool=open_live_pool(); add_to_live_pool(arguments);
     Ref name=cons_car(arguments);
+    Ref rest=cons_cdr(arguments);
+    Ref defn=consp(rest)?cons_car(rest):NIL_Symbol;
+
+    Ref compiled;
+    if(nullp(name)){
+        /* (compile nil defn) — evaluate defn to produce a function */
+        if(nullp(defn)){
+            ERROR("COMPILE: a definition is required when name is NIL%s","");}
+        if(functionp(defn)||closurep(defn)){
+            compiled=defn;    /* already a function */
+        } else {
+            MultipleValues tmp={0};
+            evale(defn,eval_global_environment(),&tmp);
+            compiled=(tmp.count>0)?tmp.values[0]:NIL_Symbol;}
+    } else if(symbolp(name)&&nullp(defn)){
+        /* (compile 'name) — function already defined; return name */
+        compiled=name;
+    } else if(symbolp(name)){
+        /* (compile 'name defn) — evaluate, install, return name */
+        Ref fn;
+        if(functionp(defn)||closurep(defn)){
+            fn=defn;
+        } else {
+            MultipleValues tmp={0};
+            evale(defn,eval_global_environment(),&tmp);
+            fn=(tmp.count>0)?tmp.values[0]:NIL_Symbol;}
+        if(functionp(fn)||closurep(fn))
+            set_symbol_function(name,fn);
+        compiled=name;
+    } else {
+        ERROR("COMPILE: name must be NIL or a symbol%s","");}
+
     results->count=3;
-    results->values[0]=name;
+    results->values[0]=compiled;
     results->values[1]=NIL_Symbol;  /* warnings-p */
     results->values[2]=NIL_Symbol;  /* failure-p */
     close_live_pool(pool);}
 
-/* (COMPILE-FILE input-file &key ...) → (values output-file warnings errors)
-   Stub: signal an error; bocl has no compiler. */
+/* (COMPILE-FILE input-file &rest keys) — minimal compilation.
+   In bocl there is no FASL output format.  The Lisp-layer wrapper in
+   prelude.lisp calls this after setting *COMPILE-FILE-PATHNAME* etc.;
+   this C entry point processes the file with *LOADING-FASL-FILE* = T
+   so EVAL-WHEN :COMPILE-TOPLEVEL and :LOAD-TOPLEVEL forms are active
+   while :EXECUTE forms are suppressed. */
 static void kernel_COMPILE_FILE(unused Ref function, Ref arguments, MultipleValues* results){
     uword pool=open_live_pool(); add_to_live_pool(arguments);
-    (void)arguments;
+    Ref filespec=cons_car(arguments);
+    char* path;
+    if(typep(filespec,STRING_Class)){
+        path=string_cstring(filespec);
+    } else if(typep(filespec,PHYSICAL_PATHNAME_Class)){
+        path=string_cstring(namestring(filespec));
+    } else {
+        TYPE_ERROR(filespec,STRING_Class);}
+
+    /* Bind *COMPILE-FILE-PATHNAME* and *LOADING-FASL-FILE* = T. */
+    Ref old_cfp  = variable_value(S(*COMPILE-FILE-PATHNAME*));
+    Ref old_cft  = variable_value(S(*COMPILE-FILE-TRUENAME*));
+    Ref old_lff  = variable_value(S(*LOADING-FASL-FILE*));
+    Ref pn_obj   = pathname(string_new_cstring(path));
+    set_symbol_value(S(*COMPILE-FILE-PATHNAME*), pn_obj);
+    set_symbol_value(S(*COMPILE-FILE-TRUENAME*), pn_obj);
+    set_symbol_value(S(*LOADING-FASL-FILE*),     T_Symbol);
+
+    bocl_load_cstring(path);   /* LOAD with compile-file variable bindings */
+
+    set_symbol_value(S(*COMPILE-FILE-PATHNAME*), old_cfp);
+    set_symbol_value(S(*COMPILE-FILE-TRUENAME*), old_cft);
+    set_symbol_value(S(*LOADING-FASL-FILE*),     old_lff);
+    free(path);
+
     results->count=3;
-    results->values[0]=NIL_Symbol;
+    results->values[0]=pn_obj;  /* "output file" = source file (no FASL) */
     results->values[1]=NIL_Symbol;
-    results->values[2]=T_Symbol;    /* failure: bocl has no compiler */
+    results->values[2]=NIL_Symbol;
     close_live_pool(pool);}
 
 /* (DISASSEMBLE fn) → NIL — bocl is an interpreter, nothing to disassemble. */
@@ -690,6 +821,16 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("DISASSEMBLE"),ll_x,kernel_DISASSEMBLE));
         set_symbol_function(symbol_intern_cstring("ED"),
             built_in_function_new(symbol_intern_cstring("ED"),ll_x,kernel_ED));
+        /* Slice 25b — EVAL, MACROEXPAND-1, MACROEXPAND */
+        Ref ll_form=list(symbol_intern_cstring("FORM"),NULL);
+        Ref ll_form_e=list(symbol_intern_cstring("FORM"),S(&OPTIONAL),
+                           symbol_intern_cstring("ENV"),NULL);
+        set_symbol_function(symbol_intern_cstring("EVAL"),
+            built_in_function_new(symbol_intern_cstring("EVAL"),ll_form,kernel_EVAL));
+        set_symbol_function(symbol_intern_cstring("MACROEXPAND-1"),
+            built_in_function_new(symbol_intern_cstring("MACROEXPAND-1"),ll_form_e,kernel_MACROEXPAND_1));
+        set_symbol_function(symbol_intern_cstring("MACROEXPAND"),
+            built_in_function_new(symbol_intern_cstring("MACROEXPAND"),ll_form_e,kernel_MACROEXPAND));
     }}
 
 void bocl_call(Ref fname,Ref arguments){
