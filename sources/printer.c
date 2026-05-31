@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <string.h>
 #include "printer.h"
 #include "kernel.h"
 #include "kernel_objects.h"
@@ -80,10 +81,18 @@ Ref prin1(Ref object,Ref stream){
         fprintf(out,"\"");
         return object;}
 
+    /* BIT-VECTOR must come before VECTOR (bit-vectors are a subtype). */
+    if(bit_vector_p(object)){
+        fprintf(out,"#*");
+        uword blen = bit_vector_length(object);
+        for(uword i=0; i<blen; i++){
+            /* Use the safe bit() accessor which handles all layout details. */
+            Ref bval = bit(object, integer_from_word((word)i));
+            fprintf(out,"%ld",(long)integer_value(bval));}
+        return object;}
+
     if(vectorp(object)){
-        /* Pre-fix this branch used car/cdr on the vector and crashed at
-           "got VECTOR, expected LIST" the first time anyone called
-           (vector …). A vector prints as #(e1 e2 …). Vectors are
+        /* A vector prints as #(e1 e2 …). Vectors are
            Array-backed under the hood, so iterate via array.elements. */
         fprintf(out,"#(");
         uword len = vector_length(object);
@@ -254,26 +263,32 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
     while(i<end){
         octet c=ctrl[i]; i++;
         if(c!='~'){ fputc((int)c,out); continue;}
-        /* --- parse numeric prefix --- */
-        word  prefix   = 0;
-        bool  has_pfx  = false;
+        /* --- parse comma-separated numeric parameters (~w,d,m,p,...X) --- */
+        /* Up to 7 params; missing params flagged with WORD_MIN sentinel. */
+#define FMT_PARAMS_MAX 7
+        word  fmt_params[FMT_PARAMS_MAX];
+        bool  fmt_has[FMT_PARAMS_MAX];
+        for(int _p=0;_p<FMT_PARAMS_MAX;_p++){ fmt_params[_p]=0; fmt_has[_p]=false; }
+        int   n_params=0;
         bool  colonp   = false;
         bool  atsignp  = false;
-        bool  neg_pfx  = false;
-        if(i<end && ctrl[i]=='-'){ neg_pfx=true; i++;}
-        while(i<end && ctrl[i]>='0' && ctrl[i]<='9'){
-            prefix = prefix*10 + (ctrl[i]-'0');
-            has_pfx=true; i++;}
-        if(neg_pfx && has_pfx) prefix=-prefix;
-        /* ~v: take prefix from next arg */
-        if(i<end && toupper((unsigned char)ctrl[i])=='V'){
-            Ref a=fmt_pop(args_ptr);
-            prefix=integerp(a)?integer_value(a):0;
-            has_pfx=true; i++;}
-        /* ~#: prefix = count of remaining args */
-        if(i<end && ctrl[i]=='#'){
-            word cnt=0; for(Ref p=*args_ptr;consp(p);p=cdr(p)) cnt++;
-            prefix=cnt; has_pfx=true; i++;}
+        /* Parse one numeric param; return whether a param was parsed. */
+        for(;;){
+            if(n_params >= FMT_PARAMS_MAX) break;
+            bool neg=false; word v=0; bool got=false;
+            if(i<end && ctrl[i]=='-'){ neg=true; i++; }
+            while(i<end && ctrl[i]>='0' && ctrl[i]<='9'){
+                v=v*10+(ctrl[i]-'0'); got=true; i++;}
+            if(neg && got) v=-v;
+            if(!got && !neg && i<end && toupper((unsigned char)ctrl[i])=='V'){
+                Ref a=fmt_pop(args_ptr); v=integerp(a)?integer_value(a):0; got=true; i++;}
+            if(!got && !neg && i<end && ctrl[i]=='#'){
+                word cnt=0; for(Ref p=*args_ptr;consp(p);p=cdr(p)) cnt++;
+                v=cnt; got=true; i++;}
+            if(got){ fmt_params[n_params]=v; fmt_has[n_params]=true; }
+            n_params++;
+            if(i<end && ctrl[i]==',') i++;  /* consume comma, loop for next */
+            else break;}
         /* modifiers */
         while(i<end && (ctrl[i]==':' || ctrl[i]=='@')){
             if(ctrl[i]==':') colonp  =true;
@@ -281,16 +296,53 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
             i++;}
         if(i>=end) break;
         char   d=(char)toupper((unsigned char)ctrl[i]); i++;
-        word  count=has_pfx ? prefix : 1;
+        /* Backward-compat aliases: first param → prefix/count */
+        word  prefix  = fmt_has[0] ? fmt_params[0] : 1;
+        bool  has_pfx = fmt_has[0];
+        word  count   = has_pfx ? prefix : 1;
 
         switch(d){
-          case 'A': {   /* PRINC */
+          case 'A': {   /* PRINC with optional min-col (~mincol,colinc,minpad,padcharA) */
+              word mincol  = fmt_has[0] ? fmt_params[0] : 0;
+              char padchar = (fmt_has[3] && fmt_params[3]>=32) ? (char)fmt_params[3] : ' ';
               Ref arg=fmt_pop(args_ptr);
-              if(colonp && nullp(arg)) fputs("()",out);
-              else princ(arg,stream);
+              if(mincol > 0){
+                  /* Use princ_to_string equivalent: get the representation first */
+                  Ref repr = (colonp && nullp(arg))
+                             ? string_new_cstring("()")
+                             : (stringp(arg) ? arg : prin1_to_string(arg));
+                  /* For PRINC we want without quotes — strip them for non-strings/chars */
+                  if(consp(arg) || symbolp(arg) || integerp(arg) || floatp(arg)){
+                      /* These look the same in princ and prin1 for these types */ }
+                  /* Write chars */
+                  octet* bytes = string_octets(repr);
+                  uword  rlen  = string_length(repr);
+                  /* For strings, skip surrounding quotes from prin1 */
+                  if(stringp(arg)){
+                      fwrite(bytes, 1, rlen, out);
+                      for(word _p=(word)rlen;_p<mincol;_p++) fputc(padchar,out);
+                  } else {
+                      princ(arg,stream);
+                      /* We can't easily know actual char count; just pad relative to repr */
+                      char* cs=string_cstring(repr);
+                      uword slen=strlen(cs); free(cs);
+                      for(word _p=(word)slen;_p<mincol;_p++) fputc(padchar,out);}
+              } else {
+                  if(colonp && nullp(arg)) fputs("()",out);
+                  else princ(arg,stream);}
               break;}
-          case 'S': case 'W': {  /* PRIN1 */
-              prin1(fmt_pop(args_ptr),stream);
+          case 'S': case 'W': {  /* PRIN1 with optional min-col */
+              word mincol = fmt_has[0] ? fmt_params[0] : 0;
+              char padchar= (fmt_has[3] && fmt_params[3]>=32) ? (char)fmt_params[3] : ' ';
+              Ref arg=fmt_pop(args_ptr);
+              if(mincol > 0){
+                  Ref repr=prin1_to_string(arg);
+                  char* cs=string_cstring(repr);
+                  uword slen=strlen(cs);
+                  fputs(cs,out); free(cs);
+                  for(word _p=(word)slen;_p<mincol;_p++) fputc(padchar,out);
+              } else {
+                  prin1(arg,stream);}
               break;}
           case 'D': {
               Ref arg=fmt_pop(args_ptr);
@@ -326,8 +378,31 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
                   octet code=(octet)integer_value(character_code(ch));
                   fputc((int)code,out);}
               break;}
-          case 'F': case 'E': case 'G': {  /* float — simplified */
-              princ(fmt_pop(args_ptr),stream);
+          case 'F': case 'E': case 'G': {
+              /* ~w,dF — fixed float: w=total width, d=decimal digits.
+                 ~dF alone — d decimal digits (no width constraint).
+                 ~F  alone — print as-is with default precision. */
+              Ref arg = fmt_pop(args_ptr);
+              floating v = floatp(arg)  ? float_value(arg)
+                         : integerp(arg)? (floating)integer_value(arg)
+                         : 0.0;
+              if(fmt_has[0] || fmt_has[1]){
+                  /* Have explicit parameters */
+                  int dec_places = fmt_has[1] ? (int)fmt_params[1]
+                                 : fmt_has[0] ? (int)fmt_params[0]
+                                 : 6;
+                  int width      = (fmt_has[0] && fmt_has[1]) ? (int)fmt_params[0] : 0;
+                  char fmtbuf[64];
+                  char outbuf[256];
+                  if(width > 0)
+                      snprintf(fmtbuf,sizeof(fmtbuf),"%%%d.%df",width,dec_places);
+                  else
+                      snprintf(fmtbuf,sizeof(fmtbuf),"%%.%df",dec_places);
+                  snprintf(outbuf,sizeof(outbuf),fmtbuf,(double)v);
+                  fputs(outbuf,out);
+              } else {
+                  /* No explicit parameters: use princ for default output */
+                  princ(arg,stream);}
               break;}
           case '%': {
               for(word k=0;k<count;k++) fputc('\n',out);

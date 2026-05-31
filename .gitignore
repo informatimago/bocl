@@ -50,6 +50,7 @@ tests/test_slice26
 tests/test_slice27
 tests/test_slice28
 tests/test_slice29
+tests/test_slice30
 tests/test_clos
 
 *-Listing.xml

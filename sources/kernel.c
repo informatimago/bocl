@@ -825,7 +825,9 @@ Ref vector_new(Ref elements){
 Ref bit_vector_new_octets(uword length,octet* bits){
     halfword dimensions[1];
     dimensions[0]=CHECK_UWORD_TO_HALFWORD(length);
-    Array* array=Array_slots(BIT_Symbol,1,dimensions);
+    /* Use OctetArray_slots so the VectorOfOctet layout matches what
+       bit(), bit_set(), and bit_vector_equal() expect. */
+    OctetArray* array=OctetArray_slots(BIT_Symbol,1,dimensions);
     memcpy(array->elements->elements,bits,length);
     return Object_new(BIT_VECTOR_Class,(Slots*)array);}
 

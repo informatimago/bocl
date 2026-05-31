@@ -113,12 +113,13 @@
 ;; ELT setter — dispatches on sequence type; uses gensyms to avoid
 ;; multiple evaluation of sub-forms.
 (define-setf-expander elt (seq idx) (val)
+  ;; bit-vector-p and stringp before vectorp (subtypes of vector in bocl)
   (let ((s (gensym "S")) (i (gensym "I")) (v (gensym "V")))
     `(let ((,s ,seq) (,i ,idx) (,v ,val))
        (cond ((consp ,s)        (rplaca (nthcdr ,i ,s) ,v))
              ((stringp ,s)      (char-set ,v ,s ,i))
-             ((vectorp ,s)      (svref-set ,s ,i ,v))
              ((bit-vector-p ,s) (bit-set ,s ,i ,v))
+             ((vectorp ,s)      (svref-set ,s ,i ,v))
              (t (error "SETF ELT: not a sequence"))))))
 
 ;; -------------------------------------------------------------------- ;;
@@ -462,10 +463,12 @@
         (t (error "LENGTH: not a sequence"))))
 
 (defun elt (seq i)
+  ;; NOTE: bit-vector-p and stringp must come BEFORE vectorp because
+  ;; bit-vectors and strings are subtypes of vector in bocl.
   (cond ((consp seq)        (nth i seq))
         ((stringp seq)      (char seq i))
-        ((vectorp seq)      (svref seq i))
         ((bit-vector-p seq) (bit seq i))
+        ((vectorp seq)      (svref seq i))
         (t (error "ELT: not a sequence"))))
 
 ;; -------------------------------------------------------------------- ;;
@@ -5662,4 +5665,143 @@
     ((and (eql type1 'null)      (eql type2 'symbol))    (values t t))
     (t (values nil nil))))
 
-;;;; THE END OF SLICE 29
+;;;; =========================================================================
+;;;; Slice 30 — TYPEP compound types, FORMAT improvements, misc utilities.
+;;;; =========================================================================
+
+;;; ---- TYPEP with compound type specifiers ---------------------------------
+;;; Overrides the Slice 19 definition with full compound-type support.
+
+(defun typep (object type &optional environment)
+  "Extended TYPEP with compound type specifiers."
+  (declare (ignore environment))
+  (cond
+    ((eq type t) t)
+    ((eq type nil) nil)
+    ;; Compound type specifiers
+    ((consp type)
+     (let ((head (car type))
+           (args (cdr type)))
+       (cond
+         ;; (or t1 t2 ...) — true if any ti matches
+         ((eq head 'or)
+          (some (lambda (ti) (typep object ti)) args))
+         ;; (and t1 t2 ...) — true if all ti match
+         ((eq head 'and)
+          (every (lambda (ti) (typep object ti)) args))
+         ;; (not ti) — true if ti does NOT match
+         ((eq head 'not)
+          (not (typep object (car args))))
+         ;; (member x1 x2 ...) — true if object is EQL to any xi
+         ((eq head 'member)
+          (not (null (member object args :test #'eql))))
+         ;; (eql x) — true if object is EQL to x
+         ((eq head 'eql)
+          (eql object (car args)))
+         ;; (satisfies predicate) — call predicate on object
+         ;; Resolve symbol to its function binding if needed.
+         ((eq head 'satisfies)
+          (let ((pred (car args)))
+            (not (null (funcall (if (symbolp pred) (symbol-function pred) pred)
+                                object)))))
+         ;; (integer low high) — integer in range
+         ((eq head 'integer)
+          (and (integerp object)
+               (or (null (car args))    (>= object (if (consp (car args)) (1+ (car (car args))) (car args))))
+               (or (null (cadr args))   (<= object (if (consp (cadr args)) (1- (car (cadr args))) (cadr args))))))
+         ;; (float low high) — float in range
+         ((eq head 'float)
+          (and (floatp object)
+               (or (null (car args))  (>= object (if (consp (car args)) (car (car args)) (car args))))
+               (or (null (cadr args)) (<= object (if (consp (cadr args)) (car (cadr args)) (cadr args))))))
+         ;; (real low high) — any real in range
+         ((eq head 'real)
+          (and (or (integerp object) (floatp object))
+               (or (null (car args))  (>= object (if (consp (car args)) (car (car args)) (car args))))
+               (or (null (cadr args)) (<= object (if (consp (cadr args)) (car (cadr args)) (cadr args))))))
+         ;; (string length) — string of given length
+         ((eq head 'string)
+          (and (stringp object)
+               (or (null (car args)) (= (string-length object) (car args)))))
+         ;; (vector elt-type length) — vector
+         ((eq head 'vector)
+          (and (vectorp object)
+               (or (null (cadr args)) (= (vector-length object) (cadr args)))))
+         ;; (array ...) — array
+         ((eq head 'array)
+          (or (stringp object) (vectorp object)))
+         ;; (values ...) — ignore for now
+         ((eq head 'values) t)
+         ;; Unknown compound — try symbol lookup of head
+         (t (typep object head)))))
+    ;; Direct %cls object (CLOS class)
+    ((%is-cls type)
+     (and (%is-obj object)
+          (not (null (member type (%cls-cpl (%obj-class object)))))))
+    ;; Symbol — check user CLOS classes first, then kernel
+    ((symbolp type)
+     (let ((cls (gethash type *%classes*)))
+       (if (%is-cls cls)
+           (and (%is-obj object)
+                (not (null (member cls (%cls-cpl (%obj-class object))))))
+           (funcall *%kernel-typep* object type))))
+    (t nil)))
+
+;;; ---- NUMERIC-TYPE-SPEC helpers -------------------------------------------
+
+(defun integer-type-p (type)
+  "Return T if TYPE names or describes an integer."
+  (or (eq type 'integer) (eq type 'fixnum) (eq type 'bignum)
+      (and (consp type) (eq (car type) 'integer))))
+
+;;; ---- BIT-VECTOR operations -----------------------------------------------
+;;; Use bit-set/bit directly to avoid the map→plain-vector pitfall.
+
+(defun %bit-binop (fn v1 v2)
+  "Apply binary function FN element-wise to two bit-vectors."
+  (let* ((len (min (length v1) (length v2)))
+         (out (make-bit-vector len 0)))
+    (dotimes (i len out)
+      (bit-set out i (logand 1 (funcall fn (bit v1 i) (bit v2 i)))))))
+
+(defun bit-and   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logand  v1 v2))
+(defun bit-or    (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logior  v1 v2))
+(defun bit-xor   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logxor  v1 v2))
+(defun bit-eqv   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logxor a b) 1)) v1 v2))
+(defun bit-nand  (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logand a b) 1)) v1 v2))
+(defun bit-nor   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logior a b) 1)) v1 v2))
+(defun bit-andc1 (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logand (logxor a 1) b)) v1 v2))
+(defun bit-andc2 (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logand a (logxor b 1))) v1 v2))
+
+(defun bit-not (v1 &optional result)
+  "Return a bit-vector with all bits flipped."
+  (declare (ignore result))
+  (let* ((len (length v1))
+         (out (make-bit-vector len 0)))
+    (dotimes (i len out)
+      (bit-set out i (logxor (bit v1 i) 1)))))
+
+;;; ---- REVERSE for strings and vectors (kernel handles lists) ---------------
+
+(defun reverse-seq (sequence)
+  "Return a reversed copy of SEQUENCE (for non-list types)."
+  (if (listp sequence)
+      (reverse sequence)   ; kernel REVERSE handles lists
+      (let* ((len (length sequence))
+             (out (copy-seq sequence)))
+        (dotimes (i (floor len 2) out)
+          (let ((j  (- len 1 i))
+                (tmp (elt out i)))
+            (setf (elt out i) (elt out j))
+            (setf (elt out j) tmp))))))
+
+;;; ---- NUMBER TYPE predicates -----------------------------------------------
+
+(defun fixnump  (n) (and (integerp n)
+                         (<= most-negative-fixnum n most-positive-fixnum)))
+(defun bignump  (n) (and (integerp n) (not (fixnump n))))
+(defun bit-p    (n) (or (eql n 0) (eql n 1)))
+
+;;; make-bit-vector is provided by the kernel (registered in sequences.c).
+
+;;;; THE END OF SLICE 30

@@ -299,6 +299,26 @@ static void kernel_GENSYM(Ref function, Ref arguments, MultipleValues* results){
 static void register_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
     set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
 
+/* (MAKE-BIT-VECTOR n &optional initial-element) — create a fresh bit-vector. */
+static void kernel_MAKE_BIT_VECTOR(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref len_ref = pop_mandatory_argument(function, &current);
+    Ref init    = nullp(current) ? I(0) : pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    word len = integer_value(len_ref);
+    if(len < 0){ ERROR("MAKE-BIT-VECTOR: negative length %ld",(long)len); }
+    octet bit  = (octet)(integerp(init) ? (integer_value(init) & 1) : 0);
+    octet* buf = (octet*)malloc((uword)len + 1);
+    for(word i = 0; i < len; i++) buf[i] = bit;
+    buf[len] = 0;
+    Ref bv = bit_vector_new_octets((uword)len, buf);
+    free(buf);
+    results->count = 1;
+    results->values[0] = bv;
+    close_live_pool(pool);}
+
 void kernel_initialize_sequences(void){
     Ref ll_fn_rest_args  = list(S(FUNCTION), S(&REST), S(ARGS),  NULL);
     Ref ll_fn_rest_lists = list(S(FUNCTION), S(&REST), S(LISTS), NULL);
@@ -324,4 +344,9 @@ void kernel_initialize_sequences(void){
     register_fn(S(CHAR-SET),
                 list(S(STRING), S(INDEX), S(CHARACTER), NULL),
                 kernel_CHAR_SET);
+    register_fn(symbol_intern_cstring("MAKE-BIT-VECTOR"),
+                list(symbol_intern_cstring("LENGTH"),
+                     S(&OPTIONAL), symbol_intern_cstring("INITIAL-ELEMENT"),
+                     NULL),
+                kernel_MAKE_BIT_VECTOR);
 }
