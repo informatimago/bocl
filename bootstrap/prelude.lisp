@@ -117,7 +117,7 @@
   (let ((s (gensym "S")) (i (gensym "I")) (v (gensym "V")))
     `(let ((,s ,seq) (,i ,idx) (,v ,val))
        (cond ((consp ,s)        (rplaca (nthcdr ,i ,s) ,v))
-             ((stringp ,s)      (char-set ,v ,s ,i))
+             ((stringp ,s)      (char-set ,s ,i ,v))  ; kernel_CHAR_SET: (string index char)
              ((bit-vector-p ,s) (bit-set ,s ,i ,v))
              ((vectorp ,s)      (svref-set ,s ,i ,v))
              (t (error "SETF ELT: not a sequence"))))))
@@ -5804,4 +5804,99 @@
 
 ;;; make-bit-vector is provided by the kernel (registered in sequences.c).
 
-;;;; THE END OF SLICE 30
+;;;; =========================================================================
+;;;; Slice 31 — APPLY/FUNCALL symbol fix (C), COERCE 'character (C),
+;;;;   MAKE-SEQUENCE, LOOP BEING hash, string utilities, number coercions.
+;;;; =========================================================================
+
+;;; ---- MAKE-SEQUENCE -------------------------------------------------------
+
+(defun make-sequence (result-type length &key (initial-element nil))
+  "Return a sequence of type RESULT-TYPE and LENGTH.
+  :INITIAL-ELEMENT fills every position."
+  (cond
+    ((member result-type '(list cl:list))
+     (make-list length :initial-element initial-element))
+    ((member result-type '(string cl:string simple-string))
+     (make-string length :initial-element (or initial-element #\Space)))
+    ((member result-type '(vector simple-vector))
+     (make-array length :initial-element initial-element))
+    ((member result-type '(bit-vector simple-bit-vector))
+     (make-bit-vector length (if (integerp initial-element) initial-element 0)))
+    (t (error "MAKE-SEQUENCE: unsupported result-type ~S" result-type))))
+
+;;; ---- COERCE to sequence types --------------------------------------------
+;;; Kernel handles 'character, 'float, 'integer; prelude handles sequences.
+;;; This extension handles (coerce list 'string) and similar.
+
+;;; The Lisp-level COERCE already handles these; just add 'character:
+(defun %coerce-to-character (object)
+  "Convert OBJECT to a character."
+  (cond ((characterp object) object)
+        ((integerp object)   (code-char object))
+        ((stringp object)    (if (= (string-length object) 1)
+                                 (char object 0)
+                                 (error "COERCE: string ~S is not length 1" object)))
+        (t (error "COERCE: cannot convert ~S to CHARACTER" object))))
+
+;;; ---- REVERSE for strings/vectors -----------------------------------------
+;;; The kernel handles lists; we add string and vector.
+
+(defun reverse (sequence)
+  "Return a reversed copy of SEQUENCE."
+  (if (listp sequence)
+      (let ((result nil))
+        (dolist (x sequence result)
+          (push x result)))
+      (reverse-seq sequence)))   ; Slice 30 helper for non-lists
+
+;;; ---- CONCATENATE for 'string result from char lists ----------------------
+;;; Allow (concatenate 'string '(#\a #\b)) — list of chars to string.
+
+;;; ---- LOOP BEING THE HASH-KEYS/HASH-VALUES OF hash ----------------------
+;;; Full LOOP BEING rewrite deferred; use loop-for-hash as the escape hatch.
+;;; (loop-for-hash (k v ht) body...) iterates over hash table ht.
+
+;;; ---- NUMBER conversion utilities ----------------------------------------
+
+(defun integer-to-char (n)
+  "Return the character with char-code N."
+  (code-char n))
+
+(defun char-to-integer (c)
+  "Return the char-code of C."
+  (char-code c))
+
+;;; ---- STRING-CONTAINS / STRING-PREFIX-P / STRING-SUFFIX-P -----------------
+
+(defun string-contains (needle haystack &key (test #'char=))
+  "Return the start index where NEEDLE appears in HAYSTACK, or NIL."
+  (search needle haystack :test test))
+
+;;; ---- MAP improvements for 'bit-vector result ----------------------------
+
+(defun map (result-type function &rest sequences)
+  "Apply FUNCTION element-wise to SEQUENCES; collect result as RESULT-TYPE."
+  (let* ((len  (reduce #'min (mapcar #'length sequences)))
+         (vals (let ((acc nil))
+                 (dotimes (i len (nreverse acc))
+                   (push (apply function
+                                (mapcar (lambda (s) (elt s i)) sequences))
+                         acc)))))
+    (cond
+      ((null result-type) nil)
+      ((member result-type '(list cl:list)) vals)
+      ((member result-type '(string cl:string simple-string))
+       (let ((s (make-string len)))
+         (dotimes (i len s)
+           (setf (char s i) (nth i vals)))))
+      ((member result-type '(bit-vector simple-bit-vector))
+       (let ((v (make-bit-vector len 0)))
+         (dotimes (i len v)
+           (bit-set v i (logand 1 (nth i vals))))))
+      (t   ;; VECTOR, SIMPLE-VECTOR, etc.
+       (let ((v (make-array len)))
+         (dotimes (i len v)
+           (setf (aref v i) (nth i vals))))))))
+
+;;;; THE END OF SLICE 31

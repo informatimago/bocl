@@ -1619,6 +1619,9 @@ void values(Ref arguments,MultipleValues* results){
         arguments=cdr(arguments);}}
 
 void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){
+    /* CL function designator: a symbol names the function in its function cell. */
+    if(symbolp(function_or_closure) && symbol_fboundp(function_or_closure)){
+        function_or_closure=symbol_function(function_or_closure);}
     if(closurep(function_or_closure)){
         kernel_apply_closure(function_or_closure,&function_or_closure->slots->closure,arguments,results);}
     else if(built_in_function_p(function_or_closure)){
@@ -1626,7 +1629,6 @@ void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results)
     else if(functionp(function_or_closure)){
         kernel_apply_function(function_or_closure,&function_or_closure->slots->function,arguments,results);}
     else{
-        /* TODO: (or function closure) */
         TYPE_ERROR(function_or_closure,FUNCTION_Class);}}
 
 /* kernel_apply_closure and kernel_apply_function are implemented in eval.c,

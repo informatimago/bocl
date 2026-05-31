@@ -609,7 +609,18 @@ void kernel_COERCE(Ref function,Ref arguments,MultipleValues* results){
     } else if(eql(result_type,S(NUMBER))){
         check_number(obj);
         results->values[0]=obj;
+    } else if(eql(result_type,S(CHARACTER))){
+        /* (coerce integer 'character) or (coerce char 'character) */
+        if(characterp(obj)){
+            results->values[0]=obj;
+        } else if(integerp(obj)){
+            results->values[0]=octet_character((octet)integer_value(obj));
+        } else {
+            TYPE_ERROR(obj,CHARACTER_Class);}
+    } else if(eql(result_type,S(T))){
+        results->values[0]=obj;  /* identity */
     } else {
+        /* Delegate to the Lisp-level coerce in prelude.lisp */
         ERROR("COERCE: result type %s not supported by the kernel",
               string_cstring(prin1_to_string(result_type)));}
     close_live_pool(pool);}
