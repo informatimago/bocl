@@ -1392,10 +1392,29 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
     bool saw_rest = false;
     while(consp(ll)){
         Ref param=car(ll);
-        if(symbolp(param)
-           && (param==S(&AUX) || param==S(&WHOLE) || param==S(&ENVIRONMENT))){
+        if(symbolp(param) && (param==S(&WHOLE) || param==S(&ENVIRONMENT))){
             ERROR("Lambda-list keyword %s not yet implemented",
                   string_cstring(symbol_name(param)));}
+        /* &AUX (var) or (var init-form) — bind local variables in order. */
+        if(symbolp(param) && param==S(&AUX)){
+            ll=cdr(ll);
+            while(consp(ll)){
+                Ref aux_spec=car(ll);
+                Ref aux_var, aux_init;
+                if(symbolp(aux_spec)){
+                    aux_var=aux_spec; aux_init=NIL_Symbol;
+                } else if(consp(aux_spec)){
+                    aux_var=car(aux_spec);
+                    aux_init=nullp(cdr(aux_spec))?NIL_Symbol:cadr(aux_spec);
+                } else {
+                    ERROR("&AUX: bad spec %s",string_cstring(prin1_to_string(aux_spec)));}
+                MultipleValues aux_res={0};
+                Ref val=(nullp(aux_init)?NIL_Symbol:evale(aux_init,target_env,&aux_res));
+                Ref wrap=env_make_lexical_variable(aux_var,val);
+                environment_add_variable(wrap,target_env);
+                ll=cdr(ll);}
+            return;  /* &AUX is always last */
+        }
         if(symbolp(param) && param==S(&OPTIONAL)){
             state = in_optional;
             ll = cdr(ll);
