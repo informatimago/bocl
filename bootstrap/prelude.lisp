@@ -4981,4 +4981,333 @@
   "Synonym for GRAPHIC-CHAR-P — visible on a printed page."
   (graphic-char-p char))
 
-;;;; THE END OF SLICE 26
+;;;; =========================================================================
+;;;; Slice 27 — sequence ops with :start/:end/:from-end/:count,
+;;;;   string= etc. with bounds, WRITE-TO-STRING :base, number utilities.
+;;;; =========================================================================
+
+;;; ---- FIND-IF / FIND / POSITION-IF / POSITION  with full CL kwargs -------
+
+(defun find-if (predicate sequence
+                &key (start 0) end from-end (key #'identity))
+  "Return first element in SEQUENCE[START,END) satisfying PREDICATE."
+  (let* ((len  (length sequence))
+         (stop (min (or end len) len)))
+    (if from-end
+        (do ((i (1- stop) (1- i)))
+            ((< i start) nil)
+          (let ((x (elt sequence i)))
+            (when (funcall predicate (funcall key x))
+              (return-from find-if x))))
+        (do ((i start (1+ i)))
+            ((>= i stop) nil)
+          (let ((x (elt sequence i)))
+            (when (funcall predicate (funcall key x))
+              (return-from find-if x)))))))
+
+(defun find (item sequence
+             &key (test #'eql) (start 0) end from-end (key #'identity))
+  "Return first occurrence of ITEM in SEQUENCE[START,END)."
+  (find-if (lambda (x) (funcall test item x)) sequence
+           :start start :end end :from-end from-end :key key))
+
+(defun find-if-not (predicate sequence
+                    &key (start 0) end from-end (key #'identity))
+  (find-if (lambda (x) (not (funcall predicate x))) sequence
+           :start start :end end :from-end from-end :key key))
+
+(defun position-if (predicate sequence
+                    &key (start 0) end from-end (key #'identity))
+  "Return index of first element in SEQUENCE[START,END) satisfying PREDICATE."
+  (let* ((len  (length sequence))
+         (stop (min (or end len) len)))
+    (if from-end
+        (do ((i (1- stop) (1- i)))
+            ((< i start) nil)
+          (when (funcall predicate (funcall key (elt sequence i)))
+            (return-from position-if i)))
+        (do ((i start (1+ i)))
+            ((>= i stop) nil)
+          (when (funcall predicate (funcall key (elt sequence i)))
+            (return-from position-if i))))))
+
+(defun position (item sequence
+                 &key (test #'eql) (start 0) end from-end (key #'identity))
+  "Return index of first occurrence of ITEM in SEQUENCE[START,END)."
+  (position-if (lambda (x) (funcall test item x)) sequence
+               :start start :end end :from-end from-end :key key))
+
+(defun position-if-not (predicate sequence
+                        &key (start 0) end from-end (key #'identity))
+  (position-if (lambda (x) (not (funcall predicate x))) sequence
+               :start start :end end :from-end from-end :key key))
+
+;;; ---- REMOVE-IF / REMOVE with :count/:start/:end/:from-end ---------------
+
+(defun remove-if (predicate sequence
+                  &key (start 0) end from-end (count nil) (key #'identity))
+  "Return sequence with elements matching PREDICATE removed."
+  (let* ((len  (length sequence))
+         (stop (min (or end len) len))
+         (n    0)
+         (acc  nil))
+    (if from-end
+        ;; from-end: collect right to left, reverse prefix/suffix
+        (let ((keep (make-array (max 0 (- stop start)) :initial-element nil))
+              (i    0))
+          (do ((j (1- stop) (1- j)))
+              ((< j start))
+            (let ((x (elt sequence j)))
+              (if (and (or (null count) (< n count))
+                       (funcall predicate (funcall key x)))
+                  (setq n (1+ n))
+                  (setf (aref keep i) (list x)))
+              (setq i (1+ i))))
+          (let ((middle nil))
+            (dotimes (k i)
+              (when (aref keep k) (push (car (aref keep k)) middle)))
+            (setq acc middle)))
+        ;; forward direction
+        (do ((i start (1+ i)))
+            ((>= i stop))
+          (let ((x (elt sequence i)))
+            (unless (and (or (null count) (< n count))
+                         (funcall predicate (funcall key x)))
+              (push x acc))
+            (when (and (or (null count) (< n count))
+                       (funcall predicate (funcall key x)))
+              (setq n (1+ n)))))
+        )
+    ;; build result preserving elements outside [start,stop)
+    (let ((prefix (subseq sequence 0 start))
+          (middle (nreverse acc))
+          (suffix (subseq sequence stop len)))
+      (if (listp sequence)
+          (nconc (coerce prefix 'list) middle (coerce suffix 'list))
+          (concatenate (if (stringp sequence) 'string 'vector)
+                       (coerce prefix (if (stringp sequence) 'string 'vector))
+                       (coerce middle (if (stringp sequence) 'string 'vector))
+                       (coerce suffix (if (stringp sequence) 'string 'vector)))))))
+
+(defun remove (item sequence
+               &key (test #'eql) (start 0) end from-end count (key #'identity))
+  (remove-if (lambda (x) (funcall test item x)) sequence
+             :start start :end end :from-end from-end :count count :key key))
+
+(defun remove-if-not (predicate sequence
+                      &key (start 0) end from-end count (key #'identity))
+  (remove-if (lambda (x) (not (funcall predicate x))) sequence
+             :start start :end end :from-end from-end :count count :key key))
+
+;;; ---- STRING= / STRING< etc. with bounds ----------------------------------
+
+(defun %string-compare-bounded (a b case-fold start1 end1 start2 end2)
+  "Compare string subranges; returns <0, 0, or >0."
+  (let* ((a  (string a))
+         (b  (string b))
+         (na (min (or end1 (string-length a)) (string-length a)))
+         (nb (min (or end2 (string-length b)) (string-length b)))
+         (la (- na start1))
+         (lb (- nb start2))
+         (n  (if (< la lb) la lb)))
+    (do ((i 0 (1+ i)))
+        ((= i n) (- la lb))
+      (let* ((ca (char a (+ start1 i)))
+             (cb (char b (+ start2 i)))
+             (xa (if case-fold (char-code (char-upcase ca)) (char-code ca)))
+             (xb (if case-fold (char-code (char-upcase cb)) (char-code cb))))
+        (when (/= xa xb)
+          (return-from %string-compare-bounded (- xa xb)))))))
+
+(defun string= (a b &key (start1 0) end1 (start2 0) end2)
+  (zerop (%string-compare-bounded a b nil start1 end1 start2 end2)))
+
+(defun string/= (a b &key (start1 0) end1 (start2 0) end2)
+  (not (zerop (%string-compare-bounded a b nil start1 end1 start2 end2))))
+
+(defun string< (a b &key (start1 0) end1 (start2 0) end2)
+  (< (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+
+(defun string> (a b &key (start1 0) end1 (start2 0) end2)
+  (> (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+
+(defun string<= (a b &key (start1 0) end1 (start2 0) end2)
+  (<= (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+
+(defun string>= (a b &key (start1 0) end1 (start2 0) end2)
+  (>= (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+
+(defun string-equal (a b &key (start1 0) end1 (start2 0) end2)
+  (zerop (%string-compare-bounded a b t start1 end1 start2 end2)))
+
+(defun string-not-equal (a b &key (start1 0) end1 (start2 0) end2)
+  (not (zerop (%string-compare-bounded a b t start1 end1 start2 end2))))
+
+(defun string-lessp (a b &key (start1 0) end1 (start2 0) end2)
+  (< (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+
+(defun string-greaterp (a b &key (start1 0) end1 (start2 0) end2)
+  (> (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+
+(defun string-not-lessp (a b &key (start1 0) end1 (start2 0) end2)
+  (>= (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+
+(defun string-not-greaterp (a b &key (start1 0) end1 (start2 0) end2)
+  (<= (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+
+;;; ---- WRITE-TO-STRING with :base ------------------------------------------
+
+(defun write-to-string (object &rest keys
+                        &key (base *print-base*)
+                             (radix *print-radix*)
+                             (readably *print-readably*)
+                             (escape *print-escape*)
+                             &allow-other-keys)
+  "Produce a string representation of OBJECT."
+  (declare (ignore readably escape radix keys))
+  (if (and (integerp object) base (/= base 10))
+      ;; Non-decimal integer: use number-to-string
+      (number-to-string object base)
+      ;; Default: prin1
+      (with-output-to-string (s)
+        (prin1 object s))))
+
+(defun princ-to-string (obj)
+  "Produce a PRINC string representation of OBJ."
+  (with-output-to-string (s) (princ obj s)))
+
+;;; ---- SUBSTITUTE with bounds/count ----------------------------------------
+
+(defun substitute (new old sequence
+                   &key (test #'eql) (start 0) end count from-end (key #'identity))
+  "Return copy of SEQUENCE with occurrences of OLD replaced by NEW."
+  (substitute-if new (lambda (x) (funcall test old x)) sequence
+                 :start start :end end :count count :from-end from-end :key key))
+
+(defun substitute-if (new predicate sequence
+                      &key (start 0) end count from-end (key #'identity))
+  "Return copy of SEQUENCE with elements matching PREDICATE replaced by NEW."
+  (let* ((len  (length sequence))
+         (stop (min (or end len) len))
+         (n    0))
+    (if (listp sequence)
+        (let ((result (copy-seq sequence)))
+          (if from-end
+              (do ((i (1- stop) (1- i)))
+                  ((or (< i start) (and count (>= n count))))
+                (when (funcall predicate (funcall key (nth i result)))
+                  (setf (nth i result) new)
+                  (setq n (1+ n))))
+              (do ((i start (1+ i)))
+                  ((or (>= i stop) (and count (>= n count))))
+                (when (funcall predicate (funcall key (nth i result)))
+                  (setf (nth i result) new)
+                  (setq n (1+ n)))))
+          result)
+        ;; string/vector path
+        (let ((result (copy-seq sequence)))
+          (if from-end
+              (do ((i (1- stop) (1- i)))
+                  ((or (< i start) (and count (>= n count))))
+                (when (funcall predicate (funcall key (elt result i)))
+                  (setf (elt result i) new)
+                  (setq n (1+ n))))
+              (do ((i start (1+ i)))
+                  ((or (>= i stop) (and count (>= n count))))
+                (when (funcall predicate (funcall key (elt result i)))
+                  (setf (elt result i) new)
+                  (setq n (1+ n)))))
+          result))))
+
+(defun substitute-if-not (new predicate sequence &rest keys)
+  (apply #'substitute-if new (lambda (x) (not (funcall predicate x))) sequence keys))
+
+(defun nsubstitute (new old sequence &rest keys)
+  "Destructive SUBSTITUTE — non-destructive in bocl."
+  (apply #'substitute new old sequence keys))
+
+(defun nsubstitute-if (new predicate sequence &rest keys)
+  (apply #'substitute-if new predicate sequence keys))
+
+(defun nsubstitute-if-not (new predicate sequence &rest keys)
+  (apply #'substitute-if-not new predicate sequence keys))
+
+;;; ---- MEMBER with :key ----------------------------------------------------
+
+(defun member-if (predicate list &key (key #'identity))
+  "Return the tail of LIST starting with first element satisfying PREDICATE."
+  (do ((l list (cdr l)))
+      ((null l) nil)
+    (when (funcall predicate (funcall key (car l)))
+      (return l))))
+
+(defun member-if-not (predicate list &key (key #'identity))
+  (member-if (lambda (x) (not (funcall predicate x))) list :key key))
+
+;;; ---- MISMATCH with full kwargs -------------------------------------------
+
+(defun mismatch (sequence1 sequence2
+                 &key (test #'eql) (key #'identity)
+                      (start1 0) end1
+                      (start2 0) end2
+                      from-end)
+  "Return index of first mismatch between two sequence subranges, or NIL."
+  (let* ((len1  (length sequence1))
+         (len2  (length sequence2))
+         (stop1 (min (or end1 len1) len1))
+         (stop2 (min (or end2 len2) len2))
+         (n     (min (- stop1 start1) (- stop2 start2))))
+    (if from-end
+        (do ((i 1 (1+ i)))
+            ((> i n)
+             (if (= (- stop1 start1) (- stop2 start2)) nil
+                 (if (> (- stop1 start1) (- stop2 start2))
+                     (- stop1 i)
+                     start2)))
+          (unless (funcall test
+                           (funcall key (elt sequence1 (- stop1 i)))
+                           (funcall key (elt sequence2 (- stop2 i))))
+            (return (- stop1 i))))
+        (do ((i 0 (1+ i)))
+            ((= i n)
+             (if (= (- stop1 start1) (- stop2 start2)) nil
+                 (+ start1 i)))
+          (unless (funcall test
+                           (funcall key (elt sequence1 (+ start1 i)))
+                           (funcall key (elt sequence2 (+ start2 i))))
+            (return (+ start1 i)))))))
+
+;;; ---- SEARCH with full kwargs (update for CL compliance) -----------------
+
+(defun search (pattern target
+               &key (test #'eql) (key #'identity)
+                    (start1 0) end1
+                    (start2 0) end2
+                    from-end)
+  "Return start index of PATTERN in TARGET, or NIL."
+  (let* ((plen  (length pattern))
+         (tlen  (length target))
+         (pe    (min (or end1 plen) plen))
+         (te    (min (or end2 tlen) tlen))
+         (pn    (- pe start1))
+         (tn    (- te start2))
+         (limit (- tn pn)))
+    (when (< limit 0) (return-from search nil))
+    (if from-end
+        (do ((i (+ start2 limit) (1- i)))
+            ((< i start2) nil)
+          (when (= 0 (or (mismatch pattern target
+                                   :start1 start1 :end1 pe
+                                   :start2 i :end2 (+ i pn)
+                                   :test test :key key)
+                         0))
+            (return i)))
+        (do ((i start2 (1+ i)))
+            ((> i (+ start2 limit)) nil)
+          (when (null (mismatch pattern target
+                                :start1 start1 :end1 pe
+                                :start2 i :end2 (+ i pn)
+                                :test test :key key))
+            (return i))))))
+
+;;;; THE END OF SLICE 27
