@@ -5310,4 +5310,187 @@
                                 :test test :key key))
             (return i))))))
 
-;;;; THE END OF SLICE 27
+;;;; =========================================================================
+;;;; Slice 28 — multi-sequence predicates, hash iteration, string utilities,
+;;;;   list utilities, WHEN-LET/IF-LET, IOTA, FLATTEN, TAKE/DROP.
+;;;; =========================================================================
+
+;;; ---- EVERY/SOME/NOTEVERY/NOTANY for multiple sequences ------------------
+
+(defun every (predicate &rest sequences)
+  "Return T if PREDICATE returns true for every set of corresponding elements.
+  With one sequence: standard single-sequence behaviour.
+  With multiple sequences: stops at the shortest."
+  (if (null (cdr sequences))
+      ;; Single-sequence fast path
+      (let ((seq (car sequences)))
+        (if (listp seq)
+            (dolist (x seq t)
+              (unless (funcall predicate x) (return nil)))
+            (dotimes (i (length seq) t)
+              (unless (funcall predicate (elt seq i)) (return-from every nil)))))
+      ;; Multi-sequence path
+      (let ((len (apply #'min (mapcar #'length sequences))))
+        (dotimes (i len t)
+          (unless (apply predicate (mapcar (lambda (s) (elt s i)) sequences))
+            (return-from every nil))))))
+
+(defun some (predicate &rest sequences)
+  "Return the first true result of PREDICATE over sequence elements, or NIL."
+  (if (null (cdr sequences))
+      (let ((seq (car sequences)))
+        (if (listp seq)
+            (dolist (x seq nil)
+              (let ((v (funcall predicate x))) (when v (return v))))
+            (dotimes (i (length seq) nil)
+              (let ((v (funcall predicate (elt seq i))))
+                (when v (return-from some v))))))
+      (let ((len (apply #'min (mapcar #'length sequences))))
+        (dotimes (i len nil)
+          (let ((v (apply predicate (mapcar (lambda (s) (elt s i)) sequences))))
+            (when v (return-from some v)))))))
+
+(defun notevery (predicate &rest sequences)
+  "Return T if PREDICATE is false for at least one element."
+  (not (apply #'every predicate sequences)))
+
+(defun notany (predicate &rest sequences)
+  "Return T if PREDICATE is false for all elements."
+  (not (apply #'some predicate sequences)))
+
+;;; ---- DO-HASH-TABLE -------------------------------------------------------
+
+(defmacro do-hash-table (var-spec &body body)
+  "Iterate over a hash table, binding key and value for each entry.
+  Syntax: (do-hash-table (key value table &optional result) body...)
+  RESULT is evaluated and returned after iteration."
+  (let ((key    (first  var-spec))
+        (value  (second var-spec))
+        (table  (third  var-spec))
+        (result (fourth var-spec)))
+    `(progn
+       (maphash (lambda (,key ,value) ,@body) ,table)
+       ,result)))
+
+;;; ---- IOTA ----------------------------------------------------------------
+
+(defun iota (count &optional (start 0) (step 1))
+  "Return a list of COUNT numbers starting at START with increment STEP.
+  Example: (iota 5) → (0 1 2 3 4), (iota 3 1) → (1 2 3)."
+  (let ((acc nil))
+    (dotimes (i count (nreverse acc))
+      (push (+ start (* i step)) acc))))
+
+;;; ---- FLATTEN -------------------------------------------------------------
+
+(defun flatten (tree)
+  "Return a flat list of all atoms in TREE (ignoring NIL from list structure)."
+  (cond ((null tree)   nil)
+        ((atom tree)   (list tree))
+        (t (nconc (flatten (car tree)) (flatten (cdr tree))))))
+
+;;; ---- ENSURE-LIST ---------------------------------------------------------
+
+(defun ensure-list (x)
+  "If X is a list, return it; otherwise return (LIST X)."
+  (if (listp x) x (list x)))
+
+;;; ---- TAKE / DROP ---------------------------------------------------------
+
+(defun take (n sequence)
+  "Return the first N elements of SEQUENCE."
+  (subseq sequence 0 (min n (length sequence))))
+
+(defun drop (n sequence)
+  "Return SEQUENCE with the first N elements removed."
+  (subseq sequence (min n (length sequence))))
+
+;;; ---- WHEN-LET / IF-LET ---------------------------------------------------
+
+(defmacro when-let (bindings &body body)
+  "Like WHEN but establishes variable bindings. Evaluates BODY only if all
+  values are non-NIL.
+  Example: (when-let ((x (find-it))) (use x))"
+  (let* ((pairs (if (and (consp bindings) (symbolp (car bindings)))
+                    (list bindings)         ; single (var form) without extra parens
+                    bindings))
+         (vars  (mapcar #'car  pairs))
+         (forms (mapcar #'cadr pairs))
+         (tmp   (mapcar (lambda (v) (gensym (symbol-name v))) vars)))
+    `(let ,(mapcar #'list tmp forms)
+       (when (and ,@tmp)
+         (let ,(mapcar #'list vars tmp)
+           ,@body)))))
+
+(defmacro if-let (bindings then &optional else)
+  "Like IF but with variable binding.  Binds VAR to VALUE; if non-NIL,
+  evaluates THEN with VAR bound; otherwise evaluates ELSE."
+  (let* ((pairs (if (and (consp bindings) (symbolp (car bindings)))
+                    (list bindings)
+                    bindings))
+         (vars  (mapcar #'car  pairs))
+         (forms (mapcar #'cadr pairs))
+         (tmp   (mapcar (lambda (v) (gensym (symbol-name v))) vars)))
+    `(let ,(mapcar #'list tmp forms)
+       (if (and ,@tmp)
+           (let ,(mapcar #'list vars tmp) ,then)
+           ,else))))
+
+;;; ---- STRING-JOIN / SPLIT-SEQUENCE ----------------------------------------
+
+(defun string-join (sequences &optional (separator ""))
+  "Concatenate strings in SEQUENCES with SEPARATOR between them."
+  (if (null sequences)
+      ""
+      (let ((sep (string separator))
+            (strs (mapcar #'string sequences)))
+        (reduce (lambda (a b)
+                  (concatenate 'string a sep b))
+                strs))))
+
+(defun split-sequence (delimiter sequence &key (test #'eql) (remove-empty-subseqs nil) count)
+  "Split SEQUENCE on elements matching DELIMITER; return list of subsequences."
+  (let ((result nil)
+        (start  0)
+        (len    (length sequence))
+        (n      0))
+    (dotimes (i len)
+      (when (funcall test delimiter (elt sequence i))
+        (let ((sub (subseq sequence start i)))
+          (when (or (not remove-empty-subseqs) (> (length sub) 0))
+            (push sub result)
+            (setq n (1+ n))))
+        (setq start (1+ i))
+        (when (and count (>= n (1- count))) (return))))
+    ;; Add the remaining tail
+    (let ((tail (subseq sequence start)))
+      (when (or (not remove-empty-subseqs) (> (length tail) 0))
+        (push tail result)))
+    (nreverse result)))
+
+;;; ---- ALEXANDRIA-style extras ---------------------------------------------
+
+(defun last-elt (sequence)
+  "Return the last element of SEQUENCE."
+  (elt sequence (1- (length sequence))))
+
+(defun emptyp (sequence)
+  "Return T if SEQUENCE has zero elements."
+  (= (length sequence) 0))
+
+(defun starts-with (prefix sequence &key (test #'eql))
+  "Return T if SEQUENCE starts with PREFIX."
+  (let ((plen (length prefix))
+        (slen (length sequence)))
+    (and (<= plen slen)
+         (null (mismatch prefix sequence :end1 plen :end2 plen :test test)))))
+
+(defun ends-with (suffix sequence &key (test #'eql))
+  "Return T if SEQUENCE ends with SUFFIX."
+  (let ((suflen (length suffix))
+        (slen   (length sequence)))
+    (and (<= suflen slen)
+         (null (mismatch suffix sequence
+                         :start2 (- slen suflen) :test test)))))
+
+;;;; THE END OF SLICE 28

@@ -48,6 +48,7 @@ tests/test_slice24
 tests/test_slice25
 tests/test_slice26
 tests/test_slice27
+tests/test_slice28
 tests/test_clos
 
 *-Listing.xml
