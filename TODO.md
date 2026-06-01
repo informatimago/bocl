@@ -25,6 +25,19 @@
 - [x] **CLOS `:before` / `:after` / `:around` method qualifiers** — already
   implemented in the existing `%apply-methods-standard` dispatch (verified).
 
+## Completed (Slice 33 — v0.0.57)
+
+- [x] **Logical pathnames** — full conforming implementation:
+  `LOGICAL-PATHNAME`, `LOGICAL-PATHNAME-P`, `LOGICAL-PATHNAME-TRANSLATIONS`,
+  `SET-LOGICAL-PATHNAME-TRANSLATIONS`, `TRANSLATE-LOGICAL-PATHNAME`,
+  `LOAD-LOGICAL-PATHNAME-TRANSLATIONS`, `PATHNAME-MATCH-P`, `WILD-PATHNAME-P`;
+  `PATHNAME-HOST`, `PATHNAME-DEVICE` (Windows C: detection), `PATHNAME-VERSION`;
+  updated `PATHNAME`, `NAMESTRING`, `MAKE-PATHNAME`, `MERGE-PATHNAMES`,
+  `ENOUGH-NAMESTRING`, `PATHNAMEP`.
+  Also fixed: `TYPEP` for structure classes (was returning NIL for non-CLOS
+  structure instances due to `(t nil)` fallback instead of
+  `(t (funcall *%kernel-typep* object type))`).
+
 ## Still Remaining
 
 ### Low Priority

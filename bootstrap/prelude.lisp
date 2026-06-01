@@ -5802,7 +5802,9 @@
            (and (%is-obj object)
                 (not (null (member cls (%cls-cpl (%obj-class object))))))
            (funcall *%kernel-typep* object type))))
-    (t nil)))
+    ;; Non-symbol non-CLOS type (e.g. a structure-class or kernel class object)
+    ;; — delegate directly to the kernel typep which handles the class hierarchy.
+    (t (funcall *%kernel-typep* object type))))
 
 ;;; ---- NUMERIC-TYPE-SPEC helpers -------------------------------------------
 
@@ -6003,4 +6005,542 @@
            instance instance initargs)
     instance))
 
-;;;; THE END OF SLICE 32
+;;;; =========================================================================
+;;;; Slice 33 — Logical Pathnames (conforming implementation)
+;;;;
+;;;; Parsing strategy
+;;;; ----------------
+;;;;  "C:/foo/bar"          physical, device="C", dir=(:abs "foo"), name="bar"
+;;;;  "C:\\foo\\bar"    same (Windows backslash normalised to /)
+;;;;  "LOGHOST:;dir;name.type" logical, host="LOGHOST"
+;;;;  "/usr/local/bin/cc"   physical, no device
+;;;;
+;;;; Single ASCII letter before ":" → Windows device letter.
+;;;; 2+ chars before ":" with a registered logical host → logical pathname.
+;;;; =========================================================================
+
+;;; ---- DEFSTRUCT for logical pathnames ------------------------------------
+
+(defstruct (logical-pathname
+            (:constructor %make-lp)
+            (:predicate   logical-pathname-p))
+  host       ; uppercase string
+  directory  ; (:absolute/:relative component…) all upcased
+  name       ; uppercase string, :wild, or nil
+  type       ; uppercase string, :wild, or nil
+  version    ; integer, :newest, :wild, or nil
+)
+
+;;; ---- Logical-pathname translation table ---------------------------------
+
+(defvar *logical-pathname-translations*
+  (make-hash-table :test 'equal)
+  "Maps upcased logical host strings to translation lists.")
+
+(defun logical-pathname-translations (host)
+  (gethash (string-upcase (string host)) *logical-pathname-translations*))
+
+(defun set-logical-pathname-translations (host translations)
+  (setf (gethash (string-upcase (string host)) *logical-pathname-translations*)
+        translations)
+  translations)
+
+(defsetf logical-pathname-translations set-logical-pathname-translations)
+
+;;; ---- Parsing helpers -----------------------------------------------------
+
+(defun %lp-valid-word-char-p (c)
+  (or (char<= #\A c #\Z) (char<= #\a c #\z)
+      (char<= #\0 c #\9) (eql c #\-)))
+
+(defun %lp-parse-device (s)
+  "If S starts with a single ASCII letter then ':', return that letter string."
+  (when (>= (string-length s) 2)
+    (let ((c0 (char s 0)) (c1 (char s 1)))
+      (when (and (eql c1 #\:)
+                 (or (char<= #\A c0 #\Z) (char<= #\a c0 #\Z)))
+        (string-upcase (string c0))))))
+
+(defun %lp-parse-host (s)
+  "If S starts with 2+ logical-word chars then ':', return (values HOST REST-STRING)."
+  (let ((len (string-length s)) (i 0))
+    (loop while (< i len)
+          while (%lp-valid-word-char-p (char s i))
+          do (incf i))
+    (when (and (>= i 2) (< i len) (eql (char s i) #\:))
+      (values (string-upcase (subseq s 0 i))
+              (subseq s (1+ i))))))
+
+(defun %lp-upcase-or-wild (x)
+  (cond ((string= x "**") :wild-inferiors)
+        ((string= x "*")  :wild)
+        ((string= x "")   nil)
+        (t (string-upcase x))))
+
+(defun %lp-parse-body (rest)
+  "Parse the directory/name/type/version from the part after HOST: in a logical namestring."
+  ;; Normalise: accept both ; and > as separator
+  (let* ((s (map 'string (lambda (c) (if (eql c #\>) #\; c)) rest))
+         (abs-p (and (> (string-length s) 0) (eql (char s 0) #\;)))
+         (s     (if abs-p (subseq s 1) s))
+         (parts (split-sequence #\; s)))
+    ;; Last part is the file component; the rest are directory components
+    (let* ((file  (if parts (car (last parts)) ""))
+           (dirs  (if parts (butlast parts) '()))
+           ;; Parse file: NAME.TYPE or NAME.TYPE.VERSION
+           (fparts (split-sequence #\. file))
+           (fname  (car fparts))
+           (ftype  (cadr fparts))
+           (fver   (caddr fparts))
+           ;; Build directory list
+           (dir-list (cons (if abs-p :absolute :relative)
+                           (mapcar #'%lp-upcase-or-wild dirs)))
+           ;; Parse version
+           (ver  (cond ((null fver)                 nil)
+                       ((string-equal fver "NEWEST") :newest)
+                       ((string= fver "*")           :wild)
+                       ((every #'digit-char-p fver) (parse-integer fver))
+                       (t                            nil))))
+      (values (if (equal dir-list '(:relative)) nil dir-list)
+              (%lp-upcase-or-wild fname)
+              (%lp-upcase-or-wild ftype)
+              ver))))
+
+;;; ---- LOGICAL-PATHNAME constructor ----------------------------------------
+
+(defun logical-pathname (pathspec)
+  "Coerce PATHSPEC to a logical-pathname struct."
+  (cond
+    ((logical-pathname-p pathspec) pathspec)
+    ((stringp pathspec)
+     (multiple-value-bind (host rest)
+         (%lp-parse-host pathspec)
+       (unless host
+         (error "LOGICAL-PATHNAME: no logical host in ~S" pathspec))
+       (multiple-value-bind (dir name type ver)
+           (%lp-parse-body rest)
+         (%make-lp :host host :directory dir
+                   :name name :type type :version ver))))
+    (t (error "LOGICAL-PATHNAME: not a string or logical-pathname: ~S" pathspec))))
+
+;;; ---- NAMESTRING for logical pathnames ------------------------------------
+
+(defun logical-pathname-namestring (lp)
+  "Produce the canonical namestring for a logical-pathname."
+  (flet ((comp-str (c)
+           (cond ((null c) "")
+                 ((eq c :wild) "*")
+                 ((eq c :wild-inferiors) "**")
+                 (t (string c)))))
+    (let* ((host  (logical-pathname-host lp))
+           (dir   (logical-pathname-directory lp))
+           (name  (logical-pathname-name lp))
+           (type  (logical-pathname-type lp))
+           (ver   (logical-pathname-version lp))
+           (abs-p (and (listp dir) (eq (car dir) :absolute)))
+           (dirs  (if (listp dir) (cdr dir) nil))
+           (dir-s (apply #'concatenate 'string
+                          (mapcar (lambda (d) (concatenate 'string (comp-str d) ";")) dirs)))
+           (name-s (comp-str name))
+           (type-s (if type (concatenate 'string "." (comp-str type)) ""))
+           (ver-s  (cond ((null ver) "")
+                         ((eq ver :newest) ".NEWEST")
+                         ((eq ver :wild)   ".*")
+                         ((integerp ver)   (concatenate 'string "." (number-to-string ver)))
+                         (t ""))))
+      (concatenate 'string
+                   host ":"
+                   (if abs-p ";" "")
+                   dir-s name-s type-s ver-s))))
+
+;;; ---- Updated NAMESTRING ---------------------------------------------------
+
+(defvar *%kernel-namestring-fn*
+  (symbol-function 'namestring))
+
+(defun namestring (p)
+  "Return the namestring of pathname designator P."
+  (cond
+    ((logical-pathname-p p)     (logical-pathname-namestring p))
+    ((stringp p)                p)
+    (t                          (funcall *%kernel-namestring-fn* p))))
+
+;;; ---- Updated PATHNAME -----------------------------------------------------
+
+(defvar *%kernel-pathname-fn*
+  (symbol-function 'pathname))
+
+(defun pathname (designator)
+  "Coerce DESIGNATOR to a pathname (logical or physical)."
+  (cond
+    ((logical-pathname-p designator) designator)
+    ((or (physical-pathname-p designator)
+         (typep designator 'file-stream))
+     (funcall *%kernel-pathname-fn* designator))
+    ((stringp designator)
+     ;; A single-letter device prefix always means physical (Windows)
+     (let ((dev (%lp-parse-device designator)))
+       (if dev
+           (funcall *%kernel-pathname-fn* designator)
+           (multiple-value-bind (host _rest)
+               (%lp-parse-host designator)
+             (declare (ignore _rest))
+             (if (and host
+                      (gethash host *logical-pathname-translations*))
+                 (logical-pathname designator)
+                 (funcall *%kernel-pathname-fn* designator))))))
+    (t (funcall *%kernel-pathname-fn* designator))))
+
+;;; ---- Updated pathname component accessors --------------------------------
+
+(defun pathname-host (p)
+  (if (logical-pathname-p p)
+      (logical-pathname-host p)
+      ;; For physical pathnames check if the namestring starts with a
+      ;; registered logical host prefix.
+      (let ((s (if (stringp p) p (namestring p))))
+        (multiple-value-bind (h _) (%lp-parse-host s)
+          (declare (ignore _))
+          (when (and h (gethash h *logical-pathname-translations*)) h)))))
+
+(defun pathname-device (p)
+  (if (logical-pathname-p p)
+      nil
+      (%lp-parse-device (if (stringp p) p (namestring p)))))
+
+(defun pathname-version (p)
+  (if (logical-pathname-p p)
+      (logical-pathname-version p)
+      nil))
+
+;;; Extend pathname-directory / pathname-name / pathname-type for
+;;; logical-pathnames (physical versions already exist above).
+
+(let ((old-dir  (symbol-function 'pathname-directory))
+      (old-name (symbol-function 'pathname-name))
+      (old-type (symbol-function 'pathname-type)))
+  (set-symbol-function
+   (lambda (p)
+     (if (logical-pathname-p p)
+         (logical-pathname-directory p)
+         (funcall old-dir p)))
+   'pathname-directory)
+  (set-symbol-function
+   (lambda (p)
+     (if (logical-pathname-p p)
+         (logical-pathname-name p)
+         (funcall old-name p)))
+   'pathname-name)
+  (set-symbol-function
+   (lambda (p)
+     (if (logical-pathname-p p)
+         (logical-pathname-type p)
+         (funcall old-type p)))
+   'pathname-type))
+
+;;; ---- MAKE-PATHNAME (logical-aware) ---------------------------------------
+
+(defun make-pathname (&key host device directory name type version
+                           (defaults nil defaults-p) case)
+  "Construct a pathname from components."
+  (declare (ignore case))
+  (let* ((uhost (when host (string-upcase (string host))))
+         (logicalp (and uhost (gethash uhost *logical-pathname-translations*))))
+    (if logicalp
+        (%make-lp :host      uhost
+                  :directory directory
+                  :name      name
+                  :type      type
+                  :version   version)
+        ;; Physical pathname — build namestring
+        (let* ((def-s (if defaults-p
+                          (namestring (if (stringp defaults) defaults
+                                          (or defaults "")))
+                          ""))
+               (dev-pref (or (when device (concatenate 'string
+                                                        (string-upcase device) ":"))
+                             (when (%lp-parse-device def-s)
+                               (concatenate 'string (%lp-parse-device def-s) ":"))
+                             ""))
+               (dir-s
+                (cond
+                  ((null directory)
+                   (let ((dd (funcall (symbol-function 'pathname-directory) def-s)))
+                     (if (listp dd)
+                         (apply #'concatenate 'string
+                                (let ((abs (eq (car dd) :absolute)))
+                                  (cons (if abs "/" "")
+                                        (mapcar (lambda (d) (concatenate 'string d "/")) (cdr dd)))))
+                         (or dd ""))))
+                  ((stringp directory) directory)
+                  ((listp directory)
+                   (let* ((abs  (eq (car directory) :absolute))
+                          (parts (cdr directory)))
+                     (apply #'concatenate 'string
+                            (cons (if abs "/" "")
+                                  (mapcar (lambda (d) (concatenate 'string d "/")) parts)))))
+                  (t "")))
+               (name-s (or name ""))
+               (type-s (if type (concatenate 'string "." type) "")))
+          (funcall *%kernel-pathname-fn*
+                   (concatenate 'string dev-pref dir-s name-s type-s))))))
+
+;;; ---- TRANSLATE-LOGICAL-PATHNAME ------------------------------------------
+
+(defun %lp-wild-match (pattern value)
+  "Return non-nil if PATTERN matches VALUE (both uppercase strings or :wild etc.)."
+  (cond
+    ((or (eq pattern :wild) (eq pattern :wild-inferiors)) t)
+    ((null pattern) (null value))
+    ((null value)   nil)
+    ((stringp pattern)
+     ;; Simple: exact or star wildcard
+     (if (string= pattern "*")
+         t
+         (let ((star (search "*" pattern)))
+           (if star
+               (and (<= star (string-length value))
+                    (string= (subseq pattern 0 star)
+                             (subseq value 0 (min star (string-length value))))
+                    (let ((suffix-len (- (string-length pattern) star 1)))
+                      (and (>= (string-length value) (+ star suffix-len))
+                           (string= (subseq pattern (+ star 1))
+                                    (subseq value (- (string-length value) suffix-len))))))
+               (string= pattern value)))))
+    (t nil)))
+
+(defun %lp-dir-match (wpat adir)
+  "Return non-nil if wildcard directory WPAT matches actual ADIR."
+  (cond
+    ((null wpat) (null adir))
+    ((null adir) nil)
+    ((not (eq (car wpat) (car adir))) nil)  ; :absolute/:relative mismatch
+    (t
+     (labels ((match (pp ap)
+                (cond ((and (null pp) (null ap)) t)
+                      ((null pp) nil)
+                      ((eq (car pp) :wild-inferiors)
+                       ;; ** matches zero or more components.
+                       ;; Try skipping ** (zero match) or consuming one ap component.
+                       (or (match (cdr pp) ap)          ; ** matches 0 remaining
+                           (and (not (null ap))          ; ** consumes 1 component
+                                (match pp (cdr ap)))))
+                      ((null ap) nil)
+                      ((%lp-wild-match (car pp) (car ap))
+                       (match (cdr pp) (cdr ap)))
+                      (t nil))))
+       (match (cdr wpat) (cdr adir))))))
+
+(defun %lp-translate-wild (from-pat to-pat actual)
+  "Given FROM-PAT wildcard, TO-PAT pattern with *, and ACTUAL value, produce output."
+  (cond
+    ((or (null to-pat) (null actual)) actual)
+    ((eq to-pat :wild) actual)
+    ((stringp to-pat)
+     (let ((star (search "*" to-pat)))
+       (if star
+           ;; Extract the part matched by * in from-pat
+           (let* ((matched
+                   (if (or (null from-pat) (eq from-pat :wild))
+                       (or actual "")
+                       (if (stringp from-pat)
+                           (let ((fs (search "*" from-pat)))
+                             (if fs
+                                 (subseq (or actual "")
+                                         (min fs (string-length (or actual "")))
+                                         (max 0 (- (string-length (or actual ""))
+                                                   (- (string-length from-pat) fs 1))))
+                                 (or actual "")))
+                           (or actual "")))))
+             (concatenate 'string
+                          (subseq to-pat 0 star)
+                          matched
+                          (subseq to-pat (+ star 1))))
+           to-pat)))
+    (t to-pat)))
+
+(defun translate-logical-pathname (pathname &key)
+  "Translate logical pathname PATHNAME to a physical pathname."
+  (let* ((lp (cond ((logical-pathname-p pathname) pathname)
+                   ((stringp pathname)
+                    (multiple-value-bind (host rest)
+                        (%lp-parse-host pathname)
+                      (when host
+                        (multiple-value-bind (dir name type ver)
+                            (%lp-parse-body rest)
+                          (%make-lp :host host :directory dir
+                                    :name name :type type :version ver)))))
+                   (t nil))))
+    (unless lp
+      ;; Not a logical pathname — return as-is
+      (return-from translate-logical-pathname (pathname pathname)))
+    (let* ((host  (logical-pathname-host lp))
+           (rules (gethash host *logical-pathname-translations*)))
+      (unless rules
+        (error "TRANSLATE-LOGICAL-PATHNAME: no translations for host ~S" host))
+      (dolist (rule rules
+               (error "TRANSLATE-LOGICAL-PATHNAME: no matching rule for ~S"
+                      (logical-pathname-namestring lp)))
+        (destructuring-bind (from to) rule
+          (let* ((fp (if (logical-pathname-p from) from
+                         (ignore-errors (logical-pathname from))))
+                 (tp (if (stringp to) to (namestring to))))
+            (when fp
+              (let ((fd  (logical-pathname-directory fp))
+                    (fn  (logical-pathname-name fp))
+                    (ft  (logical-pathname-type fp))
+                    (ld  (logical-pathname-directory lp))
+                    (ln  (logical-pathname-name lp))
+                    (lt  (logical-pathname-type lp)))
+                (when (and (or (null fd) (%lp-dir-match fd ld))
+                           (%lp-wild-match fn ln)
+                           (%lp-wild-match ft lt))
+                  ;; Build physical pathname from TO template + translated parts
+                  (let* ((tp-s    (if (stringp tp) tp (namestring tp)))
+                         ;; Parse the TO string directly to avoid relying on
+                         ;; pathname-directory's string return type.
+                         (tp-s   (map 'string (lambda (c) (if (eql c #\\) #\/ c)) tp-s))
+                         (to-abs (and (> (string-length tp-s) 0) (eql (char tp-s 0) #\/)))
+                         (to-de  (%path-dir-end tp-s))
+                         (to-dir-str (if (>= to-de 0) (subseq tp-s 0 (+ to-de 1)) ""))
+                         (to-dir-parts (split-sequence #\/ to-dir-str :remove-empty-subseqs t))
+                         (to-name-s  (file-namestring tp-s))
+                         (to-dot     (%path-dot-pos to-name-s))
+                         (to-name (if (< to-dot 0)
+                                      (if (string= to-name-s "") nil to-name-s)
+                                      (subseq to-name-s 0 to-dot)))
+                         (to-type (if (< to-dot 0) nil (subseq to-name-s (+ to-dot 1))))
+                         ;; Build directory list, normalising "**" to :wild-inferiors
+                         (to-dir-norm
+                          (cons (if to-abs :absolute :relative)
+                                (mapcar (lambda (d) (if (equal d "**") :wild-inferiors d))
+                                        to-dir-parts)))
+                         ;; Translate directory: :wild-inferiors absorbs actual dir components
+                         (new-dir
+                          (if (and (listp to-dir-norm)
+                                   (member :wild-inferiors (cdr to-dir-norm)))
+                              (let* ((ti     (position :wild-inferiors (cdr to-dir-norm)))
+                                     (before (subseq (cdr to-dir-norm) 0 ti))
+                                     (after  (subseq (cdr to-dir-norm) (+ ti 1)))
+                                     (actual-parts (if (listp ld) (cdr ld) '())))
+                                (cons :absolute (append before actual-parts after)))
+                              to-dir-norm))
+                         (dir-s
+                          (cond
+                            ((null new-dir) "")
+                            ((listp new-dir)
+                             (apply #'concatenate 'string
+                                    (cons (if (eq (car new-dir) :absolute) "/" "")
+                                          (mapcar (lambda (d) (concatenate 'string d "/"))
+                                                  (cdr new-dir)))))
+                            (t "")))
+                         (final-name (%lp-translate-wild fn to-name ln))
+                         (final-type (%lp-translate-wild ft to-type lt))
+                         (path-s
+                          (concatenate 'string dir-s
+                                       (or final-name "")
+                                       (if final-type
+                                           (concatenate 'string "." final-type)
+                                           ""))))
+                    (return-from translate-logical-pathname
+                      (funcall *%kernel-pathname-fn* path-s))))))))))))
+
+;;; ---- LOAD-LOGICAL-PATHNAME-TRANSLATIONS ----------------------------------
+
+(defun load-logical-pathname-translations (host)
+  "Load translations for HOST from a configuration file.
+  Searches (in order):
+    ~/.bocl/<host>.translations
+    /etc/bocl/<host>.translations
+    ./<host>.translations
+  Returns T if a file was found and loaded."
+  (let* ((uhost (string-upcase (string host)))
+         (lhost (string-downcase uhost))
+         (fname (concatenate 'string lhost ".translations")))
+    (dolist (dir (list
+                  (let ((h (ignore-errors
+                             (let* ((home (namestring (funcall *%kernel-pathname-fn* "~")))
+                                    ;; On Unix ~ is a literal filename not expanded
+                                    ;; Try $HOME instead
+                                    )
+                               (concatenate 'string home "/.bocl/")))))
+                    (or h ""))
+                  "/etc/bocl/"
+                  "./"))
+      (let ((path (concatenate 'string dir fname)))
+        (when (ignore-errors (probe-file path))
+          (load path)
+          (return-from load-logical-pathname-translations t))))
+    nil))
+
+;;; ---- MERGE-PATHNAMES (logical-aware) -------------------------------------
+
+(defvar *default-pathname-defaults*
+  (funcall *%kernel-pathname-fn* "")
+  "Default pathname for MERGE-PATHNAMES.")
+
+(let ((old-merge (symbol-function 'merge-pathnames)))
+  (set-symbol-function
+   (lambda (pathname &optional (defaults *default-pathname-defaults*)
+                     default-version)
+     (declare (ignore default-version))
+     (let ((p (pathname pathname))
+           (d (pathname defaults)))
+       (cond
+         ((logical-pathname-p p)
+          ;; LP + anything: fill in missing fields from D if D is also LP
+          (if (logical-pathname-p d)
+              (%make-lp
+               :host      (or (logical-pathname-host p)      (logical-pathname-host d))
+               :directory (or (logical-pathname-directory p) (logical-pathname-directory d))
+               :name      (or (logical-pathname-name p)      (logical-pathname-name d))
+               :type      (or (logical-pathname-type p)      (logical-pathname-type d))
+               :version   (or (logical-pathname-version p)   (logical-pathname-version d)))
+              p))
+         (t
+          ;; Physical: delegate to old merge-pathnames
+          (funcall old-merge pathname defaults)))))
+   'merge-pathnames))
+
+;;; ---- WILD-PATHNAME-P (logical-aware) -------------------------------------
+
+(defun wild-pathname-p (pathname &optional field-key)
+  (let ((p (pathname pathname)))
+    (flet ((wld (x) (or (eq x :wild) (eq x :wild-inferiors)
+                        (and (stringp x) (search "*" x)))))
+      (let ((all-fields
+             (list (pathname-name p) (pathname-type p) (pathname-version p)
+                   (pathname-host p) (pathname-device p)
+                   (let ((d (pathname-directory p)))
+                     (if (listp d) (some #'wld (cdr d)) (wld d))))))
+        (if field-key
+            (case field-key
+              (:name      (wld (pathname-name p)))
+              (:type      (wld (pathname-type p)))
+              (:version   (wld (pathname-version p)))
+              (:host      (wld (pathname-host p)))
+              (:device    (wld (pathname-device p)))
+              (:directory (let ((d (pathname-directory p)))
+                            (if (listp d) (some #'wld (cdr d)) (wld d)))))
+            (some #'identity (mapcar #'wld (butlast all-fields))))))))
+
+;;; ---- PATHNAME-MATCH-P ----------------------------------------------------
+
+(defun pathname-match-p (pathname wildcard)
+  "Return T if PATHNAME matches the wildcard WILDCARD."
+  (let ((p (pathname pathname))
+        (w (pathname wildcard)))
+    (and (%lp-wild-match (pathname-name w) (pathname-name p))
+         (%lp-wild-match (pathname-type w) (pathname-type p))
+         (let ((wd (pathname-directory w))
+               (pd (pathname-directory p)))
+           (or (null wd) (%lp-dir-match wd pd))))))
+
+;;; ---- Ensure PATHNAMEP recognises logical pathnames ----------------------
+
+(let ((old-pathnamep (symbol-function 'pathnamep)))
+  (set-symbol-function
+   (lambda (x) (or (logical-pathname-p x) (funcall old-pathnamep x)))
+   'pathnamep))
+
+;;;; THE END OF SLICE 33
