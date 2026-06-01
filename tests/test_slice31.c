@@ -72,21 +72,20 @@ static void test_reverse_vector(void){
     TEST_EQ(equal, e("'(3 2 1)"),
             e("(coerce (reverse #(1 2 3)) 'list)"));}
 
-/* ---- Hash iteration via loop-for-hash ------------------------------------ */
-/* LOOP BEING THE HASH-KEYS is deferred to a future slice; use loop-for-hash */
+/* ---- LOOP BEING EACH HASH-KEY OF / HASH-VALUE OF ------------------------- */
 
 static void test_loop_being_hash_keys(void){
     TEST_EQ(eql, I(3),
             e("(let ((h (make-hash-table)) (n 0))"
               "  (sethash 'a h 1) (sethash 'b h 2) (sethash 'c h 3)"
-              "  (loop-for-hash (k v h) (setq n (1+ n)))"
+              "  (loop for k being each hash-key of h do (setq n (1+ n)))"
               "  n)"));}
 
 static void test_loop_being_hash_values(void){
     TEST_EQ(eql, I(6),
             e("(let ((h (make-hash-table)) (s 0))"
               "  (sethash 'a h 1) (sethash 'b h 2) (sethash 'c h 3)"
-              "  (loop-for-hash (k v h) (setq s (+ s v)))"
+              "  (loop for v being each hash-value of h do (setq s (+ s v)))"
               "  s)"));}
 
 /* ---- MAP with bit-vector result ------------------------------------------ */
@@ -114,8 +113,8 @@ TEST_SUITE(test_slice31, s31_init, s31_fini)
     TEST_CASE("make-sequence",               test_make_sequence)
     TEST_CASE("reverse string",              test_reverse_string)
     TEST_CASE("reverse vector",              test_reverse_vector)
-    TEST_CASE("hash keys via loop-for-hash",  test_loop_being_hash_keys)
-    TEST_CASE("hash values via loop-for-hash",test_loop_being_hash_values)
+    TEST_CASE("loop being each hash-key of",  test_loop_being_hash_keys)
+    TEST_CASE("loop being each hash-value of",test_loop_being_hash_values)
     TEST_CASE("map to bit-vector",            test_map_bitvector)
     TEST_CASE("string-contains",             test_string_contains)
     TEST_FINALIZE()

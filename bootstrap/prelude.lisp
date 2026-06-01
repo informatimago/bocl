@@ -2110,6 +2110,63 @@
                                (push (list v init) letb)
                                (push `(setq ,v ,(pop!)) steps))
                         (push (list v init) letb))))
+                 ;; FOR v BEING [EACH|THE] HASH-KEY[S] OF ht [USING (HASH-VALUE vv)]
+                 ;; FOR v BEING [EACH|THE] HASH-VALUE[S] OF ht [USING (HASH-KEY kk)]
+                 ((%lkw (pk) "BEING")
+                  (pop!)  ; consume BEING
+                  (when (or (%lkw (pk) "EACH") (%lkw (pk) "THE")) (pop!))
+                  (let* ((variant  (pop!))
+                         (key-p    (%lkw variant "HASH-KEY" "HASH-KEYS"))
+                         (ht-var   (gensym "HT-"))
+                         (both-var (gensym "BOTH-"))   ; (cons keys vals) computed once
+                         (keys-var (gensym "HKEYS-"))
+                         (vals-var (gensym "HVALS-"))
+                         (other-v  nil))
+                    (when (%lkw (pk) "OF") (pop!))
+                    (let ((ht-form (pop!)))
+                      (when (%lkw (pk) "USING")
+                        (pop!)
+                        (let ((spec (pop!)))
+                          (when (consp spec) (setq other-v (cadr spec)))))
+                      ;; Evaluate hash-table once in LET*, collect keys+values once.
+                      (push (list ht-var    ht-form) letb)
+                      (push (list both-var
+                                  `(let ((%ks nil) (%vs nil))
+                                     (maphash (lambda (%k %v)
+                                                (push %k %ks)
+                                                (push %v %vs))
+                                              ,ht-var)
+                                     (cons (nreverse %ks) (nreverse %vs))))
+                            letb)
+                      (push (list keys-var `(car ,both-var)) letb)
+                      (push (list vals-var `(cdr ,both-var)) letb)
+                      (push (list v nil)                     letb)
+                      (when other-v (push (list other-v nil) letb))
+                      ;; Terminate when keys list is exhausted.
+                      (push `(null ,keys-var) tests)
+                      ;; Per-iteration setup: bind v (and co-var) from head of lists.
+                      (if key-p
+                          (progn
+                            (push `(setq ,v (car ,keys-var)) setups)
+                            (when other-v
+                              (push `(setq ,other-v (car ,vals-var)) setups)))
+                          (progn
+                            (push `(setq ,v (car ,vals-var)) setups)
+                            (when other-v
+                              (push `(setq ,other-v (car ,keys-var)) setups))))
+                      ;; Per-iteration step: advance both lists, then rebind v.
+                      (push `(progn (setq ,keys-var (cdr ,keys-var))
+                                    (setq ,vals-var (cdr ,vals-var)))
+                             steps)
+                      (if key-p
+                          (progn
+                            (push `(setq ,v (car ,keys-var)) steps)
+                            (when other-v
+                              (push `(setq ,other-v (car ,vals-var)) steps)))
+                          (progn
+                            (push `(setq ,v (car ,vals-var)) steps)
+                            (when other-v
+                              (push `(setq ,other-v (car ,keys-var)) steps)))))))
                  (t
                   (error "LOOP FOR: unknown sub-clause ~S" (pk))))))
             ;; REPEAT n
@@ -5899,4 +5956,51 @@
          (dotimes (i len v)
            (setf (aref v i) (nth i vals))))))))
 
-;;;; THE END OF SLICE 31
+;;;; =========================================================================
+;;;; Slice 32 additions (bundled with TODO-driven fixes)
+;;;; =========================================================================
+
+;;; ---- CHANGE-CLASS --------------------------------------------------------
+
+(defgeneric update-instance-for-different-class (previous current &rest initargs))
+
+(defmethod update-instance-for-different-class (previous current &rest initargs)
+  "Default: call shared-initialize with all slot names."
+  (declare (ignore previous))
+  (apply #'shared-initialize current t initargs))
+
+(defun change-class (instance new-class &rest initargs)
+  "Change the class of INSTANCE to NEW-CLASS (in-place)."
+  (unless (%is-obj instance)
+    (error "CHANGE-CLASS: ~S is not a CLOS instance" instance))
+  (let* ((old-class (%obj-class instance))
+         (new-cls   (if (%is-cls new-class) new-class
+                        (or (gethash new-class *%classes*)
+                            (error "CHANGE-CLASS: unknown class ~S" new-class))))
+         (old-slots (%cls-eslots old-class))
+         (new-slots (%cls-eslots new-cls))
+         ;; Save old slot values for slots that carry over
+         (saved (let ((acc nil))
+                  (dolist (s old-slots acc)
+                    (let* ((nm  (getf s :name))
+                           (loc (getf s :location))
+                           (val (svref (%obj-slots instance) loc)))
+                      (push (list nm val) acc)))))
+         ;; New slot vector
+         (new-vec (make-array (length new-slots) :initial-element *%unbound*)))
+    ;; Re-tag the instance
+    (setf (%obj-class instance) new-cls)
+    (setf (%obj-slots instance) new-vec)
+    ;; Carry over shared slot values
+    (dolist (s new-slots)
+      (let* ((nm  (getf s :name))
+             (loc (getf s :location))
+             (old (assoc nm saved)))
+        (when old
+          (setf (svref new-vec loc) (second old)))))
+    ;; Call protocol
+    (apply #'update-instance-for-different-class
+           instance instance initargs)
+    instance))
+
+;;;; THE END OF SLICE 32

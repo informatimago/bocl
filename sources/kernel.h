@@ -123,4 +123,7 @@ void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results)
 void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results);
 void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
 void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,MultipleValues* results);
+/* CLOS bridge predicates — set after (%clos-register …) */
+bool clos_instance_p(Ref obj);
+bool clos_class_p(Ref cls);
 #endif

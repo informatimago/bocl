@@ -55,15 +55,23 @@ Ref prin1(Ref object,Ref stream){
         return object;}
 
     if(consp(object)){
+        /* Respect *PRINT-LENGTH* — truncate after this many elements. */
+        Ref plen_ref = variable_value(S(*PRINT-LENGTH*));
+        word print_length = (integerp(plen_ref)) ? integer_value(plen_ref) : -1;
         Ref current=object;
         fprintf(out,"(");
-        prin1(car(current),stream);
+        word elem=0;
+        prin1(car(current),stream); elem++;
         current=cdr(current);
         while(consp(current)){
+            if(print_length >= 0 && elem >= print_length){
+                fprintf(out," ...");
+                break;}
             fprintf(out," ");
             prin1(car(current),stream);
-            current=cdr(current);}
-        if(!nullp(current)){
+            current=cdr(current);
+            elem++;}
+        if(!nullp(current) && !consp(current)){
             fprintf(out," . ");
             prin1(current, stream);}
         fprintf(out,")");
@@ -102,14 +110,33 @@ Ref prin1(Ref object,Ref stream){
         fprintf(out,")");
         return object;}
 
+    /* Dispatch to PRINT-OBJECT for CLOS instances (%obj structs).
+       clos_instance_p() returns true only after (%clos-register) is called,
+       so prelude-loading is safe — no CLOS objects exist yet at that point.
+       We pin object and stream in the live pool so the GC cannot collect
+       them while print-object is running. */
+    if(clos_instance_p(object)){
+        /* For CLOS instances, class_of returns a %cls struct (not CLASS_Class),
+           so we cannot call class_name() on it.  Read the NAME slot directly.
+           The Lisp-level print-object generic can be called from Lisp code;
+           we only provide the safe #<ClassName addr> fallback here. */
+        Ref clos_cls = class_of(object);
+        Ref nm_sym   = symbol_intern_cstring("NAME");
+        Ref cls_name = (clos_class_p(clos_cls))
+                       ? structure_get(clos_cls, nm_sym)
+                       : NIL_Symbol;
+        fprintf(out,"#<");
+        if(symbolp(cls_name)) prin1(cls_name, stream);
+        else fprintf(out,"CLOS-OBJECT");
+        fprintf(out," %p>", (void*)object);
+        return object;}
+
     fprintf(out,"#<");
     prin1(class_name(class_of(object)),stream);
 
     if(built_in_function_p(object)){
         fprintf(out," ");
         prin1(function_name(object),stream);}
-    /* else if(){ */
-    /* } */
     if(classp(object)){
         fprintf(out," ");
         prin1(class_name(object),stream);}
@@ -166,6 +193,18 @@ Ref princ(Ref object,Ref stream){
         fprintf(out,")");
         return object;}
 
+    /* Safe fallback for CLOS instances in princ too. */
+    if(clos_instance_p(object)){
+        Ref clos_cls = class_of(object);
+        Ref nm_sym   = symbol_intern_cstring("NAME");
+        Ref cls_name = (clos_class_p(clos_cls))
+                       ? structure_get(clos_cls, nm_sym)
+                       : NIL_Symbol;
+        fprintf(out,"#<");
+        if(symbolp(cls_name)) princ(cls_name, stream);
+        else fprintf(out,"CLOS-OBJECT");
+        fprintf(out," %p>", (void*)object);
+        return object;}
     fprintf(out,"#<");
     princ(class_name(class_of(object)),stream);
     if(typep(object,CLASS_Class)){
@@ -422,7 +461,16 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
                   fputs(nv==1?"":"s",out);}
               break;}
           case 'T': {
+              /* ~nT — emit spaces to reach column N (simplified: emit N spaces) */
               for(word k=0;k<count;k++) fputc(' ',out);
+              break;}
+          case 'I': {
+              /* ~nI — indent (bocl: emit N spaces, default 0) */
+              for(word k=0;k<count;k++) fputc(' ',out);
+              break;}
+          case 'N': {
+              /* ~N — conditional newline (bocl: always emit one newline) */
+              for(word k=0;k<count;k++) fputc('\n',out);
               break;}
           case '*': {
               for(word k=0;k<count;k++) fmt_pop(args_ptr);
