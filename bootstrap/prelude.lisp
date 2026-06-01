@@ -6331,15 +6331,23 @@
                       (t nil))))
        (match (cdr wpat) (cdr adir))))))
 
+(defun %lp-customary-case (s)
+  "Apply the customary case for logical->physical translation.
+  CLHS 19.3.1.1.3: components transferred from a logical pathname (which are
+  customarily uppercase) are downcased in the resulting physical pathname."
+  (if (stringp s) (string-downcase s) s))
+
 (defun %lp-translate-wild (from-pat to-pat actual)
-  "Given FROM-PAT wildcard, TO-PAT pattern with *, and ACTUAL value, produce output."
+  "Given FROM-PAT wildcard, TO-PAT pattern with *, and ACTUAL value, produce output.
+  The portion substituted from the (upcased) logical ACTUAL is downcased to the
+  customary physical case."
   (cond
-    ((or (null to-pat) (null actual)) actual)
-    ((eq to-pat :wild) actual)
+    ((or (null to-pat) (null actual)) (%lp-customary-case actual))
+    ((eq to-pat :wild) (%lp-customary-case actual))
     ((stringp to-pat)
      (let ((star (search "*" to-pat)))
        (if star
-           ;; Extract the part matched by * in from-pat
+           ;; Extract the part matched by * in from-pat, then downcase it.
            (let* ((matched
                    (if (or (null from-pat) (eq from-pat :wild))
                        (or actual "")
@@ -6354,7 +6362,7 @@
                            (or actual "")))))
              (concatenate 'string
                           (subseq to-pat 0 star)
-                          matched
+                          (%lp-customary-case matched)
                           (subseq to-pat (+ star 1))))
            to-pat)))
     (t to-pat)))
@@ -6422,7 +6430,11 @@
                               (let* ((ti     (position :wild-inferiors (cdr to-dir-norm)))
                                      (before (subseq (cdr to-dir-norm) 0 ti))
                                      (after  (subseq (cdr to-dir-norm) (+ ti 1)))
-                                     (actual-parts (if (listp ld) (cdr ld) '())))
+                                     ;; Directory components absorbed from the (upcased)
+                                     ;; logical pathname are downcased to customary case.
+                                     (actual-parts (if (listp ld)
+                                                       (mapcar #'%lp-customary-case (cdr ld))
+                                                       '())))
                                 (cons :absolute (append before actual-parts after)))
                               to-dir-norm))
                          (dir-s
@@ -6544,3 +6556,93 @@
    'pathnamep))
 
 ;;;; THE END OF SLICE 33
+
+;;;; =========================================================================
+;;;; Slice 34 — RATIO and COMPLEX (C kernel extension)
+;;;; =========================================================================
+
+;;; The C kernel now provides:
+;;;   RATIOP, NUMERATOR, DENOMINATOR, RATIONALP
+;;;   COMPLEXP, COMPLEX, REALPART, IMAGPART
+;;;   Ratio/complex arithmetic via + - * /
+;;;   Ratio printing (1/3) and reading
+;;;   Complex printing (#C(1 2)) and reading
+
+;;; ---- Predicates --------------------------------------------------------
+
+(defun numberp (x)
+  "Return T if X is any number."
+  (or (integerp x) (floatp x) (ratiop x) (complexp x)))
+
+;;; ---- RATIONAL / RATIONALIZE (ratio-aware) ------------------------------
+
+(defun rational (x)
+  "Convert X to a rational; floats are approximated."
+  (cond ((integerp x) x)
+        ((ratiop x) x)
+        ((floatp x)
+         ;; Approximate: multiply by a large power of 10 and reduce
+         (let* ((neg (< x 0.0))
+                (xabs (if neg (- x) x))
+                (n (round (* xabs 1000000)))
+                (result (/ n 1000000)))
+           (if neg (- result) result)))
+        (t (error "RATIONAL: ~S is not real" x))))
+
+(defun rationalize (x)
+  "Return a simple rational approximation to X."
+  (rational x))
+
+;;; ---- ABS for ratios ----------------------------------------------------
+
+(defun abs (x)
+  "Return the absolute value of X."
+  (cond ((ratiop x)   (if (< (numerator x) 0) (/ (- (numerator x)) (denominator x)) x))
+        ((integerp x) (if (< x 0) (- x) x))
+        ((floatp x)   (if (< x 0.0) (- x) x))
+        (t (error "ABS: ~S is not a real number" x))))
+
+;;; ---- Numeric predicates update ----------------------------------------
+
+(defun zerop (x)
+  (cond ((ratiop x)   nil)
+        ((integerp x) (= x 0))
+        ((floatp x)   (= x 0.0))
+        (t (error "ZEROP: ~S" x))))
+
+(defun plusp (x)
+  (cond ((ratiop x)   (> (numerator x) 0))
+        ((integerp x) (> x 0))
+        ((floatp x)   (> x 0.0))
+        (t (error "PLUSP: ~S" x))))
+
+(defun minusp (x)
+  (cond ((ratiop x)   (< (numerator x) 0))
+        ((integerp x) (< x 0))
+        ((floatp x)   (< x 0.0))
+        (t (error "MINUSP: ~S" x))))
+
+;;; ---- Update TYPEP for new types ----------------------------------------
+;;; Use *%kernel-typep* (the C kernel typep) directly to check new types.
+;;; This avoids circular calls through the Lisp wrappers at lines 196-201.
+
+(let ((old-typep (symbol-function 'typep))
+      (ktp *%kernel-typep*))
+  (set-symbol-function
+   (lambda (object type &optional environment)
+     (declare (ignore environment))
+     (cond
+       ((eq type 'ratio)    (funcall ktp object 'ratio))
+       ((eq type 'rational) (or (funcall ktp object 'integer) (funcall ktp object 'ratio)))
+       ((eq type 'complex)  (funcall ktp object 'complex))
+       ((eq type 'real)     (or (funcall ktp object 'integer)
+                                (funcall ktp object 'float)
+                                (funcall ktp object 'ratio)))
+       ((eq type 'number)   (or (funcall ktp object 'integer)
+                                (funcall ktp object 'float)
+                                (funcall ktp object 'ratio)
+                                (funcall ktp object 'complex)))
+       (t (funcall old-typep object type))))
+   'typep))
+
+;;;; THE END OF SLICE 34

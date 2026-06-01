@@ -45,8 +45,13 @@ static void test_div_int_exact(void){
     TEST_EQ(eql, I(-5),   e("(/ -20 4)"));}
 
 static void test_div_int_to_float(void){
-    /* Inexact integer / promotes to float (no ratios yet in the kernel). */
-    TEST_EQ(float_eq, F(2.5), e("(/ 5 2)"));}
+    /* Exact integer division now yields a RATIO (CL-conforming).
+       (/ 5 2) => 5/2, whose numerator/denominator are 5 and 2. */
+    TEST_EQ(eql, I(5), e("(numerator (/ 5 2))"));
+    TEST_EQ(eql, I(2), e("(denominator (/ 5 2))"));
+    TEST_EQ(eql, T_Symbol, e("(if (ratiop (/ 5 2)) t nil)"));
+    /* Mixing in a float still promotes to float. */
+    TEST_EQ(float_eq, F(2.5), e("(/ 5.0 2)"));}
 
 static void test_div_float(void){
     TEST_EQ(float_eq, F(2.5), e("(/ 5.0 2.0)"));}
@@ -215,7 +220,9 @@ static void test_arith_variadic(void){
     TEST_EQ(eql, I(1),           e("(*)"));
     /* Unary forms. */
     TEST_EQ(eql, I(-5),          e("(- 5)"));
-    TEST_EQ(float_eq, F(0.25),   e("(/ 4)"));
+    /* (/ 4) == (/ 1 4) == 1/4, a RATIO (CL-conforming). */
+    TEST_EQ(eql, I(1),           e("(numerator (/ 4))"));
+    TEST_EQ(eql, I(4),           e("(denominator (/ 4))"));
     /* The user's original failing form. */
     TEST_EQ(eql, I(1000000000000L), e("(* 10000 10000 10000)"));}
 

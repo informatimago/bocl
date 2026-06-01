@@ -33,6 +33,7 @@ static bool do_quit=false;
 static char* all_encoding;
 static char* terminal_encoding;
 static bool do_norc=false;
+static bool do_noprelude=false;
 static bool do_quiet=false;
 static bool do_verbose=false;
 static bool do_batch=false;
@@ -80,6 +81,51 @@ static char* find_rc_file(void){
         free(path);}
     return NULL;}
 
+/* The argv[0] path of this process, captured in main(). */
+static const char* program_path=NULL;
+
+/* Locate bootstrap/prelude.lisp.  Search order:
+   1. $BOCL_PRELUDE environment variable (explicit override).
+   2. Paths relative to the executable directory (handles in-tree runs and
+      typical installs: <exe-dir>/../bootstrap/prelude.lisp, etc.).
+   3. Standard system install paths.
+   Returns a malloc'd path or NULL if none is readable. */
+static char* find_prelude(void){
+    /* 1. Environment override. */
+    const char* env=getenv("BOCL_PRELUDE");
+    if(env && access(env,R_OK)==0){ return strdup(env); }
+
+    /* 2. Relative to the executable. */
+    if(program_path){
+        /* Copy program_path and strip the trailing component to get the dir. */
+        char dir[4096];
+        snprintf(dir,sizeof(dir),"%s",program_path);
+        char* slash=strrchr(dir,'/');
+        if(slash){ *slash='\0'; } else { snprintf(dir,sizeof(dir),"."); }
+        /* Candidate suffixes relative to the executable directory. */
+        static const char* suffixes[]={
+            "/../bootstrap/prelude.lisp",   /* in-tree:  sources/../bootstrap */
+            "/bootstrap/prelude.lisp",      /* exe alongside bootstrap/      */
+            "/../share/bocl/prelude.lisp",  /* install:  bin/../share/bocl   */
+            "/../lib/bocl/prelude.lisp",
+            NULL};
+        for(int i=0; suffixes[i]; i++){
+            char path[4096];
+            snprintf(path,sizeof(path),"%s%s",dir,suffixes[i]);
+            if(access(path,R_OK)==0){ return strdup(path); }}
+    }
+
+    /* 3. Standard install paths. */
+    static const char* sys_paths[]={
+        "/usr/local/share/bocl/prelude.lisp",
+        "/usr/share/bocl/prelude.lisp",
+        "/opt/bocl/share/bocl/prelude.lisp",
+        NULL};
+    for(int i=0; sys_paths[i]; i++){
+        if(access(sys_paths[i],R_OK)==0){ return strdup(sys_paths[i]); }}
+
+    return NULL;}
+
 
 #define PSOP(name) printf("%-30s = %s\n",#name,(name)?(name):"NULL")
 #define PBOP(name) printf("%-30s = %s\n",#name,(name)?"true":"false")
@@ -124,6 +170,7 @@ static struct {
     {{"-Eterminal",NULL},                   NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"--terminal-encoding",NULL},          NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {.name=NULL},                              "suppress loading of default init file ~/.boclrc"},
+    {{"--no-prelude",NULL},                 &do_noprelude, none, {.name=NULL},                            "suppress loading of bootstrap/prelude.lisp (bare kernel only)"},
     {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {.name=NULL},                              "if --batch, also suppress printing of heralds, prompts."},
     {{"-b","--batch",NULL},                 &do_batch,   none, {.name=NULL},                              "exit when EOF on *STANDARD-INPUT*"},
     {{"--verbose",NULL},                    &do_verbose, none, {.name=NULL},                              "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
@@ -322,9 +369,25 @@ bool error_handler(Ref error){
 
 int main(int argc,char** argv){
     pname=argv[0];
+    program_path=argv[0];
     int status=0;
     kernel_initialize();
     process_options(argc,argv);
+
+    /* Load the Lisp prelude (bootstrap/prelude.lisp) so the full Common Lisp
+       surface (macros like OR, AND, LOOP, CLOS, etc.) is available before any
+       user file or expression runs.  --no-prelude suppresses this for tests
+       that exercise only the bare kernel. */
+    if(!do_noprelude && !do_version && !do_help){
+        char* prelude=find_prelude();
+        if(prelude){
+            bocl_load_cstring(prelude);
+            free(prelude);
+        } else if(!do_quiet){
+            fprintf(stderr,
+                    "bocl: warning: could not find bootstrap/prelude.lisp; "
+                    "running with the bare kernel only.\n"
+                    "      Set BOCL_PRELUDE or use --no-prelude to silence.\n");}}
 
     if(do_version){
         print_version();

@@ -1,0 +1,28 @@
+
+The ansi-test are at: "https://gitlab.common-lisp.net/ansi-test/ansi-test"
+The ansi-test-harness is at:  "https://github.com/yitzchak/ansi-test-harness.git"
+
+We can use the ansi-test directly quite simply.
+
+    cd ../bocl
+    git clone https://gitlab.common-lisp.net/ansi-test/ansi-test
+    cd bocl
+    sources/bocl --no-init --batch --print -on-error appease -l ../ansi-test/doit.lisp --quit | tee test.out
+
+For now we'll ignore the ansi-test-harness, it's use is when we want
+to select some specific tests (and it works with asdf, with the tests
+loaded in the lisp image with asdf).
+
+
+
+So, I've cloned ansi-test into bocl/../ansi-test ; you can now run them
+with bocl using a command such as:
+
+  sources/bocl --no-init --batch --print -on-error appease -l ../ansi-test/doit.lisp --quit
+
+right away we find a warning that seems spurious about -on-error, but
+more critical, an error about OR which is not defined
+apparently. Anyways, I'll let your run these ansi-test in loop until
+you've corrected all the errors (you can leave the conforming problems
+alone for now, just ensure that the ansi-test can execute to
+completion and print out their report.

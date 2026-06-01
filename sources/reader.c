@@ -429,6 +429,34 @@ static Ref parse_bit_vector(parser_state* parser){
               ungetc(parser->ch,stream_cstream(parser->input_stream));
               return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}}}
 
+/* scan_ratio: recognise "[-+]?digits/digits", return a ratio Ref or NIL_Symbol */
+static Ref scan_ratio(parser_state* parser){
+    const char* token = (char*)parser->token;
+    /* Find a '/' in the token */
+    const char* slash = strchr(token, '/');
+    if(!slash || slash==token) return NIL_Symbol;  /* no slash or at start */
+    /* Both halves must be all-digit (optionally sign-prefixed on the numerator) */
+    const char* p = token;
+    if(*p=='-'||*p=='+') p++;
+    while(p < slash){
+        if(*p<'0' || *p>'9') return NIL_Symbol;
+        p++;}
+    const char* q = slash+1;
+    if(*q=='\0') return NIL_Symbol;
+    while(*q){
+        if(*q<'0' || *q>'9') return NIL_Symbol;
+        q++;}
+    /* Parse numerator and denominator */
+    word num_sign = (token[0]=='-') ? -1 : 1;
+    word num=0;
+    p = token + (token[0]=='-'||token[0]=='+' ? 1 : 0);
+    while(p < slash){ num = num*10 + (*p-'0'); p++; }
+    word den=0;
+    q = slash+1;
+    while(*q){ den = den*10 + (*q-'0'); q++; }
+    if(den==0) return NIL_Symbol;
+    return ratio_new(integer_from_word(num_sign*num), integer_from_word(den));}
+
 static Ref scan_integer(parser_state* parser){
     /* [-+]?[0-9]+\.?  — sign is allowed ONLY at position 0; otherwise a
        token like "1+" would mis-parse as the integer 1 and the "+" would
@@ -569,6 +597,8 @@ static Ref parse_token(parser_state* parser){
     bool valid=true;
     Ref result=scan_integer(parser);
     if(result==NIL_Symbol){
+        result=scan_ratio(parser);}
+    if(result==NIL_Symbol){
         result=scan_float(parser);}
     if(result==NIL_Symbol){
         result=scan_symbol(parser,&valid);}
@@ -622,6 +652,22 @@ static Ref parse_object(parser_state* parser){
             case '\\': return parse_character(parser);
             case '(':  return parse_vector(parser);
             case '*':  return parse_bit_vector(parser);
+            case 'c': case 'C': {  /* #C(re im) — complex literal */
+                advance_character(parser);   /* skip 'C'/'c' */
+                skip_spaces(parser);
+                if(parser->ch != '('){
+                    READER_ERROR(parser->input_stream,"Expected '(' after #C%s","");}
+                advance_character(parser);   /* skip '(' */
+                skip_spaces(parser);
+                Ref re = parse_object(parser);
+                skip_spaces(parser);
+                Ref im = parse_object(parser);
+                skip_spaces(parser);
+                if(parser->ch != ')'){
+                    READER_ERROR(parser->input_stream,"Expected ')' after #C parts%s","");}
+                advance_character(parser);   /* skip ')' */
+                return complex_new(re, im);}
+
             case '\'': {  /* #'name => (FUNCTION name) */
                 advance_character(parser);
                 skip_spaces(parser);

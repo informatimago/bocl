@@ -540,6 +540,71 @@ floating float_value(Ref object){
     return object->slots->floater.value;}
 
 
+/* RATIO */
+
+static word gcd_word(word a, word b){
+    a = (a < 0) ? -a : a;
+    b = (b < 0) ? -b : b;
+    while(b){ word t=b; b=a%b; a=t; }
+    return a;}
+
+Ref ratio_new(Ref num, Ref den){
+    /* Normalise: denominator always > 0; reduce by GCD; integer if den==1 */
+    word n = integer_value(num);
+    word d = integer_value(den);
+    if(d == 0){ ERROR("Division by zero in ratio%s",""); }
+    if(d < 0){ n = -n; d = -d; }
+    word g = gcd_word(n < 0 ? -n : n, d);
+    if(g > 1){ n /= g; d /= g; }
+    if(d == 1){ return integer_from_word(n); }
+    Ratio* slots = allocate(sizeof(Ratio));
+    slots->objcount = 2;
+    slots->numerator   = integer_from_word(n);
+    slots->denominator = integer_from_word(d);
+    return Object_new(RATIO_Class, (Slots*)slots);}
+
+bool ratiop(Ref object){
+    return class_of(object) == RATIO_Class;}
+
+Ref ratio_numerator(Ref r){
+    if(integerp(r)) return r;
+    check_class(r, RATIO_Class);
+    return r->slots->ratio.numerator;}
+
+Ref ratio_denominator(Ref r){
+    if(integerp(r)) return integer_from_word(1);
+    check_class(r, RATIO_Class);
+    return r->slots->ratio.denominator;}
+
+/* Rational → floating */
+floating ratio_to_float(Ref r){
+    if(integerp(r)) return (floating)integer_value(r);
+    return (floating)integer_value(r->slots->ratio.numerator)
+         / (floating)integer_value(r->slots->ratio.denominator);}
+
+/* COMPLEX */
+
+Ref complex_new(Ref re, Ref im){
+    /* (complex r 0) = r when r is real */
+    if(integerp(im) && integer_value(im) == 0) return re;
+    if(floatp(im)   && float_value(im)    == 0.0) return re;
+    Complex* slots = allocate(sizeof(Complex));
+    slots->objcount = 2;
+    slots->realpart = re;
+    slots->imagpart = im;
+    return Object_new(COMPLEX_Class, (Slots*)slots);}
+
+bool complexp(Ref object){
+    return class_of(object) == COMPLEX_Class;}
+
+Ref complex_realpart(Ref c){
+    if(!complexp(c)) return c;     /* any non-complex number is its own realpart */
+    return c->slots->complex.realpart;}
+
+Ref complex_imagpart(Ref c){
+    if(!complexp(c)) return integer_from_word(0);
+    return c->slots->complex.imagpart;}
+
 /* CONS */
 
 Cons* Cons_slots(Ref car,Ref cdr){

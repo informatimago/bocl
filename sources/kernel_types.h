@@ -383,6 +383,18 @@ typedef struct Condition {
 } Condition;
 
 
+typedef struct Ratio {
+    BLOCK_HEADER;
+    Ref numerator;      /* INTEGER (always positive after normalisation) */
+    Ref denominator;    /* INTEGER (always > 0 after normalisation) */
+} Ratio;
+
+typedef struct Complex {
+    BLOCK_HEADER;
+    Ref realpart;       /* any real number */
+    Ref imagpart;       /* any real number */
+} Complex;
+
 /* Slots */
 
 typedef union Slots {
@@ -407,6 +419,8 @@ typedef union Slots {
     Package                     package;
     HashTable                   hash_table;
     Condition                   condition;
+    Ratio                       ratio;
+    Complex                     complex;
     /*                          Classes: */
     Class                       class;
     StandardClass               standard_class;

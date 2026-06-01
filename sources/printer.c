@@ -41,6 +41,20 @@ Ref prin1(Ref object,Ref stream){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
         return object;}
 
+    if(ratiop(object)){
+        fprintf(out,"%"WORD_FORMAT"/%"WORD_FORMAT,
+                integer_value(ratio_numerator(object)),
+                integer_value(ratio_denominator(object)));
+        return object;}
+
+    if(complexp(object)){
+        fprintf(out,"#C(");
+        prin1(complex_realpart(object), stream);
+        fprintf(out," ");
+        prin1(complex_imagpart(object), stream);
+        fprintf(out,")");
+        return object;}
+
     /* if(nullp(object)){ */
     /*     fprintf(out,"NIL"); */
     /*     return object;} */
@@ -158,6 +172,20 @@ Ref princ(Ref object,Ref stream){
 
     if(integerp(object)){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
+        return object;}
+
+    if(ratiop(object)){
+        fprintf(out,"%"WORD_FORMAT"/%"WORD_FORMAT,
+                integer_value(ratio_numerator(object)),
+                integer_value(ratio_denominator(object)));
+        return object;}
+
+    if(complexp(object)){
+        fprintf(out,"#C(");
+        princ(complex_realpart(object), stream);
+        fprintf(out," ");
+        princ(complex_imagpart(object), stream);
+        fprintf(out,")");
         return object;}
 
     /* if(nullp(object)){ */

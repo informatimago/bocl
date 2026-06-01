@@ -9,21 +9,26 @@
  *  Helpers                                                              *
  * -------------------------------------------------------------------- */
 
-/* Coerce a Ref to floating, accepting INTEGER or FLOAT. */
+/* Coerce a Ref to floating, accepting INTEGER, RATIO, or FLOAT. */
 static floating as_floating(Ref x){
     if(integerp(x)){ word iv = integer_value(x); return (floating)iv; }
     if(floatp(x))  { return float_value(x); }
+    if(ratiop(x))  { return ratio_to_float(x); }
     TYPE_ERROR(x,NUMBER_Class);}
 
 /* Check that x is a NUMBER (INTEGER or FLOAT). */
 static void check_number(Ref x){
-    if(!(integerp(x)||floatp(x))){
+    if(!(integerp(x)||floatp(x)||ratiop(x)||complexp(x))){
         TYPE_ERROR(x,NUMBER_Class);}}
 
 /* Promote two numbers: return true iff at least one is a float; the integer
    values are written into *iout (only valid if returns false). */
 static bool either_float(Ref a, Ref b){
     return floatp(a) || floatp(b);}
+
+/* Check if either operand is a ratio (but not float — that's handled above) */
+static bool either_ratio(Ref a, Ref b){
+    return (ratiop(a) || ratiop(b)) && !floatp(a) && !floatp(b);}
 
 /* -------------------------------------------------------------------- *
  *  Variadic arithmetic: + - * /                                         *
@@ -38,6 +43,7 @@ static bool either_float(Ref a, Ref b){
 /* Combine two numbers with a binary op (+, -, *, / coded as a single char). */
 static Ref num_combine(char op, Ref a, Ref b){
     check_number(a); check_number(b);
+    /* Float contagion: if either is float, result is float */
     if(either_float(a,b)){
         floating av=as_floating(a), bv=as_floating(b), r=0.0;
         switch(op){
@@ -49,8 +55,66 @@ static Ref num_combine(char op, Ref a, Ref b){
               r = av / bv; break;
           default: FATAL("num_combine: unknown op %c",op);}
         return float_from_floating(r);
-    } else {
-        word av=integer_value(a), bv=integer_value(b), r=0;
+    }
+    /* Ratio arithmetic: (a/b op c/d) */
+    if(either_ratio(a,b)){
+        Ref an = ratio_numerator(a),   ad = ratio_denominator(a);
+        Ref bn = ratio_numerator(b),   bd = ratio_denominator(b);
+        Ref rn, rd;
+        switch(op){
+          case '+': /* a/b + c/d = (a*d + c*b)/(b*d) */
+              rn = num_combine('*', num_combine('+', num_combine('*',an,bd),
+                                                         num_combine('*',bn,ad)),
+                               I(1));
+              /* Actually compute directly */
+              rn = num_combine('+', num_combine('*',an,bd), num_combine('*',bn,ad));
+              rd = num_combine('*', ad, bd);
+              break;
+          case '-':
+              rn = num_combine('-', num_combine('*',an,bd), num_combine('*',bn,ad));
+              rd = num_combine('*', ad, bd);
+              break;
+          case '*': /* a/b * c/d = (a*c)/(b*d) */
+              rn = num_combine('*', an, bn);
+              rd = num_combine('*', ad, bd);
+              break;
+          case '/': /* a/b / c/d = (a*d)/(b*c) */
+              if((integerp(bn) && integer_value(bn)==0) ||
+                 (integerp(an) && integer_value(an)==0 && ratiop(b))){
+                  ARITHMETIC_ERROR("Division by zero%s",""); }
+              rn = num_combine('*', an, bd);
+              rd = num_combine('*', ad, bn);
+              break;
+          default: FATAL("num_combine: unknown op %c",op); rn=I(0); rd=I(1);}
+        if(!integerp(rn) || !integerp(rd))
+            return float_from_floating(as_floating(rn)/as_floating(rd));
+        return ratio_new(rn, rd);
+    }
+    /* Complex arithmetic */
+    if(complexp(a) || complexp(b)){
+        Ref ar=complex_realpart(a), ai=complex_imagpart(a);
+        Ref br=complex_realpart(b), bi=complex_imagpart(b);
+        Ref rr, ri;
+        switch(op){
+          case '+': rr=num_combine('+',ar,br); ri=num_combine('+',ai,bi); break;
+          case '-': rr=num_combine('-',ar,br); ri=num_combine('-',ai,bi); break;
+          case '*': /* (a+bi)(c+di) = (ac-bd)+(ad+bc)i */
+              rr=num_combine('-', num_combine('*',ar,br), num_combine('*',ai,bi));
+              ri=num_combine('+', num_combine('*',ar,bi), num_combine('*',ai,br));
+              break;
+          case '/': /* (a+bi)/(c+di) = ((ac+bd)/(c²+d²)) + ((bc-ad)/(c²+d²))i */
+              {   Ref denom=num_combine('+',num_combine('*',br,br),num_combine('*',bi,bi));
+                  if((integerp(denom)&&integer_value(denom)==0)||
+                     (floatp(denom)&&float_value(denom)==0.0)){
+                      ARITHMETIC_ERROR("Division by zero (complex)%s","");}
+                  rr=num_combine('/',num_combine('+',num_combine('*',ar,br),num_combine('*',ai,bi)),denom);
+                  ri=num_combine('/',num_combine('-',num_combine('*',ai,br),num_combine('*',ar,bi)),denom);
+                  break;}
+          default: FATAL("num_combine complex: unknown op %c",op); rr=I(0); ri=I(0);}
+        return complex_new(rr, ri);}
+
+    /* Pure integer arithmetic */
+    {   word av=integer_value(a), bv=integer_value(b), r=0;
         switch(op){
           case '+':
               if(__builtin_add_overflow(av,bv,&r)){
@@ -67,8 +131,8 @@ static Ref num_combine(char op, Ref a, Ref b){
           case '/':
               if(bv==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
               if(av%bv != 0){
-                  /* Inexact integer division promotes to float (no ratios yet). */
-                  return float_from_floating((floating)av/(floating)bv);}
+                  /* Exact integer division → ratio */
+                  return ratio_new(integer_from_word(av), integer_from_word(bv));}
               if(av==WORD_MIN && bv==-1){
                   ARITHMETIC_ERROR("Integer overflow in (/ %"WORD_FORMAT" -1)",av);}
               r = av / bv;
@@ -132,15 +196,15 @@ void kernel_DIVIDE(Ref function,Ref arguments,MultipleValues* results){
 
 static bool num_eq(Ref a, Ref b){
     check_number(a); check_number(b);
-    return either_float(a,b)
-            ? as_floating(a)==as_floating(b)
-            : integer_value(a)==integer_value(b);}
+    if(either_float(a,b) || either_ratio(a,b))
+        return as_floating(a)==as_floating(b);
+    return integer_value(a)==integer_value(b);}
 
 static bool num_lt(Ref a, Ref b){
     check_number(a); check_number(b);
-    return either_float(a,b)
-            ? as_floating(a)<as_floating(b)
-            : integer_value(a)<integer_value(b);}
+    if(either_float(a,b) || either_ratio(a,b))
+        return as_floating(a)<as_floating(b);
+    return integer_value(a)<integer_value(b);}
 
 /* Variadic monotonic comparator: (cmp a b c) ≡ (and (cmp a b) (cmp b c)).
    pairp(prev,curr) is the predicate the user picked (e.g. num_lt for <). */
@@ -982,6 +1046,71 @@ void kernel_LOGBITP(Ref function, Ref arguments, MultipleValues* results){
     close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *
+ *  Ratio / Complex kernel functions                                     *
+ * -------------------------------------------------------------------- */
+
+static void kernel_RATIOP(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref obj=cons_car(arguments);
+    results->count=1;
+    results->values[0] = ratiop(obj) ? T_Symbol : NIL_Symbol;
+    close_live_pool(pool);}
+
+static void kernel_NUMERATOR(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref r=cons_car(arguments);
+    if(!integerp(r)&&!ratiop(r)){ TYPE_ERROR(r,NUMBER_Class); }
+    results->count=1;
+    results->values[0] = ratio_numerator(r);
+    close_live_pool(pool);}
+
+static void kernel_DENOMINATOR(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref r=cons_car(arguments);
+    if(!integerp(r)&&!ratiop(r)){ TYPE_ERROR(r,NUMBER_Class); }
+    results->count=1;
+    results->values[0] = ratio_denominator(r);
+    close_live_pool(pool);}
+
+static void kernel_COMPLEXP(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref obj=cons_car(arguments);
+    results->count=1;
+    results->values[0] = complexp(obj) ? T_Symbol : NIL_Symbol;
+    close_live_pool(pool);}
+
+static void kernel_COMPLEX(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref re=pop_mandatory_argument(function,&current);
+    Ref im=nullp(current)?I(0):pop_mandatory_argument(function,&current);
+    check_number(re); check_number(im);
+    results->count=1;
+    results->values[0] = complex_new(re, im);
+    close_live_pool(pool);}
+
+static void kernel_REALPART(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref c=cons_car(arguments); check_number(c);
+    results->count=1;
+    results->values[0] = complex_realpart(c);
+    close_live_pool(pool);}
+
+static void kernel_IMAGPART(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref c=cons_car(arguments); check_number(c);
+    results->count=1;
+    results->values[0] = complex_imagpart(c);
+    close_live_pool(pool);}
+
+static void kernel_RATIONALP(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref obj=cons_car(arguments);
+    results->count=1;
+    results->values[0] = (integerp(obj)||ratiop(obj)) ? T_Symbol : NIL_Symbol;
+    close_live_pool(pool);}
+
+/* -------------------------------------------------------------------- *
  *  Registration.                                                        *
  *                                                                       *
  *  Mirrors the auto-generated kernel_initialize_built_in_functions().   *
@@ -1081,4 +1210,16 @@ void kernel_initialize_arithmetic(void){
     register_fn(S(FLOAT-SIGN),           ll_f_opt_f2, kernel_FLOAT_SIGN);
     register_fn(S(SCALE-FLOAT),          ll_f_e,   kernel_SCALE_FLOAT);
     register_fn(S(LOGBITP), list(S(INDEX),S(INTEGER),NULL), kernel_LOGBITP);
+    /* Ratio / Complex */
+    register_fn(symbol_intern_cstring("RATIOP"),      ll_x,  kernel_RATIOP);
+    register_fn(symbol_intern_cstring("NUMERATOR"),   ll_x,  kernel_NUMERATOR);
+    register_fn(symbol_intern_cstring("DENOMINATOR"), ll_x,  kernel_DENOMINATOR);
+    register_fn(symbol_intern_cstring("COMPLEXP"),    ll_x,  kernel_COMPLEXP);
+    register_fn(symbol_intern_cstring("COMPLEX"),
+                list(symbol_intern_cstring("REALPART"),
+                     S(&OPTIONAL),symbol_intern_cstring("IMAGPART"),NULL),
+                kernel_COMPLEX);
+    register_fn(symbol_intern_cstring("REALPART"),    ll_x,  kernel_REALPART);
+    register_fn(symbol_intern_cstring("IMAGPART"),    ll_x,  kernel_IMAGPART);
+    register_fn(symbol_intern_cstring("RATIONALP"),   ll_x,  kernel_RATIONALP);
 }

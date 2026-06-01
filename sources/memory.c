@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <sysexits.h>
 #include "memory.h"
@@ -235,6 +236,7 @@ void* allocate(size_t size){
 static bool garbage_collection_enabled=true;
 
 bool garbage_collection_is_enabled(void){
+    if(getenv("BOCL_NOGC")) return false;   /* debug override */
     return garbage_collection_enabled;}
 
 bool set_garbage_collection_enabled(bool on){
