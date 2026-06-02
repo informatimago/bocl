@@ -227,7 +227,20 @@ static Block* allocate_internal(size_t size){
                 block=allocate_in_zone(new_zone,hsize);}}}
     return block;}
 
+/* GC-stress: when BOCL_GCSTRESS=N is set, force a full collection every N
+   allocations (N=1 = every allocation).  This makes latent "object not rooted
+   before a nested allocate" bugs reproduce deterministically rather than
+   depending on heap layout.  A moderate N (e.g. 64) keeps the prelude load
+   tractable while still exercising the collector heavily. */
+static long gc_stress_n = -1;   /* -1 = unchecked, 0 = off, >0 = period */
+static long gc_stress_c = 0;
+
 void* allocate(size_t size){
+    if(gc_stress_n < 0){
+        const char* s = getenv("BOCL_GCSTRESS");
+        gc_stress_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;}
+    if(gc_stress_n > 0 && garbage_collection_is_enabled()){
+        if(++gc_stress_c >= gc_stress_n){ gc_stress_c = 0; garbage_collect(); }}
     Block* result=allocate_internal(size);
     add_to_live_pool((void*)result);
     return result;}

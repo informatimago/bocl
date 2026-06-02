@@ -304,8 +304,12 @@ static void process_options(int argc,char** argv){
                               argv[i-1],
                               (*options[k].argument.variable.string),
                               argv[i]);}
-                  else{
-                      (*options[k].argument.variable.string)=argv[i];}
+                  /* Always apply the supplied value — including when a default
+                     was pre-set (on_error_action defaults to "exit", package to
+                     "COMMON-LISP-USER").  Previously the assignment lived only in
+                     the else branch, so -on-error/-p were silently ignored
+                     whenever a default existed. */
+                  (*options[k].argument.variable.string)=argv[i];
                   break;
               case elst:
                   string_list_push(strdup(argv[i]),options[k].argument.variable.list);
@@ -374,21 +378,6 @@ int main(int argc,char** argv){
     kernel_initialize();
     process_options(argc,argv);
 
-    /* Load the Lisp prelude (bootstrap/prelude.lisp) so the full Common Lisp
-       surface (macros like OR, AND, LOOP, CLOS, etc.) is available before any
-       user file or expression runs.  --no-prelude suppresses this for tests
-       that exercise only the bare kernel. */
-    if(!do_noprelude && !do_version && !do_help){
-        char* prelude=find_prelude();
-        if(prelude){
-            bocl_load_cstring(prelude);
-            free(prelude);
-        } else if(!do_quiet){
-            fprintf(stderr,
-                    "bocl: warning: could not find bootstrap/prelude.lisp; "
-                    "running with the bare kernel only.\n"
-                    "      Set BOCL_PRELUDE or use --no-prelude to silence.\n");}}
-
     if(do_version){
         print_version();
         exit(0);}
@@ -410,6 +399,28 @@ int main(int argc,char** argv){
     define_parameter(S(*LOAD-PRINT*),S(NIL));
     define_parameter(S(*COMPILE-PRINT*),S(NIL));
 
+    /* Load the Lisp prelude (bootstrap/prelude.lisp) so the full Common Lisp
+       surface (macros like OR, AND, LOOP, CLOS, etc.) is available before any
+       rc file, init file, user expression, or loaded file runs.  --no-prelude
+       suppresses this for tests that exercise only the bare kernel.
+
+       This MUST happen BEFORE enabling LOAD-PRINT and LOAD-VERBOSE below: the
+       prelude defines the printer's special variables (PRINT-LENGTH,
+       PRINT-LEVEL, ...) partway through, so printing the result of each
+       loaded form during the bootstrap would reference them before they are
+       bound.  --print and --verbose therefore apply only to user files loaded
+       afterwards, never to the bootstrap itself. */
+    if(!do_noprelude){
+        char* prelude=find_prelude();
+        if(prelude){
+            bocl_load_cstring(prelude);
+            free(prelude);
+        } else if(!do_quiet){
+            fprintf(stderr,
+                    "bocl: warning: could not find bootstrap/prelude.lisp; "
+                    "running with the bare kernel only.\n"
+                    "      Set BOCL_PRELUDE or use --no-prelude to silence.\n");}}
+
     if(do_verbose){
         define_parameter(S(*LOAD-VERBOSE*),S(T));
         define_parameter(S(*COMPILE-VERBOSE*),S(T));
@@ -421,6 +432,13 @@ int main(int argc,char** argv){
         define_parameter(S(*COMPILE-PRINT*),S(T));
         bocl_read_eval_cstring("(SETQ *LOAD-PRINT*      T)");
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
+
+    /* The prelude has now loaded.  Under -on-error appease, enable per-form
+       recovery so user files (rc / init / -l, and everything they LOAD) skip
+       individual bad forms instead of aborting — this lets large suites such as
+       the ANSI tests load as much as possible and still reach their report. */
+    {   extern bool bocl_load_recover;
+        if(on_error==on_error_appease){ bocl_load_recover=true; }}
 
     if(!do_norc){
         char* rcfile=find_rc_file();

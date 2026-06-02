@@ -62,6 +62,12 @@ Ref bocl_in_package(Ref package_designator){
     set_symbol_value(S(*PACKAGE*), pkg);
     return pkg;}
 
+/* When true, each top-level form is evaluated through the Lisp wrapper
+   %LOAD-EVAL-TOPLEVEL-FORM, which catches errors so a single bad form does not
+   abort the whole file.  main.c enables this only after the prelude has loaded
+   and only under -on-error appease — never during the bootstrap. */
+bool bocl_load_recover = false;
+
 Ref bocl_load_cstring(const char* path){
     Ref out = variable_value(S(*STANDARD-OUTPUT*));
 
@@ -87,15 +93,42 @@ Ref bocl_load_cstring(const char* path){
         terpri(out);
         stream_finish_output(out);}
     /* kernel_read on EOF returns the stream itself (we pass `inp` as the
-       eof-value), so the loop test `sexp != inp` terminates at EOF. */
-    Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
-    while(sexp!=inp){
+       eof-value), so the loop test `sexp != inp` terminates at EOF.
+
+       Each iteration runs inside its own live-pool frame so that the form and
+       everything it allocates transiently are reclaimed before the next form is
+       read.  Without this, every top-level form of every (possibly deeply
+       nested) LOAD piles up in one ever-growing live pool, making each GC scan
+       O(total-forms) and turning a large load — e.g. the ANSI suite — into an
+       O(n^2) crawl.  Definitions survive trimming because they are rooted via
+       their symbols, not the live pool. */
+    int dbgf=0;
+    for(;;){
+        uword form_pool=open_live_pool();
+        Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
+        if(sexp==inp){ close_live_pool(form_pool); break; }
+        add_to_live_pool(sexp);
         if(do_print){
             prin1(sexp,out);
             terpri(out);
             stream_finish_output(out);}
-        bocl_eval(sexp);
-        sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);}
+        if(getenv("BOCL_DBG_LOAD")){
+            fprintf(stderr,"F%d:",dbgf++);
+            if(consp(sexp)&&symbolp(car(sexp))){ fputs(string_cstring(symbol_name(car(sexp))),stderr);
+                if(consp(cdr(sexp))&&symbolp(cadr(sexp))){ fputc(' ',stderr); fputs(string_cstring(symbol_name(cadr(sexp))),stderr);} }
+            fputc('\n',stderr); fflush(stderr); }
+        if(bocl_load_recover){
+            /* Route through %LOAD-EVAL-TOPLEVEL-FORM so an error in this form is
+               caught and reported rather than aborting the rest of the file. */
+            Ref wrapper=symbol_function(symbol_intern_cstring("%LOAD-EVAL-TOPLEVEL-FORM"));
+            if(functionp(wrapper) || built_in_function_p(wrapper) || closurep(wrapper)){
+                MultipleValues r={0};
+                kernel_apply(wrapper, cons(sexp,NIL_Symbol), &r);
+            } else {
+                bocl_eval(sexp);}
+        } else {
+            bocl_eval(sexp);}
+        close_live_pool(form_pool);}
     stream_close(inp);
     if(do_verbose){
         princ(T(";; Loaded "),out);
@@ -240,6 +273,48 @@ static void kernel_PROBE_FILE(unused Ref function, Ref arguments, MultipleValues
     free(path);
     results->count=1;
     results->values[0]=exists?name_ref:NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (FILE-WRITE-DATE filespec) — return the file's modification time as a
+   Common-Lisp universal time (seconds since 1900-01-01 00:00:00 GMT), or
+   signal an error if the file does not exist. */
+#define BOCL_UNIVERSAL_TIME_OFFSET 2208988800L  /* 1900..1970 in seconds */
+static void kernel_FILE_WRITE_DATE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref filespec=cons_car(arguments);
+    Ref name_ref=typep(filespec,STRING_Class)?filespec:namestring(filespec);
+    char* path=string_cstring(name_ref);
+    struct stat st;
+    int rc=stat(path,&st);
+    free(path);
+    if(rc!=0){ ERROR("FILE-WRITE-DATE: file does not exist%s",""); }
+    results->count=1;
+    results->values[0]=integer_from_word((word)st.st_mtime + BOCL_UNIVERSAL_TIME_OFFSET);
+    close_live_pool(pool);}
+
+/* (%COPY-FILE source destination) — byte-for-byte copy of SOURCE to
+   DESTINATION.  Used by COMPILE-FILE, which on bocl (an interpreter) "compiles"
+   a source file by copying it to the fasl pathname so that LOAD can read it
+   back as ordinary source.  Returns the destination namestring. */
+static void kernel_COPY_FILE(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref from=cons_car(current); current=cons_cdr(current);
+    Ref to=cons_car(current);
+    Ref from_str=typep(from,STRING_Class)?from:namestring(from);
+    Ref to_str  =typep(to,  STRING_Class)?to  :namestring(to);
+    char* fp=string_cstring(from_str);
+    char* tp=string_cstring(to_str);
+    FILE* in=fopen(fp,"rb");
+    if(!in){ free(fp); free(tp); ERROR("%%COPY-FILE: cannot open source%s",""); }
+    FILE* out=fopen(tp,"wb");
+    if(!out){ fclose(in); free(fp); free(tp); ERROR("%%COPY-FILE: cannot open destination%s",""); }
+    char buf[8192]; size_t n;
+    while((n=fread(buf,1,sizeof(buf),in))>0){ fwrite(buf,1,n,out); }
+    fclose(in); fclose(out);
+    free(fp); free(tp);
+    results->count=1;
+    results->values[0]=to_str;
     close_live_pool(pool);}
 
 /* (DELETE-FILE filespec) — delete a file; errors if it can't. */
@@ -741,6 +816,10 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("DELETE-FILE"),ll_f,kernel_DELETE_FILE));
         set_symbol_function(symbol_intern_cstring("RENAME-FILE"),
             built_in_function_new(symbol_intern_cstring("RENAME-FILE"),ll_f2,kernel_RENAME_FILE));
+        set_symbol_function(symbol_intern_cstring("FILE-WRITE-DATE"),
+            built_in_function_new(symbol_intern_cstring("FILE-WRITE-DATE"),ll_f,kernel_FILE_WRITE_DATE));
+        set_symbol_function(symbol_intern_cstring("%COPY-FILE"),
+            built_in_function_new(symbol_intern_cstring("%COPY-FILE"),ll_f2,kernel_COPY_FILE));
         set_symbol_function(symbol_intern_cstring("WILD-PATHNAME-P"),
             built_in_function_new(symbol_intern_cstring("WILD-PATHNAME-P"),ll_f_o,kernel_WILD_PATHNAME_P));
         set_symbol_function(symbol_intern_cstring("TYPE-OF"),

@@ -52,6 +52,19 @@ bool equalp(Ref a, Ref b){
 
 typedef bool (*test_fn)(Ref, Ref);
 
+/* Normalise a hash-table :TEST designator to its canonical symbol.  CL allows
+   either a symbol (EQ/EQL/EQUAL/EQUALP) or the corresponding function object
+   (#'eq …).  A function object passed as #'equal is, by identity, the value of
+   the EQUAL symbol's function cell, so we can map it back. */
+static Ref canonical_test_symbol(Ref test){
+    if(test==S(EQ) || test==S(EQL) || test==S(EQUAL) || test==S(EQUALP)){
+        return test;}
+    if(test==symbol_function(S(EQ)))     { return S(EQ); }
+    if(test==symbol_function(S(EQL)))    { return S(EQL); }
+    if(test==symbol_function(S(EQUAL)))  { return S(EQUAL); }
+    if(test==symbol_function(S(EQUALP))) { return S(EQUALP); }
+    return test;}   /* unrecognised — let resolve_test signal the error */
+
 static test_fn resolve_test(Ref test_symbol){
     if(test_symbol == S(EQ))     { return eq; }
     if(test_symbol == S(EQL))    { return eql; }
@@ -73,6 +86,8 @@ static HashTable* HashTable_slots(Ref test){
     return that;}
 
 Ref hash_table_new(Ref test){
+    /* Accept a function-object designator (#'equal) as well as a symbol. */
+    test = canonical_test_symbol(test);
     /* Validate test up front. */
     (void)resolve_test(test);
     return Object_new(HASH_TABLE_Class, (Slots*)HashTable_slots(test));}

@@ -705,6 +705,29 @@ static Ref parse_object(parser_state* parser){
                        kernel_read) recognise reader_skip_marker. */
                     parse_object(parser);
                     return get_skip_marker();}}
+            case ':': {  /* #:name => a fresh uninterned symbol named NAME */
+                advance_character(parser);   /* skip ':' */
+                parser->length=0;
+                while(!parser->error && !parser->eof && constituentp(parser->ch)){
+                    check_token_too_long(parser,"Token");
+                    parser->token[parser->length++]=parser->ch;
+                    advance_character(parser);}
+                check_parser_error(parser);
+                parser->token[parser->length]='\0';
+                parser->eof=false;   /* a name terminated by EOF is still valid */
+                octet_upcase(parser->token);
+                return symbol_new(string_new_cstring((const char*)parser->token)); }
+            case '.': {  /* #.form => evaluate FORM at read time (read-eval) */
+                extern Ref bocl_eval(Ref);
+                advance_character(parser);   /* skip '.' */
+                skip_spaces(parser);
+                Ref form=parse_object(parser);
+                return bocl_eval(form); }
+            case 'p': case 'P': {  /* #P"..." => a pathname */
+                advance_character(parser);   /* skip 'P' */
+                skip_spaces(parser);
+                Ref designator=parse_object(parser);
+                return pathname(designator); }
             default:
                 READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}
           break;

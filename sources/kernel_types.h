@@ -134,7 +134,8 @@ typedef enum {
 } frame_type;
 
 typedef struct Frame {
-    struct Frame* next;
+    struct Frame* next;      /* link on the global dynamic frame stack (g_frame_stack) */
+    struct Frame* env_next;  /* link on the establishing environment's lexical frame list */
     struct Frame* target;
     VectorOfObject* frame; /* the local variables and local functions */
     frame_type type;

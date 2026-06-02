@@ -24,66 +24,76 @@ Ref eval_global_environment(void){
 /* non_local_exit_t is declared in kernel.h so conditions.c can use it. */
 
 
+/* All control frames (BLOCK, CATCH, TAGBODY, HANDLER-CASE, HANDLER-BIND,
+   UNWIND-PROTECT, dynamic bindings, RESTART-CASE) live on ONE global dynamic
+   stack in LIFO order, rather than on per-environment lists.  This makes their
+   lookup follow the DYNAMIC call chain, so CATCH/THROW and HANDLER-CASE /
+   HANDLER-BIND work across function-call boundaries (essential for, e.g., a
+   test runner that wraps each test in a handler).  Variable and function
+   lookup are unaffected — they still walk the lexical environment chain.
+   Frame structs are plain C stack objects whose Ref contents are GC-protected
+   via the live pool, so keeping them on a global stack is GC-safe. */
+Frame* g_frame_stack = NULL;
+
 static void push_frame(Frame* frame,Ref environment){
+    /* Global dynamic stack — used by CATCH/THROW, HANDLER-CASE/HANDLER-BIND and
+       all non-local-exit unwinding, so those work across function-call
+       boundaries (the dynamic extent). */
+    frame->next=g_frame_stack;
+    g_frame_stack=frame;
+    /* Per-environment lexical list — used by BLOCK/TAGBODY lookup, which is
+       lexically scoped and must stay O(lexical-depth) rather than walking the
+       whole dynamic stack (otherwise deep nested loads crawl). */
     check_class(environment,ENVIRONMENT_Class);
     Environment* env=&(environment->slots->environment);
-    frame->next=env->frames;
+    frame->env_next=env->frames;
     env->frames=frame;}
 
 static Frame* pop_frame(Frame* frame,Ref environment){
-    check_class(environment,ENVIRONMENT_Class);
-    /*
-    if frame!=NULL, then check if frame==current_frame(environment)
-    (if not, then signal a fatal error).
-    pop the current frame and return it.
-    */
-    Environment* env=&(environment->slots->environment);
-    Frame* result=env->frames;
+    Frame* result=g_frame_stack;
     if(result==NULL){
         FATAL("Frame stack is %s!","empty");}
-    env->frames=result->next;
+    g_frame_stack=result->next;
+    /* Unlink from the establishing environment's lexical list too (LIFO: the
+       global top is also the top of its own environment's list). */
+    check_class(environment,ENVIRONMENT_Class);
+    Environment* env=&(environment->slots->environment);
+    if(env->frames==result){
+        env->frames=result->env_next;}
     if((frame!=NULL) && (frame!=result)){
         FATAL("Popped frame is not the %s frame.","expected");}
     return result;}
 
-/* Frames live on the env where the establishing special-op fired. Inner
-   LET / LET* / FLET / MACROLET create child envs that don't have those
-   frames in their own ->frames list, so we must walk the parent chain. */
+/* BLOCK / TAGBODY are LEXICALLY scoped: search the establishing environment and
+   its lexical parents (via the per-env list), not the dynamic stack. */
 
 static Frame* find_block_frame(Ref block_name,Ref environment){
     while(typep(environment,ENVIRONMENT_Class)){
         Environment* env=&(environment->slots->environment);
-        Frame* frame=env->frames;
-        while(frame){
+        for(Frame* frame=env->frames; frame; frame=frame->env_next){
             if(frame->type==frame_block
                && frame->parameters.block.name==block_name){
-                return frame;}
-            frame=frame->next;}
-        environment=env->next_environment;}
-    return NULL;}
-
-static Frame* find_catch_frame(Ref catch_object,Ref environment){
-    while(typep(environment,ENVIRONMENT_Class)){
-        Environment* env=&(environment->slots->environment);
-        Frame* frame=env->frames;
-        while(frame){
-            if(frame->type==frame_catch
-               && frame->parameters.catch.object==catch_object){
-                return frame;}
-            frame=frame->next;}
+                return frame;}}
         environment=env->next_environment;}
     return NULL;}
 
 static Frame* find_tagbody_frame(Ref tag,Ref environment){
     while(typep(environment,ENVIRONMENT_Class)){
         Environment* env=&(environment->slots->environment);
-        Frame* frame=env->frames;
-        while(frame){
+        for(Frame* frame=env->frames; frame; frame=frame->env_next){
             if(frame->type==frame_tagbody
                && !nullp(assq(tag,frame->parameters.tagbody.tags))){
-                return frame;}
-            frame=frame->next;}
+                return frame;}}
         environment=env->next_environment;}
+    return NULL;}
+
+/* CATCH/THROW is DYNAMICally scoped: search the global dynamic frame stack so a
+   THROW finds a CATCH established by any caller. */
+static Frame* find_catch_frame(Ref catch_object,unused Ref environment){
+    for(Frame* frame=g_frame_stack; frame; frame=frame->next){
+        if(frame->type==frame_catch
+           && frame->parameters.catch.object==catch_object){
+            return frame;}}
     return NULL;}
 
 unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
@@ -101,21 +111,10 @@ unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
 /* find_restart_frame: implemented in conditions.c as part of FIND-RESTART /
    INVOKE-RESTART.  The stub is removed. */
 
-static _Noreturn void unwind_next_frame(Frame* popped, Ref environment){
-    /* After popping `popped` from `environment`'s frames list, find the
-       new top frame to longjmp into. The next frame may be in a parent
-       env (LET / FLET / etc. create child envs whose frames list is
-       empty even though their parent has the BLOCK/HANDLER/etc. frame).
-       Pre-fix this just used popped->next which only walks within one
-       env and crashed on NULL when the popped frame was the only one
-       in its env. */
-    Frame* next = NULL;
-    Ref env_walk = environment;
-    while(typep(env_walk, ENVIRONMENT_Class)){
-        Frame* f = env_walk->slots->environment.frames;
-        if(f != NULL){ next = f; break; }
-        env_walk = env_walk->slots->environment.next_environment;
-    }
+static _Noreturn void unwind_next_frame(Frame* popped, unused Ref environment){
+    /* `popped` has just been removed from the global frame stack; the new top
+       is the next frame to unwind through on the way to popped->target. */
+    Frame* next = g_frame_stack;
     if(next == NULL){
         FATAL("unwind_next_frame: %s","no next frame; target not reached");}
     non_local_exit_t exit = (next == popped->target)
@@ -228,13 +227,7 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
    frames list — that's the "current top frame" for unwind purposes. */
 #define NON_LOCAL_EXIT(target_frame)                                    \
     do {                                                                \
-        Ref _env_walk = environment;                                    \
-        Frame* current_top = NULL;                                      \
-        while(typep(_env_walk, ENVIRONMENT_Class)){                     \
-            current_top = _env_walk->slots->environment.frames;         \
-            if(current_top != NULL){ break; }                           \
-            _env_walk = _env_walk->slots->environment.next_environment; \
-        }                                                               \
+        Frame* current_top = g_frame_stack;                             \
         if(current_top==NULL){                                          \
             FATAL("NON_LOCAL_EXIT: %s","no active frame");}             \
         current_top->target=(target_frame);                             \

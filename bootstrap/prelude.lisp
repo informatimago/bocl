@@ -4832,10 +4832,26 @@
 
 ;;; ---- COMPILE-FILE-PATHNAME -----------------------------------------------
 
-(defun compile-file-pathname (input-file &key (output-file nil) &allow-other-keys)
-  "Return the pathname that COMPILE-FILE would write to.  In bocl: stub."
-  (declare (ignore output-file))
-  input-file)
+(defun compile-file-pathname (input-file &key output-file &allow-other-keys)
+  "Return the pathname COMPILE-FILE would write to: the source pathname with
+   its type changed to \"fasl\".  (bocl has no real compiler — see COMPILE-FILE.)
+   A distinct type is required: programs such as the ANSI test suite assert that
+   the compiled-file type differs from the source type."
+  (or output-file
+      (let* ((in  (pathname input-file))
+             (dir (directory-namestring in))
+             (nm  (or (pathname-name in) "")))
+        (pathname (concatenate 'string dir nm ".fasl")))))
+
+(defun compile-file (input-file &key output-file &allow-other-keys)
+  "bocl is an interpreter with no real compiler.  COMPILE-FILE does not produce
+   a fasl; it just reports the conventional output pathname.  LOAD of that
+   (absent) pathname falls back to the source, so the COMPILE-AND-LOAD idiom in
+   the ANSI suite still loads everything — without writing any files.
+   Returns (values output-truename warnings-p failure-p)."
+  (let* ((in  (merge-pathnames input-file *default-pathname-defaults*))
+         (out (compile-file-pathname in :output-file output-file)))
+    (values (pathname out) nil nil)))
 
 ;;; ---- *PRINT-PPRINT-DISPATCH* ---------------------------------------------
 
@@ -6240,6 +6256,23 @@
 
 ;;; ---- MAKE-PATHNAME (logical-aware) ---------------------------------------
 
+(defun %pn-comp-string (c)
+  "Coerce a pathname component (name / type / directory part) to the string
+   that represents it in a namestring.
+     NIL              -> \"\"   (component absent)
+     :WILD            -> \"*\"
+     :WILD-INFERIORS  -> \"**\"
+     :UNSPECIFIC      -> \"\"
+     string           -> itself
+     other symbol     -> its (downcased) name."
+  (cond ((null c)               "")
+        ((eq c :wild)           "*")
+        ((eq c :wild-inferiors) "**")
+        ((eq c :unspecific)     "")
+        ((stringp c)            c)
+        ((symbolp c)            (string-downcase (symbol-name c)))
+        (t                      (princ-to-string c))))
+
 (defun make-pathname (&key host device directory name type version
                            (defaults nil defaults-p) case)
   "Construct a pathname from components."
@@ -6278,10 +6311,11 @@
                           (parts (cdr directory)))
                      (apply #'concatenate 'string
                             (cons (if abs "/" "")
-                                  (mapcar (lambda (d) (concatenate 'string d "/")) parts)))))
+                                  (mapcar (lambda (d) (concatenate 'string (%pn-comp-string d) "/")) parts)))))
                   (t "")))
-               (name-s (or name ""))
-               (type-s (if type (concatenate 'string "." type) "")))
+               (name-s (%pn-comp-string name))
+               (type-s (let ((ts (%pn-comp-string type)))
+                         (if (string= ts "") "" (concatenate 'string "." ts)))))
           (funcall *%kernel-pathname-fn*
                    (concatenate 'string dev-pref dir-s name-s type-s))))))
 
@@ -6646,3 +6680,179 @@
    'typep))
 
 ;;;; THE END OF SLICE 34
+
+;;;; ========================================================================
+;;;; Slice 35 — LOAD merges its filespec against *DEFAULT-PATHNAME-DEFAULTS*
+;;;; ========================================================================
+;;;
+;;; The bare kernel LOAD opens the namestring it is given verbatim, relative
+;;; to the process working directory.  Conforming LOAD must instead merge a
+;;; relative FILESPEC against *DEFAULT-PATHNAME-DEFAULTS* (CLHS 20 / LOAD).
+;;; Programs such as the ANSI test suite rely on this: doit.lsp rebinds
+;;; *DEFAULT-PATHNAME-DEFAULTS* to its own directory and then does
+;;; (load "init.lsp"), expecting the file to be found there rather than in
+;;; the caller's working directory.
+
+(defvar *%kernel-load* (symbol-function 'load)
+  "The bare kernel LOAD: opens an explicit namestring and binds
+   *LOAD-PATHNAME* / *LOAD-TRUENAME* for the duration of the load.")
+
+(defun load (filespec &key (verbose *load-verbose*) (print *load-print*)
+                           (if-does-not-exist t) (external-format :default))
+  "Load FILESPEC.  A relative pathname is merged against
+   *DEFAULT-PATHNAME-DEFAULTS* before opening (conforming behaviour).  Because
+   bocl's COMPILE-FILE produces no real fasl, a request to LOAD a missing
+   compiled file (e.g. \"foo.fasl\") transparently falls back to its source
+   \"foo.lsp\" — this is what makes the COMPILE-AND-LOAD idiom work without
+   writing any compiled files."
+  (declare (ignore verbose print external-format))
+  (let* ((merged (merge-pathnames filespec *default-pathname-defaults*))
+         (ns     (namestring merged)))
+    (cond
+      ((probe-file ns) (funcall *%kernel-load* ns))
+      (t
+       (let* ((dir  (directory-namestring merged))
+              (name (pathname-name merged))
+              (src  (and name (concatenate 'string dir name ".lsp"))))
+         (cond
+           ((and src (not (string= src ns)) (probe-file src))
+            (funcall *%kernel-load* src))
+           (if-does-not-exist
+            (error "LOAD: file ~S does not exist" ns))
+           (t nil)))))))
+
+;;; ---- PROCLAIM / DECLAIM --------------------------------------------------
+;;; Global declarations are advisory in bocl (an interpreter that does no
+;;; optimisation and treats every binding uniformly).  We accept and ignore
+;;; them so that conforming programs — notably the ANSI test suite — load.
+;;; The one declaration with run-time meaning, (SPECIAL var...), is honoured
+;;; by marking the named variables special via DEFVAR.
+
+(defun proclaim (declaration-specifier)
+  (when (and (consp declaration-specifier)
+             (eq (car declaration-specifier) 'special))
+    (dolist (v (cdr declaration-specifier))
+      (when (symbolp v)
+        (eval (list 'defvar v)))))      ; DEFVAR marks the variable special
+  nil)
+
+(defmacro declaim (&rest declaration-specifiers)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     ,@(mapcar (lambda (spec) `(proclaim ',spec)) declaration-specifiers)
+     nil))
+
+;;; ---- DEFPACKAGE / IMPORT / SHADOW ----------------------------------------
+;;; bocl keeps a single shared symbol table (no per-package symbol isolation),
+;;; so IMPORT / SHADOW / SHADOWING-IMPORT have no real work to do — a symbol is
+;;; visible everywhere once it exists.  They are provided so conforming code,
+;;; in particular the ANSI test suite's package setup, loads and runs.
+
+(defun import (symbols &optional package)
+  (declare (ignore symbols package))
+  t)
+
+(defun shadow (symbols &optional package)
+  (declare (ignore symbols package)) t)
+
+(defun shadowing-import (symbols &optional package)
+  (declare (ignore symbols package)) t)
+
+(defun unintern (symbol &optional package)
+  (declare (ignore symbol package)) nil)
+
+(defmacro defpackage (name &rest options)
+  (let ((sname     (string name))
+        (nicknames '())
+        (use       '())
+        (exports   '())
+        (interns   '()))
+    (dolist (opt options)
+      (when (consp opt)
+        (let ((k (car opt)) (a (cdr opt)))
+          (cond
+            ((eq k :nicknames) (setq nicknames (append nicknames (mapcar #'string a))))
+            ((eq k :use)       (setq use       (append use       (mapcar #'string a))))
+            ((eq k :export)    (setq exports   (append exports   (mapcar #'string a))))
+            ((eq k :intern)    (setq interns   (append interns   (mapcar #'string a))))
+            ((eq k :shadow)    (setq interns   (append interns   (mapcar #'string a))))
+            ((eq k :import-from)
+             (setq interns (append interns (mapcar #'string (cdr a)))))
+            ((eq k :shadowing-import-from)
+             (setq interns (append interns (mapcar #'string (cdr a)))))
+            (t nil)))))     ; :documentation, :size, etc. — ignored
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       (let ((pkg (or (find-package ,sname)
+                      (make-package ,sname :nicknames ',nicknames :use ',use))))
+         ,@(mapcar (lambda (u) `(use-package ,u pkg)) use)   ; one designator each
+         ,@(mapcar (lambda (n) `(intern ,n pkg)) interns)
+         ,@(mapcar (lambda (n) `(export (intern ,n pkg) pkg)) exports)
+         pkg))))
+
+;;; ---- DOLIST / DOTIMES: tolerate leading (DECLARE ...) --------------------
+;;; The earlier DOLIST / DOTIMES splice their body straight into a TAGBODY, so
+;;; a conforming body that begins with (declare ...) would try to *call* DECLARE.
+;;; Redefine them to strip leading declarations first.  (Placed late so the
+;;; redefinitions are what user code — e.g. the ANSI suite — expands with.)
+
+(defun %strip-leading-declares (body)
+  "BODY with any leading (DECLARE ...) forms removed."
+  (if (and (consp body) (consp (car body)) (eq (car (car body)) 'declare))
+      (%strip-leading-declares (cdr body))
+      body))
+
+(defmacro dolist (head &body body)
+  (let ((var       (first head))
+        (list-form (second head))
+        (result    (third head))
+        (real-body (%strip-leading-declares body)))
+    `(let ((dolist-list ,list-form))
+       (block nil
+         (let ((,var nil))
+           (tagbody
+              dolist-loop
+              (if (null dolist-list) (go dolist-done))
+              (setq ,var (car dolist-list))
+              (setq dolist-list (cdr dolist-list))
+              ,@real-body
+              (go dolist-loop)
+              dolist-done))
+         ,result))))
+
+(defmacro dotimes (head &body body)
+  (let ((var        (first head))
+        (count-form (second head))
+        (result     (third head))
+        (real-body  (%strip-leading-declares body)))
+    `(let ((dotimes-count ,count-form))
+       (block nil
+         (let ((,var 0))
+           (tagbody
+              dotimes-loop
+              (if (>= ,var dotimes-count) (go dotimes-done))
+              ,@real-body
+              (setq ,var (+ ,var 1))
+              (go dotimes-loop)
+              dotimes-done))
+         ,result))))
+
+;;; ---- Per-form LOAD recovery (used under -on-error appease) ----------------
+;;; LOAD normally aborts the whole file on the first error.  When the kernel
+;;; enables recovery (only for user files, never the bootstrap, and only under
+;;; -on-error appease), each top-level form is evaluated through this wrapper so
+;;; that one bad form is reported and skipped instead of killing the load.  This
+;;; lets large suites — e.g. the ANSI tests — load every file they can and still
+;;; reach their final report, rather than dying on the first unsupported form.
+
+(defvar *load-error-count* 0
+  "Number of top-level forms skipped due to errors during recovering LOADs.")
+
+(defun %load-eval-toplevel-form (form)
+  (handler-case
+      (eval form)
+    (error (c)
+      (setq *load-error-count* (+ *load-error-count* 1))
+      (ignore-errors
+        (format *error-output* "~&;; [load] skipped a form: ~A~%" c))
+      nil)))
+
+;;;; THE END OF SLICE 35

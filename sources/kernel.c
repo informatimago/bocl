@@ -557,10 +557,18 @@ Ref ratio_new(Ref num, Ref den){
     word g = gcd_word(n < 0 ? -n : n, d);
     if(g > 1){ n /= g; d /= g; }
     if(d == 1){ return integer_from_word(n); }
+    /* Build the numerator/denominator INTEGER objects BEFORE allocating the
+       Ratio, and root them in the live pool.  Otherwise a GC triggered by the
+       second integer_from_word() would scan the half-built Ratio (objcount=2)
+       and follow the uninitialised num/den slots as if they were Refs. */
+    Ref num_i = integer_from_word(n);
+    add_to_live_pool(num_i);
+    Ref den_i = integer_from_word(d);
+    add_to_live_pool(den_i);
     Ratio* slots = allocate(sizeof(Ratio));
-    slots->objcount = 2;
-    slots->numerator   = integer_from_word(n);
-    slots->denominator = integer_from_word(d);
+    slots->numerator   = num_i;
+    slots->denominator = den_i;
+    slots->objcount    = 2;
     return Object_new(RATIO_Class, (Slots*)slots);}
 
 bool ratiop(Ref object){
@@ -588,10 +596,12 @@ Ref complex_new(Ref re, Ref im){
     /* (complex r 0) = r when r is real */
     if(integerp(im) && integer_value(im) == 0) return re;
     if(floatp(im)   && float_value(im)    == 0.0) return re;
+    /* re/im are already-rooted Refs; set slots before objcount so a GC during
+       Object_new() never sees a half-built Complex. */
     Complex* slots = allocate(sizeof(Complex));
-    slots->objcount = 2;
     slots->realpart = re;
     slots->imagpart = im;
+    slots->objcount = 2;
     return Object_new(COMPLEX_Class, (Slots*)slots);}
 
 bool complexp(Ref object){
@@ -1752,12 +1762,14 @@ Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
 
 static Ref rootset;
 static Ref kernel_initialize_rootset(void){
+    extern Ref all_packages;   /* the package registry (sentinel header, packages.c) */
     rootset=NIL_Symbol;
     push(UNBOUND_Object,&rootset);
     push(KERNEL_obarray,&rootset);
     push(KEYWORD_obarray,&rootset);
     push(kernel_classes,&rootset);
     push(characterset,&rootset);
+    push(all_packages,&rootset);
     return rootset;}
 
 Ref kernel_rootset(void){
