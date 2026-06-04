@@ -5,6 +5,9 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <signal.h>
+#include <execinfo.h>
+#include <unistd.h>
 #include "kernel.h"
 #include "kernel_types.h"
 #include "kernel_objects.h"
@@ -1161,6 +1164,7 @@ StructureClass* StructureClass_slots(Ref class_name,Ref direct_superclass,Ref of
             +(uword)integer_value(offset)
             +list_length(slot_names);
     close_live_pool(pool);
+    add_to_live_pool((Ref)that);   /* re-root: caller's Object_new allocates (GC) before storing `that` */
     return that;}
 
 Ref make_structure_class(Ref name,Ref direct_superclass,Ref offset,Ref slots){
@@ -1191,6 +1195,7 @@ Ref make_structure_class(Ref name,Ref direct_superclass,Ref offset,Ref slots){
     Ref class=Object_new(STRUCTURE_CLASS_Class,
                          (Slots*)StructureClass_slots(name,direct_superclass,offset,slots));
     close_live_pool(pool);
+    add_to_live_pool(class);   /* re-root: close_live_pool trimmed the fresh class */
     return class;}
 
 Ref make_structure_instance(Ref structure_class){
@@ -1204,6 +1209,7 @@ Ref make_structure_instance(Ref structure_class){
     VectorOfObject* slots=VectorOfObject_slots(CHECK_UWORD_TO_HALFWORD(structure_class->slots->structure_class.nslots));
     Ref instance=Object_new(structure_class,(Slots*)slots);
     close_live_pool(pool);
+    add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
     return instance;}
 
 
@@ -1775,11 +1781,20 @@ static Ref kernel_initialize_rootset(void){
 Ref kernel_rootset(void){
     return rootset;}
 
+/* The GC marks memory.c's RootSet->kernel_rootset, a snapshot installed once by
+   set_rootset() at init.  push/delete here mutate the `rootset` LIST HEAD, so
+   the snapshot must be re-installed after every change — otherwise objects
+   added post-init (notably the global environment, pushed on first eval) are
+   invisible to the collector and get swept while still in use.  This manifested
+   as heap-dependent corruption: the global env collected and its memory reused
+   (e.g. environment_find_function dereferencing a string). */
 void push_to_rootset(Ref object){
-    rootset=cons(object,rootset);}
+    rootset=cons(object,rootset);
+    set_rootset((Block*)rootset);}
 
 void delete_from_rootset(Ref object){
-    rootset=delete(object,rootset);}
+    rootset=delete(object,rootset);
+    set_rootset((Block*)rootset);}
 
 
 static void kernel_LISP_IMPLEMENTATION_TYPE(unused Ref function,Ref arguments,MultipleValues* results){
@@ -1852,7 +1867,31 @@ static void kernel_initialize_features(void){
     define_variable(S(*COMPILE-FILE-TRUENAME*),  NIL_Symbol);
 }
 
+/* Debug aid: when BOCL_BACKTRACE is set, dump a native backtrace on a fatal
+   signal (so heap-layout-dependent crashes can be located without a debugger,
+   which perturbs the layout and hides them). */
+static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
+    (void)ucontext;
+    char buf[128];
+    int len = snprintf(buf,sizeof(buf),
+                       "\n=== bocl: fatal signal %d; fault address = %p ===\n",
+                       sig, info ? info->si_addr : (void*)0);
+    write(2, buf, (size_t)len);
+    void* bt[64];
+    int n = backtrace(bt, 64);
+    backtrace_symbols_fd(bt, n, 2);
+    signal(sig, SIG_DFL);
+    raise(sig);}
+
 void kernel_initialize(void){
+    if(getenv("BOCL_BACKTRACE")){
+        struct sigaction sa;
+        memset(&sa,0,sizeof(sa));
+        sa.sa_sigaction = bocl_crash_handler;
+        sa.sa_flags = SA_SIGINFO;
+        sigaction(SIGSEGV,&sa,NULL);
+        sigaction(SIGBUS, &sa,NULL);
+        sigaction(SIGABRT,&sa,NULL);}
     memory_initialize();
     set_garbage_collection_enabled(false);
 

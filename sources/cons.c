@@ -83,6 +83,13 @@ Ref push(Ref element,Ref* list){
     add_to_live_pool(*list);
     (*list)=cons(element,(*list));
     close_live_pool(pool);
+    /* close_live_pool trimmed the live pool back to `pool`, which DROPPED the
+       freshly-consed result (it was added above `pool`).  The result must
+       outlive this call, so re-root it.  Without this, every list built with
+       push() (e.g. the reader's parse_list) has an unrooted head cons and is
+       silently collected by the next GC — the source of heap-dependent,
+       GCSTRESS-only corruption. */
+    add_to_live_pool(*list);
     return (*list);}
 
 Ref pop(Ref* list){
@@ -147,6 +154,7 @@ Ref bocl_append(Ref lists){
         Ref last_cell=last(result);
         rplacd(last_cell,rest);}
     close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: close_live_pool trimmed the result */
     return result;}
 
 Ref list(Ref first_element,...){
@@ -173,6 +181,7 @@ Ref list(Ref first_element,...){
     }
     va_end(ap);
     close_live_pool(pool);
+    add_to_live_pool(list);   /* re-root: close_live_pool trimmed the result */
     return list;}
 
 Ref copy_list(Ref list){
@@ -193,6 +202,7 @@ Ref copy_list(Ref list){
     if(!nullp(list)){              /* preserve dotted-list tail */
         rplacd(tail,list);}
     close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: close_live_pool trimmed the result */
     return result;}
 
 Ref memq(Ref item,Ref list){
@@ -215,6 +225,7 @@ Ref firsts(Ref alist){
         alist=cdr(alist);}
     result=nreverse(result);
     close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: close_live_pool trimmed the result */
     return result;}
 
 Ref nreverse(Ref list){
@@ -239,6 +250,7 @@ Ref reverse(Ref list){
         result=cons(car(list),result);
         list=cdr(list);}
     close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: close_live_pool trimmed the result */
     return result;}
 
 /* Plist */
@@ -266,6 +278,7 @@ Ref putf(Ref plist,Ref indicator,Ref new_value){
     else{
         Ref result=cons(indicator,cons(new_value,plist));
         close_live_pool(pool);
+        add_to_live_pool(result);   /* re-root: close_live_pool trimmed the result */
         return result;}}
 
 bool remf(Ref plist,Ref indicator){

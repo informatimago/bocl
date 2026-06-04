@@ -237,12 +237,18 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
         longjmp(current_top->non_local_exit,(int)exit_code);            \
     } while(0)
 
-#define PASS_VALUES()      do{close_live_pool(pool);return ((results->count==0)?NIL_Symbol:results->values[0]);}while(0)
+/* These macros close the evale live-pool scope and return a result.  Closing
+   the pool TRIMS every object allocated during this evale — INCLUDING the
+   result — out of the live pool, so the returned value would be unrooted while
+   the caller is still about to use it (one allocation away from being
+   collected).  Re-root the result(s) in the now-current (outer) pool after
+   closing so the caller receives a value that survives GC. */
+#define PASS_VALUES()      do{close_live_pool(pool);for(uword _vi=0;_vi<results->count;_vi++){add_to_live_pool(results->values[_vi]);}return ((results->count==0)?NIL_Symbol:results->values[0]);}while(0)
 //#define VALUES0()          do{close_live_pool(pool);results->count=0;return NIL_Symbol;}while(0)
-#define VALUES1(v1)        do{close_live_pool(pool);results->count=1;return ((results->values[0]=(v1)));}while(0)
+#define VALUES1(v1)        do{Ref _v1=(v1);close_live_pool(pool);add_to_live_pool(_v1);results->count=1;return ((results->values[0]=_v1));}while(0)
 //#define VALUES2(v1,v2)     do{close_live_pool(pool);results->count=2;results->values[0]=(v1);return ((results->values[1]=(v2)));}while(0)
 //#define VALUES3(v1,v2,v3)  do{close_live_pool(pool);results->count=3;results->values[0]=(v1);results->values[1]=(v2);return ((results->values[2]=(v3)));}while(0)
-#define FIRST_VALUE()      do{close_live_pool(pool);return (results->count>0)?results->values[0]:NIL_Symbol;}while(0)
+#define FIRST_VALUE()      do{close_live_pool(pool);if(results->count>0){add_to_live_pool(results->values[0]);return results->values[0];}return NIL_Symbol;}while(0)
 
 
 static eval_counters_t eval_counters={0};

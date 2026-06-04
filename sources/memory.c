@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
+#include <stddef.h>
 #include <sysexits.h>
 #include "memory.h"
 #include "boerror.h"
@@ -242,6 +244,14 @@ void* allocate(size_t size){
     if(gc_stress_n > 0 && garbage_collection_is_enabled()){
         if(++gc_stress_c >= gc_stress_n){ gc_stress_c = 0; garbage_collect(); }}
     Block* result=allocate_internal(size);
+    /* Zero the object body.  A constructor that sets `objcount` before filling
+       its reference slots (with a nested allocation in between that can trigger
+       GC) would otherwise expose freed/garbage pointers to the collector, which
+       follows them and corrupts the heap — heap-dependent, hard-to-find crashes.
+       With the body zeroed, an unfilled slot reads as NULL, and mark() skips
+       NULL.  This neutralises that entire class of rooting bug at the source. */
+    {   size_t hdr = offsetof(Block, blocks);
+        if(size > hdr){ memset((char*)result + hdr, 0, size - hdr); }}
     add_to_live_pool((void*)result);
     return result;}
 
@@ -486,12 +496,38 @@ void close_live_pool(uword objcount){
     if(objcount < rootset->live_pool->offset+LivePool_MaxSize+1){
         rootset->live_pool->objcount = (halfword)(objcount - rootset->live_pool->offset);}}
 
-
+/* Debug aid (BOCL_GCCHECK): after marking, every SURVIVING object's reference
+   slots must point to objects that also survive.  A survivor that references a
+   doomed (unmarked) child means that child is about to be wrongly freed while
+   still reachable — i.e. a real rooting/objcount bug.  Report the offending
+   parent so the bug can be traced to a specific constructor. */
+static void verify_no_dangling(void){
+    do_zones(zone){
+        Block* end = end_block(zone);
+        Block* b   = first_block(zone);
+        while(b < end){
+            Block* nxt = next_block(b);
+            if(!free_block_p(b) && marked_block_p(b)){
+                uword cnt = block_objcount(b);
+                uword max = block_physical_slot_count(b);
+                if(cnt > max){ cnt = max; }
+                for(uword i = 0; i < cnt; i++){
+                    Block* child = b->blocks[i];
+                    if(child && valid_block_start_p(child)
+                       && !free_block_p(child) && !marked_block_p(child)){
+                        fprintf(stderr,
+                            "GCCHECK: survivor %p (objcount=%lu size=%lu) slot %lu -> DOOMED %p (objcount=%lu size=%lu)\n",
+                            (void*)b, (unsigned long)block_objcount(b), (unsigned long)b->size,
+                            (unsigned long)i, (void*)child,
+                            (unsigned long)block_objcount(child), (unsigned long)child->size);
+                        fflush(stderr);}}}
+            b = nxt;}}}
 
 uword garbage_collect(void){
     if(!garbage_collection_enabled){
         return 0;}
     mark((Block*)rootset);
+    if(getenv("BOCL_GCCHECK")){ verify_no_dangling(); }
     uword freed = sweep();
     return freed;}
 

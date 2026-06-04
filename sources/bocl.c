@@ -71,6 +71,7 @@ bool bocl_load_recover = false;
 Ref bocl_load_cstring(const char* path){
     Ref out = variable_value(S(*STANDARD-OUTPUT*));
 
+    if(getenv("BOCL_DBG_FILE")){ fprintf(stderr,">>> loading %s\n",path); fflush(stderr); }
     bool do_verbose = is_true(variable_value(S(*LOAD-VERBOSE*)));
     bool do_print   = is_true(variable_value(S(*LOAD-PRINT*)));
     Ref inp = stream_open(physical_pathname_new_cstring(path),

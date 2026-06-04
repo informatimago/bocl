@@ -93,6 +93,7 @@ Ref environment_frames(Ref environment){
         frame=frame->next;}
     results=nreverse(results);
     close_live_pool(pool);
+    add_to_live_pool(results);   /* re-root: close_live_pool trimmed the fresh list */
     return results;}
 
  
