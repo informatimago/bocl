@@ -39,7 +39,6 @@ static Array*                    Array_slots                        (Ref  elemen
 static BuiltInClass*             BuiltInClass_slots                 (Ref  name,         Ref  superclasses);
 static Character*                Character_slots                    (Ref  name,         Ref  code);
 static Class*                    Class_slots                        (Ref  name,         Ref  superclasses);
-static Cons*                     Cons_slots                         (Ref  car,          Ref  cdr);
 static Float*                    Float_slots                        (floating value);
 static Closure*                  Closure_slots                      (Ref  function,     Ref environment);
 static Function*                 Function_slots                     (Ref  lisp_name,    Ref lambda_list, Ref body);
@@ -620,31 +619,33 @@ Ref complex_imagpart(Ref c){
 
 /* CONS */
 
-Cons* Cons_slots(Ref car,Ref cdr){
-    Cons* that=allocate(sizeof(*that));
-    that->objcount=2;
+Ref cons(Ref car,Ref cdr){
+    /* Single-block compact cons (see ConsCell in kernel_types.h): one
+       allocation, car/cdr inline.  Fill slots before setting objcount so the
+       collector never sees uninitialised reference slots.  car/cdr must already
+       be rooted by the caller (same contract as before). */
+    ConsCell* that=allocate(sizeof(ConsCell));
+    that->class=CONS_Class;
     that->car=car;
     that->cdr=cdr;
-    return that;}
-
-Ref cons(Ref car,Ref cdr){
-    return Object_new(CONS_Class,(Slots*)Cons_slots(car,cdr));}
+    that->objcount=3;
+    return (Ref)that;}
 
 bool consp(Ref object){
     return class_of(object)==CONS_Class;}
 
 Ref cons_car(Ref cell){
-    return cell->slots->cons.car;}
+    return ((ConsCell*)cell)->car;}
 
 Ref cons_cdr(Ref cell){
-    return cell->slots->cons.cdr;}
+    return ((ConsCell*)cell)->cdr;}
 
 Ref cons_rplaca(Ref cell,Ref newcar){
-    cell->slots->cons.car=newcar;
+    ((ConsCell*)cell)->car=newcar;
     return cell;}
 
 Ref cons_rplacd(Ref cell,Ref newcdr){
-    cell->slots->cons.cdr=newcdr;
+    ((ConsCell*)cell)->cdr=newcdr;
     return cell;}
 
 
@@ -1127,7 +1128,7 @@ void check_class(Ref object,Ref class){
 Ref boot_last(Ref list){
     Ref next;
     if(consp(list)){
-        while(consp(next=list->slots->cons.cdr)){
+        while(consp(next=cons_cdr(list))){
             list=next;}
         return list;}
     else if(nullp(list)){
@@ -1140,7 +1141,7 @@ Ref boot_nconc(Ref list,Ref tail){
         return tail;}
     else if(consp(list)){
         Ref last_cell=boot_last(list);
-        last_cell->slots->cons.cdr=tail;
+        cons_rplacd(last_cell,tail);
         return list;}
     else{
         TYPE_ERROR(list,LIST_Class);}}

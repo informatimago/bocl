@@ -549,16 +549,15 @@ void memory_initialize(void){
 
 /* For memory dump: */
 static bool in_root_set_p(Block* block){
-    /* We assume the root set is a lisp list */
+    /* The root set is a lisp list of (compact) conses: each cons is a single
+       block {class, car, cdr} with objcount==3 — car is blocks[1], cdr blocks[2]. */
     Block* current=rootset->kernel_rootset;
     if(current==NULL){
         return false;}
-    while(current
-          && (block_objcount(current)==2)
-          && (block_objcount(current->blocks[1])==2)){
-        if(current->blocks[1]->blocks[0]==block){
+    while(current && block_objcount(current)==3){
+        if(current->blocks[1]==block){   /* car == the searched object */
             return true;}
-        current=current->blocks[1]->blocks[1];}
+        current=current->blocks[2];}     /* cdr == next cons */
     return false;}
 
 static bool in_free_list(FreeBlock* list,Block* block){

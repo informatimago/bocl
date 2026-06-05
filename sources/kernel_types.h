@@ -113,6 +113,21 @@ typedef struct Object {
     Slots* slots;
 } Object;
 
+/* Compact cons: car/cdr are stored INLINE in the object itself rather than in a
+   separate Cons slots block.  A cons is therefore a single 32-byte block
+   {header; class=CONS_Class; car; cdr} with objcount=3 — one allocation, one
+   dereference for car/cdr, half the GC objects.  It shares the first two fields
+   (header, class) with Object, so class_of()/consp() are unchanged; only the
+   cons accessors (cons_car/cons_cdr/cons_rplaca/cons_rplacd) read car/cdr from
+   here instead of through ->slots.  (See issues/open/deferred-cons-paged-heap
+   for the 16-byte next step.) */
+typedef struct ConsCell {
+    BLOCK_HEADER;
+    Ref class;   /* always CONS_Class */
+    Ref car;
+    Ref cdr;
+} ConsCell;
+
 
 
 
