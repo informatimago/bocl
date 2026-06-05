@@ -732,32 +732,92 @@ Symbol* Symbol_slots(Ref name,Ref package){
     that->plist=NIL_Symbol;
     return that;}
 
+/* ----------------------------------------------------------------------
+ * Symbol-table index (obarray hash).
+ *
+ * find_symbol used to linear-scan the obarray (a cons list), comparing names
+ * with string_eq — O(n) per intern, O(n^2) to read a large program.  (The ANSI
+ * suite spent ~30% of load time in string_eq/find_symbol.)  The cons list stays
+ * authoritative — it roots the symbols and supports package iteration — and we
+ * add a C-side open-addressing hash, name -> symbol, purely as an index:
+ *   - the GC is non-moving, so cached symbol pointers stay valid;
+ *   - every symbol in the index is also on the obarray list (hence rooted), so
+ *     the index needs no GC roots and is never scanned by the collector;
+ *   - the obarray symbol list is mutated in exactly one place
+ *     (symbol_intern_obarray), which updates the index, so they never diverge.
+ * The index is built lazily from the current list the first time an obarray is
+ * seen, capturing any symbols installed during bootstrap.  All storage is the
+ * C heap (malloc/calloc), so none of this triggers a Lisp GC.
+ * -------------------------------------------------------------------- */
+typedef struct SymHash {
+    Ref             obarray;
+    Ref*            buckets;   /* symbol Refs; NULL == empty slot */
+    uword*          hashes;    /* cached name hash for each occupied slot */
+    uword           capacity;  /* power of two */
+    uword           count;
+    struct SymHash* next;
+} SymHash;
+
+static SymHash* g_sym_hashes = NULL;
+
+static uword sym_name_hash(Ref name){
+    /* FNV-1a over the name's octets. */
+    uword h = 1469598103934665603UL;
+    uword length = string_length(name);
+    const octet* p = name->slots->octet_array.elements->elements;
+    for(uword i=0;i<length;i++){ h ^= (uword)p[i]; h *= 1099511628211UL; }
+    return h;}
+
+static void sym_hash_put(SymHash* H,Ref symbol,uword hash){
+    uword mask = H->capacity - 1;
+    uword i = hash & mask;
+    while(H->buckets[i] != NULL){ i = (i+1) & mask; }
+    H->buckets[i] = symbol;
+    H->hashes[i]  = hash;
+    H->count++;}
+
+static void sym_hash_grow(SymHash* H){
+    uword  oldcap = H->capacity;
+    Ref*   oldb   = H->buckets;
+    uword* oldh   = H->hashes;
+    H->capacity = oldcap * 2;
+    H->buckets  = (Ref*)  calloc(H->capacity, sizeof(Ref));
+    H->hashes   = (uword*)calloc(H->capacity, sizeof(uword));
+    H->count    = 0;
+    for(uword i=0;i<oldcap;i++){ if(oldb[i]){ sym_hash_put(H,oldb[i],oldh[i]); } }
+    free(oldb); free(oldh);}
+
+static void sym_hash_add(SymHash* H,Ref symbol){
+    if((H->count + 1) * 10 >= H->capacity * 7){ sym_hash_grow(H); }   /* load < 0.7 */
+    sym_hash_put(H, symbol, sym_name_hash(symbol->slots->symbol.name));}
+
+static SymHash* sym_hash_for(Ref obarray){
+    for(SymHash* H=g_sym_hashes; H; H=H->next){
+        if(H->obarray==obarray){ return H; }}
+    SymHash* H = (SymHash*)malloc(sizeof(SymHash));
+    H->obarray  = obarray;
+    H->capacity = 2048;
+    H->buckets  = (Ref*)  calloc(H->capacity, sizeof(Ref));
+    H->hashes   = (uword*)calloc(H->capacity, sizeof(uword));
+    H->count    = 0;
+    H->next     = g_sym_hashes;
+    g_sym_hashes = H;
+    /* Build from the symbols already on the list. */
+    Ref syms = cons_cdr(obarray);
+    while(consp(syms)){ sym_hash_add(H, cons_car(syms)); syms = cons_cdr(syms); }
+    return H;}
+
 Ref find_symbol(Ref name,Ref obarray){
-#ifdef DEBUG
-    {
-        static long c=0;
-        fprintf(stderr,"find_symbol %3ld: %-40s in %-16s",
-                c++,string_cstring(name),
-                string_cstring(symbol_name(cons_car(obarray))));
-        Ref syms=cons_cdr(obarray);
-        long sc=0;
-        while(consp(syms)){
-            sc++;
-            if(string_eq(symbol_name(cons_car(syms)),name)){
-                fprintf(stderr,"found %s\n",
-                        string_cstring(symbol_name(cons_car(syms))));}
-            if(symbol_package(cons_car(syms))!=obarray){
-                fprintf(stderr,"wrong package for %s\n",
-                        string_cstring(symbol_name(cons_car(syms))));}
-            syms=cons_cdr(syms);}
-        fprintf(stderr," %3ld symbols\n",sc);}
-#endif
-    Ref syms=cons_cdr(obarray);
-    while(consp(syms) && !string_eq(cons_car(syms)->slots->symbol.name,name)){
-        syms=cons_cdr(syms);}
-    return consp(syms)
-            ? cons_car(syms)
-            : NULL;}
+    SymHash* H = sym_hash_for(obarray);
+    uword hash = sym_name_hash(name);
+    uword mask = H->capacity - 1;
+    uword i = hash & mask;
+    while(H->buckets[i] != NULL){
+        if(H->hashes[i]==hash
+           && string_eq(H->buckets[i]->slots->symbol.name, name)){
+            return H->buckets[i];}
+        i = (i+1) & mask;}
+    return NULL;}
 
 Ref symbol_new(Ref name){
     /* make an uninterned symbol */
@@ -768,13 +828,14 @@ Ref symbol_new_cstring(const char* name){
     return symbol_new(string_new_cstring(name));}
 
 static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
-    Ref symbol=find_symbol(name,obarray);
+    Ref symbol=find_symbol(name,obarray);   /* builds/uses the obarray hash index */
     if(symbol){
         (*internal)=true;
         return symbol;}
     (*internal)=false;
     symbol=Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,obarray));
     cons_rplacd(obarray,cons(symbol,cons_cdr(obarray)));
+    sym_hash_add(sym_hash_for(obarray),symbol);   /* keep the index in sync */
     return symbol;}
 
 Ref symbol_intern(Ref name){
