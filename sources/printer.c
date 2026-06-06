@@ -124,6 +124,13 @@ Ref prin1(Ref object,Ref stream){
         fprintf(out,")");
         return object;}
 
+    /* Pathnames print in their readable #P"namestring" form (both physical and
+       logical pathnames are PATHNAME_Class). */
+    if(typep(object,PATHNAME_Class)){
+        fprintf(out,"#P");
+        prin1(namestring(object),stream);   /* prints the namestring as "…" */
+        return object;}
+
     /* Dispatch to PRINT-OBJECT for CLOS instances (%obj structs).
        clos_instance_p() returns true only after (%clos-register) is called,
        so prelude-loading is safe — no CLOS objects exist yet at that point.
@@ -219,6 +226,11 @@ Ref princ(Ref object,Ref stream){
             fprintf(out," . ");
             princ(current, stream);}
         fprintf(out,")");
+        return object;}
+
+    /* PRINC of a pathname writes its namestring (no #P"…" escaping). */
+    if(typep(object,PATHNAME_Class)){
+        princ(namestring(object),stream);
         return object;}
 
     /* Safe fallback for CLOS instances in princ too. */
