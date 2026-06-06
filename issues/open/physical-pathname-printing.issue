@@ -1,0 +1,11 @@
+bocl> (compile-file "~/src/lisp/encours/symbol-sxhash.lisp" "~/src/lisp/encours/symbol-sxhash.fas")  
+
+#<PHYSICAL-PATHNAME 0x47e579e30>
+
+print, prin1 of physical pathnames should print out the the readable
+form of the pathname, and princ should write the namestring:
+
+eg.
+cl-user> (princ #P"/Users/pjb/notes.txt")
+/Users/pjb/notes.txt          ; princ output
+#P"/Users/pjb/notes.txt"      ; print output
