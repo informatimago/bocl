@@ -1,0 +1,12 @@
+Missing functions:
+- FILE-LENGTH
+
+Perhaps others? Please check precisely with the list of the 672
+symbols from COMMON-LISP), and implement all the missing functions.
+
+
+bocl> (file-length(open (compile-file "~/src/lisp/encours/symbol-sxhash.lisp" "~/src/lisp/encours/symbol-sxhash.fas")))
+
+In evale:
+ERROR: Undefined function: FILE-LENGTH
+

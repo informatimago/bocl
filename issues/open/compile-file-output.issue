@@ -1,0 +1,28 @@
+
+COMPILE-FILE doesn't produce an output .fasl file:
+
+
+~/src/public/bocl
+11:17[pjb@thalassa org.xquartz:0 bocl 25Gi]$ sources/bocl
+
+Welcome to BOCL Version 0.0.64
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+"~/src/lisp/encours/symbol-sxhash.fasl"
+bocl> (namestring  (compile-file "~/src/lisp/encours/symbol-sxhash.lisp" :output-file "/tmp/symbol-sxhash.fas"))
+
+"/tmp/symbol-sxhash.fas"
+bocl> ^D
+~/src/public/bocl
+11:25[pjb@thalassa org.xquartz:0 bocl 23Gi]$ ls -l ~/src/lisp/encours/symbol-sxhash.lisp /tmp/symbol-sxhash.fasl
+gls: cannot access '/tmp/symbol-sxhash.fasl': No such file or directory
+-rw-r--r-- 1 pjb staff 6022 Jun  6 11:09 /Users/pjb/src/lisp/encours/symbol-sxhash.lisp
+
+With minimal compilation it should be a file of lisp forms containing
+only function calls and special operators, no macros.
+
+
+
