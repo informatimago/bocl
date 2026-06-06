@@ -10,3 +10,17 @@ bocl> (file-length(open (compile-file "~/src/lisp/encours/symbol-sxhash.lisp" "~
 In evale:
 ERROR: Undefined function: FILE-LENGTH
 
+
+----------------------------------------------------------------------
+PROGRESS (slice 43):
+- FILE-LENGTH implemented (C primitive kernel_FILE_LENGTH, via fstat).
+
+AUDIT NOTE: a systematic fboundp audit over the 978 CL external symbols is
+blocked by a packaging quirk — (fboundp 'car) => T but
+(find-symbol "CAR" "COMMON-LISP") => NIL and (find-symbol "CAR") => NIL in
+COMMON-LISP-USER.  bocl interns kernel symbols where the READER finds them, but
+FIND-SYMBOL/packages do not resolve them by package name.  This also affects the
+ANSI cl-symbols tests (which use FIND-SYMBOL).  Fixing FIND-SYMBOL/package
+membership is a prerequisite for a precise audit and is tracked here.
+Remaining: fix find-symbol package resolution, then audit + implement the
+missing functions.  Issue kept OPEN.

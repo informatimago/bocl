@@ -324,6 +324,19 @@ static void kernel_FILE_WRITE_DATE(unused Ref function, Ref arguments, MultipleV
     results->values[0]=integer_from_word((word)st.st_mtime + BOCL_UNIVERSAL_TIME_OFFSET);
     close_live_pool(pool);}
 
+/* (FILE-LENGTH stream) — length in bytes of the file the (open) file-stream is
+   connected to, via fstat (does not disturb the stream position). */
+static void kernel_FILE_LENGTH(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref stream=cons_car(arguments);
+    check_type(stream,FILE_STREAM_Class);
+    FILE* f=stream->slots->file_stream.stream;
+    struct stat st;
+    if(f==NULL || fstat(fileno(f),&st)!=0){ ERROR("FILE-LENGTH: not an open file stream%s",""); }
+    results->count=1;
+    results->values[0]=integer_from_word((word)st.st_size);
+    close_live_pool(pool);}
+
 /* (%COPY-FILE source destination) — byte-for-byte copy of SOURCE to
    DESTINATION.  Used by COMPILE-FILE, which on bocl (an interpreter) "compiles"
    a source file by copying it to the fasl pathname so that LOAD can read it
@@ -850,6 +863,8 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("RENAME-FILE"),ll_f2,kernel_RENAME_FILE));
         set_symbol_function(symbol_intern_cstring("FILE-WRITE-DATE"),
             built_in_function_new(symbol_intern_cstring("FILE-WRITE-DATE"),ll_f,kernel_FILE_WRITE_DATE));
+        set_symbol_function(symbol_intern_cstring("FILE-LENGTH"),
+            built_in_function_new(symbol_intern_cstring("FILE-LENGTH"),ll_s,kernel_FILE_LENGTH));
         set_symbol_function(symbol_intern_cstring("%COPY-FILE"),
             built_in_function_new(symbol_intern_cstring("%COPY-FILE"),ll_f2,kernel_COPY_FILE));
         set_symbol_function(symbol_intern_cstring("WILD-PATHNAME-P"),
