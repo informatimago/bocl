@@ -1333,9 +1333,13 @@ bool physical_pathname_equal(Ref a,Ref b){
     if(a->slots->vector_of_octet.length
        !=b->slots->vector_of_octet.length){
         return false;}
-    OctetArray* aa=&(a->slots->octet_array);
-    OctetArray* bb=&(b->slots->octet_array);
-    return vector_of_octet_equalp(aa->elements,bb->elements);}
+    /* A PHYSICAL-PATHNAME's slots IS a VectorOfOctet (see physical_pathname_new),
+       not an OctetArray.  Reading ->octet_array.elements reinterprets the inline
+       namestring bytes as a VectorOfOctet* and dereferences garbage (crash whose
+       fault address is the namestring's own characters).  Compare the two
+       VectorOfOctet slots directly. */
+    return vector_of_octet_equalp(&(a->slots->vector_of_octet),
+                                  &(b->slots->vector_of_octet));}
 
 
 /* EXTERNAL-FORMAT */
