@@ -37,14 +37,45 @@ Ref bocl_read_eval_cstring(const char* text){
 
 Ref bocl_repl(Ref inp,Ref out){
     terpri(out);
+    /* REPL history variables (CLHS 25.1.1).  (Interned here with explicit names
+       because S(//) / S(///) would be read as C line comments.)
+       -        : the form currently being evaluated
+       +/++/+++ : the last three forms evaluated
+       *​/**​/*** : the primary values of the last three evaluations
+       /​//​///  : the value LISTS of the last three evaluations                  */
+    Ref vd=S(-);
+    Ref vp1=S(+),  vp2=S(++),  vp3=S(+++);
+    Ref vs1=S(*),  vs2=S(**),  vs3=S(***);
+    Ref vl1=S(/),  vl2=symbol_intern_cstring("//"), vl3=symbol_intern_cstring("///");
+    set_symbol_value(vd,NIL_Symbol);
+    set_symbol_value(vp1,NIL_Symbol); set_symbol_value(vp2,NIL_Symbol); set_symbol_value(vp3,NIL_Symbol);
+    set_symbol_value(vs1,NIL_Symbol); set_symbol_value(vs2,NIL_Symbol); set_symbol_value(vs3,NIL_Symbol);
+    set_symbol_value(vl1,NIL_Symbol); set_symbol_value(vl2,NIL_Symbol); set_symbol_value(vl3,NIL_Symbol);
     while(true){
         princ(T("bocl> "),out);
         stream_finish_output(out);
         Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
         if((sexp==inp)||equal(sexp,list(S(QUIT),NULL))){
             return I(0);}
-        Ref result=bocl_eval(sexp);
-        print(result,out);
+        /* Shift the form history: + gets the form evaluated last time (old -). */
+        set_symbol_value(vp3,symbol_value(vp2));
+        set_symbol_value(vp2,symbol_value(vp1));
+        set_symbol_value(vp1,symbol_value(vd));
+        set_symbol_value(vd,sexp);
+        /* Evaluate, capturing ALL values (for / // ///). */
+        MultipleValues results={0};
+        evale(sexp,eval_global_environment(),&results);
+        Ref primary=(results.count>0)?results.values[0]:NIL_Symbol;
+        Ref vals=NIL_Symbol;
+        for(uword i=results.count;i-->0;){ vals=cons(results.values[i],vals); }
+        /* Shift the value history. */
+        set_symbol_value(vs3,symbol_value(vs2));
+        set_symbol_value(vs2,symbol_value(vs1));
+        set_symbol_value(vs1,primary);
+        set_symbol_value(vl3,symbol_value(vl2));
+        set_symbol_value(vl2,symbol_value(vl1));
+        set_symbol_value(vl1,vals);
+        print(primary,out);
         terpri(out);}}
 
 Ref bocl_read_eval_loop_cstring(const char* text){
