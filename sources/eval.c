@@ -1266,7 +1266,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             else{
                 FATAL("Function-namespace wrapper of unexpected type %p",(void*)local);}}
 
-        /* 2. Global DEFMACRO. */
+        /* 2. Global DEFMACRO (stored on the symbol's plist). */
         if(nullp(function) && nullp(macro)){
             Ref macro_fn = getf(symbol_plist(operator), S($MACRO), NIL_Symbol);
             if(!nullp(macro_fn)){
@@ -1274,6 +1274,23 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 MultipleValues mac_results = {0};
                 kernel_apply(macro_fn, arguments, &mac_results);
                 Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
+                /* Minimal compilation by macro displacement: cache the expansion
+                   in place so this global-macro call is expanded ONCE rather than
+                   on every evaluation.  This is the dominant cost in repeatedly-run
+                   code: WHEN/INCF/SETF/DOTIMES etc. otherwise rebuild their
+                   expansion (backquote conses + setf-expander gethash + gensym) on
+                   every iteration.  CLHS 3.2.2.2 permits caching macro expansions.
+                   Skip the degenerate expansion==form case (would loop forever). */
+                if(expansion!=form && consp(form)){
+                    add_to_live_pool(expansion);
+                    if(consp(expansion)){
+                        cons_rplaca(form,cons_car(expansion));
+                        cons_rplacd(form,cons_cdr(expansion));
+                    }else{
+                        cons_rplaca(form,PROGN_Symbol);
+                        cons_rplacd(form,cons(expansion,NIL_Symbol));}
+                    evale(form, environment, results);   /* run displaced form */
+                    PASS_VALUES();}
                 evale(expansion, environment, results);
                 PASS_VALUES();}
         }
@@ -1306,6 +1323,26 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             MultipleValues mac_results = {0};
             kernel_apply(fn,arguments,&mac_results);
             Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
+            /* Minimal compilation by macro displacement: cache the expansion in
+               place so a global-macro call is expanded ONCE, not on every
+               evaluation.  This is the dominant cost in repeatedly-run code
+               (function bodies, loop bodies): without it, e.g. WHEN/INCF rebuild
+               their expansion — backquote conses + GENSYM symbol creation — on
+               every iteration.  CLHS 3.2.2.2 explicitly permits caching macro
+               expansions.  We only displace GLOBAL macros (a local/lexical macro
+               may expand differently in another scope) and skip the degenerate
+               expansion==form case (would re-expand forever). */
+            if(env_global_macro_p(macro) && expansion!=form && consp(form)){
+                add_to_live_pool(expansion);
+                if(consp(expansion)){
+                    cons_rplaca(form,cons_car(expansion));
+                    cons_rplacd(form,cons_cdr(expansion));
+                }else{
+                    /* atom expansion X -> (progn X), keeping `form` a cons */
+                    cons_rplaca(form,PROGN_Symbol);
+                    cons_rplacd(form,cons(expansion,NIL_Symbol));}
+                evale(form,environment,results);   /* run the displaced form */
+                PASS_VALUES();}
             evale(expansion,environment,results);
             PASS_VALUES();}
 
