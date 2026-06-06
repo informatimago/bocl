@@ -1,0 +1,7 @@
+
+REPL variables should be defined and maintained by the REPL: + ++ +++ * ** *** / // /// -
+
+bocl> (princ *)
+
+In evale:
+ERROR: Unbound variable: *
