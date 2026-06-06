@@ -6856,3 +6856,134 @@
       nil)))
 
 ;;;; THE END OF SLICE 35
+
+;;;; ====================================================================
+;;;; Slice 44: file-type resolution variables + MACROEXPAND family
+;;;; (issues: lisp-file-types, minimal-compilation)
+;;;; ====================================================================
+
+;;; --- Accepted file types for source / compiled files -----------------
+;;; A file type is either a string (matched case-sensitively, but a
+;;; case-insensitive file system will of course match case-insensitively),
+;;; or (:case-insensitive "type") to force a case-insensitive search even on
+;;; a case-sensitive file system, with "type" tried first.
+(defparameter *accepted-source-file-types*
+  '("lisp" "LISP" (:case-insensitive "lisp")
+    (:case-insensitive "lsp") (:case-insensitive "cl") (:case-insensitive "l"))
+  "File types tried (in order) to find a source file given a typeless pathname.")
+
+(defparameter *accepted-compiled-file-types*
+  '("fasl" "FASL" (:case-insensitive "fasl")
+    (:case-insensitive "fas") (:case-insensitive "obj") (:case-insensitive "o"))
+  "File types tried (in order) to find a compiled file given a typeless pathname.")
+
+(defparameter *default-compiled-file-type* "fasl"
+  "The file type COMPILE-FILE gives its output file when none is specified.")
+
+(defun %ftype-string (ft) (if (consp ft) (second ft) ft))
+
+(defun %find-typed-file (pathname types)
+  "Return the namestring of the first existing file obtained by giving PATHNAME
+   each of TYPES, or NIL.  (:case-insensitive t) entries fall back to upper- and
+   lower-case variants — adequate on the common case-insensitive file systems
+   and a best effort on case-sensitive ones.)"
+  (let ((dir  (directory-namestring pathname))
+        (name (or (pathname-name pathname) "")))
+    (dolist (ft types nil)
+      (let* ((ts (%ftype-string ft))
+             (candidates (if (consp ft)
+                             (list ts (string-downcase ts) (string-upcase ts))
+                             (list ts))))
+        (dolist (c candidates)
+          (let ((ns (concatenate 'string dir name "." c)))
+            (when (probe-file ns) (return-from %find-typed-file ns))))))))
+
+;;; --- MACROEXPAND-1 / MACROEXPAND / MACROEXPAND-ALL -------------------
+;;; bocl stores a global macro's expander on the symbol plist ($MACRO); the
+;;; expander takes the macro call's arguments (the cdr of the form).
+(defun macroexpand-1 (form &optional environment)
+  "Expand FORM once if it is a macro call; returns (values expansion expanded-p)."
+  (declare (ignore environment))
+  (if (and (consp form) (symbolp (car form)) (macro-function (car form)))
+      (values (apply (macro-function (car form)) (rest form)) t)
+      (values form nil)))
+
+(defun macroexpand (form &optional environment)
+  "Repeatedly MACROEXPAND-1 FORM until it is no longer a macro call."
+  (multiple-value-bind (exp expanded) (macroexpand-1 form environment)
+    (if expanded (values (macroexpand exp environment) t) (values form nil))))
+
+(defun macroexpand-all (form &optional environment)
+  "Recursively expand every macro call in FORM, returning a macro-free form.
+   This is the core of bocl's minimal compilation (CLHS 3.2.2.2): the result
+   contains only special operators and function calls, no macros.  Quoted data,
+   binding-form variable lists and (THE type ...) type specifiers are left
+   untouched; all evaluated subforms are walked."
+  (declare (ignore environment))
+  (cond
+    ((atom form) form)
+    ((eq (car form) 'quote) form)
+    ((and (symbolp (car form)) (macro-function (car form)))
+     (macroexpand-all (macroexpand-1 form)))
+    ((eq (car form) 'function)
+     (if (and (consp (cdr form)) (consp (cadr form)) (eq (car (cadr form)) 'lambda))
+         (list 'function (cons 'lambda (cons (cadr (cadr form))
+                                             (mapcar #'macroexpand-all (cddr (cadr form))))))
+         form))
+    ((eq (car form) 'lambda)
+     (cons 'lambda (cons (cadr form) (mapcar #'macroexpand-all (cddr form)))))
+    ((member (car form) '(let let*))
+     (list* (car form)
+            (mapcar (lambda (b)
+                      (if (consp b) (list (car b) (macroexpand-all (cadr b))) b))
+                    (cadr form))
+            (mapcar #'macroexpand-all (cddr form))))
+    ((eq (car form) 'setq)
+     (cons 'setq
+           (let ((r '()) (l (cdr form)))
+             (loop (when (null l) (return (nreverse r)))
+                   (push (car l) r)                       ; variable, untouched
+                   (push (macroexpand-all (cadr l)) r)    ; value form, walked
+                   (setq l (cddr l))))))
+    ((eq (car form) 'the)
+     (list 'the (cadr form) (macroexpand-all (caddr form))))
+    (t                                                    ; special op or call
+     (cons (car form) (mapcar #'macroexpand-all (cdr form))))))
+
+;;; --- compile-file-pathname now honours *default-compiled-file-type* --
+(defun compile-file-pathname (input-file &key output-file &allow-other-keys)
+  "Pathname COMPILE-FILE writes to: the source pathname with its type changed to
+   *DEFAULT-COMPILED-FILE-TYPE* (default \"fasl\"), unless OUTPUT-FILE is given."
+  (or output-file
+      (let* ((in  (pathname input-file))
+             (dir (directory-namestring in))
+             (nm  (or (pathname-name in) "")))
+        (pathname (concatenate 'string dir nm "." *default-compiled-file-type*)))))
+
+;;;; THE END OF SLICE 44
+
+;;; --- COMPILE-FILE: write a fast-load file of macroexpanded forms ------
+;;; (issues: compile-file-output, minimal-compilation)
+(defun compile-file (input-file &key output-file &allow-other-keys)
+  "Minimal-compile INPUT-FILE to a fast-load file.  Each top-level form is read,
+   MACROEXPAND-ALL'd (so the output contains only special operators and function
+   calls — no macros), and written to the output file.  LOAD of that file is
+   therefore faster (no macro expansion needed).  Returns
+   (values output-truename warnings-p failure-p)."
+  (let* ((in     (merge-pathnames input-file *default-pathname-defaults*))
+         (out    (compile-file-pathname in :output-file output-file))
+         (out-ns (namestring out))
+         (failure nil))
+    (with-open-file (src in :direction :input)
+      (with-open-file (dst out-ns :direction :output
+                                  :if-exists :supersede :if-does-not-exist :create)
+        (format dst ";;; bocl fast-load (minimal-compiled) file. Source: ~A~%"
+                (namestring in))
+        (loop
+          (let ((form (read src nil src)))
+            (when (eq form src) (return))
+            (let ((expanded (handler-case (macroexpand-all form)
+                              (error () (setq failure t) form))))
+              (prin1 expanded dst)
+              (terpri dst))))))
+    (values (pathname out) nil failure)))

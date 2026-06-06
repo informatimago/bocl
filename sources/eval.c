@@ -915,6 +915,20 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     MultipleValues tmp_results = {0};
                     dolist(subform,cleanup){
                         evale(subform,environment,&tmp_results);}}}
+            /* The shared unwind state machine runs UWCLEANUP only when UNWINDING
+               through this frame (select 1/2); its normal-entry row {1,2,4,9}
+               has no cleanup step.  CLHS requires UNWIND-PROTECT's cleanup forms
+               to run on NORMAL completion too, so run them here for that path.
+               (On a non-local exit, unwind_next_frame has already longjmp'd away
+               above, so this point is never reached — no double execution.)
+               This is why e.g. WITH-OPEN-FILE used to leave its output unflushed:
+               its CLOSE never ran on the normal path. */
+            if(check_non_local_exit(result)==0){
+                for(uword _i=0;_i<protect_results.count;_i++){
+                    add_to_live_pool(protect_results.values[_i]); }
+                MultipleValues tmp_results = {0};
+                dolist(subform,cleanup){
+                    evale(subform,environment,&tmp_results);}}
             *results = protect_results;
             PASS_VALUES();}
 

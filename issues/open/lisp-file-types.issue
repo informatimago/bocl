@@ -150,3 +150,12 @@ bocl:*default-compiled-file-type*
 #+begin_src lisp
 (make-pathname :defaults actual-input-pathname :type bocl:*default-compiled-file-type*)
 #+end_src
+
+----------------------------------------------------------------------
+PROGRESS (slice 44):
+- Defined *ACCEPTED-SOURCE-FILE-TYPES*, *ACCEPTED-COMPILED-FILE-TYPES*,
+  *DEFAULT-COMPILED-FILE-TYPE* with the specified defaults, plus the
+  %FIND-TYPED-FILE helper.  COMPILE-FILE-PATHNAME now uses
+  *DEFAULT-COMPILED-FILE-TYPE*.
+REMAINING: wire the full LOAD / COMPILE-FILE file-selection pseudocode
+(try typed candidates; load the more recent of compiled vs source).
