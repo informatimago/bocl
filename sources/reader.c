@@ -630,11 +630,11 @@ static Ref parse_token(parser_state* parser){
    already positioned just past CHAR.  Refresh the parser's lookahead afterwards
    and treat a trailing EOF as a plain terminator.  Returns the macro's value, or
    the skip marker if it returned no values. */
-static Ref call_reader_macro(parser_state* parser, Ref fn, octet ch, bool with_arg){
+static Ref call_reader_macro(parser_state* parser, Ref fn, octet ch, bool with_arg, Ref arg){
     uword pool=open_live_pool();
-    add_to_live_pool(fn); add_to_live_pool(parser->input_stream);
+    add_to_live_pool(fn); add_to_live_pool(parser->input_stream); add_to_live_pool(arg);
     Ref args = with_arg
-        ? list(parser->input_stream, code_character(I(ch)), NIL_Symbol, NULL)
+        ? list(parser->input_stream, code_character(I(ch)), arg, NULL)
         : list(parser->input_stream, code_character(I(ch)), NULL);
     add_to_live_pool(args);
     MultipleValues mv;
@@ -665,9 +665,9 @@ static Ref parse_object(parser_state* parser){
                 Ref fn=(!nullp(subtab)&&idx>=0&&idx<128)?rtv_get(subtab,idx):NIL_Symbol;
                 if(nullp(fn)){ READER_ERROR(parser->input_stream,
                                             "No dispatch function for %c",(char)sub); }
-                return call_reader_macro(parser, fn, sub, true);}
+                return call_reader_macro(parser, fn, sub, true, NIL_Symbol);}
             if(m!=g_dispatch_marker){
-                return call_reader_macro(parser, m, parser->ch, false);}}}
+                return call_reader_macro(parser, m, parser->ch, false, NIL_Symbol);}}}
     switch(parser->ch){
         /* We cannot have a ';' since skip_space(parser); eats the comments too. */
       case '\'':
@@ -703,11 +703,19 @@ static Ref parse_object(parser_state* parser){
           return parse_string(parser);
       case '(':
           return parse_list(parser);
-      case '#':
+      case '#': {
+          word disp_arg=-1;   /* the optional numeric infix argument, e.g. #3A */
           parser->ch=read_octet(parser->input_stream,&parser->eof,&parser->error);
           check_parser_error(parser);
           if(parser->eof){
               return NIL_Symbol;}
+          if(parser->ch>='0' && parser->ch<='9'){
+              disp_arg=0;
+              while(parser->ch>='0' && parser->ch<='9'){
+                  disp_arg=disp_arg*10+(parser->ch-'0');
+                  parser->ch=read_octet(parser->input_stream,&parser->eof,&parser->error);
+                  check_parser_error(parser);
+                  if(parser->eof){ return NIL_Symbol; }}}
           switch(parser->ch){
             case '\\': return parse_character(parser);
             case '(':  return parse_vector(parser);
@@ -803,9 +811,10 @@ static Ref parse_object(parser_state* parser){
                 octet sub=parser->ch;
                 int idx=sub; if(idx>='a'&&idx<='z'){ idx-=32; }
                 Ref fn=(!nullp(subtab)&&idx>=0&&idx<128)?rtv_get(subtab,idx):NIL_Symbol;
-                if(!nullp(fn)){ return call_reader_macro(parser, fn, sub, true); }
+                if(!nullp(fn)){ return call_reader_macro(parser, fn, sub, true,
+                                                         disp_arg>=0?I(disp_arg):NIL_Symbol); }
                 READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}}
-          break;
+          break;}
       default:
           if(constituentp(parser->ch)){
               return parse_token(parser);}
@@ -992,13 +1001,28 @@ static bool token_continues(Ref rt,int ch){
     int s=rt_syntax(rt,ch);
     return s==CS_CONSTITUENT || s==CS_NON_TERMINATING_MACRO;}
 
-/* Stub for the standard macro markers: they are dispatched by the reader's
-   built-in fast path, not called via FUNCALL.  (Making them independently
-   funcallable from user code is a later refinement.) */
-static void rm_standard_stub(Ref function, Ref arguments, MultipleValues* results){
-    (void)function; (void)arguments;
-    ERROR("standard reader macro is dispatched by the reader, not directly callable%s","");
-    results->count=1; results->values[0]=NIL_Symbol;}
+/* The standard macro markers ARE callable: (fn stream char).  By the reader-macro
+   convention CHAR has already been consumed and STREAM sits just past it — which
+   is exactly the parser's lookahead invariant (p.ch = the char already read,
+   stream positioned after it).  So we seed a parser_state with p.ch = CHAR and
+   re-enter parse_object, reusing the entire hardwired dispatch (parse_list for
+   '(', parse_string for '"', the '#' dispatch, etc.) with no duplication.  The
+   one leftover lookahead char is pushed back so the caller's stream position is
+   right.  This is what lets reader macros call reader macros, and user code do
+   (funcall (get-macro-character #\\() stream char). */
+static void rm_standard_dispatch(Ref function, Ref arguments, MultipleValues* results){
+    (void)function;
+    Ref stream=car(arguments);
+    octet ch=(octet)integer_value(character_code(cadr(arguments)));
+    parser_state p;
+    p.input_stream=stream;
+    p.length=0;
+    p.ch=ch;
+    p.eof=false; p.error=false; p.escape=false; p.suppress=false;
+    Ref r=parse_object(&p);
+    if(!p.eof){ ungetc((int)p.ch, stream_cstream(stream)); }
+    if(r==get_skip_marker()){ results->count=0; }   /* a no-value macro (comment, #+) */
+    else { results->count=1; results->values[0]=r; }}
 
 static Ref make_standard_readtable(void){
     uword pool=open_live_pool();
@@ -1149,9 +1173,9 @@ void reader_initialize(){
     define_parameter(READ_SUPPRESS,S(NIL));
     /* Build the standard readtable and the standard-macro markers. */
     g_standard_macro  = built_in_function_new(S(%STANDARD-READER-MACRO),
-                                              list(S(STREAM),S(CHAR),NULL), rm_standard_stub);
+                                              list(S(STREAM),S(CHAR),NULL), rm_standard_dispatch);
     g_dispatch_marker = built_in_function_new(S(%STANDARD-DISPATCH-MACRO),
-                                              list(S(STREAM),S(CHAR),NULL), rm_standard_stub);
+                                              list(S(STREAM),S(CHAR),NULL), rm_standard_dispatch);
     push_to_rootset(g_standard_macro);
     push_to_rootset(g_dispatch_marker);
     g_standard_readtable = make_standard_readtable();
