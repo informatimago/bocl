@@ -411,15 +411,32 @@ int main(int argc,char** argv){
        bound.  --print and --verbose therefore apply only to user files loaded
        afterwards, never to the bootstrap itself. */
     if(!do_noprelude){
+        /* The prelude defines the standard CL symbols, so load it with *PACKAGE*
+           bound to COMMON-LISP: every symbol it interns then lands in CL (where
+           the reader's bare symbols already go), instead of in CL-USER.  After
+           the bootstrap, user code defaults to COMMON-LISP-USER per the standard. */
+        extern Ref COMMON_LISP_Package, COMMON_LISP_USER_Package;
+        set_symbol_value(S(*PACKAGE*), COMMON_LISP_Package);
         char* prelude=find_prelude();
         if(prelude){
             bocl_load_cstring(prelude);
+            /* Then export the standard CL symbols (generated cl-exports.lisp,
+               sibling of prelude.lisp), still with *PACKAGE* = COMMON-LISP. */
+            char* p=strstr(prelude,"prelude.lisp");
+            if(p){
+                size_t base=(size_t)(p-prelude);
+                char* exports=malloc(base+sizeof("cl-exports.lisp"));
+                memcpy(exports,prelude,base);
+                strcpy(exports+base,"cl-exports.lisp");
+                bocl_load_cstring(exports);
+                free(exports);}
             free(prelude);
         } else if(!do_quiet){
             fprintf(stderr,
                     "bocl: warning: could not find bootstrap/prelude.lisp; "
                     "running with the bare kernel only.\n"
-                    "      Set BOCL_PRELUDE or use --no-prelude to silence.\n");}}
+                    "      Set BOCL_PRELUDE or use --no-prelude to silence.\n");}
+        set_symbol_value(S(*PACKAGE*), COMMON_LISP_USER_Package);}
 
     if(do_verbose){
         define_parameter(S(*LOAD-VERBOSE*),S(T));

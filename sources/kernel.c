@@ -843,6 +843,40 @@ Ref symbol_intern(Ref name){
     bool internal;
     return symbol_intern_obarray(name,KERNEL_obarray,&internal);}
 
+/* Package support (packages.c): an "obarray" is a cons sentinel whose CDR is the
+   symbol list, indexed by a SymHash.  These let the package system reuse the
+   fast name->symbol index for each package's present/external tables. */
+Ref make_obarray(void){
+    return cons(NIL_Symbol,NIL_Symbol);}
+
+/* Rebuild an obarray's SymHash index from its current symbol list (used after a
+   removal, which is rare). */
+static void sym_hash_rebuild(Ref obarray){
+    SymHash* H=sym_hash_for(obarray);
+    for(uword i=0;i<H->capacity;i++){ H->buckets[i]=NULL; H->hashes[i]=0; }
+    H->count=0;
+    Ref syms=cons_cdr(obarray);
+    while(consp(syms)){ sym_hash_add(H,cons_car(syms)); syms=cons_cdr(syms); }}
+
+/* Add an EXISTING symbol to an obarray (no-op if a symbol of that name is
+   already there).  Used to populate a package's present/external tables. */
+void obarray_add_symbol(Ref obarray,Ref sym){
+    if(find_symbol(symbol_name(sym),obarray)){ return; }
+    cons_rplacd(obarray,cons(sym,cons_cdr(obarray)));
+    sym_hash_add(sym_hash_for(obarray),sym);}
+
+/* Remove a symbol from an obarray (list + index).  Returns true if removed. */
+bool obarray_remove_symbol(Ref obarray,Ref sym){
+    Ref prev=obarray, it=cons_cdr(obarray);
+    bool found=false;
+    while(consp(it)){
+        if(cons_car(it)==sym){ cons_rplacd(prev,cons_cdr(it)); found=true; break; }
+        prev=it; it=cons_cdr(it);}
+    if(found){
+        /* Rebuild the index for this obarray (simplest correct approach). */
+        sym_hash_rebuild(obarray);}
+    return found;}
+
 Ref symbol_intern_cstring(const char* name){
     return symbol_intern(string_new_cstring(name));}
 

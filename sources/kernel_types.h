@@ -371,12 +371,14 @@ typedef struct FuncallableStandardObject {
    (one global pool), and each package keeps a list of the symbols that
    are "in" it. Real per-package symbol isolation will come later. */
 typedef struct Package {
-    BLOCK_HEADER;
+    BLOCK_HEADER;            /* objcount = 7 */
     Ref name;        /* STRING — the package's primary name */
     Ref nicknames;   /* list of STRING */
-    Ref symbols;     /* list of symbol — interned in this package */
-    Ref exported;    /* list of symbol — visible via pkg:sym syntax */
-    Ref used;        /* list of Package — used-package list */
+    Ref present;     /* obarray (cons sentinel) — all symbols present (interned) here */
+    Ref external;    /* obarray (cons sentinel) — the external subset of `present` */
+    Ref shadowing;   /* list of symbol — the shadowing symbols of this package */
+    Ref used;        /* list of Package — packages this one uses (use-list) */
+    Ref used_by;     /* list of Package — packages that use this one */
 } Package;
 
 /* CL Hash Table. Phase 4 minimum: alist-backed (per design notes —

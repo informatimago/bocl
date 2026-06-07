@@ -17,13 +17,18 @@ Ref all_packages             = NULL;
 /* ------------------------------------------------------------------ */
 
 static Package* Package_slots(Ref name, Ref nicknames){
+    /* present/external are obarrays (cons sentinels + SymHash index); see
+       kernel.c make_obarray.  Fill the reference slots before setting objcount
+       so a GC during make_obarray never sees uninitialised slots. */
     Package* that = allocate(sizeof(*that));
-    that->objcount = 5;
     that->name      = name;
     that->nicknames = nicknames;
-    that->symbols   = NIL_Symbol;
-    that->exported  = NIL_Symbol;
+    that->present   = make_obarray();
+    that->external  = make_obarray();
+    that->shadowing = NIL_Symbol;
     that->used      = NIL_Symbol;
+    that->used_by   = NIL_Symbol;
+    that->objcount  = 7;
     return that;}
 
 static Ref make_package(Ref name, Ref nicknames){
@@ -74,14 +79,46 @@ Ref package_find(Ref designator){
 
 void package_add_symbol(Ref pkg, Ref sym){
     check_type(pkg, PACKAGE_Class);
-    if(nullp(memq(sym, pkg->slots->package.symbols))){
-        pkg->slots->package.symbols = cons(sym, pkg->slots->package.symbols);}}
+    obarray_add_symbol(pkg->slots->package.present, sym);}
 
 void package_export(Ref pkg, Ref sym){
     check_type(pkg, PACKAGE_Class);
-    package_add_symbol(pkg, sym);
-    if(nullp(memq(sym, pkg->slots->package.exported))){
-        pkg->slots->package.exported = cons(sym, pkg->slots->package.exported);}}
+    obarray_add_symbol(pkg->slots->package.present, sym);   /* must be present */
+    obarray_add_symbol(pkg->slots->package.external, sym);}
+
+/* Core lookup: find NAME (a STRING) accessible in PKG, following the use-list.
+   Sets *status to the keyword :EXTERNAL/:INTERNAL/:INHERITED or NIL, and returns
+   the symbol (or NIL when not found). */
+static Ref pkg_find_symbol(Ref name, Ref pkg, Ref* status){
+    Ref s = find_symbol(name, pkg->slots->package.external);
+    if(s){ *status = K(EXTERNAL); return s; }
+    s = find_symbol(name, pkg->slots->package.present);
+    if(s){ *status = K(INTERNAL); return s; }
+    Ref used = pkg->slots->package.used;
+    while(consp(used)){
+        Ref u = cons_car(used);
+        s = find_symbol(name, u->slots->package.external);
+        if(s){ *status = K(INHERITED); return s; }
+        used = cons_cdr(used);}
+    *status = NIL_Symbol;
+    return NIL_Symbol;}
+
+/* INTERN: find-or-create NAME in PKG.  *status is the accessibility of an
+   EXISTING symbol, or NIL when a fresh symbol was created (CL semantics). */
+static Ref pkg_intern(Ref name, Ref pkg, Ref* status){
+    Ref s = pkg_find_symbol(name, pkg, status);
+    if(*status != NIL_Symbol){ return s; }
+    if(pkg == KEYWORD_Package){
+        /* keyword_intern installs the keyword (KEYWORD_obarray, self-evaluating);
+           KEYWORD's present/external both ARE KEYWORD_obarray, so it's external. */
+        s = keyword_intern(name);
+        *status = NIL_Symbol;
+        return s;}
+    s = symbol_new(name);                       /* fresh uninterned symbol */
+    s->slots->symbol.package = pkg;             /* home package */
+    obarray_add_symbol(pkg->slots->package.present, s);
+    *status = NIL_Symbol;
+    return s;}
 
 Ref current_package(void){
     Ref p = symbol_value(S(*PACKAGE*));
@@ -231,12 +268,11 @@ static void kp_INTERN(Ref function, Ref arguments, MultipleValues* results){
     Ref pkg = package_find(pkg_des);
     if(nullp(pkg)){ ERROR("INTERN: no such package %s",
                           string_cstring(prin1_to_string(pkg_des))); }
-    /* For Phase 3 we share the global KERNEL_obarray; symbol_intern handles
-       the find-or-create. The package gets the symbol added to its list. */
-    Ref sym = symbol_intern(name);
-    package_add_symbol(pkg, sym);
-    results->count = 1;
+    Ref status;
+    Ref sym = pkg_intern(name, pkg, &status);
+    results->count = 2;
     results->values[0] = sym;
+    results->values[1] = status;
     close_live_pool(pool);}
 
 static void kp_FIND_SYMBOL(Ref function, Ref arguments, MultipleValues* results){
@@ -250,31 +286,11 @@ static void kp_FIND_SYMBOL(Ref function, Ref arguments, MultipleValues* results)
     Ref pkg = package_find(pkg_des);
     if(nullp(pkg)){ ERROR("FIND-SYMBOL: no such package %s",
                           string_cstring(prin1_to_string(pkg_des))); }
-    /* Walk the package's symbols + its used packages' exported lists. */
-    Ref it = pkg->slots->package.symbols;
-    while(consp(it)){
-        Ref s = cons_car(it);
-        if(string_equal(symbol_name(s), name)){
-            results->count = 1;
-            results->values[0] = s;
-            close_live_pool(pool);
-            return;}
-        it = cons_cdr(it);}
-    Ref used = pkg->slots->package.used;
-    while(consp(used)){
-        Ref u = cons_car(used);
-        Ref ex = u->slots->package.exported;
-        while(consp(ex)){
-            Ref s = cons_car(ex);
-            if(string_equal(symbol_name(s), name)){
-                results->count = 1;
-                results->values[0] = s;
-                close_live_pool(pool);
-                return;}
-            ex = cons_cdr(ex);}
-        used = cons_cdr(used);}
-    results->count = 1;
-    results->values[0] = NIL_Symbol;
+    Ref status;
+    Ref sym = pkg_find_symbol(name, pkg, &status);
+    results->count = 2;
+    results->values[0] = sym;
+    results->values[1] = status;
     close_live_pool(pool);}
 
 static void kernel_PACKAGE(Ref function, Ref arguments, MultipleValues* results){
@@ -299,7 +315,7 @@ static void kernel_PACKAGE_SYMBOLS(Ref function, Ref arguments, MultipleValues* 
     if(nullp(pkg)){ ERROR("PACKAGE-SYMBOLS: no such package %s",
                           string_cstring(prin1_to_string(pkg_des))); }
     results->count = 1;
-    results->values[0] = pkg->slots->package.symbols;
+    results->values[0] = cons_cdr(pkg->slots->package.present);
     close_live_pool(pool);}
 
 static void kernel_PACKAGE_EXPORTED_SYMBOLS(Ref function, Ref arguments, MultipleValues* results){
@@ -313,7 +329,7 @@ static void kernel_PACKAGE_EXPORTED_SYMBOLS(Ref function, Ref arguments, Multipl
     if(nullp(pkg)){ ERROR("PACKAGE-EXPORTED-SYMBOLS: no such package %s",
                           string_cstring(prin1_to_string(pkg_des))); }
     results->count = 1;
-    results->values[0] = pkg->slots->package.exported;
+    results->values[0] = cons_cdr(pkg->slots->package.external);
     close_live_pool(pool);}
 
 static void kernel_LIST_ALL_PACKAGES(Ref function, Ref arguments, MultipleValues* results){
@@ -347,9 +363,21 @@ void kernel_initialize_packages(void){
     COMMON_LISP_USER_Package = package_new("COMMON-LISP-USER", cl_user_nicknames);
     KEYWORD_Package          = package_new("KEYWORD",          NULL);
 
-    /* CL-USER uses CL. */
+    /* The kernel interns every CL symbol into KERNEL_obarray, so that obarray IS
+       COMMON-LISP's present-table.  (Its external subset is populated later, in
+       the prelude, by EXPORTing the standard CL symbols.)  Every keyword lives
+       in KEYWORD_obarray and is external, so KEYWORD's present and external
+       tables both ARE that obarray. */
+    {   extern Ref KERNEL_obarray; extern Ref KEYWORD_obarray;
+        COMMON_LISP_Package->slots->package.present = KERNEL_obarray;
+        KEYWORD_Package->slots->package.present  = KEYWORD_obarray;
+        KEYWORD_Package->slots->package.external = KEYWORD_obarray;}
+
+    /* CL-USER uses CL (and is used-by recorded on CL). */
     COMMON_LISP_USER_Package->slots->package.used =
         cons(COMMON_LISP_Package, COMMON_LISP_USER_Package->slots->package.used);
+    COMMON_LISP_Package->slots->package.used_by =
+        cons(COMMON_LISP_USER_Package, COMMON_LISP_Package->slots->package.used_by);
 
     /* *PACKAGE* defaults to CL-USER. */
     define_parameter(S(*PACKAGE*), COMMON_LISP_USER_Package);
