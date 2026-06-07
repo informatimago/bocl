@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <sysexits.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "string_list.h"
 #include "kernel.h"
 #include "bocl.h"
@@ -49,17 +50,20 @@ static string_list* expressions_and_loads=NULL;
 static char* package=NULL;
 
 
-/* Candidate RC file paths searched in order; first existing file wins.
-   A leading ~/ is expanded to $HOME/ at runtime. */
+/* Candidate RC (init) file paths searched in order; the first existing file
+   wins, EXCEPT that when a .fasl candidate is found, a more-recent .lisp sibling
+   is preferred (see find_rc_file).  A leading ~/ is expanded to $HOME/.  Stems
+   ~/.bocl and ~/.boclrc allow a bare (extension-less) file; ~/.config/bocl/init
+   does not. */
 static const char* rc_candidates[]={
     "~/.bocl",
+    "~/.bocl.fasl",
     "~/.bocl.lisp",
-    "~/.config/bocl/init",
+    "~/.boclrc",
+    "~/.boclrc.fasl",
+    "~/.boclrc.lisp",
+    "~/.config/bocl/init.fasl",
     "~/.config/bocl/init.lisp",
-    "~/.common-lisp",
-    "~/.common-lisp.lisp",
-    "~/.config/common-lisp/init",
-    "~/.config/common-lisp/init.lisp",
     NULL};
 
 /* Return a malloc'd copy of path with a leading ~/ replaced by $HOME/. */
@@ -73,11 +77,26 @@ static char* expand_tilde(const char* path){
     snprintf(result,len+1,"%s%s",home,path+1); /* skip the '~' */
     return result;}
 
-/* Return the first readable RC file from rc_candidates, malloc'd, or NULL. */
+/* mtime of PATH in seconds, or -1 if it cannot be stat'd. */
+static long file_mtime(const char* path){
+    struct stat st;
+    if(stat(path,&st)!=0){ return -1; }
+    return (long)st.st_mtime;}
+
+/* Return the first readable RC file from rc_candidates, malloc'd, or NULL.
+   When the match is a .fasl whose .lisp sibling exists and is more recent, the
+   .lisp is returned instead (the fasl is stale). */
 static char* find_rc_file(void){
     for(int i=0; rc_candidates[i]; i++){
         char* path=expand_tilde(rc_candidates[i]);
         if(access(path,R_OK)==0){
+            size_t n=strlen(path);
+            if(n>5 && strcmp(path+n-5,".fasl")==0){
+                char* lisp=CHECK_POINTER(malloc(n+1));
+                snprintf(lisp,n+1,"%.*s.lisp",(int)(n-5),path);
+                if(access(lisp,R_OK)==0 && file_mtime(lisp)>file_mtime(path)){
+                    free(path); return lisp; }
+                free(lisp);}
             return path;}
         free(path);}
     return NULL;}
@@ -410,6 +429,10 @@ static Ref run_session(void* ctx){
     return integer_from_word(status);}
 
 int main(int argc,char** argv){
+    /* Line-buffer stdout (and unbuffer stderr) so output is visible promptly
+       when redirected to a file or pipe (CI logs, tee), not just on a tty. */
+    setvbuf(stdout,NULL,_IOLBF,0);
+    setvbuf(stderr,NULL,_IONBF,0);
     pname=argv[0];
     program_path=argv[0];
     int status=0;

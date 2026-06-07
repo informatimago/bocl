@@ -1997,31 +1997,42 @@ static void bocl_run_abort_hooks(int sig){
 
 static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
     (void)ucontext;
-    /* The system may be corrupt: stop the GC and do minimal work. */
-    set_garbage_collection_enabled(false);
-    bocl_run_abort_hooks(sig);
-    if(getenv("BOCL_BACKTRACE")){
-        char buf[128];
-        int len = snprintf(buf,sizeof(buf),
-                           "\n=== bocl: fatal signal %d; fault address = %p ===\n",
-                           sig, info ? info->si_addr : (void*)0);
-        write(2, buf, (size_t)len);
-        void* bt[64];
-        int n = backtrace(bt, 64);
-        backtrace_symbols_fd(bt, n, 2);}
+    /* Re-entrancy guard: if running the hooks itself faults, don't loop —
+       fall straight through to the default action on the second entry. */
+    static volatile sig_atomic_t in_handler = 0;
+    if(!in_handler){
+        in_handler = 1;
+        /* The system may be corrupt: stop the GC and do minimal work. */
+        set_garbage_collection_enabled(false);
+        bocl_run_abort_hooks(sig);
+        if(getenv("BOCL_BACKTRACE")){
+            char buf[128];
+            int len = snprintf(buf,sizeof(buf),
+                               "\n=== bocl: fatal signal %d; fault address = %p ===\n",
+                               sig, info ? info->si_addr : (void*)0);
+            write(2, buf, (size_t)len);
+            void* bt[64];
+            int n = backtrace(bt, 64);
+            backtrace_symbols_fd(bt, n, 2);}}
     signal(sig, SIG_DFL);
     raise(sig);}
 
 void kernel_initialize(void){
-    /* Install the crash handler always so BOCL:*ABORT-HOOK* runs on a fatal
-       signal; the native backtrace dump stays gated on BOCL_BACKTRACE. */
+    /* Install the crash handler so BOCL:*ABORT-HOOK* runs when the process is
+       terminating on a signal — both faults (SEGV/BUS/ABRT) and termination
+       requests (TERM/INT/HUP).  The native backtrace dump stays gated on
+       BOCL_BACKTRACE.  The handler re-raises with the default action so the
+       process still dies as it would have. */
     {   struct sigaction sa;
         memset(&sa,0,sizeof(sa));
         sa.sa_sigaction = bocl_crash_handler;
         sa.sa_flags = SA_SIGINFO;
         sigaction(SIGSEGV,&sa,NULL);
         sigaction(SIGBUS, &sa,NULL);
-        sigaction(SIGABRT,&sa,NULL);}
+        sigaction(SIGABRT,&sa,NULL);
+        sigaction(SIGTERM,&sa,NULL);
+        sigaction(SIGINT, &sa,NULL);
+        sigaction(SIGHUP, &sa,NULL);}
     memory_initialize();
     set_garbage_collection_enabled(false);
 

@@ -1019,13 +1019,18 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 pop_frame(&frame, environment);
                 PASS_VALUES();
             } else {
-                /* signal_condition longjmps us here; clause + cond on the frame. */
+                /* Non-local entry.  Two cases:
+                   - signal_condition matched a clause here (code 2): matched_clause
+                     is set — run the clause below.
+                   - a non-local exit (THROW/RETURN-FROM/GO/BOCL:QUIT, or a signal
+                     destined for an OUTER handler) is unwinding THROUGH us (code 1):
+                     matched_clause is nil — continue the unwind to the next frame
+                     on the way to its real target, exactly like CATCH/BLOCK do. */
                 pop_frame(&frame, environment);
                 Ref clause = frame.parameters.handler.matched_clause;
                 Ref cond   = frame.parameters.handler.condition;
                 if(nullp(clause)){
-                    /* unwind-only: re-raise to outer handler. Not currently used. */
-                    FATAL("HANDLER-CASE unwound without a matched clause%s","");}
+                    unwind_next_frame(&frame, environment); /* _Noreturn */ }
                 Ref var       = cadr(clause);
                 Ref body_form = caddr(clause);
                 /* Bind var to the condition in a fresh env and eval body. */
