@@ -1980,22 +1980,42 @@ static void kernel_initialize_features(void){
 /* Debug aid: when BOCL_BACKTRACE is set, dump a native backtrace on a fatal
    signal (so heap-layout-dependent crashes can be located without a debugger,
    which perturbs the layout and hides them). */
+/* BOCL:*ABORT-HOOK* — best effort, called from the crash handler with the GC
+   disabled.  We only enter Lisp if a hook is actually registered (cheap symbol
+   check, no allocation otherwise), to keep ordinary crashes unperturbed.  The
+   Lisp runner wraps each hook in IGNORE-ERRORS. */
+static void bocl_run_abort_hooks(int sig){
+    extern Ref BOCL_Package;
+    if(BOCL_Package==NULL || !typep(BOCL_Package,PACKAGE_Class)){ return; }
+    Ref present=BOCL_Package->slots->package.present;
+    Ref hooks_sym=find_symbol(string_new_cstring("*ABORT-HOOK*"),present);
+    if(!hooks_sym || nullp(symbol_value(hooks_sym))){ return; }
+    Ref fn_sym=find_symbol(string_new_cstring("%RUN-ABORT-HOOKS"),present);
+    if(!fn_sym || !symbol_fboundp(fn_sym)){ return; }
+    MultipleValues mv;
+    kernel_apply(symbol_function(fn_sym),cons(integer_from_word(sig),NIL_Symbol),&mv);}
+
 static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
     (void)ucontext;
-    char buf[128];
-    int len = snprintf(buf,sizeof(buf),
-                       "\n=== bocl: fatal signal %d; fault address = %p ===\n",
-                       sig, info ? info->si_addr : (void*)0);
-    write(2, buf, (size_t)len);
-    void* bt[64];
-    int n = backtrace(bt, 64);
-    backtrace_symbols_fd(bt, n, 2);
+    /* The system may be corrupt: stop the GC and do minimal work. */
+    set_garbage_collection_enabled(false);
+    bocl_run_abort_hooks(sig);
+    if(getenv("BOCL_BACKTRACE")){
+        char buf[128];
+        int len = snprintf(buf,sizeof(buf),
+                           "\n=== bocl: fatal signal %d; fault address = %p ===\n",
+                           sig, info ? info->si_addr : (void*)0);
+        write(2, buf, (size_t)len);
+        void* bt[64];
+        int n = backtrace(bt, 64);
+        backtrace_symbols_fd(bt, n, 2);}
     signal(sig, SIG_DFL);
     raise(sig);}
 
 void kernel_initialize(void){
-    if(getenv("BOCL_BACKTRACE")){
-        struct sigaction sa;
+    /* Install the crash handler always so BOCL:*ABORT-HOOK* runs on a fatal
+       signal; the native backtrace dump stays gated on BOCL_BACKTRACE. */
+    {   struct sigaction sa;
         memset(&sa,0,sizeof(sa));
         sa.sa_sigaction = bocl_crash_handler;
         sa.sa_flags = SA_SIGINFO;

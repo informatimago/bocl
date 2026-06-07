@@ -6,6 +6,7 @@
 #include "environment.h"
 #include "variable.h"
 #include "bocl.h"
+#include "packages.h"
 
 /* Forward decls for the apply helpers implemented later in this file. */
 void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
@@ -250,6 +251,27 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
 //#define VALUES3(v1,v2,v3)  do{close_live_pool(pool);results->count=3;results->values[0]=(v1);results->values[1]=(v2);return ((results->values[2]=(v3)));}while(0)
 #define FIRST_VALUE()      do{close_live_pool(pool);if(results->count>0){add_to_live_pool(results->values[0]);return results->values[0];}return NIL_Symbol;}while(0)
 
+
+/* Run BODY(ctx) inside a top-level CATCH for BOCL's quit tag, so BOCL:QUIT can
+   unwind — running pending UNWIND-PROTECT cleanups (WITH-OPEN-FILE etc.) — back
+   to here.  Returns BODY's value on normal completion, or the value thrown to
+   the quit tag by BOCL:QUIT.  main() wraps the whole session in this so QUIT is
+   a proper non-local exit. */
+Ref bocl_run_with_toplevel_catch(Ref (*body)(void*), void* ctx){
+    Ref environment = eval_global_environment();
+    Frame frame;
+    frame.type = frame_catch;
+    frame.parameters.catch.object =
+        package_intern_cstring_in("%QUIT-CATCH-TAG", BOCL_Package);
+    MultipleValues mv;
+    mv.count = 1; mv.values[0] = integer_from_word(0);
+    frame.results = &mv;
+    Ref result = integer_from_word(0);
+    int sel = setjmp(frame.non_local_exit);
+    UNWIND(sel){
+        UWBODY{ result = body(ctx); }
+        UWCLEANUP{ result = (mv.count>0) ? mv.values[0] : integer_from_word(0); }}
+    return result;}
 
 static eval_counters_t eval_counters={0};
 

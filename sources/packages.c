@@ -10,6 +10,7 @@ extern Ref Object_new(Ref class, Slots* slots);
 Ref COMMON_LISP_Package      = NULL;
 Ref COMMON_LISP_USER_Package = NULL;
 Ref KEYWORD_Package          = NULL;
+Ref BOCL_Package             = NULL;
 Ref all_packages             = NULL;
 
 /* ------------------------------------------------------------------ */
@@ -576,6 +577,7 @@ void kernel_initialize_packages(void){
     COMMON_LISP_Package      = package_new("COMMON-LISP",      cl_nicknames);
     COMMON_LISP_USER_Package = package_new("COMMON-LISP-USER", cl_user_nicknames);
     KEYWORD_Package          = package_new("KEYWORD",          NULL);
+    BOCL_Package             = package_new("BOCL",             NULL);
 
     /* The kernel interns every CL symbol into KERNEL_obarray, so that obarray IS
        COMMON-LISP's present-table.  (Its external subset is populated later, in
@@ -592,6 +594,11 @@ void kernel_initialize_packages(void){
         cons(COMMON_LISP_Package, COMMON_LISP_USER_Package->slots->package.used);
     COMMON_LISP_Package->slots->package.used_by =
         cons(COMMON_LISP_USER_Package, COMMON_LISP_Package->slots->package.used_by);
+    /* BOCL (the implementation-extensions package) uses CL too. */
+    BOCL_Package->slots->package.used =
+        cons(COMMON_LISP_Package, BOCL_Package->slots->package.used);
+    COMMON_LISP_Package->slots->package.used_by =
+        cons(BOCL_Package, COMMON_LISP_Package->slots->package.used_by);
 
     /* *PACKAGE* defaults to CL-USER. */
     define_parameter(S(*PACKAGE*), COMMON_LISP_USER_Package);

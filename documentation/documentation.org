@@ -917,19 +917,63 @@ Unicode and UTF-8 is out of scope for version 1.
 
 The REPL is a standard REPL.
 
-*** Function QUIT
+*** Function BOCL:QUIT
 
 Syntax:
 
-    QUIT (&optional (status 0)) => non-local-exit
+    BOCL:QUIT (&optional (status 0)) => non-local-exit
 
 Arguments and Values:
 
-    status -- an integer
+    status -- an integer (default 0)
 
 Description:
 
-    Exits the =bocl= process, with the given STATUS.
+    Exits the =bocl= process with the given STATUS.  QUIT performs a
+    /non-local exit/, so any UNWIND-PROTECT clean-up clauses pending in
+    the current dynamic environment are run on the way out.  Being the
+    primitive used by WITH-OPEN-FILE and similar resource macros, this
+    lets them close and free their resources (flush buffers, close
+    files and sockets) before the process exits.
+
+    Once the dynamic environment has been unwound, the functions on
+    BOCL:*QUIT-HOOK* are each called (inside IGNORE-ERRORS), and then
+    the process exits.  QUIT does not return.
+
+*** Extension hooks
+
+Three lists of function designators let user code (typically from the
+init/rc file, a -i file, the command line, or normal Lisp code) run
+code at well-defined points in the process life-cycle.  They live in
+the BOCL package and are never cleared (a function on a list serves
+until removed by the user).  No locking is provided.
+
+| variable          | signature        | when called                                            |
+|-------------------+------------------+--------------------------------------------------------|
+| BOCL:*INIT-HOOK*  | (lambda ())      | after the rc/init file has been loaded (or --no-init   |
+|                   |                  | processed), before the main task (-l/-x/-i + the REPL) |
+| BOCL:*QUIT-HOOK*  | (lambda (status))| by BOCL:QUIT, after the non-local exit unwinds the     |
+|                   |                  | dynamic environment, just before the process exits     |
+| BOCL:*ABORT-HOOK* | (lambda (signum))| when the process is crashing on a fatal signal; the    |
+|                   |                  | GC is disabled and the heap may be corrupt             |
+
+Each function on a hook list is called in turn, each wrapped in an
+IGNORE-ERRORS.  If a hook calls BOCL:QUIT, or a crash occurs, the
+corresponding processing happens and the remaining functions on the
+list are not called.
+
+*INIT-HOOK* and the main task run under a single top-level CATCH for
+QUIT, so a QUIT from an init hook, a loaded form, or the REPL is a
+proper non-local exit.
+
+*ABORT-HOOK* is best effort, with no guarantees: the signal may
+indicate system corruption, so the garbage collector is disabled and
+hooks should perform minimal allocation (flush a buffer, write a
+dirty/clean flag) and return quickly — the user may otherwise kill an
+unresponsive process, preventing the remaining hooks from running.
+QUIT-HOOK and ABORT-HOOK functions may be called from a thread other
+than the main thread; the main thread starts the main task only once
+the INIT-HOOK functions have completed.
 
 ** The debugger
 

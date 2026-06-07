@@ -104,3 +104,19 @@ and intended to remain open for the whole process, may be flushed and
 closed properly in a BOCL:*QUIT-HOOK*. Similarly, if the terminal is
 initialized with ncurses, a BOCL:*QUIT-HOOK* and BOCL:*ABORT-HOOK* can
 be used to reset its state.
+
+
+;; ============================== RESOLUTION (Slice 58) ==============================
+;; Implemented:
+;;  - BOCL package (created in C, uses CL).
+;;  - BOCL:*INIT-HOOK* / *ABORT-HOOK* / *QUIT-HOOK* (prelude defvars, exported).
+;;  - BOCL:QUIT [status]: non-local exit via THROW to a top-level CATCH that
+;;    main() establishes (bocl_run_with_toplevel_catch in eval.c), so pending
+;;    UNWIND-PROTECT clean-ups run; then *QUIT-HOOK* runs; then exit(status).
+;;  - *INIT-HOOK* fired by main() after the init/rc files, before the main task
+;;    (the whole session runs inside the QUIT catch).
+;;  - *ABORT-HOOK* fired by the crash handler (kernel.c), GC disabled, only when
+;;    a hook is registered (no perturbation of ordinary crashes).
+;;  - Documented in documentation/documentation.org (Extensions > The REPL).
+;; Verified: QUIT runs UNWIND-PROTECT cleanup + quit-hook and exits with STATUS;
+;; INIT-HOOK fires before the main task; no regression in normal runs.

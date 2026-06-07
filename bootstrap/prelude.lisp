@@ -7368,3 +7368,39 @@
 (set-dispatch-macro-character #\# #\<
   (lambda (stream sub arg) (declare (ignore stream sub arg))
     (error "#<...> is not readable")))
+
+;;; ---- BOCL extension hooks (init / abort / quit) + QUIT -------------------
+;;; bocl extension (see issues/closed/extension-hooks): three lists of function
+;;; designators run as best-effort hooks, and BOCL:QUIT, a non-local exit that
+;;; runs pending UNWIND-PROTECT cleanups, then *QUIT-HOOK*, then exits.
+(in-package "BOCL")
+
+(defvar *init-hook* '()
+  "List of (lambda ()) function designators, each called inside IGNORE-ERRORS
+   after the init/rc file has been loaded (or --no-init processed), before the
+   main task (-l/-x/-i and the REPL).")
+(defvar *abort-hook* '()
+  "List of (lambda (signum)) function designators, each called inside
+   IGNORE-ERRORS when the process is crashing on a signal.  The GC is disabled
+   and the system may be corrupt: minimal work, best effort, no guarantees.")
+(defvar *quit-hook* '()
+  "List of (lambda (status)) function designators, each called inside
+   IGNORE-ERRORS by BOCL:QUIT before the process exits.")
+
+(defun quit (&optional (status 0))
+  "Quit bocl.  Performs a non-local exit so pending UNWIND-PROTECT clean-ups run
+   (WITH-OPEN-FILE etc. close their resources); then *QUIT-HOOK* is run and the
+   process exits with STATUS.  Does not return."
+  (throw '%quit-catch-tag status))
+
+;; Internal hook runners, called from the C launcher / crash handler.
+(defun %run-init-hooks ()
+  (dolist (f *init-hook*) (ignore-errors (funcall f))))
+(defun %run-quit-hooks (status)
+  (dolist (f *quit-hook*) (ignore-errors (funcall f status))))
+(defun %run-abort-hooks (signum)
+  (dolist (f *abort-hook*) (ignore-errors (funcall f signum))))
+
+(export '(*init-hook* *abort-hook* *quit-hook* quit))
+
+(in-package "COMMON-LISP")

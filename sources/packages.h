@@ -11,6 +11,7 @@
 extern Ref COMMON_LISP_Package;
 extern Ref COMMON_LISP_USER_Package;
 extern Ref KEYWORD_Package;
+extern Ref BOCL_Package;   /* implementation-extensions package (hooks, QUIT) */
 
 /* The single global registry of named packages (alist of name → package). */
 extern Ref all_packages;

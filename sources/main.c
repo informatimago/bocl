@@ -18,6 +18,7 @@
 #include "printer.h"
 #include "reader.h"
 #include "variable.h"
+#include "eval.h"
 #include "version.h"
 
 static const char* source="http://gitlab.com/bocl/bocl/";
@@ -371,6 +372,43 @@ bool error_handler(Ref error){
       default:
           abort();}}
 
+/* The session body, run under the BOCL:QUIT top-level catch (see main()):
+   init/rc files, BOCL:*INIT-HOOK*, then the -x/-l forms, IN-PACKAGE and the
+   REPL.  Returns the exit status as an integer Ref. */
+static Ref run_session(void* ctx){
+    (void)ctx;
+    int status=0;
+    if(!do_norc){
+        char* rcfile=find_rc_file();
+        if(rcfile){
+            /* prepend so it loads before any -i files */
+            initfiles=string_list_cons(rcfile,initfiles);}}
+    {do_string_list(ifile,initfiles){
+            bocl_load_cstring(ifile);}}
+    string_list_free(initfiles);
+    initfiles=NULL;
+
+    /* BOCL:*INIT-HOOK* — after the init/rc files, before the main task. */
+    bocl_read_eval_cstring("(BOCL::%RUN-INIT-HOOKS)");
+
+    {do_string_list(expression,expressions_and_loads){
+            bocl_read_eval_cstring(expression);}}
+    string_list_free(expressions_and_loads);
+    expressions_and_loads=NULL;
+
+    if(package){
+        bocl_in_package(bocl_read_cstring(package));}
+
+    if(do_repl){
+        /* When a Lisp-level REPL (e.g. BOCL:REPL) is available, call it
+           instead.  For now, use the C bocl_repl() entry point directly. */
+        Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
+                             variable_value(S(*STANDARD-OUTPUT*)));
+        if(integerp(result)){
+            status=(int)integer_value(result);}}
+
+    return integer_from_word(status);}
+
 int main(int argc,char** argv){
     pname=argv[0];
     program_path=argv[0];
@@ -459,31 +497,19 @@ int main(int argc,char** argv){
     {   extern bool bocl_load_recover;
         if(on_error==on_error_appease){ bocl_load_recover=true; }}
 
-    if(!do_norc){
-        char* rcfile=find_rc_file();
-        if(rcfile){
-            /* prepend so it loads before any -i files */
-            initfiles=string_list_cons(rcfile,initfiles);}}
-    {do_string_list(ifile,initfiles){
-            bocl_load_cstring(ifile);}}
-    string_list_free(initfiles);
-    initfiles=NULL;
+    /* The session — init/rc files, BOCL:*INIT-HOOK*, then -x/-l forms, IN-PACKAGE
+       and the REPL — runs inside a top-level CATCH for BOCL:QUIT, so QUIT (from
+       an init hook, a loaded form, or the REPL) performs a proper non-local exit
+       that runs pending UNWIND-PROTECT clean-ups.  *QUIT-HOOK* runs afterwards. */
+    {   Ref r=bocl_run_with_toplevel_catch(run_session,NULL);
+        if(integerp(r)){ status=(int)integer_value(r); }}
 
-    {do_string_list(expression,expressions_and_loads){
-            bocl_read_eval_cstring(expression);}}
-    string_list_free(expressions_and_loads);
-    expressions_and_loads=NULL;
-
-    if(package){
-        bocl_in_package(bocl_read_cstring(package));}
-
-    if(do_repl){
-        /* When a Lisp-level REPL (e.g. BOCL:REPL) is available, call it
-           instead.  For now, use the C bocl_repl() entry point directly. */
-        Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
-                             variable_value(S(*STANDARD-OUTPUT*)));
-        if(integerp(result)){
-            status=(int)integer_value(result);}}
+    /* BOCL:*QUIT-HOOK* — best-effort clean-up, then flush, then exit. */
+    {   char buf[64];
+        snprintf(buf,sizeof(buf),"(BOCL::%%RUN-QUIT-HOOKS %d)",status);
+        bocl_read_eval_cstring(buf);}
+    fflush(stdout);
+    fflush(stderr);
 
     if(do_wait){
         wait_for_termination(status);}
