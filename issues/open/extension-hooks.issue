@@ -1,0 +1,106 @@
+An extension to bocl: init, abort and quit hooks
+
+
+These are specification elements to be added to the specifications,
+and to implement and document in the user-manual and implementation
+documentation (chapter on extensions).
+
+| variable          | default value | description                                 |
+|-------------------+---------------+---------------------------------------------|
+|                   |               |                                             |
+| BOCL:*INIT-HOOK*  | ()            | A list of function designators.             |
+|                   |               | signature: (lambda () …)                    |
+|                   |               | Each function is called inside an           |
+|                   |               | IGNORE-ERRORS in turn, after the            |
+|                   |               | rc (init) file has been loaded (or          |
+|                   |               | after processing the --no-init option).     |
+|                   |               |                                             |
+| BOCL:*ABORT-HOOK* | ()            | A list of function designators.             |
+|                   |               | signature: (lambda (signum) …)              |
+|                   |               | Each function is called inside an           |
+|                   |               | IGNORE-ERRORS in turn, when it has been     |
+|                   |               | determined the process is crashing          |
+|                   |               | (exiting upon reception of a signal).       |
+|                   |               | The signal may indicate a corruption        |
+|                   |               | of the system, so the garbage collector     |
+|                   |               | is disabled, and minimal dynamic allocation |
+|                   |               | should be performed. It's a best effort,    |
+|                   |               | no guarantees.                              |
+|                   |               |                                             |
+| BOCL:*QUIT-HOOK*  | ()            | A list of function designators.             |
+|                   |               | signature: (lambda (status) …)              |
+|                   |               | Each function is called inside an           |
+|                   |               | IGNORE-ERRORS in turn, before BOCL:QUIT     |
+|                   |               | terminates the process. It's a normal       |
+|                   |               | exit, so all facilities are available,      |
+|                   |               | but functions cannot prevent exiting once   |
+|                   |               | they return.                                |
+|                   |               |                                             |
+
+When bocl boots (after it has loaded all system files like its
+prelude), and once it has processed its init (rc) file (or ignored
+it), each function on BOCL:*INIT-HOOK* are called in turn in a
+IGNORE-ERRORS form.  Note: if a crash occurs, or one of those 
+functions call BOCL:QUIT, then those processes happen, with the
+corresponding hooks processed, and the init function doesn't return
+and none the remaining functions on the BOCL:*INIT-HOOK* are called.
+
+When bocl quits (BOCL:QUIT [status]) is called, bocl performs a
+non-local exit that allows UNWIND-PROTECT forms to perform clean-ups
+(closing files, network connections, etc).  Once this done, the
+functions on the BOCL:*QUIT-HOOK* are called in turn, each inside an
+IGNORE-ERRORS form.  Note: if a crash occurs, then crash processes
+happen, with the corresponding hooks processed, and the quit hook
+function doesn't return and none the remaining functions on the
+BOCL:*QUIT-HOOK* are called.
+
+
+When a crash occurs (eg. a signal is received that means termination
+of the POSIX process), bocl processes the crash, stops the
+garbage-collector, and as a last ressort to save something, call in
+turn each functions on this BOCL:*ABORT-HOOK*, in an IGNORE-ERRORS
+forms, passing it the signum.
+
+In both BOCL:*QUIT-HOOK* functions and BOCL:*ABORT-HOOK* functions,
+length processes are discouraged. Eg. if a quit hook function lasts to
+long, the user may become impatient and kill the process with a SIGINT
+or SIGTERM, so the quit hook function won't be able to terminate, the
+remaining quit hook functions won't be called, and the abort hook
+functions will have a chance, to in a very limited environment.
+
+They may be used to flush buffers, and save a dirty/clean flag on
+disk, at most.  The actual data should have been written or processed
+before.
+
+These hook functions may be called from a different thread than the
+main thread. But the main thread will start processing the main task
+(-l -x -i options, with the REPL), only once the hook functions are
+completed.
+
+Note: these lists are not cleared, even while they serve only once
+(contrarily to equivalent lists in a saved lisp image, which can be
+reused. These lists must be populated by user code, from the init (rc)
+file, the command-line options or normal lisp code.
+
+Note: no mutex or other protection to these variables is
+provided. Normally, SETQ should not crash, so setting the abort hook
+should be safe, unless several threads try to do the same at the same
+time.
+
+
+Function BOCL:QUIT
+
+We precise here that this function shall perform a non-local exit, so
+that any unwind-protect with clean-up clauses pending in the current
+dynamic environment have a chance to perform the clean-up. Being the
+primitive form used by WITH-OPEN-FILE and all similar macros managing
+resources, this allows them to clean-up and close and free resources,
+including external resources (flush buffer, close files, close
+sockets, free external resources).
+
+The BOCL:*QUIT-HOOK* can be used for clean-up that doesn't lead itself
+to dynamic scope unwind-protecting. For example a file open with OPEN,
+and intended to remain open for the whole process, may be flushed and
+closed properly in a BOCL:*QUIT-HOOK*. Similarly, if the terminal is
+initialized with ncurses, a BOCL:*QUIT-HOOK* and BOCL:*ABORT-HOOK* can
+be used to reset its state.
