@@ -438,65 +438,71 @@ static Ref parse_bit_vector(parser_state* parser){
               ungetc(parser->ch,stream_cstream(parser->input_stream));
               return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}}}
 
-/* scan_ratio: recognise "[-+]?digits/digits", return a ratio Ref or NIL_Symbol */
+/* The value of a digit character in BASE (2..36), or -1 if it is not a digit. */
+static int digit_in_base(int c,int base){
+    int d;
+    if(c>='0'&&c<='9'){ d=c-'0'; }
+    else if(c>='a'&&c<='z'){ d=c-'a'+10; }
+    else if(c>='A'&&c<='Z'){ d=c-'A'+10; }
+    else { return -1; }
+    return (d<base)?d:-1;}
+
+/* The current input radix (*READ-BASE*), clamped to 2..36, default 10. */
+static int current_read_base(void){
+    Ref rb=symbol_value(READ_BASE);
+    if(integerp(rb)){ word b=integer_value(rb); if(b>=2 && b<=36){ return (int)b; } }
+    return 10;}
+
+/* scan_ratio: recognise "[-+]?digits/digits" in the current radix. */
 static Ref scan_ratio(parser_state* parser){
     const char* token = (char*)parser->token;
-    /* Find a '/' in the token */
+    int base=current_read_base();
     const char* slash = strchr(token, '/');
     if(!slash || slash==token) return NIL_Symbol;  /* no slash or at start */
-    /* Both halves must be all-digit (optionally sign-prefixed on the numerator) */
     const char* p = token;
     if(*p=='-'||*p=='+') p++;
+    if(p>=slash) return NIL_Symbol;                /* no numerator digits */
     while(p < slash){
-        if(*p<'0' || *p>'9') return NIL_Symbol;
+        if(digit_in_base((unsigned char)*p,base)<0) return NIL_Symbol;
         p++;}
     const char* q = slash+1;
     if(*q=='\0') return NIL_Symbol;
     while(*q){
-        if(*q<'0' || *q>'9') return NIL_Symbol;
+        if(digit_in_base((unsigned char)*q,base)<0) return NIL_Symbol;
         q++;}
-    /* Parse numerator and denominator */
     word num_sign = (token[0]=='-') ? -1 : 1;
     word num=0;
     p = token + (token[0]=='-'||token[0]=='+' ? 1 : 0);
-    while(p < slash){ num = num*10 + (*p-'0'); p++; }
+    while(p < slash){ num = num*base + digit_in_base((unsigned char)*p,base); p++; }
     word den=0;
     q = slash+1;
-    while(*q){ den = den*10 + (*q-'0'); q++; }
+    while(*q){ den = den*base + digit_in_base((unsigned char)*q,base); q++; }
     if(den==0) return NIL_Symbol;
     return ratio_new(integer_from_word(num_sign*num), integer_from_word(den));}
 
 static Ref scan_integer(parser_state* parser){
-    /* [-+]?[0-9]+\.?  — sign is allowed ONLY at position 0; otherwise a
-       token like "1+" would mis-parse as the integer 1 and the "+" would
-       be silently dropped. */
+    /* [-+]?digits+\.?  in the current radix (*READ-BASE*).  Sign is allowed ONLY
+       at position 0.  A trailing '.' forces base 10 (CL: "123." is decimal). */
     const char* token=(char*)parser->token;
+    int base=current_read_base();
+    size_t len=0; while(token[len]){ len++; }
+    if(len>0 && token[len-1]=='.'){ base=10; }   /* decimal-point integer */
     word sign=1;
-    bool value_set=false;
-    word value=0;
     size_t pos=0;
-    word digit=0;
     if(token[0]=='-'){ sign=-1; pos=1; }
     else if(token[0]=='+'){ sign=+1; pos=1; }
+    bool value_set=false;
+    word value=0;
     while(token[pos]){
-        switch(token[pos]){
-          case '0':case '1':case '2':case '3':case '4':
-          case '5':case '6':case '7':case '8':case '9':
-              digit=token[pos]-'0';
-              if((WORD_MAX/10<value)
-                  ||((WORD_MAX/10==value)&&(WORD_MAX-10*(WORD_MAX/10)<=digit))){
-                  ARITHMETIC_ERROR("Integer too big maximum %"WORD_FORMAT,WORD_MAX);}
-              value=(value*10)+digit;
-              value_set=true;
-              pos++;
-              break;
-          case '.':
-              if(token[pos+1]=='\0'){
-                  pos++;
-                  break;}
-              return NIL_Symbol;
-          default:
-              return NIL_Symbol;}}
+        if(token[pos]=='.' && token[pos+1]=='\0'){ pos++; break; }   /* trailing . */
+        int digit=digit_in_base((unsigned char)token[pos],base);
+        if(digit<0){ return NIL_Symbol; }
+        if((WORD_MAX/base<value)
+            ||((WORD_MAX/base==value)&&(WORD_MAX-base*(WORD_MAX/base)<=(word)digit))){
+            ARITHMETIC_ERROR("Integer too big maximum %"WORD_FORMAT,WORD_MAX);}
+        value=(value*base)+digit;
+        value_set=true;
+        pos++;}
     return (value_set)
             ?integer_from_word(sign*value)
             :NIL_Symbol;}
@@ -914,16 +920,15 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
     if(parser.error){ /* Should not occur here */
         STREAM_ERROR(input_stream);}
     /* Push back the one-char lookahead (the char that terminated OBJECT) so it
-       isn't lost across reads.  This is what makes two top-level forms with no
-       separating whitespace read correctly — e.g. "(a)(b)" no longer drops the
-       second '(' and misreads "(b)" as the bare symbol B.  (Terminating macros
-       — ( ) ' " ; ` , — need no preceding whitespace; constituentp already stops
-       tokens at them.)  We push back '(' / quote / a constituent (an atom start)
-       but NOT: whitespace (harmless to drop, and read_octet already translated
-       newlines so re-reading a pushed-back NEL would misbehave), the EOF
-       sentinel, or a stray top-level ')' (which can only come from a paren
-       imbalance — keep swallowing it leniently rather than erroring). */
-    if(parser.ch != (octet)EOF && parser.ch != ')' && !whitespacep(parser.ch)){
+       isn't lost across reads.  This makes two top-level forms with no separating
+       whitespace read correctly — "(a)(b)" no longer drops the second '(' — and,
+       crucially, lets a recursive read (e.g. inside a reader macro) leave a ')'
+       that belongs to an enclosing list for the outer parse_list to consume.  We
+       push back any non-whitespace, non-EOF char (a genuine stray top-level ')'
+       then surfaces as an error on the next read, which is conforming).
+       Whitespace is dropped (harmless, and read_octet already translated newlines
+       so re-reading a pushed-back NEL would misbehave). */
+    if(parser.ch != (octet)EOF && !whitespacep(parser.ch)){
         ungetc((int)parser.ch, stream_cstream(input_stream));}
     return object;}
 

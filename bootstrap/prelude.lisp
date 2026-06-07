@@ -7087,3 +7087,71 @@
               (prin1 expanded dst)
               (terpri dst))))))
     (values (pathname out) nil failure)))
+
+;;; ---- Standard # dispatch reader macros -----------------------------------
+;;; Radix (#B #O #X #R), array (#A), structure (#S), labels (#= ##), and the
+;;; unreadable marker (#<).  Registered on the standard readtable so they apply
+;;; to every subsequent read.  (The character macros and #' #( #\ #* #+ #- #. #:
+;;; #P #C #| are handled by the kernel reader.)
+
+(defvar *read-labels* nil
+  "Alist of (label . object) for #n= / #n# shared-structure references.")
+
+;; #B / #O / #X — fixed-radix rationals; #R — radix given by the infix argument.
+(set-dispatch-macro-character #\# #\B
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let ((*read-base* 2)) (read stream t nil t))))
+(set-dispatch-macro-character #\# #\O
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let ((*read-base* 8)) (read stream t nil t))))
+(set-dispatch-macro-character #\# #\X
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let ((*read-base* 16)) (read stream t nil t))))
+(set-dispatch-macro-character #\# #\R
+  (lambda (stream sub arg) (declare (ignore sub))
+    (unless (and (integerp arg) (<= 2 arg 36))
+      (error "#R requires a radix between 2 and 36, got ~S" arg))
+    (let ((*read-base* arg)) (read stream t nil t))))
+
+;; #nA — array of rank N from nested sequences.  bocl arrays are one-dimensional,
+;; so ranks 0 and 1 are supported.
+(set-dispatch-macro-character #\# #\A
+  (lambda (stream sub arg) (declare (ignore sub))
+    (let ((contents (read stream t nil t))
+          (rank (or arg 1)))
+      (cond ((eql rank 0) contents)
+            ((eql rank 1) (make-array (length contents) :initial-contents contents))
+            (t (error "#~DA: multi-dimensional arrays are not supported" rank))))))
+
+;; #S(type slot value ...) — make a structure instance via its constructor
+;; MAKE-<type> with keyword initargs from the slot names.
+(set-dispatch-macro-character #\# #\S
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let* ((spec (read stream t nil t))
+           (type (car spec))
+           (ctor (find-symbol (concatenate 'string "MAKE-" (string type))
+                              (or (symbol-package type) *package*)))
+           (initargs '()))
+      (do ((p (cdr spec) (cddr p)))
+          ((null p))
+        (push (intern (string (car p)) "KEYWORD") initargs)
+        (push (cadr p) initargs))
+      (unless (and ctor (fboundp ctor))
+        (error "#S: ~S is not a structure type" type))
+      (apply (symbol-function ctor) (nreverse initargs)))))
+
+;; #n= label / #n# reference (shared, non-circular structure).
+(set-dispatch-macro-character #\# #\=
+  (lambda (stream sub arg) (declare (ignore sub))
+    (let ((object (read stream t nil t)))
+      (when arg (push (cons arg object) *read-labels*))
+      object)))
+(set-dispatch-macro-character #\# #\#
+  (lambda (stream sub arg) (declare (ignore sub stream))
+    (let ((cell (assoc arg *read-labels*)))
+      (if cell (cdr cell) (error "Reference to undefined label #~D#" arg)))))
+
+;; #< — objects printed this way cannot be read back.
+(set-dispatch-macro-character #\# #\<
+  (lambda (stream sub arg) (declare (ignore stream sub arg))
+    (error "#<...> is not readable")))
