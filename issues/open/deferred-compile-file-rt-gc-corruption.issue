@@ -1,0 +1,49 @@
+COMPILE-FILE of ansi-test/rt.lsp intermittently HANGS or signals a spurious
+type error — a GC / live-pool rooting bug.  This blocks the ANSI-test "clean
+run": gclload1 does (COMPILE-AND-LOAD "rt.lsp") = COMPILE-FILE + LOAD, so the
+whole suite stalls or aborts here.
+
+SYMPTOM (non-deterministic, heap-layout dependent):
+  - sometimes an infinite loop (compile-file never returns);
+  - sometimes  "In check_class: TYPE ERROR: got an object of class SYMBOL,
+                expected an object of class STRING".
+The two faces (hang vs. reading a STRING slot as a SYMBOL) are the classic
+signature of an object collected mid-use, then its memory reused.
+
+REPRODUCE:
+    sources/bocl --no-init --batch -on-error appease \
+      -l ../ansi-test/rt-package.lsp \
+      -x '(compile-file "/abs/path/ansi-test/rt.lsp" :output-file "/tmp/o.fasl")' \
+      -x '(format t "OK~%")(finish-output)(bocl:quit 0)'
+  Prints neither OK nor a clean error — it hangs, or prints the check_class
+  type error and dies.
+
+NARROWING DONE:
+  - COMPILE-FILE of a *minimal* file (defmacro/defun/defstruct) works.
+  - COMPILE-FILE of a byte-identical COPY of rt.lsp (e.g. /tmp/rth.lisp) often
+    works where the original path hangs — i.e. it is timing/heap-layout
+    dependent, NOT content- or path-specific (diff is empty; same 23695 bytes).
+  - Pre-existing: present at Slice 57 (the session summary already noted the
+    "check_class: expected STRING got SYMBOL" during compile-file rt.lsp).  NOT
+    introduced by the hooks work (Slices 58-60); confirmed by rebuilding at
+    Slice 57 and reproducing.
+  - The prime suspect is the Slice-57 package-qualified symbol printing path
+    (prin1 -> symbol_print_prefix -> pkg_find_symbol / find_symbol), which now
+    runs per-symbol while PRIN1 writes each (large, MACROEXPAND-ALL'd) top-level
+    form to the fasl.  pkg_find_symbol itself does not allocate, so the unrooted
+    Ref is more likely a temporary held across an allocation elsewhere in the
+    prin1 / macroexpand-all / fasl-write chain.
+
+NEXT STEPS:
+  - Build with a GC-stress mode (collect on every allocation) to make the
+    corruption deterministic, then bisect which Ref is held across an alloc
+    without add_to_live_pool (likely in printer.c symbol printing, or in
+    %compile-file-form's prin1 of the macroexpand-all result).
+  - As an interim unblock for the suite, COMPILE-AND-LOAD could fall back to a
+    plain LOAD of the source (plain LOAD of rt.lsp works), or COMPILE-FILE could
+    skip MACROEXPAND-ALL (write forms as-is) — but the latter exposed a separate
+    PRIN1 loop on some rt.lsp form, so the rooting bug should be fixed properly.
+
+Once fixed, re-run:
+  sources/bocl --no-init --batch -on-error appease -l ../ansi-test/doit.lsp --quit
+and process the remaining ANSI conformance failures (and bignums).
