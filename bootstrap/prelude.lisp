@@ -7190,6 +7190,42 @@
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
 
+;;; ---- #n= / #n# label fixup (shared and circular structure) --------------
+;;; A #n# read before its #n= finishes yields a placeholder %READ-REF; once the
+;;; #n= object is fully read, %PATCH-READ-LABEL walks it and replaces every
+;;; occurrence of that placeholder with the object itself — across conses,
+;;; vectors, multi-dimensional arrays, and structures — which is what makes
+;;; circular structure work.
+
+(defstruct (%read-ref (:predicate %read-ref-p) (:copier nil)) label)
+
+(defun %patch-read-label (object placeholder replacement)
+  "Destructively replace PLACEHOLDER by REPLACEMENT throughout OBJECT, following
+   conses, vectors, md-arrays and structure slots; a visited set bounds the walk
+   over the (now possibly circular) result."
+  (let ((visited (make-hash-table :test 'eq)))
+    (labels ((sub (x) (if (eq x placeholder) replacement (progn (walk x) x)))
+             (walk (x)
+               (unless (or (%read-ref-p x) (gethash x visited))
+                 (cond
+                   ((consp x)
+                    (setf (gethash x visited) t)
+                    (setf (car x) (sub (car x)))
+                    (setf (cdr x) (sub (cdr x))))
+                   ((%md-array-p x)
+                    (setf (gethash x visited) t)
+                    (let ((s (%md-array-storage x)))
+                      (dotimes (i (length s)) (setf (svref s i) (sub (svref s i))))))
+                   ((and (vectorp x) (not (stringp x)))
+                    (setf (gethash x visited) t)
+                    (dotimes (i (length x)) (setf (svref x i) (sub (svref x i)))))
+                   ((typep x 'structure-object)
+                    (setf (gethash x visited) t)
+                    (let ((n (length (gethash (type-of x) *defstruct-slot-specs*))))
+                      (dotimes (i n) (structure-set (sub (structure-get x i)) x i))))))))
+      (walk object))
+    object))
+
 ;;; ---- Standard # dispatch reader macros -----------------------------------
 ;;; Radix (#B #O #X #R), array (#A), structure (#S), labels (#= ##), and the
 ;;; unreadable marker (#<).  Registered on the standard readtable so they apply
@@ -7244,12 +7280,19 @@
         (error "#S: ~S is not a structure type" type))
       (apply (symbol-function ctor) (nreverse initargs)))))
 
-;; #n= label / #n# reference (shared, non-circular structure).
+;; #n= label / #n# reference — supports shared AND circular structure.
+;; #n= registers a placeholder, reads its object (during which a nested #n#
+;; yields that placeholder), then patches the placeholder to the object.
 (set-dispatch-macro-character #\# #\=
   (lambda (stream sub arg) (declare (ignore sub))
-    (let ((object (read stream t nil t)))
-      (when arg (push (cons arg object) *read-labels*))
-      object)))
+    (unless arg (error "#= requires a label"))
+    (let* ((ref  (make-%read-ref :label arg))
+           (cell (cons arg ref)))
+      (push cell *read-labels*)               ; placeholder visible to nested #n#
+      (let ((object (read stream t nil t)))
+        (setf (cdr cell) object)              ; label now resolves to the object
+        (%patch-read-label object ref object) ; close any circular references
+        object))))
 (set-dispatch-macro-character #\# #\#
   (lambda (stream sub arg) (declare (ignore sub stream))
     (let ((cell (assoc arg *read-labels*)))

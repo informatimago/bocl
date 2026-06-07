@@ -886,6 +886,10 @@ Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_valu
 
 
 Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
+    /* #n= / #n# labels are scoped to one top-level read: clear the label table
+       at the start of a non-recursive read (a recursive read — e.g. (read
+       stream) inside a reader macro — keeps the labels currently in scope). */
+    if(nullp(recursive_p)){ set_symbol_value(S(*READ-LABELS*),NIL_Symbol); }
     parser_state parser;
     parser.input_stream=input_stream;
     parser.length=0;
@@ -1176,6 +1180,7 @@ void reader_initialize(){
     define_parameter(READ_DEFAULT_FLOAT_FORMAT,S(SINGLE-FLOAT));
     define_parameter(READ_EVAL,S(T));
     define_parameter(READ_SUPPRESS,S(NIL));
+    define_parameter(S(*READ-LABELS*),NIL_Symbol);   /* #n= / #n# label table */
     /* Build the standard readtable and the standard-macro markers. */
     g_standard_macro  = built_in_function_new(S(%STANDARD-READER-MACRO),
                                               list(S(STREAM),S(CHAR),NULL), rm_standard_dispatch);
