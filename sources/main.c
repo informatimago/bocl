@@ -52,9 +52,10 @@ static char* package=NULL;
 
 /* Candidate RC (init) file paths searched in order; the first existing file
    wins, EXCEPT that when a .fasl candidate is found, a more-recent .lisp sibling
-   is preferred (see find_rc_file).  A leading ~/ is expanded to $HOME/.  Stems
-   ~/.bocl and ~/.boclrc allow a bare (extension-less) file; ~/.config/bocl/init
-   does not. */
+   is preferred (see find_rc_file).  A leading ~/ is expanded to $HOME/.  This is
+   the union of bocl's historical candidates (~/.bocl, ~/.config/bocl/init,
+   ~/.common-lisp, ~/.config/common-lisp/init, with .lisp) and the documented
+   per-stem {bare, .fasl, .lisp} set. */
 static const char* rc_candidates[]={
     "~/.bocl",
     "~/.bocl.fasl",
@@ -62,8 +63,15 @@ static const char* rc_candidates[]={
     "~/.boclrc",
     "~/.boclrc.fasl",
     "~/.boclrc.lisp",
+    "~/.config/bocl/init",
     "~/.config/bocl/init.fasl",
     "~/.config/bocl/init.lisp",
+    "~/.common-lisp",
+    "~/.common-lisp.fasl",
+    "~/.common-lisp.lisp",
+    "~/.config/common-lisp/init",
+    "~/.config/common-lisp/init.fasl",
+    "~/.config/common-lisp/init.lisp",
     NULL};
 
 /* Return a malloc'd copy of path with a leading ~/ replaced by $HOME/. */

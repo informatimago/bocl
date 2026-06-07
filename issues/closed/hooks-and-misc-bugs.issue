@@ -149,3 +149,11 @@ Then we enter the REPL.
 ;;   via PRINC (princ_to_string).  [Slice 60]
 ;; - Init files + search order documented (documentation.org, Extensions > The
 ;;   REPL > Init (rc) files).  [Slice 60]
+
+;; Follow-up (Slice 61): the documented rc-candidate list (and the rc_candidates
+;; array) is now the UNION of bocl's historical candidates (~/.bocl,
+;; ~/.config/bocl/init, ~/.common-lisp, ~/.config/common-lisp/init, with .lisp)
+;; and the new per-stem {bare, .fasl, .lisp} variants — 15 entries, kept in sync
+;; between sources/main.c and documentation.org (Extensions > The REPL > Init
+;; files).  Previously the doc/list dropped the historical .common-lisp and bare
+;; .config/bocl/init candidates.

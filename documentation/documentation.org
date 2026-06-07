@@ -923,22 +923,32 @@ Unless =-n= / =-norc= / =--no-init= is given, bocl loads at most one init
 file at start-up, the first that exists from this list (a leading =~/= is
 the user's home directory, =(USER-HOMEDIR-PATHNAME)=):
 
-| order | file                       | bare allowed |
-|-------+----------------------------+--------------|
-|     1 | ~~/.bocl~                  | yes          |
-|     2 | ~~/.bocl.fasl~             |              |
-|     3 | ~~/.bocl.lisp~             |              |
-|     4 | ~~/.boclrc~                | yes          |
-|     5 | ~~/.boclrc.fasl~           |              |
-|     6 | ~~/.boclrc.lisp~           |              |
-|     7 | ~~/.config/bocl/init.fasl~ |              |
-|     8 | ~~/.config/bocl/init.lisp~ |              |
+| order | file                              |
+|-------+-----------------------------------|
+|     1 | ~~/.bocl~                         |
+|     2 | ~~/.bocl.fasl~                    |
+|     3 | ~~/.bocl.lisp~                    |
+|     4 | ~~/.boclrc~                       |
+|     5 | ~~/.boclrc.fasl~                  |
+|     6 | ~~/.boclrc.lisp~                  |
+|     7 | ~~/.config/bocl/init~             |
+|     8 | ~~/.config/bocl/init.fasl~        |
+|     9 | ~~/.config/bocl/init.lisp~        |
+|    10 | ~~/.common-lisp~                  |
+|    11 | ~~/.common-lisp.fasl~             |
+|    12 | ~~/.common-lisp.lisp~             |
+|    13 | ~~/.config/common-lisp/init~      |
+|    14 | ~~/.config/common-lisp/init.fasl~ |
+|    15 | ~~/.config/common-lisp/init.lisp~ |
 
-The first match wins, except that when the match is a =.fasl= whose =.lisp=
-sibling exists and is more recent, the =.lisp= is loaded instead (the fasl is
-stale).  After the init file, every =-i= / =--init= file given on the command
-line is loaded in turn.  Then the functions on BOCL:*INIT-HOOK* are called.
-Then the main task runs (=-x= / =-l= forms and the REPL).
+This is the union of bocl's historical init-file locations (the =~/.bocl=,
+=~/.config/bocl/init=, =~/.common-lisp= and =~/.config/common-lisp/init= stems)
+and the per-stem =bare= / =.fasl= / =.lisp= variants.  The first match wins,
+except that when the match is a =.fasl= whose =.lisp= sibling exists and is more
+recent, the =.lisp= is loaded instead (the fasl is stale).  After the init file,
+every =-i= / =--init= file given on the command line is loaded in turn.  Then the
+functions on BOCL:*INIT-HOOK* are called.  Then the main task runs (=-x= / =-l=
+forms and the REPL).
 
 *** Function BOCL:QUIT
 
