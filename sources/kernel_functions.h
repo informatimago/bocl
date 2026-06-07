@@ -153,6 +153,7 @@ void values(Ref par_values, MultipleValues* results);
 Ref pathname(Ref par_pathname_designator);
 Ref namestring(Ref par_pathname);
 Ref prin1_to_string(Ref par_object);
+Ref princ_to_string(Ref par_object);
 Ref print(Ref par_object, Ref par_stream);
 Ref prin1(Ref par_object, Ref par_stream);
 Ref princ(Ref par_object, Ref par_stream);

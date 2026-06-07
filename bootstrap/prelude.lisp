@@ -2641,6 +2641,13 @@
 (defun pathname-device  (p) (setq p nil) nil)
 (defun pathname-version (p) (setq p nil) nil)
 
+(defun user-homedir-pathname (&optional host)
+  "Return the pathname of the user's home directory ($HOME).  A leading ~/ in a
+   namestring abbreviates this (e.g. (PATHNAME \"~/x\") = (MERGE-PATHNAMES \"x\"
+   (USER-HOMEDIR-PATHNAME)))."
+  (declare (ignore host))
+  (pathname "~/"))
+
 (defun directory-namestring (pathname)
   (pathname-directory pathname))
 

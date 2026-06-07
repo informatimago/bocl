@@ -150,13 +150,13 @@ static void kernel_ERROR(Ref function, Ref arguments, MultipleValues* results){
     /* If signal_condition returned, no handler matched — invoke the
        unhandled-error fallback. For now: print the message and exit
        via the C error() path. */
-    Condition* c = &cond->slots->condition;
-    char* fmt = typep(c->format_control, STRING_Class)
-        ? string_cstring(c->format_control)
-        : (char*)"unhandled condition";
+    /* Render the condition's REPORT (format-control applied to its
+       format-arguments) via PRINC, not the raw format-control — otherwise an
+       unhandled "LOAD: file ~S does not exist" prints the literal ~S. */
+    char* report = string_cstring(princ_to_string(cond));
     ERROR("Unhandled %s: %s",
           string_cstring(symbol_name(class_name(class_of(cond)))),
-          fmt);
+          report);
     /* unreachable */
     (void)results;
     close_live_pool(pool);}

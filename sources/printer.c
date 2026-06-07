@@ -18,6 +18,11 @@ Ref prin1_to_string(Ref object){
     prin1(object,stream);
     return string_output_stream_get_string(stream);}
 
+Ref princ_to_string(Ref object){
+    Ref stream=stream_output_string(S(CHARACTER));
+    princ(object,stream);
+    return string_output_stream_get_string(stream);}
+
 Ref print(Ref object,Ref stream){
     terpri(stream);
     prin1(object,stream);

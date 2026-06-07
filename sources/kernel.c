@@ -1344,11 +1344,36 @@ Ref physical_pathname_new(VectorOfOctet* path){
     return Object_new(find_class(symbol_intern_cstring("PHYSICAL-PATHNAME")),
                       (Slots*)path);}
 
+/* If PATH begins with ~ followed by '/' or end-of-string, return a malloc'd
+   copy with the leading ~ replaced by $HOME (trailing slashes of $HOME trimmed),
+   i.e. ~ abbreviates (USER-HOMEDIR-PATHNAME); otherwise a plain copy.  ~user is
+   not handled.  Caller frees. */
+static char* expand_home_namestring(const char* path){
+    if(path[0]=='~' && (path[1]=='/' || path[1]=='\0')){
+        const char* home=getenv("HOME");
+        if(home && home[0]){
+            size_t hlen=strlen(home);
+            while(hlen>1 && home[hlen-1]=='/'){ hlen--; }
+            size_t rlen=strlen(path+1);             /* part after '~' (incl. '/') */
+            char* result=CHECK_POINTER(malloc(hlen+rlen+1));
+            memcpy(result,home,hlen);
+            memcpy(result+hlen,path+1,rlen+1);      /* +1 copies the NUL */
+            return result;}}
+    return strdup(path);}
+
 Ref physical_pathname_new_cstring(const char* path){
-    return physical_pathname_new(VectorOfOctet_slots_cstring(path));}
+    char* expanded=expand_home_namestring(path);
+    Ref result=physical_pathname_new(VectorOfOctet_slots_cstring(expanded));
+    free(expanded);
+    return result;}
 
 Ref physical_pathname(Ref namestring){
     check_class(namestring,STRING_Class);
+    /* A leading ~ abbreviates the user's home directory; expand via the cstring
+       path (which trims/joins $HOME). */
+    {   OctetArray* oa0 = &namestring->slots->octet_array;
+        if(oa0->dimensions[0] >= 1 && oa0->elements->elements[0] == '~'){
+            return physical_pathname_new_cstring(string_cstring(namestring));}}
     /* Copy the string's bytes into a fresh VectorOfOctet so the pathname has
        its own backing store. We cannot share the string's slots directly:
        STRING is laid out as an OctetArray (element_type, elements*,

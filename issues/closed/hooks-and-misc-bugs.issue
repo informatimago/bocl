@@ -127,3 +127,25 @@ Then we enter the REPL.
     ~/src/public/bocl
     slice-41-issues-resolution
     20:09[pjb@thalassa org.xquartz:0 bocl 35Gi]$ 
+
+
+;; ===================== RESOLUTION (Slices 59 + 60) =====================
+;; All items fixed:
+;; - ~/.boclrc now loaded: rc search order is ~/.bocl{,.fasl,.lisp},
+;;   ~/.boclrc{,.fasl,.lisp}, ~/.config/bocl/init.{fasl,lisp}; first match wins,
+;;   .fasl defers to a newer .lisp sibling.  (main.c)  [Slice 59]
+;; - *INIT-HOOK* / *QUIT-HOOK* now fire (they were never reached because the rc
+;;   file that registered them was not loaded).  [Slice 59]
+;; - *ABORT-HOOK* now fires on termination signals too (SIGTERM/SIGINT/SIGHUP),
+;;   not just SEGV/BUS/ABRT; crash handler installed unconditionally with a
+;;   re-entrancy guard.  (kernel.c)  [Slice 59]
+;;   (Underlying enabler: fixed HANDLER-CASE non-local pass-through FATAL, which
+;;    also broke BOCL:QUIT through the appease loader.  [Slice 59])
+;; - ~ in namestrings now abbreviates (USER-HOMEDIR-PATHNAME): (PATHNAME "~/x")
+;;   => $HOME/x; added USER-HOMEDIR-PATHNAME.  (kernel.c physical_pathname,
+;;   prelude)  [Slice 60]
+;; - Unhandled-condition report now applies the format arguments (was printing
+;;   the raw format-control, e.g. literal ~S): kernel_ERROR renders the report
+;;   via PRINC (princ_to_string).  [Slice 60]
+;; - Init files + search order documented (documentation.org, Extensions > The
+;;   REPL > Init (rc) files).  [Slice 60]
