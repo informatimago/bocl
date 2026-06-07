@@ -829,6 +829,18 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
         END_OF_FILE(input_stream);}
     if(parser.error){ /* Should not occur here */
         STREAM_ERROR(input_stream);}
+    /* Push back the one-char lookahead (the char that terminated OBJECT) so it
+       isn't lost across reads.  This is what makes two top-level forms with no
+       separating whitespace read correctly — e.g. "(a)(b)" no longer drops the
+       second '(' and misreads "(b)" as the bare symbol B.  (Terminating macros
+       — ( ) ' " ; ` , — need no preceding whitespace; constituentp already stops
+       tokens at them.)  We push back '(' / quote / a constituent (an atom start)
+       but NOT: whitespace (harmless to drop, and read_octet already translated
+       newlines so re-reading a pushed-back NEL would misbehave), the EOF
+       sentinel, or a stray top-level ')' (which can only come from a paren
+       imbalance — keep swallowing it leniently rather than erroring). */
+    if(parser.ch != (octet)EOF && parser.ch != ')' && !whitespacep(parser.ch)){
+        ungetc((int)parser.ch, stream_cstream(input_stream));}
     return object;}
 
 Ref kernel_read_preserving_whitespace(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){

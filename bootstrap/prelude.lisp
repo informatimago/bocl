@@ -3525,7 +3525,7 @@
                 (when (and (eq (svref (%obj-slots instance) (getf eslot :location)) *%unbound*)
                            (getf eslot :initfunction))
                   (setf (svref (%obj-slots instance) (getf eslot :location))
-                        (funcall (getf eslot :initfunction))))))))))
+                        (funcall (getf eslot :initfunction)))))))))
     instance))
 
 (defun make-instance (class-designator &rest initargs)
