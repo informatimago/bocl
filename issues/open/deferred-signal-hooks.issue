@@ -1,0 +1,133 @@
+Signal handling design: extend *ABORT-HOOK* to all Term/Core signals, and add
+BOCL:*STOP-HOOK* / BOCL:*CONT-HOOK* for SIGTSTP/SIGCONT.  Deferred — study a few
+CL implementations first, signal handling is subtle.
+
+------------------------------------------------------------------------------
+1. BACKGROUND — POSIX default signal actions (man 7 signal)
+------------------------------------------------------------------------------
+  Term   terminate the process
+  Ign    ignore the signal
+  Core   terminate the process and dump core
+  Stop   stop (suspend) the process
+  Cont   continue the process if stopped
+
+Principle we want:
+  - Term or Core (a "crash"/termination): call BOCL:*ABORT-HOOK* (signum).
+  - Stop:  call a new BOCL:*STOP-HOOK* () before the process suspends.
+  - Cont:  call a new BOCL:*CONT-HOOK* () when the process resumes.
+  - Ign:   no hook.
+
+Rationale for *STOP-HOOK* / *CONT-HOOK*: let the process release/restore
+resource state across suspend/resume — e.g. reset the terminal out of an
+ncurses/raw mode on stop and re-enter it on cont; or close a network connection
+on stop (can't service it while suspended) and re-open it on cont.
+
+  (push (function restore-terminal)    bocl:*stop-hook*)
+  (push (function set-ncurse-terminal) bocl:*cont-hook*)
+
+------------------------------------------------------------------------------
+2. CURRENT STATE (Slices 58-59)
+------------------------------------------------------------------------------
+- BOCL:*ABORT-HOOK* exists; the crash handler (kernel.c bocl_crash_handler) runs
+  it then re-raises with SIG_DFL.  GC is disabled in the handler; there is a
+  re-entrancy guard; it only enters Lisp when a hook is registered.
+- It is installed for a SUBSET only: SIGSEGV, SIGBUS, SIGABRT (Core) and
+  SIGTERM, SIGINT, SIGHUP (Term).  The native backtrace dump is gated on
+  $BOCL_BACKTRACE.
+- No *STOP-HOOK* / *CONT-HOOK* yet.
+
+------------------------------------------------------------------------------
+3. SIGNAL TAXONOMY (catchable, by default action) — Linux/macOS differ slightly
+------------------------------------------------------------------------------
+Uncatchable (cannot be caught, blocked, or ignored): SIGKILL, SIGSTOP.
+  => SIGKILL: no abort hook possible.  SIGSTOP: no stop hook possible; only the
+     interactive/job-control SIGTSTP (Ctrl-Z) is catchable, and SIGTTIN/SIGTTOU.
+
+Core  (=> *ABORT-HOOK*): SIGQUIT, SIGILL, SIGABRT, SIGFPE, SIGSEGV, SIGBUS,
+      SIGTRAP, SIGSYS, SIGXCPU, SIGXFSZ, SIGEMT(BSD/macOS).
+Term  (=> *ABORT-HOOK*): SIGHUP, SIGINT, SIGPIPE, SIGALRM, SIGTERM, SIGUSR1,
+      SIGUSR2, SIGPROF, SIGVTALRM, SIGSTKFLT(Linux), SIGIO/SIGPOLL, SIGPWR(Linux).
+Stop  (=> *STOP-HOOK* via the catchable proxy SIGTSTP): SIGTSTP, SIGTTIN, SIGTTOU.
+Cont  (=> *CONT-HOOK*): SIGCONT.
+Ign   (no hook): SIGCHLD, SIGURG, SIGWINCH (+ SIGCONT's default is Cont not Ign).
+
+CAUTION: "catch every Term/Core signal" is NOT obviously right —
+  - SIGPIPE is very commonly left at SIG_IGN by libraries; catching it to run a
+    hook + terminate would change long-standing behaviour.
+  - SIGALRM/SIGVTALRM/SIGPROF/SIGUSR1/SIGUSR2/SIGIO are frequently used by
+    libraries/profilers for non-fatal purposes; grabbing them by default would
+    break them.
+  - SIGCHLD/SIGURG/SIGWINCH are Ign by default; SIGWINCH is wanted by TUIs.
+So the real design question is *which* signals bocl should claim by default,
+which to leave alone, and how to let user code opt in/out per signal.
+
+------------------------------------------------------------------------------
+4. COMPLEXITY / OPEN QUESTIONS
+------------------------------------------------------------------------------
+- Async-signal-safety: running arbitrary Lisp from a C signal handler is unsafe
+  (the handler may interrupt malloc/GC/printf).  Current *ABORT-HOOK* accepts
+  this as best-effort.  The robust approach most CL impls use is DEFERRED
+  signals: the C handler only sets a flag (and saves siginfo); the flag is
+  checked + the Lisp handler run at a safe point (between forms, on allocation,
+  on the next REPL turn).  That can't help true crashes (SEGV in bad state) but
+  is right for TERM/INT/TSTP/CONT/USR.  Decide: best-effort-in-handler vs
+  deferred vs hybrid (deferred for Term/Stop/Cont/User, best-effort for Core).
+- SIGTSTP/SIGCONT dance: SIGTSTP handler must run *STOP-HOOK*, then actually
+  suspend (reset SIGTSTP to SIG_DFL and re-raise, or raise SIGSTOP), re-arming
+  the handler; on resume the SIGCONT handler runs *CONT-HOOK*.  Must cooperate
+  with job control (don't deadlock the shell) and with SIGTTIN/SIGTTOU.
+- SA_RESTART vs EINTR: do we restart interrupted syscalls (read in the REPL) or
+  surface EINTR?  Affects whether Ctrl-Z/Ctrl-C interrupt a blocking READ.
+- sigaltstack: for SIGSEGV/SIGBUS (stack-overflow), the handler needs an
+  alternate signal stack or it re-faults.  (Relevant to the current best-effort
+  abort hook too.)
+- SIGINT semantics: most CL REPLs treat Ctrl-C as an INTERACTIVE INTERRUPT into
+  the debugger, NOT as terminate.  bocl currently runs *ABORT-HOOK* + terminates
+  on SIGINT.  Decide whether SIGINT should instead interrupt to the REPL/debugger
+  (then it is not an "abort" at all and shouldn't run *ABORT-HOOK*).
+- Re-raising to preserve the default action (Term vs Core/core-dump) after the
+  hook: keep the current "signal(sig,SIG_DFL); raise(sig);" so a Core signal
+  still dumps core.
+- Threads: hooks "may be called from a thread other than the main thread"
+  (per the extension-hooks spec); signal delivery + thread choice matters once
+  bocl has threads.
+
+------------------------------------------------------------------------------
+5. STUDY PLAN — what do other implementations do?
+------------------------------------------------------------------------------
+Read the signal handling of: SBCL, CCL (Clozure), ECL, CLISP, ABCL, Allegro.
+Questions per impl:
+  - which signals do they install handlers for, and at what default?
+  - deferred-signal mechanism? (SBCL pseudo-atomic / without-interrupts;
+    sb-sys:enable-interrupt, sb-unix, sb-sys:*interactive-interrupt*).
+  - SIGINT -> debugger (INTERACTIVE-INTERRUPT) vs terminate.
+  - SIGTSTP/SIGCONT handling for the REPL (terminal save/restore).
+  - exit vs abort hooks: SBCL sb-ext:*exit-hooks* (normal exit only) +
+    *save-hooks*; CCL; ECL ext:quit hooks.  Note ours already splits
+    *QUIT-HOOK* (normal) from *ABORT-HOOK* (signal).
+  - sigaltstack usage; SA_RESTART policy; SIGPIPE policy (most SIG_IGN it).
+Seed (from memory, verify): SBCL uses deferred signals + pseudo-atomic regions,
+SIGINT -> INTERACTIVE-INTERRUPT into the debugger, sb-ext:*exit-hooks* run on
+normal exit only, SIGPIPE handled/ignored.  CCL has ccl:*break-hook* and installs
+its own handlers.  Most impls do NOT run arbitrary user Lisp directly from the C
+handler for non-fatal signals — they defer.
+
+------------------------------------------------------------------------------
+6. REFERENCES
+------------------------------------------------------------------------------
+  https://pubs.opengroup.org/onlinepubs/009695399/functions/xsh_chap02_04.html#tag_02_04
+  https://pubs.opengroup.org/onlinepubs/009695399/functions/sigaction.html
+  man 7 signal
+  issues/closed/extension-hooks.issue (the original *INIT/ABORT/QUIT-HOOK* spec)
+
+------------------------------------------------------------------------------
+7. PROPOSED INCREMENT (once studied)
+------------------------------------------------------------------------------
+- Add BOCL:*STOP-HOOK* (lambda ()) and BOCL:*CONT-HOOK* (lambda ()), exported,
+  documented next to the other hooks (documentation.org, Extensions > The REPL).
+- A signal-disposition table mapping each handled signal to {abort|stop|cont|
+  ignore|interrupt}, with a sane default set (NOT blindly all Term/Core) and a
+  way for user code to adjust it.
+- Likely a deferred-signal mechanism for the non-fatal signals; keep the
+  best-effort in-handler path (GC off, re-entrancy guard, sigaltstack) only for
+  the genuine Core faults.
