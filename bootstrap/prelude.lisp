@@ -7088,6 +7088,108 @@
               (terpri dst))))))
     (values (pathname out) nil failure)))
 
+;;; ---- Multi-dimensional arrays (ranks 0..array-rank-limit-1 = 0..7) -------
+;;; Rank-1 arrays stay kernel vectors (so VECTORP / SVREF and the existing code
+;;; keep working).  Ranks 0 and >=2 are an %MD-ARRAY: a flat row-major storage
+;;; vector plus the dimension list.  AREF / MAKE-ARRAY / ARRAY-DIMENSIONS etc.
+;;; dispatch on the representation; the rank-1 path delegates to the kernel.
+
+(defvar *%kernel-aref*             (symbol-function 'aref))
+(defvar *%kernel-aref-set*         (symbol-function 'aref-set))
+(defvar *%kernel-array-dimensions* (symbol-function 'array-dimensions))
+(defvar *%kernel-arrayp*           (symbol-function 'arrayp))
+
+(defstruct (%md-array (:predicate %md-array-p) (:copier nil))
+  dimensions   ; list of dimension sizes
+  storage)     ; flat row-major simple-vector
+
+(defun %make-vector-filled (n initial-element)
+  (let ((lst nil)) (dotimes (i n) (push initial-element lst)) (apply #'vector lst)))
+
+(defun %md-row-major-index (dimensions subscripts)
+  (let ((index 0) (ss subscripts))
+    (dolist (d dimensions)
+      (when (null ss) (error "AREF: too few subscripts"))
+      (unless (and (integerp (car ss)) (<= 0 (car ss)) (< (car ss) d))
+        (error "AREF: subscript ~S out of range for dimension ~S" (car ss) d))
+      (setq index (+ (* index d) (car ss)) ss (cdr ss)))
+    (when ss (error "AREF: too many subscripts"))
+    index))
+
+(defun %md-dims-from-contents (contents rank)
+  (let ((dims nil) (c contents))
+    (dotimes (i rank)
+      (let ((l (coerce c 'list))) (push (length l) dims) (setq c (if l (car l) nil))))
+    (nreverse dims)))
+
+(defun %md-flatten (contents rank)
+  (if (<= rank 1)
+      (coerce contents 'list)
+      (let ((acc nil))
+        (dolist (sub (coerce contents 'list)) (setq acc (append acc (%md-flatten sub (1- rank)))))
+        acc)))
+
+(defun make-array (dimensions &key initial-element initial-contents
+                                   element-type adjustable fill-pointer)
+  element-type adjustable fill-pointer        ; accepted, ignored
+  (let* ((dims (if (listp dimensions) dimensions (list dimensions)))
+         (rank (length dims))
+         (total (reduce #'* dims :initial-value 1)))
+    (cond
+      ((= rank 1)
+       (let ((v (%make-vector-filled (car dims) initial-element)))
+         (when initial-contents
+           (let ((i 0)) (dolist (e (coerce initial-contents 'list)) (setf (svref v i) e) (incf i))))
+         v))
+      (t
+       (let ((storage (%make-vector-filled total initial-element)))
+         (when initial-contents
+           (let ((flat (if (= rank 0) (list initial-contents) (%md-flatten initial-contents rank)))
+                 (i 0))
+             (dolist (e flat) (setf (svref storage i) e) (incf i))))
+         (make-%md-array :dimensions dims :storage storage))))))
+
+(defun arrayp (x) (or (%md-array-p x) (funcall *%kernel-arrayp* x)))
+
+(defun array-dimensions (array)
+  (if (%md-array-p array) (copy-list (%md-array-dimensions array))
+      (funcall *%kernel-array-dimensions* array)))
+
+(defun aref (array &rest subscripts)
+  (if (%md-array-p array)
+      (svref (%md-array-storage array)
+             (%md-row-major-index (%md-array-dimensions array) subscripts))
+      (apply *%kernel-aref* array subscripts)))
+
+(defun aref-set (value array &rest subscripts)
+  (if (%md-array-p array)
+      (progn (setf (svref (%md-array-storage array)
+                          (%md-row-major-index (%md-array-dimensions array) subscripts))
+                   value)
+             value)
+      (apply *%kernel-aref-set* value array subscripts)))
+
+;; (SETF (AREF array sub...) value) — variadic; the value is the last arg the
+;; setf machinery appends after the place subscripts.
+(sethash 'aref *setf-expanders*
+  (lambda (array &rest subs-and-val)
+    (let* ((rev (reverse subs-and-val)) (val (car rev)) (subs (reverse (cdr rev))))
+      `(aref-set ,val ,array ,@subs))))
+
+(defun row-major-aref (array index)
+  (if (%md-array-p array) (svref (%md-array-storage array) index)
+      (svref array index)))
+
+(define-setf-expander row-major-aref (array index) (val)
+  `(row-major-aref-set ,val ,array ,index))
+(defun row-major-aref-set (value array index)
+  (if (%md-array-p array)
+      (progn (setf (svref (%md-array-storage array) index) value) value)
+      (progn (setf (svref array index) value) value)))
+
+(defun array-row-major-index (array &rest subscripts)
+  (%md-row-major-index (array-dimensions array) subscripts))
+
 ;;; ---- Standard # dispatch reader macros -----------------------------------
 ;;; Radix (#B #O #X #R), array (#A), structure (#S), labels (#= ##), and the
 ;;; unreadable marker (#<).  Registered on the standard readtable so they apply
@@ -7113,15 +7215,17 @@
       (error "#R requires a radix between 2 and 36, got ~S" arg))
     (let ((*read-base* arg)) (read stream t nil t))))
 
-;; #nA — array of rank N from nested sequences.  bocl arrays are one-dimensional,
-;; so ranks 0 and 1 are supported.
+;; #nA — array of rank N from nested sequences (ranks 0..array-rank-limit-1).
 (set-dispatch-macro-character #\# #\A
   (lambda (stream sub arg) (declare (ignore sub))
     (let ((contents (read stream t nil t))
           (rank (or arg 1)))
-      (cond ((eql rank 0) contents)
-            ((eql rank 1) (make-array (length contents) :initial-contents contents))
-            (t (error "#~DA: multi-dimensional arrays are not supported" rank))))))
+      (unless (< rank array-rank-limit)
+        (error "#~DA: rank exceeds ARRAY-RANK-LIMIT (~D)" rank array-rank-limit))
+      (cond ((= rank 0) (make-array nil :initial-contents contents))
+            ((= rank 1) (make-array (length contents) :initial-contents contents))
+            (t (make-array (%md-dims-from-contents contents rank)
+                           :initial-contents contents))))))
 
 ;; #S(type slot value ...) — make a structure instance via its constructor
 ;; MAKE-<type> with keyword initargs from the slot names.
