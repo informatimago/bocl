@@ -255,6 +255,13 @@ static Ref parse_string(parser_state* parser){
 
 static Ref parse_object(parser_state* parser);
 
+/* Readtable support (defined near reader_initialize). */
+static Ref g_standard_readtable, g_standard_macro, g_dispatch_marker;
+static Ref current_readtable(void);
+static Ref rt_macro(Ref rt,int ch);
+static Ref rtv_get(Ref vec,int i);
+static bool token_continues(Ref rt,int ch);
+
 /* Recursively expand a backquoted form into LIST / APPEND / CONS / QUOTE
    nodes. The reader uses tagged conses (UNQUOTE x) and (UNQUOTE-SPLICING x)
    for `,x` and `,@x`; this function eliminates them. Only one level of
@@ -593,11 +600,17 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
     return sym;}
 
 static Ref parse_token(parser_state* parser){
+    Ref rt=current_readtable();
     parser->length=0;
-    while(!parser->error && !parser->eof && constituentp(parser->ch)){
+    while(!parser->error && !parser->eof && token_continues(rt,parser->ch)){
         check_token_too_long(parser,"Token");
         parser->token[parser->length++]=parser->ch;
         advance_character(parser);}
+    /* A token terminated by end-of-file is still a complete token: clear the EOF
+       flag (as parse_list does after ')') so kernel_read returns the object
+       instead of signalling end-of-file.  e.g. (read-from-string "foo"), or a
+       reader macro doing (read stream) on the last token before EOF. */
+    if(parser->eof && parser->length>0){ parser->eof=false; }
     check_parser_error(parser);
     parser->token[parser->length]='\0';
     bool valid=true;
@@ -613,7 +626,48 @@ static Ref parse_token(parser_state* parser){
     parser->eof=false; /* We've got a result, so defer EOF */
     return result;}
 
+/* Invoke a reader-macro function FN as (fn stream char [arg]); the stream is
+   already positioned just past CHAR.  Refresh the parser's lookahead afterwards
+   and treat a trailing EOF as a plain terminator.  Returns the macro's value, or
+   the skip marker if it returned no values. */
+static Ref call_reader_macro(parser_state* parser, Ref fn, octet ch, bool with_arg){
+    uword pool=open_live_pool();
+    add_to_live_pool(fn); add_to_live_pool(parser->input_stream);
+    Ref args = with_arg
+        ? list(parser->input_stream, code_character(I(ch)), NIL_Symbol, NULL)
+        : list(parser->input_stream, code_character(I(ch)), NULL);
+    add_to_live_pool(args);
+    MultipleValues mv;
+    kernel_apply(fn, args, &mv);
+    Ref res=(mv.count==0)?get_skip_marker():mv.values[0];
+    close_live_pool(pool);
+    add_to_live_pool(res);            /* re-root: close_live_pool trimmed it */
+    advance_character(parser);        /* refresh lookahead past the macro's input */
+    parser->eof=false;               /* object complete; EOF here is just the terminator */
+    return res;}
+
 static Ref parse_object(parser_state* parser){
+    /* Reader-macro characters in the current readtable.  A built-in marker
+       (g_standard_macro / g_dispatch_marker for the standard '#') is handled by
+       the hardwired dispatch below; any other function is a user reader macro,
+       and a g_dispatch_marker on a non-'#' character is a user dispatch macro
+       (made with make-dispatch-macro-character). */
+    if(!parser->suppress){
+        Ref rt=current_readtable();
+        Ref m=rt_macro(rt,parser->ch);
+        if(m!=NIL_Symbol && m!=g_standard_macro){
+            if(m==g_dispatch_marker && parser->ch!='#'){
+                octet disp=parser->ch;
+                octet sub=read_octet(parser->input_stream,&parser->eof,&parser->error);
+                check_parser_error(parser);
+                Ref subtab=rtv_get(rt->slots->readtable.dispatch,disp);
+                int idx=sub; if(idx>='a'&&idx<='z'){ idx-=32; }
+                Ref fn=(!nullp(subtab)&&idx>=0&&idx<128)?rtv_get(subtab,idx):NIL_Symbol;
+                if(nullp(fn)){ READER_ERROR(parser->input_stream,
+                                            "No dispatch function for %c",(char)sub); }
+                return call_reader_macro(parser, fn, sub, true);}
+            if(m!=g_dispatch_marker){
+                return call_reader_macro(parser, m, parser->ch, false);}}}
     switch(parser->ch){
         /* We cannot have a ';' since skip_space(parser); eats the comments too. */
       case '\'':
@@ -740,8 +794,17 @@ static Ref parse_object(parser_state* parser){
                 skip_spaces(parser);
                 Ref designator=parse_object(parser);
                 return pathname(designator); }
-            default:
-                READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}
+            default: {
+                /* User-defined #-dispatch sub-character?
+                   (set-dispatch-macro-character #\# sub fn) — call (fn stream
+                   sub-char arg); bocl does not parse the numeric infix arg. */
+                Ref rt=current_readtable();
+                Ref subtab=rtv_get(rt->slots->readtable.dispatch,'#');
+                octet sub=parser->ch;
+                int idx=sub; if(idx>='a'&&idx<='z'){ idx-=32; }
+                Ref fn=(!nullp(subtab)&&idx>=0&&idx<128)?rtv_get(subtab,idx):NIL_Symbol;
+                if(!nullp(fn)){ return call_reader_macro(parser, fn, sub, true); }
+                READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}}
           break;
       default:
           if(constituentp(parser->ch)){
@@ -880,12 +943,227 @@ Ref kernel_read_from_string(Ref input_string,Ref eof_error_p,Ref eof_value,Ref s
     return result;}
 
 
+/* ============================================================ */
+/*  Readtable & reader macros                                    */
+/* ============================================================ */
+/* Character syntax types (CL standard; mirror the reference reader). */
+#define CS_INVALID                0
+#define CS_WHITESPACE             1
+#define CS_SINGLE_ESCAPE          2
+#define CS_MULTIPLE_ESCAPE        3
+#define CS_CONSTITUENT            4
+#define CS_TERMINATING_MACRO      5
+#define CS_NON_TERMINATING_MACRO  6
+
+extern Ref Object_new(Ref class, Slots* slots);
+
+/* g_standard_readtable / g_standard_macro / g_dispatch_marker are declared near
+   the top (forward-declared for parse_token/parse_object).  The two markers are
+   stored in the macros vector for the standard macro characters: the reader
+   recognises them by identity and uses its built-in (fast) dispatch; any OTHER
+   (user) function in the macros vector is invoked as a reader macro. */
+
+static Ref rtv_get(Ref vec,int i){ return vec->slots->array.elements->elements[i]; }
+static void rtv_set(Ref vec,int i,Ref v){ vec->slots->array.elements->elements[i]=v; }
+static Ref make_rt_vector(Ref fill){
+    Ref lst=NIL_Symbol;
+    for(int i=0;i<128;i++){ lst=cons(fill,lst); }
+    return vector_new(lst);}
+
+static int rt_syntax(Ref rt,int ch){
+    if(ch<0||ch>=128){ return CS_CONSTITUENT; }
+    return (int)integer_value(rtv_get(rt->slots->readtable.syntax,ch));}
+static Ref rt_macro(Ref rt,int ch){
+    if(ch<0||ch>=128){ return NIL_Symbol; }
+    return rtv_get(rt->slots->readtable.macros,ch);}
+
+/* The readtable in force (*READTABLE*), or the standard one as a fallback. */
+static Ref current_readtable(void){
+    Ref rt=symbol_value(READTABLE);
+    if(!typep(rt,READTABLE_Class)){ return g_standard_readtable; }
+    return rt;}
+
+/* A token continues across a character iff that character is a constituent or a
+   non-terminating macro character (whitespace and terminating macros end it).
+   whitespacep() is the authority for whitespace — it knows the reader's NEL
+   newline (code 133, outside the 0..127 syntax vector). */
+static bool token_continues(Ref rt,int ch){
+    if(whitespacep((octet)ch)){ return false; }
+    int s=rt_syntax(rt,ch);
+    return s==CS_CONSTITUENT || s==CS_NON_TERMINATING_MACRO;}
+
+/* Stub for the standard macro markers: they are dispatched by the reader's
+   built-in fast path, not called via FUNCALL.  (Making them independently
+   funcallable from user code is a later refinement.) */
+static void rm_standard_stub(Ref function, Ref arguments, MultipleValues* results){
+    (void)function; (void)arguments;
+    ERROR("standard reader macro is dispatched by the reader, not directly callable%s","");
+    results->count=1; results->values[0]=NIL_Symbol;}
+
+static Ref make_standard_readtable(void){
+    uword pool=open_live_pool();
+    Ref syntax=make_rt_vector(I(CS_CONSTITUENT));   add_to_live_pool(syntax);
+    Ref macros=make_rt_vector(NIL_Symbol);          add_to_live_pool(macros);
+    Ref dispatch=make_rt_vector(NIL_Symbol);        add_to_live_pool(dispatch);
+    /* whitespace */
+    int ws[]={' ','\t','\n','\r','\f',11,-1};
+    for(int i=0;ws[i]>=0;i++){ rtv_set(syntax,ws[i],I(CS_WHITESPACE)); }
+    rtv_set(syntax,'\\',I(CS_SINGLE_ESCAPE));
+    rtv_set(syntax,'|', I(CS_MULTIPLE_ESCAPE));
+    /* terminating macro characters */
+    const char* term="()'\";`,";
+    for(const char* p=term;*p;p++){
+        rtv_set(syntax,(int)(unsigned char)*p,I(CS_TERMINATING_MACRO));
+        rtv_set(macros,(int)(unsigned char)*p,g_standard_macro);}
+    /* # — a non-terminating dispatch macro */
+    rtv_set(syntax,'#',I(CS_NON_TERMINATING_MACRO));
+    rtv_set(macros,'#',g_dispatch_marker);
+    rtv_set(dispatch,'#',make_rt_vector(NIL_Symbol));
+    Readtable* rt=(Readtable*)allocate(sizeof(Readtable));
+    rt->syntax=syntax; rt->macros=macros; rt->dispatch=dispatch; rt->readcase=K(UPCASE);
+    rt->objcount=4;
+    Ref result=Object_new(READTABLE_Class,(Slots*)rt);
+    close_live_pool(pool);
+    add_to_live_pool(result);
+    return result;}
+
+static Ref readtable_arg(Ref* current, Ref function){
+    Ref rt = nullp(*current) ? current_readtable() : pop_mandatory_argument(function,current);
+    if(!typep(rt,READTABLE_Class)){ TYPE_ERROR(rt,READTABLE_Class); }
+    return rt;}
+
+static int char_arg(Ref obj){
+    if(!typep(obj,CHARACTER_Class)){ TYPE_ERROR(obj,CHARACTER_Class); }
+    return (int)integer_value(character_code(obj));}
+
+static void k_READTABLEP(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments; Ref obj=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1; results->values[0]=as_boolean(typep(obj,READTABLE_Class));
+    close_live_pool(pool);}
+
+static void k_GET_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int ch=char_arg(pop_mandatory_argument(function,&current));
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    int s=rt_syntax(rt,ch);
+    results->count=2;
+    results->values[0]=rt_macro(rt,ch);
+    results->values[1]=as_boolean(s==CS_NON_TERMINATING_MACRO);
+    close_live_pool(pool);}
+
+static void k_SET_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int ch=char_arg(pop_mandatory_argument(function,&current));
+    Ref fn=pop_mandatory_argument(function,&current);
+    Ref non_term=nullp(current)?NIL_Symbol:pop_mandatory_argument(function,&current);
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    if(ch<0||ch>=128){ ERROR("SET-MACRO-CHARACTER: only codes 0..127 supported%s",""); }
+    rtv_set(rt->slots->readtable.syntax,ch,
+            I(is_true(non_term)?CS_NON_TERMINATING_MACRO:CS_TERMINATING_MACRO));
+    rtv_set(rt->slots->readtable.macros,ch,fn);
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+static void k_MAKE_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int ch=char_arg(pop_mandatory_argument(function,&current));
+    Ref non_term=nullp(current)?NIL_Symbol:pop_mandatory_argument(function,&current);
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    if(ch<0||ch>=128){ ERROR("MAKE-DISPATCH-MACRO-CHARACTER: only codes 0..127 supported%s",""); }
+    rtv_set(rt->slots->readtable.syntax,ch,
+            I(is_true(non_term)?CS_NON_TERMINATING_MACRO:CS_TERMINATING_MACRO));
+    rtv_set(rt->slots->readtable.macros,ch,g_dispatch_marker);
+    rtv_set(rt->slots->readtable.dispatch,ch,make_rt_vector(NIL_Symbol));
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+static void k_GET_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int disp=char_arg(pop_mandatory_argument(function,&current));
+    int sub =char_arg(pop_mandatory_argument(function,&current));
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    Ref subtab=(disp>=0&&disp<128)?rtv_get(rt->slots->readtable.dispatch,disp):NIL_Symbol;
+    if(nullp(subtab)){ ERROR("GET-DISPATCH-MACRO-CHARACTER: not a dispatch character%s",""); }
+    if(sub>='a'&&sub<='z'){ sub-=32; }   /* CL upcases the sub-character */
+    results->count=1;
+    results->values[0]=(sub>=0&&sub<128)?rtv_get(subtab,sub):NIL_Symbol;
+    close_live_pool(pool);}
+
+static void k_SET_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int disp=char_arg(pop_mandatory_argument(function,&current));
+    int sub =char_arg(pop_mandatory_argument(function,&current));
+    Ref fn=pop_mandatory_argument(function,&current);
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    Ref subtab=(disp>=0&&disp<128)?rtv_get(rt->slots->readtable.dispatch,disp):NIL_Symbol;
+    if(nullp(subtab)){ ERROR("SET-DISPATCH-MACRO-CHARACTER: not a dispatch character%s",""); }
+    if(sub>='a'&&sub<='z'){ sub-=32; }
+    if(sub>=0&&sub<128){ rtv_set(subtab,sub,fn); }
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+static void k_COPY_READTABLE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref from=nullp(current)?current_readtable():pop_mandatory_argument(function,&current);
+    /* (the optional TO-READTABLE arg is accepted but a fresh copy is returned) */
+    if(!nullp(current)){ (void)pop_mandatory_argument(function,&current); }
+    check_no_more_arguments(function,current);
+    if(nullp(from)){ from=g_standard_readtable; }   /* (copy-readtable nil) => standard */
+    if(!typep(from,READTABLE_Class)){ TYPE_ERROR(from,READTABLE_Class); }
+    add_to_live_pool(from);
+    Ref syntax=make_rt_vector(I(CS_CONSTITUENT)); add_to_live_pool(syntax);
+    Ref macros=make_rt_vector(NIL_Symbol);        add_to_live_pool(macros);
+    Ref dispatch=make_rt_vector(NIL_Symbol);      add_to_live_pool(dispatch);
+    for(int i=0;i<128;i++){
+        rtv_set(syntax,i,rtv_get(from->slots->readtable.syntax,i));
+        rtv_set(macros,i,rtv_get(from->slots->readtable.macros,i));
+        Ref sub=rtv_get(from->slots->readtable.dispatch,i);
+        if(!nullp(sub)){
+            Ref nsub=make_rt_vector(NIL_Symbol);
+            for(int j=0;j<128;j++){ rtv_set(nsub,j,rtv_get(sub,j)); }
+            rtv_set(dispatch,i,nsub);}}
+    Readtable* rt=(Readtable*)allocate(sizeof(Readtable));
+    rt->syntax=syntax; rt->macros=macros; rt->dispatch=dispatch;
+    rt->readcase=from->slots->readtable.readcase; rt->objcount=4;
+    Ref result=Object_new(READTABLE_Class,(Slots*)rt);
+    close_live_pool(pool); add_to_live_pool(result);
+    results->count=1; results->values[0]=result;}
+
+static void register_reader_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
+    set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
+
 void reader_initialize(){
     define_parameter(READ_BASE,integer_from_word(10));
     define_parameter(READ_DEFAULT_FLOAT_FORMAT,S(SINGLE-FLOAT));
     define_parameter(READ_EVAL,S(T));
     define_parameter(READ_SUPPRESS,S(NIL));
-    define_parameter(READTABLE,S(NIL));}
+    /* Build the standard readtable and the standard-macro markers. */
+    g_standard_macro  = built_in_function_new(S(%STANDARD-READER-MACRO),
+                                              list(S(STREAM),S(CHAR),NULL), rm_standard_stub);
+    g_dispatch_marker = built_in_function_new(S(%STANDARD-DISPATCH-MACRO),
+                                              list(S(STREAM),S(CHAR),NULL), rm_standard_stub);
+    push_to_rootset(g_standard_macro);
+    push_to_rootset(g_dispatch_marker);
+    g_standard_readtable = make_standard_readtable();
+    push_to_rootset(g_standard_readtable);
+    define_parameter(READTABLE,g_standard_readtable);
+    register_reader_fn(S(READTABLEP),                    list(S(OBJECT),NULL),               k_READTABLEP);
+    register_reader_fn(S(GET-MACRO-CHARACTER),           list(S(CHAR),NULL),                 k_GET_MACRO_CHARACTER);
+    register_reader_fn(S(SET-MACRO-CHARACTER),           list(S(CHAR),S(FN),NULL),           k_SET_MACRO_CHARACTER);
+    register_reader_fn(S(GET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),NULL),          k_GET_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(SET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(FN),NULL),    k_SET_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(MAKE-DISPATCH-MACRO-CHARACTER), list(S(CHAR),NULL),                 k_MAKE_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(COPY-READTABLE),                NIL_Symbol,                         k_COPY_READTABLE);}
 
 
 /**** THE END ****/

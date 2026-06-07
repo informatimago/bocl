@@ -413,6 +413,19 @@ typedef struct Complex {
     Ref imagpart;       /* any real number */
 } Complex;
 
+/* CL Readtable.  syntax/macros/dispatch are SIMPLE-VECTORs indexed by character
+   code (0..127; codes >= 128 are constituents with no macro).  syntax[c] is a
+   fixnum syntax type (see +cs-*+ in reader.c); macros[c] is the reader-macro
+   function (or NIL); dispatch[c] is NIL or a 128-element SIMPLE-VECTOR mapping a
+   sub-character to its dispatch function. */
+typedef struct Readtable {
+    BLOCK_HEADER;       /* objcount = 4 */
+    Ref syntax;         /* SIMPLE-VECTOR[128] of fixnum syntax types */
+    Ref macros;         /* SIMPLE-VECTOR[128] of macro function or NIL */
+    Ref dispatch;       /* SIMPLE-VECTOR[128] of dispatch sub-table or NIL */
+    Ref readcase;       /* keyword :UPCASE / :DOWNCASE / :PRESERVE / :INVERT */
+} Readtable;
+
 /* Slots */
 
 typedef union Slots {
@@ -439,6 +452,7 @@ typedef union Slots {
     Condition                   condition;
     Ratio                       ratio;
     Complex                     complex;
+    Readtable                   readtable;
     /*                          Classes: */
     Class                       class;
     StandardClass               standard_class;
