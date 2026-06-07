@@ -115,3 +115,30 @@ bocl> (defmethod print-object ((condition simple-condition) stream)
 In FIND-CLASS:
 Too many arguments, unused: (NIL)
 
+
+
+;; ============================== RESOLUTION ==============================
+;; Resolved in Slice 56 (v0.0.81):
+;;
+;; 1- The FIND-CLASS crash is fixed: %add-method resolved a class-name
+;;    specializer by calling the 1-arg kernel FIND-CLASS with 2 args
+;;    ((funcall *%kernel-find-class* s nil)).  It now keeps the symbol so
+;;    %applicable-p dispatches via the kernel TYPEP.  DEFMETHOD PRINT-OBJECT
+;;    ((c simple-condition) stream) no longer errors.
+;;
+;; 2- Conditions now print their formatted report.  Conditions are kernel
+;;    objects (not %obj CLOS instances), so the C printer (prin1/princ) now
+;;    routes them through the Lisp PRINT-OBJECT generic.  A default method on
+;;    CONDITION prints the report: PRINC / ~A => "the error is simple and 33";
+;;    PRIN1 / ~S => "#<SIMPLE-ERROR the error is simple and 33>".  User
+;;    PRINT-OBJECT methods on condition subclasses override it (CLOS method
+;;    ordering for symbol/built-in specializers now ranks by the kernel class
+;;    hierarchy via SUBCLASSP).  TYPE-OF of a condition now returns its class
+;;    name (e.g. SIMPLE-ERROR) instead of T.
+;;
+;; The *print-readably* fancy branch in the proposed method above is the
+;; author's stylistic choice and can be installed as a user method now that the
+;; crash is fixed.
+;;
+;; Split off: DEFINE-CONDITION inheriting a kernel superclass still fails in
+;; DEFCLASS — see issues/open/deferred-define-condition-kernel-superclass.issue.

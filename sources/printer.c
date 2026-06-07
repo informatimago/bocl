@@ -22,6 +22,33 @@ Ref print(Ref object,Ref stream){
     prin1(object,stream);
     return object;}
 
+/* Conditions are kernel objects (not %obj CLOS instances), so the Lisp-level
+   prin1 dispatch never reaches them.  Route them through the Lisp PRINT-OBJECT
+   generic here, so the method on CONDITION (and any user/library methods) prints
+   the formatted report instead of "#<SIMPLE-ERROR 0x…>".  Returns true if it
+   handled OBJECT.  A static guard prevents unbounded re-entry when a condition's
+   report itself references another condition. */
+static bool g_in_condition_print = false;
+static bool print_condition_via_print_object(Ref object,Ref stream,bool escape){
+    if(g_in_condition_print){ return false; }
+    if(!typep(object,CONDITION_Class)){ return false; }
+    Ref po=S(PRINT-OBJECT);
+    if(!symbol_fboundp(po)){ return false; }   /* before the prelude defines it */
+    g_in_condition_print=true;
+    /* The C printer's prin1/princ do not themselves bind *PRINT-ESCAPE*, so set
+       it around the dispatch (PRIN1 => escaped #<…>, PRINC => bare report). */
+    Ref pe=S(*PRINT-ESCAPE*);
+    Ref saved=symbol_value(pe);
+    set_symbol_value(pe, escape?T_Symbol:NIL_Symbol);
+    uword pool=open_live_pool();
+    add_to_live_pool(object); add_to_live_pool(stream); add_to_live_pool(saved);
+    MultipleValues mv;
+    kernel_apply(symbol_function(po),list(object,stream,NULL),&mv);
+    close_live_pool(pool);
+    set_symbol_value(pe, saved);
+    g_in_condition_print=false;
+    return true;}
+
 Ref prin1(Ref object,Ref stream){
     FILE* out=stream_output_cstream(stream);
 
@@ -131,6 +158,9 @@ Ref prin1(Ref object,Ref stream){
         prin1(namestring(object),stream);   /* prints the namestring as "…" */
         return object;}
 
+    /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
+    if(print_condition_via_print_object(object,stream,true)){ return object; }
+
     /* Dispatch to PRINT-OBJECT for CLOS instances (%obj structs).
        clos_instance_p() returns true only after (%clos-register) is called,
        so prelude-loading is safe — no CLOS objects exist yet at that point.
@@ -232,6 +262,9 @@ Ref princ(Ref object,Ref stream){
     if(typep(object,PATHNAME_Class)){
         princ(namestring(object),stream);
         return object;}
+
+    /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
+    if(print_condition_via_print_object(object,stream,false)){ return object; }
 
     /* Safe fallback for CLOS instances in princ too. */
     if(clos_instance_p(object)){

@@ -446,6 +446,9 @@ static void kernel_TYPE_OF(unused Ref function, Ref arguments, MultipleValues* r
     else if(structurep(obj)){
         /* Structure instance — return the structure class name */
         type=obj->class->slots->structure_class.name;}
+    else if(typep(obj,CONDITION_Class)){
+        /* Condition — return its class name (e.g. SIMPLE-ERROR). */
+        type=class_name(class_of(obj));}
     else{                            type=S(T); }
     results->count=1;
     results->values[0]=type;

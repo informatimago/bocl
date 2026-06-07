@@ -3376,15 +3376,33 @@
      (if (funcall *%kernel-typep* arg spec) 1 9999))
     (t 9999)))
 
+(defun %spec-more-specific-p (s1 s2 arg)
+  "Return T if specializer S1 is strictly more specific than S2 for ARG."
+  (cond
+    ((eq s1 s2) nil)
+    ((eq s1 t)  nil)                 ; T is least specific
+    ((eq s2 t)  t)
+    ((and (%is-cls s1) (%is-cls s2))
+     (< (%specializer-position s1 arg) (%specializer-position s2 arg)))
+    ((and (symbolp s1) (symbolp s2))
+     ;; Built-in / condition type names: rank by the kernel class hierarchy, so
+     ;; e.g. a method on SIMPLE-ERROR overrides one on CONDITION.
+     (let ((c1 (funcall *%kernel-find-class* s1))
+           (c2 (funcall *%kernel-find-class* s2)))
+       (and (not (%clos-null-p c1)) (not (%clos-null-p c2))
+            (not (eq c1 c2))
+            (subclassp c1 c2))))
+    ((%is-cls s1) t)                 ; a CLOS class beats a bare built-in symbol
+    ((%is-cls s2) nil)
+    (t nil)))
+
 (defun %method-more-specific-p (m1 m2 args)
   "Return T if M1 is more specific than M2 for ARGS."
   (loop for s1 in (%mth-specializers m1)
         for s2 in (%mth-specializers m2)
         for arg in args
         unless (eq s1 s2)
-        do (return
-             (< (%specializer-position s1 arg)
-                (%specializer-position s2 arg)))
+        do (return (%spec-more-specific-p s1 s2 arg))
         finally (return nil)))
 
 (defun %sort-methods (methods args)
@@ -3488,8 +3506,9 @@
                            ((%is-cls s) s)
                            ((symbolp s)
                             (or (gethash s *%classes*)
-                                (funcall *%kernel-find-class* s nil)
-                                s))          ; keep symbol for kernel typep dispatch
+                                s))          ; keep the symbol so %applicable-p
+                                             ; dispatches via the kernel TYPEP
+                                             ; (handles built-in & condition classes)
                            (t s)))
                    specializer-names))
          (method (make-%mth :qualifiers qualifiers
@@ -3659,6 +3678,23 @@
 (ensure-method 'print-object nil '(standard-object t)
                (lambda (object stream)
                  (format stream "#<~A>" (%cls-name (%obj-class object)))))
+
+;;; PRINT-OBJECT for conditions.  Conditions are kernel objects (not %obj
+;;; instances), so the C printer dispatches them here explicitly.  With
+;;; *print-escape* nil (PRINC, ~A) a simple condition prints its formatted
+;;; report; with *print-escape* true (PRIN1, ~S) it is wrapped #<CLASS report>.
+(ensure-method 'print-object nil '(condition t)
+               (lambda (c stream)
+                 (if (typep c 'simple-condition)
+                     (if *print-escape*
+                         (format stream "#<~A ~?>" (type-of c)
+                                 (simple-condition-format-control c)
+                                 (simple-condition-format-arguments c))
+                         (format stream "~?"
+                                 (simple-condition-format-control c)
+                                 (simple-condition-format-arguments c)))
+                     (format stream "#<~A>" (type-of c)))
+                 c))
 
 ;;; DESCRIBE-OBJECT — stub; used by some code
 (defgeneric describe-object (object stream))
