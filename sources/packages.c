@@ -126,6 +126,23 @@ Ref current_package(void){
     if(!typep(p, PACKAGE_Class)){ return COMMON_LISP_USER_Package; }
     return p;}
 
+/* ---- Reader support: bare and package-qualified symbol resolution -------- */
+
+Ref package_find_cstring(const char* name){
+    return package_find(string_new_cstring(name));}
+
+Ref package_intern_current_cstring(const char* name){
+    Ref status;
+    return pkg_intern(string_new_cstring(name), current_package(), &status);}
+
+Ref package_intern_cstring_in(const char* name, Ref pkg){
+    Ref status;
+    return pkg_intern(string_new_cstring(name), pkg, &status);}
+
+Ref package_find_external_cstring(const char* name, Ref pkg){
+    Ref s = find_symbol(string_new_cstring(name), pkg->slots->package.external);
+    return s ? s : NIL_Symbol;}
+
 /* ------------------------------------------------------------------ */
 /*  Kernel built-ins                                                    */
 /* ------------------------------------------------------------------ */
@@ -253,6 +270,32 @@ static void kernel_EXPORT(Ref function, Ref arguments, MultipleValues* results){
             if(!symbolp(s)){ TYPE_ERROR(s, SYMBOL_Class); }
             package_export(pkg, s);
             it = cons_cdr(it);}}
+    results->count = 1;
+    results->values[0] = T_Symbol;
+    close_live_pool(pool);}
+
+/* (%EXPORT-STRINGS names-list package) — intern each STRING in NAMES into the
+   package and make it external.  Uses only kernel features (quote + strings) so
+   the generated cl-exports.lisp can run BEFORE the prelude, ensuring the
+   standard CL symbols are already external when the prelude reads cl:FOO. */
+static void kernel_EXPORT_STRINGS(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref names   = pop_mandatory_argument(function, &current);
+    Ref pkg_des = pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    Ref pkg = package_find(pkg_des);
+    if(nullp(pkg)){ ERROR("%%EXPORT-STRINGS: no such package %s",
+                          string_cstring(prin1_to_string(pkg_des))); }
+    Ref it = names;
+    while(consp(it)){
+        Ref nm = cons_car(it);
+        if(typep(nm, STRING_Class)){
+            Ref status;
+            Ref sym = pkg_intern(nm, pkg, &status);
+            package_export(pkg, sym);}
+        it = cons_cdr(it);}
     results->count = 1;
     results->values[0] = T_Symbol;
     close_live_pool(pool);}
@@ -390,6 +433,7 @@ void kernel_initialize_packages(void){
     register_fn(S(MAKE-PACKAGE),       list(S(NAME),NULL),                          kernel_MAKE_PACKAGE);
     register_fn(S(USE-PACKAGE),        list(S(PACKAGES-TO-USE),NULL),               kernel_USE_PACKAGE);
     register_fn(S(EXPORT),             list(S(SYMBOLS),NULL),                       kernel_EXPORT);
+    register_fn(S(%EXPORT-STRINGS),    list(S(NAMES),S(PACKAGE),NULL),             kernel_EXPORT_STRINGS);
     register_fn(S(INTERN),             list(S(NAME),NULL),                          kp_INTERN);
     register_fn(S(FIND-SYMBOL),        list(S(NAME),NULL),                          kp_FIND_SYMBOL);
     register_fn(S(PACKAGEP),                    list(S(OBJECT),NULL),  kernel_PACKAGE);

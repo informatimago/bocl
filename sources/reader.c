@@ -4,6 +4,7 @@
 #include "reader.h"
 #include "macros.h"
 #include "kernel.h"
+#include "packages.h"
 #include "variable.h"
 #include "boerror.h"
 #include "cons.h"
@@ -548,10 +549,11 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
     const char* token=(const char*)octet_upcase(parser->token);
     const char* colon=strchr(token,':');
     (*valid)=false;
-    /* No colon: a plain symbol in the current package. */
+    /* No colon: a plain symbol interned in the current package (*PACKAGE*),
+       following its use-list. */
     if(!colon){
         (*valid)=true;
-        return symbol_intern_cstring(token);}
+        return package_intern_current_cstring(token);}
     /* Leading colon: a keyword (:foo). */
     if(colon==token){
         if(token[1]==':'){
@@ -559,32 +561,31 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
             return NIL_Symbol;}
         (*valid)=true;
         return keyword_intern_cstring(token+1);}
-    /* Mid-token colon: pkg:sym (one colon, external only) or pkg::sym
-       (two colons, internal allowed). Phase 3 doesn't actually isolate
-       symbols per package — all live in KERNEL_obarray — so both forms
-       collapse to symbol_intern_cstring on the local name. The package
-       designator is parsed and validated but otherwise ignored. */
+    /* Mid-token colon: pkg:sym (one colon — sym must be external in pkg) or
+       pkg::sym (two colons — internal access, interns in pkg). */
     size_t pkg_len = (size_t)(colon - token);
     char pkg_buf[256];
     if(pkg_len >= sizeof(pkg_buf)){
         return NIL_Symbol;}
     for(size_t i=0;i<pkg_len;i++){ pkg_buf[i]=token[i]; }
     pkg_buf[pkg_len]='\0';
-    const char* name_part;
-    if(colon[1]==':'){
-        name_part = colon+2;
-    } else {
-        name_part = colon+1;}
+    bool internal_access = (colon[1]==':');
+    const char* name_part = internal_access ? colon+2 : colon+1;
     if(*name_part=='\0' || strchr(name_part,':')){
         return NIL_Symbol;}
     (*valid)=true;
-    /* KEYWORD:foo and :foo are equivalent. */
-    if(pkg_len==7
-       && pkg_buf[0]=='K' && pkg_buf[1]=='E' && pkg_buf[2]=='Y'
-       && pkg_buf[3]=='W' && pkg_buf[4]=='O' && pkg_buf[5]=='R'
-       && pkg_buf[6]=='D'){
+    Ref pkg = package_find_cstring(pkg_buf);
+    if(nullp(pkg)){
+        ERROR("READ: there is no package named %s",pkg_buf);}
+    if(pkg == KEYWORD_Package){
         return keyword_intern_cstring(name_part);}
-    return symbol_intern_cstring(name_part);}
+    if(internal_access){
+        return package_intern_cstring_in(name_part,pkg);}   /* pkg::sym */
+    /* pkg:sym — the symbol must be present AND external in pkg. */
+    Ref sym = package_find_external_cstring(name_part,pkg);
+    if(nullp(sym)){
+        ERROR("READ: symbol %s is not external in package %s",name_part,pkg_buf);}
+    return sym;}
 
 static Ref parse_token(parser_state* parser){
     parser->length=0;

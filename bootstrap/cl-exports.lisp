@@ -1,7 +1,9 @@
 ;;;; -*- mode:lisp -*-  AUTO-GENERATED from the reference package-def.lisp
-;;;; Exports the standard COMMON-LISP symbols (makes them :EXTERNAL so that
-;;;; packages USEing CL inherit them).  Loaded right after the prelude.
-(dolist (name (list
+;;;; Makes the 978 standard COMMON-LISP symbols external.  Uses only QUOTE +
+;;;; the %EXPORT-STRINGS kernel primitive, so it loads BEFORE the prelude —
+;;;; the standard CL symbols are then already external when the prelude
+;;;; reads cl:FOO references.
+(%export-strings (quote (
   "&ALLOW-OTHER-KEYS"
   "&AUX"
   "&BODY"
@@ -980,5 +982,4 @@
   "Y-OR-N-P"
   "YES-OR-NO-P"
   "ZEROP"
-  ))
-  (export (intern name "COMMON-LISP") "COMMON-LISP"))
+  )) "COMMON-LISP")

@@ -419,9 +419,10 @@ int main(int argc,char** argv){
         set_symbol_value(S(*PACKAGE*), COMMON_LISP_Package);
         char* prelude=find_prelude();
         if(prelude){
-            bocl_load_cstring(prelude);
-            /* Then export the standard CL symbols (generated cl-exports.lisp,
-               sibling of prelude.lisp), still with *PACKAGE* = COMMON-LISP. */
+            /* FIRST make the standard CL symbols external (generated
+               cl-exports.lisp, sibling of prelude.lisp): it uses only QUOTE and
+               the %EXPORT-STRINGS primitive, so it runs before the prelude and
+               the prelude's cl:FOO references then resolve to external symbols. */
             char* p=strstr(prelude,"prelude.lisp");
             if(p){
                 size_t base=(size_t)(p-prelude);
@@ -430,6 +431,7 @@ int main(int argc,char** argv){
                 strcpy(exports+base,"cl-exports.lisp");
                 bocl_load_cstring(exports);
                 free(exports);}
+            bocl_load_cstring(prelude);
             free(prelude);
         } else if(!do_quiet){
             fprintf(stderr,

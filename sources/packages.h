@@ -32,4 +32,10 @@ void package_export(Ref pkg, Ref sym);
 /* Return the current value of *PACKAGE*. */
 Ref current_package(void);
 
+/* Reader support for package-qualified and bare symbols. */
+Ref package_find_cstring(const char* name);               /* find a package by name, or NIL */
+Ref package_intern_current_cstring(const char* name);     /* bare sym: intern in *PACKAGE* */
+Ref package_intern_cstring_in(const char* name, Ref pkg); /* pkg::sym: intern in pkg */
+Ref package_find_external_cstring(const char* name, Ref pkg); /* pkg:sym: external symbol or NIL */
+
 #endif
