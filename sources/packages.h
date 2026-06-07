@@ -37,5 +37,7 @@ Ref package_find_cstring(const char* name);               /* find a package by n
 Ref package_intern_current_cstring(const char* name);     /* bare sym: intern in *PACKAGE* */
 Ref package_intern_cstring_in(const char* name, Ref pkg); /* pkg::sym: intern in pkg */
 Ref package_find_external_cstring(const char* name, Ref pkg); /* pkg:sym: external symbol or NIL */
+/* Printer support: how to qualify SYMBOL under *PACKAGE* (see packages.c). */
+void symbol_print_prefix(Ref symbol, Ref* package_name_out, int* sep);
 
 #endif

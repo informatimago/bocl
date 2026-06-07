@@ -143,6 +143,28 @@ Ref package_find_external_cstring(const char* name, Ref pkg){
     Ref s = find_symbol(string_new_cstring(name), pkg->slots->package.external);
     return s ? s : NIL_Symbol;}
 
+/* Printer support: decide how SYMBOL must be qualified when written (prin1) with
+   *PACKAGE* in force.  Sets *package_name_out to the home package's name STRING
+   when a prefix is needed (else NIL) and *sep to:
+     0  no prefix — the symbol is accessible as itself in *PACKAGE* (or keyword)
+     1  pkg:name  — external in its home package
+     2  pkg::name — internal in its home package
+     3  #:name    — uninterned (no home package)
+   No allocation, so it is safe to call from the printer. */
+void symbol_print_prefix(Ref symbol, Ref* package_name_out, int* sep){
+    *package_name_out = NIL_Symbol;
+    *sep = 0;
+    Ref home = symbol->slots->symbol.package;
+    if(!typep(home, PACKAGE_Class)){ *sep = 3; return; }   /* uninterned */
+    if(home == KEYWORD_Package){ *sep = 0; return; }       /* caller prints ':' */
+    Ref name = symbol_name(symbol);
+    Ref status;
+    Ref accessible = pkg_find_symbol(name, current_package(), &status);
+    if(accessible == symbol){ *sep = 0; return; }          /* accessible unqualified */
+    *package_name_out = home->slots->package.name;
+    Ref ext = find_symbol(name, home->slots->package.external);
+    *sep = (ext == symbol) ? 1 : 2;}
+
 /* ------------------------------------------------------------------ */
 /*  Kernel built-ins                                                    */
 /* ------------------------------------------------------------------ */

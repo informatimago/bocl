@@ -9,6 +9,7 @@
 #include "stream.h"
 #include "bostring.h"
 #include "character.h"
+#include "packages.h"
 
 /* Printer */
 
@@ -92,6 +93,15 @@ Ref prin1(Ref object,Ref stream){
         return object;}
 
     if(symbolp(object)){
+        /* prin1 qualifies a symbol by package when it is not accessible as
+           itself in *PACKAGE*, so the written form reads back to the same symbol
+           (needed for fasls and readable output across packages). */
+        Ref pkgname; int sep;
+        symbol_print_prefix(object,&pkgname,&sep);
+        if(sep==3){ fprintf(out,"#:"); }
+        else if(sep!=0){
+            princ(pkgname,stream);
+            fprintf(out, sep==1 ? ":" : "::"); }
         princ(symbol_name(object),stream);
         return object;}
 

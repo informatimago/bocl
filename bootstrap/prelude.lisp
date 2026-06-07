@@ -7100,29 +7100,59 @@
 
 ;;; --- COMPILE-FILE: write a fast-load file of macroexpanded forms ------
 ;;; (issues: compile-file-output, minimal-compilation)
+(defvar *%compile-time-evaluated*
+  '(in-package defpackage defmacro defstruct defclass define-condition
+    deftype define-setf-expander define-symbol-macro proclaim declaim)
+  "Top-level operators whose compile-time side effect COMPILE-FILE performs so
+   that subsequent forms read and macroexpand correctly (CLHS 3.2.3.1).")
+
+(defun %compile-file-form (form dst)
+  "Process one top-level FORM for COMPILE-FILE: perform its compile-time effect
+   (so later forms see the right *PACKAGE* and macros) and write the load-time
+   form, MACROEXPAND-ALL'd, to DST.  PROGN and EVAL-WHEN are handled per the
+   standard top-level processing rules."
+  (cond
+    ((not (consp form))
+     (prin1 form dst) (terpri dst))
+    ((eq (car form) 'progn)
+     (dolist (sub (cdr form)) (%compile-file-form sub dst)))
+    ((eq (car form) 'eval-when)
+     (let ((situations (cadr form)) (body (cddr form)))
+       (when (or (member :compile-toplevel situations) (member 'compile situations))
+         (dolist (f body) (ignore-errors (eval f))))
+       (when (or (member :load-toplevel situations) (member 'load situations)
+                 (member :execute situations)      (member 'eval situations))
+         (dolist (f body) (%compile-file-form f dst)))))
+    (t
+     ;; Definition forms with compile-time significance: evaluate now (so the
+     ;; compilation environment — *PACKAGE*, macros, types — is updated) AND emit
+     ;; them for load time.
+     (when (member (car form) *%compile-time-evaluated*)
+       (ignore-errors (eval form)))
+     (prin1 (handler-case (macroexpand-all form) (error () form)) dst)
+     (terpri dst))))
+
 (defun compile-file (input-file &key output-file &allow-other-keys)
-  "Minimal-compile INPUT-FILE to a fast-load file.  Each top-level form is read,
-   MACROEXPAND-ALL'd (so the output contains only special operators and function
-   calls — no macros), and written to the output file.  LOAD of that file is
-   therefore faster (no macro expansion needed).  Returns
+  "Minimal-compile INPUT-FILE to a fast-load file.  Each top-level form is read
+   and processed (compile-time effects performed, MACROEXPAND-ALL'd) and the
+   load-time form written, so LOAD of the result needs no macro expansion.
+   *PACKAGE* is bound locally, and (IN-PACKAGE …) is evaluated as it is read so
+   the rest of the file is read in the right package.  Returns
    (values output-truename warnings-p failure-p)."
   (let* ((in     (merge-pathnames input-file *default-pathname-defaults*))
          (out    (compile-file-pathname in :output-file output-file))
-         (out-ns (namestring out))
-         (failure nil))
+         (out-ns (namestring out)))
     (with-open-file (src in :direction :input)
       (with-open-file (dst out-ns :direction :output
                                   :if-exists :supersede :if-does-not-exist :create)
         (format dst ";;; bocl fast-load (minimal-compiled) file. Source: ~A~%"
                 (namestring in))
-        (loop
-          (let ((form (read src nil src)))
-            (when (eq form src) (return))
-            (let ((expanded (handler-case (macroexpand-all form)
-                              (error () (setq failure t) form))))
-              (prin1 expanded dst)
-              (terpri dst))))))
-    (values (pathname out) nil failure)))
+        (let ((*package* *package*))           ; compile-time IN-PACKAGE is local
+          (loop
+            (let ((form (read src nil src)))
+              (when (eq form src) (return))
+              (%compile-file-form form dst))))))
+    (values (pathname out) nil nil)))
 
 ;;; ---- Multi-dimensional arrays (ranks 0..array-rank-limit-1 = 0..7) -------
 ;;; Rank-1 arrays stay kernel vectors (so VECTORP / SVREF and the existing code
