@@ -2754,14 +2754,25 @@
 
 ;; ---- DO-SYMBOLS, DO-ALL-SYMBOLS, DO-EXTERNAL-SYMBOLS ---------------------
 
+(defun %pkg-accessible-symbols (package)
+  "All symbols accessible in PACKAGE: its present symbols plus the external
+   symbols inherited (and not shadowed) from the packages it uses."
+  (let* ((pkg (find-package package))
+         (result (copy-list (package-symbols pkg))))
+    (dolist (used (package-use-list pkg) result)
+      (dolist (s (package-exported-symbols used))
+        (when (and (eq s (find-symbol (symbol-name s) pkg))
+                   (not (member s result)))
+          (push s result))))))
+
 (defmacro do-symbols (varspec &body body)
   ;; (DO-SYMBOLS (var [package [result]]) body...)
-  ;; Bind VAR to each symbol accessible in PACKAGE (default *package*).
-  ;; Returns RESULT (default NIL).
+  ;; Bind VAR to each symbol accessible in PACKAGE (default *package*) — its own
+  ;; present symbols and those inherited from used packages.  Returns RESULT.
   (let ((var     (first  varspec))
         (package (or (second varspec) '*package*))
         (result  (third  varspec)))
-    `(dolist (,var (package-symbols ,package) ,result)
+    `(dolist (,var (%pkg-accessible-symbols ,package) ,result)
        ,@body)))
 
 (defmacro do-external-symbols (varspec &body body)
@@ -2775,12 +2786,50 @@
 
 (defmacro do-all-symbols (varspec &body body)
   ;; (DO-ALL-SYMBOLS (var [result]) body...)
-  ;; Bind VAR to every symbol accessible in every package.
+  ;; Bind VAR to every symbol present in every package.
   (let ((var    (first  varspec))
         (result (second varspec))
         (pkg%   (gensym "PKG-")))
     `(dolist (,pkg% (list-all-packages) ,result)
-       (do-symbols (,var ,pkg%)
+       (dolist (,var (package-symbols ,pkg%))
+         ,@body))))
+
+(defun %make-package-iterator (packages symbol-types)
+  "Return a thunk that yields (values found-p symbol accessibility package) for
+   each requested symbol across PACKAGES, then (values nil nil nil nil)."
+  (let ((items '()))
+    (dolist (pd packages)
+      (let ((p (find-package pd)))
+        (when p
+          (when (member :external symbol-types)
+            (dolist (s (package-exported-symbols p)) (push (list s :external p) items)))
+          (when (member :internal symbol-types)
+            (dolist (s (package-symbols p))
+              (multiple-value-bind (sym st) (find-symbol (symbol-name s) p)
+                (declare (ignore sym))
+                (when (eq st :internal) (push (list s :internal p) items)))))
+          (when (member :inherited symbol-types)
+            (dolist (u (package-use-list p))
+              (dolist (e (package-exported-symbols u))
+                (when (eq e (find-symbol (symbol-name e) p))
+                  (push (list e :inherited p) items))))))))
+    (lambda ()
+      (if items
+          (let ((triple (pop items)))
+            (values t (first triple) (second triple) (third triple)))
+          (values nil nil nil nil)))))
+
+(defmacro with-package-iterator (spec &body body)
+  ;; (WITH-PACKAGE-ITERATOR (name package-list . symbol-types) body...)
+  ;; Within BODY, (name) returns (values found-p symbol accessibility package).
+  (let ((name         (first spec))
+        (packages     (second spec))
+        (symbol-types (cddr spec))
+        (stepper      (gensym "STEP-")))
+    `(let ((,stepper (%make-package-iterator
+                       (if (listp ,packages) ,packages (list ,packages))
+                       ',symbol-types)))
+       (macrolet ((,name () (list 'funcall ',stepper)))
          ,@body))))
 
 ;;;; ========================================================================
@@ -6741,51 +6790,102 @@
      ,@(mapcar (lambda (spec) `(proclaim ',spec)) declaration-specifiers)
      nil))
 
-;;; ---- DEFPACKAGE / IMPORT / SHADOW ----------------------------------------
-;;; bocl keeps a single shared symbol table (no per-package symbol isolation),
-;;; so IMPORT / SHADOW / SHADOWING-IMPORT have no real work to do — a symbol is
-;;; visible everywhere once it exists.  They are provided so conforming code,
-;;; in particular the ANSI test suite's package setup, loads and runs.
+;;; ---- DEFPACKAGE / IMPORT / SHADOW / UNINTERN / ... -----------------------
+;;; True per-package operators, built on the kernel table primitives
+;;; (%pkg-import, %pkg-unintern, %pkg-unexport, %pkg-shadow-add, %pkg-unuse,
+;;; %pkg-rename, %pkg-delete) and the package accessors.
 
-(defun import (symbols &optional package)
-  (declare (ignore symbols package))
-  t)
+(defun %designated-package (package)
+  (or (find-package package)
+      (error "There is no package named ~S" package)))
 
-(defun shadow (symbols &optional package)
-  (declare (ignore symbols package)) t)
+(defun %as-symbol-list (symbols)
+  "Accept a single symbol or a list of symbols; always return a list."
+  (if (listp symbols) symbols (list symbols)))
 
-(defun shadowing-import (symbols &optional package)
-  (declare (ignore symbols package)) t)
+(defun import (symbols &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (sym (%as-symbol-list symbols) t)
+      (%pkg-import sym pkg))))
 
-(defun unintern (symbol &optional package)
-  (declare (ignore symbol package)) nil)
+(defun shadow (symbols &optional (package *package*))
+  ;; SYMBOLS are symbols or strings; make a present (home) symbol of each name in
+  ;; PKG — shadowing any inherited one — and mark it shadowing.
+  (let ((pkg (%designated-package package)))
+    (dolist (name (%as-symbol-list symbols) t)
+      (%pkg-shadow-add (%pkg-make-present (string name) pkg) pkg))))
+
+(defun shadowing-import (symbols &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (sym (%as-symbol-list symbols) t)
+      (%pkg-import sym pkg)
+      (%pkg-shadow-add sym pkg))))
+
+(defun unintern (symbol &optional (package *package*))
+  (%pkg-unintern symbol (%designated-package package)))
+
+(defun unexport (symbols &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (sym (%as-symbol-list symbols) t)
+      (%pkg-unexport sym pkg))))
+
+(defun unuse-package (packages-to-unuse &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (u (%as-symbol-list packages-to-unuse) t)
+      (%pkg-unuse (%designated-package u) pkg))))
+
+(defun rename-package (package new-name &optional new-nicknames)
+  (%pkg-rename (%designated-package package)
+               (string new-name)
+               (mapcar #'string new-nicknames)))
+
+(defun delete-package (package)
+  (let ((pkg (find-package package)))
+    (when pkg (%pkg-delete pkg) t)))
+
+(defun find-all-symbols (name)
+  (let ((sname (string name)) (result '()))
+    (dolist (pkg (list-all-packages) result)
+      (multiple-value-bind (sym status) (find-symbol sname pkg)
+        (when (and status (not (member sym result)))
+          (push sym result))))))
 
 (defmacro defpackage (name &rest options)
   (let ((sname     (string name))
-        (nicknames '())
-        (use       '())
-        (exports   '())
-        (interns   '()))
+        (nicknames '()) (use '()) (exports '()) (interns '()) (shadows '())
+        (import-froms '()) (shadow-import-froms '()) (use-given nil)
+        (body '()))
     (dolist (opt options)
       (when (consp opt)
         (let ((k (car opt)) (a (cdr opt)))
           (cond
             ((eq k :nicknames) (setq nicknames (append nicknames (mapcar #'string a))))
-            ((eq k :use)       (setq use       (append use       (mapcar #'string a))))
-            ((eq k :export)    (setq exports   (append exports   (mapcar #'string a))))
-            ((eq k :intern)    (setq interns   (append interns   (mapcar #'string a))))
-            ((eq k :shadow)    (setq interns   (append interns   (mapcar #'string a))))
+            ((eq k :use)       (setq use (append use (mapcar #'string a)) use-given t))
+            ((eq k :export)    (setq exports (append exports (mapcar #'string a))))
+            ((eq k :intern)    (setq interns (append interns (mapcar #'string a))))
+            ((eq k :shadow)    (setq shadows (append shadows (mapcar #'string a))))
             ((eq k :import-from)
-             (setq interns (append interns (mapcar #'string (cdr a)))))
+             (push (cons (string (car a)) (mapcar #'string (cdr a))) import-froms))
             ((eq k :shadowing-import-from)
-             (setq interns (append interns (mapcar #'string (cdr a)))))
+             (push (cons (string (car a)) (mapcar #'string (cdr a))) shadow-import-froms))
             (t nil)))))     ; :documentation, :size, etc. — ignored
+    ;; Build the body forms in the order DEFPACKAGE specifies:
+    ;; shadows, shadowing-import-from, import-from, use, intern, export.
+    (dolist (n shadows) (push `(shadow ,n pkg) body))
+    (dolist (spec shadow-import-froms)
+      (let ((from (car spec)))
+        (dolist (n (cdr spec)) (push `(shadowing-import (intern ,n ,from) pkg) body))))
+    (dolist (spec import-froms)
+      (let ((from (car spec)))
+        (dolist (n (cdr spec)) (push `(import (intern ,n ,from) pkg) body))))
+    (dolist (u use) (push `(use-package ,u pkg) body))
+    (dolist (n interns) (push `(intern ,n pkg) body))
+    (dolist (n exports) (push `(export (intern ,n pkg) pkg) body))
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        (let ((pkg (or (find-package ,sname)
-                      (make-package ,sname :nicknames ',nicknames :use ',use))))
-         ,@(mapcar (lambda (u) `(use-package ,u pkg)) use)   ; one designator each
-         ,@(mapcar (lambda (n) `(intern ,n pkg)) interns)
-         ,@(mapcar (lambda (n) `(export (intern ,n pkg) pkg)) exports)
+                      (make-package ,sname :nicknames ',nicknames
+                                          :use ',(if use-given use '("COMMON-LISP"))))))
+         ,@(nreverse body)
          pkg))))
 
 ;;; ---- DOLIST / DOTIMES: tolerate leading (DECLARE ...) --------------------

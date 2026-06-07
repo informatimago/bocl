@@ -217,6 +217,7 @@ static void kernel_MAKE_PACKAGE(Ref function, Ref arguments, MultipleValues* res
         if(nullp(u)){ ERROR("MAKE-PACKAGE: unknown package in :use %s",
                             string_cstring(prin1_to_string(cons_car(it)))); }
         pkg->slots->package.used = cons(u, pkg->slots->package.used);
+        u->slots->package.used_by = cons(pkg, u->slots->package.used_by);
         it = cons_cdr(it);}
     results->count = 1;
     results->values[0] = pkg;
@@ -228,7 +229,8 @@ static void use_one_package(Ref to_use_des, Ref in_pkg){
     if(nullp(to_use)){ ERROR("USE-PACKAGE: no such package %s",
                              string_cstring(prin1_to_string(to_use_des))); }
     if(nullp(memq(to_use, in_pkg->slots->package.used))){
-        in_pkg->slots->package.used = cons(to_use, in_pkg->slots->package.used);}}
+        in_pkg->slots->package.used = cons(to_use, in_pkg->slots->package.used);
+        to_use->slots->package.used_by = cons(in_pkg, to_use->slots->package.used_by);}}
 
 static void kernel_USE_PACKAGE(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
@@ -391,6 +393,153 @@ static void kernel_LIST_ALL_PACKAGES(Ref function, Ref arguments, MultipleValues
     results->values[0] = pkgs;
     close_live_pool(pool);}
 
+/* ------------------------------------------------------------------ */
+/*  Low-level table primitives for the high-level operators.  The Lisp  */
+/*  layer (import/shadow/unintern/... in the prelude) builds on these.  */
+/* ------------------------------------------------------------------ */
+
+/* Pop (symbol package) — package defaults to *PACKAGE* — and resolve package. */
+static void pop_sym_pkg(Ref function, Ref* current, Ref* sym, Ref* pkg){
+    *sym = pop_mandatory_argument(function, current);
+    Ref pkg_des = nullp(*current) ? current_package()
+                                  : pop_mandatory_argument(function, current);
+    check_no_more_arguments(function, *current);
+    *pkg = package_find(pkg_des);
+    if(nullp(*pkg)){ ERROR("package operator: no such package %s",
+                           string_cstring(prin1_to_string(pkg_des))); }}
+
+/* Pop a single optional package designator (defaults to *PACKAGE*). */
+static Ref pop_one_pkg(Ref function, Ref arguments){
+    Ref current=arguments;
+    Ref pkg_des = nullp(current) ? current_package() : pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function, current);
+    Ref pkg = package_find(pkg_des);
+    if(nullp(pkg)){ ERROR("package operator: no such package %s",
+                          string_cstring(prin1_to_string(pkg_des))); }
+    return pkg;}
+
+/* (%PKG-IMPORT symbol package) — make symbol present (accessible) in package. */
+static void kp_PKG_IMPORT(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments, sym, pkg; pop_sym_pkg(function,&current,&sym,&pkg);
+    obarray_add_symbol(pkg->slots->package.present, sym);
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+/* (%PKG-MAKE-PRESENT name-string package) — ensure a symbol of NAME is PRESENT
+   (home) in package, creating it if no present symbol of that name exists,
+   ignoring any inherited symbol of the same name.  This is what SHADOW needs:
+   plain INTERN would return an inherited symbol instead of making a local one. */
+static void kp_PKG_MAKE_PRESENT(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref name = pop_mandatory_argument(function,&current);
+    Ref pkg_des = nullp(current) ? current_package() : pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!typep(name,STRING_Class)){ TYPE_ERROR(name,STRING_Class); }
+    Ref pkg=package_find(pkg_des);
+    if(nullp(pkg)){ ERROR("SHADOW: no such package%s",""); }
+    Ref sym = find_symbol(name, pkg->slots->package.present);
+    if(!sym){
+        sym = symbol_new(name);
+        sym->slots->symbol.package = pkg;
+        obarray_add_symbol(pkg->slots->package.present, sym);}
+    results->count=1; results->values[0]=sym; close_live_pool(pool);}
+
+/* (%PKG-UNINTERN symbol package) — remove symbol from present/external/shadowing. */
+static void kp_PKG_UNINTERN(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments, sym, pkg; pop_sym_pkg(function,&current,&sym,&pkg);
+    bool removed = obarray_remove_symbol(pkg->slots->package.present, sym);
+    obarray_remove_symbol(pkg->slots->package.external, sym);
+    pkg->slots->package.shadowing = delete(sym, pkg->slots->package.shadowing);
+    results->count=1; results->values[0]=as_boolean(removed); close_live_pool(pool);}
+
+/* (%PKG-UNEXPORT symbol package) — remove symbol from the external table. */
+static void kp_PKG_UNEXPORT(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments, sym, pkg; pop_sym_pkg(function,&current,&sym,&pkg);
+    obarray_remove_symbol(pkg->slots->package.external, sym);
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+/* (%PKG-SHADOW-ADD symbol package) — record symbol as shadowing in package. */
+static void kp_PKG_SHADOW_ADD(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments, sym, pkg; pop_sym_pkg(function,&current,&sym,&pkg);
+    if(nullp(memq(sym, pkg->slots->package.shadowing))){
+        pkg->slots->package.shadowing = cons(sym, pkg->slots->package.shadowing);}
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+static void kp_PKG_SHADOWING_SYMBOLS(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref pkg=pop_one_pkg(function,arguments);
+    results->count=1; results->values[0]=pkg->slots->package.shadowing; close_live_pool(pool);}
+
+static void kp_PKG_USE_LIST(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref pkg=pop_one_pkg(function,arguments);
+    results->count=1; results->values[0]=pkg->slots->package.used; close_live_pool(pool);}
+
+static void kp_PKG_USED_BY_LIST(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref pkg=pop_one_pkg(function,arguments);
+    results->count=1; results->values[0]=pkg->slots->package.used_by; close_live_pool(pool);}
+
+/* (%PKG-UNUSE used-package package) — drop used from package's use-list. */
+static void kp_PKG_UNUSE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref used_des = pop_mandatory_argument(function,&current);
+    Ref pkg_des  = nullp(current) ? current_package() : pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function, current);
+    Ref used=package_find(used_des), pkg=package_find(pkg_des);
+    if(nullp(used)||nullp(pkg)){ ERROR("UNUSE-PACKAGE: no such package%s",""); }
+    pkg->slots->package.used     = delete(used, pkg->slots->package.used);
+    used->slots->package.used_by = delete(pkg,  used->slots->package.used_by);
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+/* (%PKG-RENAME package new-name nicknames) — update name + nicknames + registry. */
+static void kp_PKG_RENAME(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref pkg_des   = pop_mandatory_argument(function,&current);
+    Ref new_name  = pop_mandatory_argument(function,&current);
+    Ref nicknames = nullp(current) ? NIL_Symbol : pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function, current);
+    Ref pkg=package_find(pkg_des);
+    if(nullp(pkg)){ ERROR("RENAME-PACKAGE: no such package%s",""); }
+    if(symbolp(new_name)){ new_name=symbol_name(new_name); }
+    /* Drop old name+nickname registry entries pointing at pkg, then re-add. */
+    Ref kept=NIL_Symbol, it=cons_cdr(all_packages);
+    while(consp(it)){ Ref pair=cons_car(it);
+        if(cons_cdr(pair)!=pkg){ push(pair,&kept); } it=cons_cdr(it); }
+    rplacd(all_packages, nreverse(kept));
+    pkg->slots->package.name=new_name;
+    pkg->slots->package.nicknames=nicknames;
+    registry_add(new_name, pkg);
+    it=nicknames; while(consp(it)){ Ref n=cons_car(it);
+        if(symbolp(n)){ n=symbol_name(n); } registry_add(n,pkg); it=cons_cdr(it); }
+    results->count=1; results->values[0]=pkg; close_live_pool(pool);}
+
+/* (%PKG-DELETE package) — unregister package and empty its tables. */
+static void kp_PKG_DELETE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref pkg=pop_one_pkg(function,arguments);
+    Ref kept=NIL_Symbol, it=cons_cdr(all_packages);
+    while(consp(it)){ Ref pair=cons_car(it);
+        if(cons_cdr(pair)!=pkg){ push(pair,&kept); } it=cons_cdr(it); }
+    rplacd(all_packages, nreverse(kept));
+    /* Drop this package from every package it uses (their used-by lists). */
+    Ref u=pkg->slots->package.used;
+    while(consp(u)){ Ref used=cons_car(u);
+        used->slots->package.used_by=delete(pkg,used->slots->package.used_by); u=cons_cdr(u); }
+    pkg->slots->package.present=make_obarray();
+    pkg->slots->package.external=make_obarray();
+    pkg->slots->package.shadowing=NIL_Symbol;
+    pkg->slots->package.used=NIL_Symbol;
+    pkg->slots->package.used_by=NIL_Symbol;
+    pkg->slots->package.name=NIL_Symbol;     /* deleted package: name is NIL */
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
 static void register_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
     set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
 
@@ -440,4 +589,26 @@ void kernel_initialize_packages(void){
     register_fn(S(LIST-ALL-PACKAGES),           NIL_Symbol,            kernel_LIST_ALL_PACKAGES);
     register_fn(S(PACKAGE-SYMBOLS),             list(S(PACKAGE),NULL), kernel_PACKAGE_SYMBOLS);
     register_fn(S(PACKAGE-EXPORTED-SYMBOLS),    list(S(PACKAGE),NULL), kernel_PACKAGE_EXPORTED_SYMBOLS);
+    /* Low-level table primitives — the Lisp layer wraps these. */
+    register_fn(S(%PKG-IMPORT),            list(S(SYMBOL),NULL),          kp_PKG_IMPORT);
+    register_fn(S(%PKG-MAKE-PRESENT),      list(S(NAME),NULL),            kp_PKG_MAKE_PRESENT);
+    register_fn(S(%PKG-UNINTERN),          list(S(SYMBOL),NULL),          kp_PKG_UNINTERN);
+    register_fn(S(%PKG-UNEXPORT),          list(S(SYMBOL),NULL),          kp_PKG_UNEXPORT);
+    register_fn(S(%PKG-SHADOW-ADD),        list(S(SYMBOL),NULL),          kp_PKG_SHADOW_ADD);
+    register_fn(S(PACKAGE-SHADOWING-SYMBOLS), list(S(PACKAGE),NULL),      kp_PKG_SHADOWING_SYMBOLS);
+    register_fn(S(PACKAGE-USE-LIST),       list(S(PACKAGE),NULL),         kp_PKG_USE_LIST);
+    register_fn(S(PACKAGE-USED-BY-LIST),   list(S(PACKAGE),NULL),         kp_PKG_USED_BY_LIST);
+    register_fn(S(%PKG-UNUSE),             list(S(USED),NULL),            kp_PKG_UNUSE);
+    register_fn(S(%PKG-RENAME),            list(S(PACKAGE),NULL),         kp_PKG_RENAME);
+    register_fn(S(%PKG-DELETE),            list(S(PACKAGE),NULL),         kp_PKG_DELETE);
+
+    /* Fix up the home package of every symbol interned before the package
+       system existed: those created during early bootstrap got KERNEL_obarray /
+       KEYWORD_obarray as a placeholder home.  (Symbols interned after this point
+       get the right home package from symbol_intern_obarray directly.) */
+    {   extern Ref KERNEL_obarray, KEYWORD_obarray;
+        Ref it=cons_cdr(KERNEL_obarray);
+        while(consp(it)){ cons_car(it)->slots->symbol.package=COMMON_LISP_Package; it=cons_cdr(it); }
+        it=cons_cdr(KEYWORD_obarray);
+        while(consp(it)){ cons_car(it)->slots->symbol.package=KEYWORD_Package; it=cons_cdr(it); }}
 }

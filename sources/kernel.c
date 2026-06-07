@@ -835,6 +835,16 @@ static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
         return symbol;}
     (*internal)=false;
     symbol=Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,obarray));
+    /* Home package: once the package system exists, KERNEL_obarray IS the
+       COMMON-LISP package and KEYWORD_obarray IS the KEYWORD package, so set the
+       symbol's home package accordingly.  During very early bootstrap (before
+       kernel_initialize_packages) the packages are NULL; those symbols get their
+       home package fixed up at the end of kernel_initialize_packages. */
+    {   extern Ref COMMON_LISP_Package, KEYWORD_Package;
+        if(obarray==KERNEL_obarray && COMMON_LISP_Package){
+            symbol->slots->symbol.package=COMMON_LISP_Package; }
+        else if(obarray==KEYWORD_obarray && KEYWORD_Package){
+            symbol->slots->symbol.package=KEYWORD_Package; }}
     cons_rplacd(obarray,cons(symbol,cons_cdr(obarray)));
     sym_hash_add(sym_hash_for(obarray),symbol);   /* keep the index in sync */
     return symbol;}
