@@ -1,0 +1,117 @@
+;; 2- Provide a print-object method for SIMPLE-ERROR (actually,
+;; SIMPLE-CONDITION), the format-control and format-arguments:
+
+(defvar *strictly-conforming-print-object* nil)
+
+(defmethod print-object ((condition simple-condition) stream)
+  (if *print-readably*
+
+      (if *strictly-conforming-print-object*
+          ;; use print-unreadable-object just to signal the error:
+          (print-unreadable-object (condition stream))
+
+          ;; Not strictly conforming:
+
+          ;; Theorically, when printing readably we must signal an error
+          ;; when the object cannot be printed readably.
+
+          ;; Again, theorically, we could print-out a #. form to rebuild a
+          ;; similar condition, but since #. can also be suppressed by
+          ;; *read-eval*, it may not be considered really printed
+          ;; readably.
+          
+          ;; In any case, implementations do print #<…> when
+          ;; *print-readably* is set for objects that cannot be printed
+          ;; readably, which IMO is not strictly conforming. (and
+          ;; print-unreadable-object signals an error, so they must do
+          ;; hard work to avoid using it.
+
+          ;; So we do hard work here to prevent print-unreadable-object to
+          ;; signal an error, and still use it to recover the identity of
+          ;; the object (there is no other way to recover the identity of
+          ;; an object than printing it out with print-unreadable-object
+          ;; :identity t).
+
+          (let* ((class-and-id
+                   (with-output-to-string (out)
+                     (let ((*print-readably* nil))
+                       (print-unreadable-object (condition out :type t :identity t)
+                         (princ #\& out)))))
+                 (split (position #\& class-and-id)))
+            (format stream "~A~?~A"
+                    (subseq class-and-id 0 split)
+                    (simple-condition-format-control condition)
+                    (simple-condition-format-arguments condition)
+                    (subseq class-and-id (1+ split)))))
+
+      ;; Printing the condition non-readably: just print the formatted message.
+      (format stream "~A: ~?"
+              (class-name (class-of condition))
+              (simple-condition-format-control condition)
+              (simple-condition-format-arguments condition)))
+  ;; People often forget that print-object should return the printed object,
+  ;; notably, print-unreadable-object doesn't return the object!
+  condition)
+
+(define-condition terrible-error (simple-error)
+  ())
+
+(loop :for *strictly-conforming-print-object* :in '(nil t)
+      :do (let ((*print-readably* t))
+            (loop :for c :in (list (make-condition 'simple-condition
+                                                   :format-control "the condition is ~A and ~A"
+                                                   :format-arguments '("benign" 42))
+
+                                   (make-condition 'simple-error
+                                                   :format-control "the error is ~A and ~A"
+                                                   :format-arguments '("simple" 33))
+
+                                   (make-condition 'terrible-error
+                                                   :format-control "the error is ~A and ~A"
+                                                   :format-arguments '("simple" 11)))
+                  :do (terpri) (princ c) (terpri) (or (ignore-errors (prin1 c)) (princ "printing error muffled")) (terpri))))
+
+;; Prints out:
+;;
+;; SIMPLE-CONDITION: the condition is benign and 42
+;; #<SIMPLE-CONDITION the condition is benign and 42 #x30200204C44D>
+;; 
+;; SIMPLE-ERROR: the error is simple and 33
+;; #<SIMPLE-ERROR the error is simple and 33 #x30200204C40D>
+;; 
+;; TERRIBLE-ERROR: the error is simple and 11
+;; #<TERRIBLE-ERROR the error is simple and 11 #x30200204C3CD>
+;; 
+;; SIMPLE-CONDITION: the condition is benign and 42
+;; printing error muffled
+;; 
+;; SIMPLE-ERROR: the error is simple and 33
+;; printing error muffled
+;; 
+;; TERRIBLE-ERROR: the error is simple and 11
+;; printing error muffled
+
+
+;; 1- correct this bug:
+
+14:10[pjb@thalassa org.xquartz:0 bocl 32Gi]$ sources/bocl 
+
+Welcome to BOCL Version 0.0.79
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+bocl> (defmethod print-object ((condition simple-condition) stream)
+        (if *print-readably*
+            (let ((*print-readably* nil))
+              (print-unreadable-object (condition stream :type t :identity t)
+                (format stream "~?" (simple-condition-format-control condition)
+                        (simple-condition-format-arguments condition))))
+            (format stream "~?" (simple-condition-format-control condition)
+                    (simple-condition-format-arguments condition))       )
+        condition)
+
+In FIND-CLASS:
+Too many arguments, unused: (NIL)
+
