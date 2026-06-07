@@ -1,0 +1,129 @@
+I dont' see the *init-hook* functions being called.
+
+I have this in ~/.boclrc, and the "Have fun!" doesn't occur.
+
+    (in-package "CL-USER")
+    (use-package "BOCL")
+
+    (format t "~2%Welcome to ~A~2%"
+            (lisp-implementation-type)
+            (lisp-implementation-version))
+
+    (push (lambda ()
+            (format t "~&Have fun!~%")
+            (finish-output))
+          bocl:*init-hook*)
+
+    (push (lambda (signum)
+            (format t "~%Oops got signal ~A!~%" signum)
+            (finish-output))
+          bocl:*abort-hook*)
+
+
+    (push (lambda (status)
+            (format t "~%Bye, bye, cruel world! (with status ~A)~%" status)
+            (finish-output))
+          bocl:*quit-hook*)
+
+
+- the ~/.boclrc init file is not loaded.
+
+- the documentation doesn't mention the init files, the can be one of:
+
+| # | Stem                                | Bare allowed? |
+|---+-------------------------------------+---------------|
+| 1 | ~~/.bocl{,rc}{,.lisp,.fasl}~        | yes           |
+| 2 | ~~/.config/bocl/init{.lisp,.fasl}~  | no            |
+
+The first one that matches is loaded (.fasl is loaded if more recent than .lisp).
+
+So the order tried is:
+
+| .bocl                  |
+| .bocl.fasl             |
+| .bocl.lisp             |
+| .boclrc                |
+| .boclrc.fasl           |
+| .boclrc.lisp           |
+| .config/bocl/init.fasl |
+| .config/bocl/init.lisp |
+
+After the first file amongst these is found and loaded (if no -n -norc
+--no-init option is given), all the -i | --init options are processed
+and the specified init files are loaded.
+
+After this, *init-hook* are called.
+
+Then we enter the REPL.
+  
+- *abort-hook* are not called either:
+
+    ~/src/public/bocl
+    slice-41-issues-resolution
+    19:57[pjb@thalassa org.xquartz:0 bocl 35Gi]$ sources/bocl
+
+    Welcome to BOCL Version 0.0.83
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+
+    bocl> Terminated: 15
+
+    ~/src/public/bocl slice-41-issues-resolution 19:57[pjb@thalassa
+    org.xquartz:0 bocl 35Gi]$
+
+
+- ~/ is not processed in pathnames. It should be taken as an
+  abbreviation for (user-homedir-pathname).
+
+  (pathname "~/foo/bar") == (merge-pathnames "foo/bar" (user-homedir-pathname))
+
+
+    20:07[pjb@thalassa org.xquartz:0 bocl 35Gi]$ sources/bocl
+
+    Welcome to BOCL Version 0.0.83
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+
+    bocl> (load "~/.boclrc")
+
+
+- Missing format-argument to the simple-error file does not exist:
+      
+    In kernel_ERROR:
+    ERROR: Unhandled SIMPLE-ERROR: LOAD: file ~S does not exist
+
+
+    ~/src/public/bocl
+    slice-41-issues-resolution
+    20:09[pjb@thalassa org.xquartz:0 bocl 35Gi]$ sources/bocl
+
+    Welcome to BOCL Version 0.0.83
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+- no rc file loaded:
+  
+    bocl> (load "/Users/pjb/.boclrc")
+
+
+    Welcome to BOCL
+
+
+    T
+    bocl> (funcall (first bocl:*init-hook*))
+
+    Have fun!
+
+    NIL
+    bocl> (quit)
+
+    Bye, bye, cruel world! (with status 0)
+
+    ~/src/public/bocl
+    slice-41-issues-resolution
+    20:09[pjb@thalassa org.xquartz:0 bocl 35Gi]$ 
