@@ -90,6 +90,7 @@ typedef struct parser_state {
     bool eof;
     bool error;
     bool escape;
+    bool suppress;   /* *READ-SUPPRESS*: reading a #+/#- discarded form */
     octet token[ARRAY_TOTAL_SIZE_LIMIT+1];
 } parser_state;
 
@@ -546,6 +547,10 @@ static Ref scan_float(parser_state* parser){
     return float_from_floating(value);}
 
 static Ref scan_symbol(parser_state* parser,bool* valid){
+    /* Under *READ-SUPPRESS* (reading a #+/#- discarded form) the token is
+       consumed but produces no symbol: don't intern, and don't error on an
+       unknown package qualifier. */
+    if(parser->suppress){ (*valid)=true; return NIL_Symbol; }
     const char* token=(const char*)octet_upcase(parser->token);
     const char* colon=strchr(token,':');
     (*valid)=false;
@@ -703,8 +708,14 @@ static Ref parse_object(parser_state* parser){
                     return parse_object(parser);
                 } else {
                     /* Skip the next form silently; callers (parse_list /
-                       kernel_read) recognise reader_skip_marker. */
+                       kernel_read) recognise reader_skip_marker.  Bind
+                       *READ-SUPPRESS* (parser->suppress) so the discarded form
+                       neither interns symbols nor errors on unknown packages
+                       (e.g. "#+allegro (excl:foo ...)" on a non-Allegro build). */
+                    bool saved=parser->suppress;
+                    parser->suppress=true;
                     parse_object(parser);
+                    parser->suppress=saved;
                     return get_skip_marker();}}
             case ':': {  /* #:name => a fresh uninterned symbol named NAME */
                 advance_character(parser);   /* skip ':' */
@@ -804,6 +815,7 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
     parser.eof=false;
     parser.error=false;
     parser.escape=false;
+    parser.suppress=false;
     advance_character(&parser);
     skip_spaces(&parser);
     check_parser_error(&parser);
