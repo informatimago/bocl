@@ -1313,7 +1313,14 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             if(!nullp(macro_fn)){
                 eval_counters.global_macro++;
                 MultipleValues mac_results = {0};
-                kernel_apply(macro_fn, arguments, &mac_results);
+                /* If the macro lambda-list begins with &WHOLE, prepend the whole
+                   form (a FRESH copy of its top cons, so the macro-displacement
+                   below — which mutates FORM in place — cannot corrupt the value
+                   captured by the &WHOLE variable) for bind_required_parameters. */
+                Ref mll=functionp(macro_fn)?macro_fn->slots->function.lambda_list:NIL_Symbol;
+                Ref margs=(consp(mll)&&car(mll)==S(&WHOLE))
+                          ?cons(cons(car(form),arguments),arguments):arguments;
+                kernel_apply(macro_fn, margs, &mac_results);
                 Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
                 /* Minimal compilation by macro displacement: cache the expansion
                    in place so this global-macro call is expanded ONCE rather than
@@ -1362,7 +1369,10 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                             :env_global_macro_name(macro);
             Ref fn=function_new(name,lambda_list,body);
             MultipleValues mac_results = {0};
-            kernel_apply(fn,arguments,&mac_results);
+            /* &WHOLE: prepend a fresh copy of the whole form (see above). */
+            Ref margs=(consp(lambda_list)&&car(lambda_list)==S(&WHOLE))
+                      ?cons(cons(car(form),arguments),arguments):arguments;
+            kernel_apply(fn,margs,&mac_results);
             Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
             /* Minimal compilation by macro displacement: cache the expansion in
                place so a global-macro call is expanded ONCE, not on every
@@ -1469,9 +1479,27 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
     bool saw_rest = false;
     while(consp(ll)){
         Ref param=car(ll);
-        if(symbolp(param) && (param==S(&WHOLE) || param==S(&ENVIRONMENT))){
-            ERROR("Lambda-list keyword %s not yet implemented",
-                  string_cstring(symbol_name(param)));}
+        /* &WHOLE var — the whole form, prepended to ARGUMENTS by the macro-call
+           dispatch when the lambda-list begins with &WHOLE; bind and consume it. */
+        if(symbolp(param) && param==S(&WHOLE)){
+            ll=cdr(ll);
+            if(!consp(ll) || !symbolp(car(ll))){
+                ERROR("&WHOLE: expected a variable%s","");}
+            Ref whole_var=car(ll);
+            Ref whole_val=consp(arguments)?car(arguments):NIL_Symbol;
+            environment_add_variable(env_make_lexical_variable(whole_var,whole_val),target_env);
+            if(consp(arguments)){ arguments=cdr(arguments); }
+            ll=cdr(ll);
+            continue;}
+        /* &ENVIRONMENT var — bocl has no first-class macro environments; bind the
+           variable to NIL and do not consume an argument (it may appear anywhere). */
+        if(symbolp(param) && param==S(&ENVIRONMENT)){
+            ll=cdr(ll);
+            if(!consp(ll) || !symbolp(car(ll))){
+                ERROR("&ENVIRONMENT: expected a variable%s","");}
+            environment_add_variable(env_make_lexical_variable(car(ll),NIL_Symbol),target_env);
+            ll=cdr(ll);
+            continue;}
         /* &AUX (var) or (var init-form) — bind local variables in order. */
         if(symbolp(param) && param==S(&AUX)){
             ll=cdr(ll);
