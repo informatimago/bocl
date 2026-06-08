@@ -3718,6 +3718,45 @@
                      (format stream "#<~A>" (type-of c)))
                  c))
 
+;;; Register the standard CONDITION class hierarchy as CLOS classes, so that
+;;; (DEFCLASS foo (ERROR) ...) and DEFINE-CONDITION can inherit them (FIND-CLASS
+;;; and ENSURE-CLOS-CLASS resolve superclasses from *%classes*).  These are SEPARATE
+;;; from the kernel condition classes that HANDLER-CASE and TYPEP use via the C
+;;; find_class / *%kernel-typep* (kernel lookup takes priority), so kernel-condition
+;;; signalling, catching and printing are unaffected.  Registered AFTER the kernel
+;;; print-object method above so that method keeps its kernel-symbol specializer.
+(dolist (%cspec '((condition standard-object)
+                  (serious-condition condition)
+                  (warning condition)
+                  (simple-condition condition)
+                  (style-warning warning)
+                  (storage-condition serious-condition)
+                  (error serious-condition)
+                  (simple-error error simple-condition)
+                  (simple-warning warning simple-condition)
+                  (type-error error)
+                  (simple-type-error type-error simple-condition)
+                  (program-error error)
+                  (control-error error)
+                  (stream-error error)
+                  (end-of-file stream-error)
+                  (file-error error)
+                  (cell-error error)
+                  (unbound-variable cell-error)
+                  (undefined-function cell-error)
+                  (unbound-slot cell-error)
+                  (arithmetic-error error)
+                  (division-by-zero arithmetic-error)
+                  (floating-point-overflow arithmetic-error)
+                  (floating-point-underflow arithmetic-error)
+                  (floating-point-inexact arithmetic-error)
+                  (floating-point-invalid-operation arithmetic-error)
+                  (parse-error error)
+                  (reader-error parse-error stream-error)
+                  (print-not-readable error)
+                  (package-error error)))
+  (ensure-clos-class (car %cspec) (cdr %cspec) nil))
+
 ;;; DESCRIBE-OBJECT — stub; used by some code
 (defgeneric describe-object (object stream))
 (ensure-method 'describe-object nil '(standard-object t)
@@ -5843,6 +5882,14 @@
     ((and (eql type1 'cons)      (eql type2 'list))      (values t t))
     ((and (eql type1 'null)      (eql type2 'list))      (values t t))
     ((and (eql type1 'null)      (eql type2 'symbol))    (values t t))
+    ;; CLOS class subtyping: TYPE2 is a superclass of TYPE1 when its %cls is in
+    ;; TYPE1's class precedence list (covers conditions defined via DEFCLASS /
+    ;; DEFINE-CONDITION inheriting the standard condition classes).
+    ((and (symbolp type1)
+          (let ((c1 (gethash type1 *%classes*)) (c2 (gethash type2 *%classes*)))
+            (and (%is-cls c1) (%is-cls c2)
+                 (not (null (member c2 (%cls-cpl c1)))))))
+     (values t t))
     (t (values nil nil))))
 
 ;;;; =========================================================================
@@ -5918,12 +5965,15 @@
     ((%is-cls type)
      (and (%is-obj object)
           (not (null (member type (%cls-cpl (%obj-class object)))))))
-    ;; Symbol — check user CLOS classes first, then kernel
+    ;; Symbol — a CLOS class (for %obj instances) and/or a kernel class (for
+    ;; kernel objects); some names (the CONDITION hierarchy) are BOTH, so check
+    ;; the %cls CPL for CLOS instances and fall back to the kernel hierarchy.
     ((symbolp type)
      (let ((cls (gethash type *%classes*)))
        (if (%is-cls cls)
-           (and (%is-obj object)
-                (not (null (member cls (%cls-cpl (%obj-class object))))))
+           (or (and (%is-obj object)
+                    (not (null (member cls (%cls-cpl (%obj-class object))))))
+               (funcall *%kernel-typep* object type))
            (funcall *%kernel-typep* object type))))
     ;; Non-symbol non-CLOS type (e.g. a structure-class or kernel class object)
     ;; — delegate directly to the kernel typep which handles the class hierarchy.
