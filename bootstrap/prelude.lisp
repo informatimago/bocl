@@ -1783,7 +1783,7 @@
             (v   (make-array (length all))))
        (dotimes (i (length all) v)
          (setf (aref v i) (elt all i)))))
-    ((member result-type '(string cl:string simple-string))
+    ((member result-type '(string cl:string simple-string base-string simple-base-string))
      ;; Flatten all sequences to a list of characters, then build a string.
      (let* ((all (apply *%old-concatenate* 'list sequences))
             (len (length all))
@@ -2539,7 +2539,7 @@
   ;; vector branches.
   (cond
     ;; String identity
-    ((and (stringp object) (member result-type '(string cl:string simple-string)))
+    ((and (stringp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
      object)
     ;; String → list
     ((and (stringp object) (member result-type '(list cl:list)))
@@ -2559,7 +2559,7 @@
        (dotimes (i len v)
          (setf (aref v i) (nth i object)))))
     ;; List → string
-    ((and (listp object) (member result-type '(string cl:string simple-string)))
+    ((and (listp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
      (let* ((len (length object))
             (s   (make-string len)))
        (dotimes (i len s)
@@ -2576,7 +2576,7 @@
        (dotimes (i (vector-length object) (nreverse acc))
          (push (svref object i) acc))))
     ;; Vector → string
-    ((and (vectorp object) (member result-type '(string cl:string simple-string)))
+    ((and (vectorp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
      (let* ((len (vector-length object))
             (s   (make-string len)))
        (dotimes (i len s)
@@ -5988,7 +5988,7 @@
   (cond
     ((member result-type '(list cl:list))
      (make-list length :initial-element initial-element))
-    ((member result-type '(string cl:string simple-string))
+    ((member result-type '(string cl:string simple-string base-string simple-base-string))
      (make-string length :initial-element (or initial-element #\Space)))
     ((member result-type '(vector simple-vector))
      (make-array length :initial-element initial-element))
@@ -6057,7 +6057,7 @@
     (cond
       ((null result-type) nil)
       ((member result-type '(list cl:list)) vals)
-      ((member result-type '(string cl:string simple-string))
+      ((member result-type '(string cl:string simple-string base-string simple-base-string))
        (let ((s (make-string len)))
          (dotimes (i len s)
            (setf (char s i) (nth i vals)))))
