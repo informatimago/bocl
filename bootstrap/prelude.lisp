@@ -2284,6 +2284,17 @@
                              (list (if neg
                                        `(unless ,cond (setq ,v (append ,v ,e)))
                                        `(when ,cond (setq ,v (append ,v ,e)))))))
+                          ;; NCONC / NCONCING
+                          ((%lkw sub "NCONC" "NCONCING")
+                           (let* ((e (pop!))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  (v  (or reuse-var iv (gensym "NC-"))))
+                             (setq shared-var v)
+                             (unless reuse-var
+                               (push (list :nconc-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond (setq ,v (nconc ,v ,e)))
+                                       `(when ,cond (setq ,v (nconc ,v ,e)))))))
                           ;; SUM / SUMMING
                           ((%lkw sub "SUM" "SUMMING")
                            (let* ((e (pop!))
@@ -7122,10 +7133,14 @@
 (defun compile-file (input-file &key output-file &allow-other-keys)
   "Return the conventional fast-load pathname for INPUT-FILE without writing any
    file.  bocl interprets, so LOAD of the (absent) result falls back to the
-   source.  Returns (values output-truename warnings-p failure-p); failure-p is
-   always NIL."
+   source.  Any pre-existing (stale) fast-load file is deleted so it cannot
+   shadow the source.  Returns (values output-truename warnings-p failure-p);
+   failure-p is always NIL."
   (let* ((in  (merge-pathnames input-file *default-pathname-defaults*))
          (out (compile-file-pathname in :output-file output-file)))
+    ;; LOAD only falls back to the .lsp source when the .fasl is ABSENT; remove a
+    ;; stale .fasl (e.g. left by an older COMPILE-FILE) so the fresh source wins.
+    (when (probe-file out) (ignore-errors (delete-file out)))
     (values (pathname out) nil nil)))
 
 ;;; ---- Multi-dimensional arrays (ranks 0..array-rank-limit-1 = 0..7) -------
