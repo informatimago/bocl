@@ -47,3 +47,12 @@ NEXT STEPS:
 Once fixed, re-run:
   sources/bocl --no-init --batch -on-error appease -l ../ansi-test/doit.lsp --quit
 and process the remaining ANSI conformance failures (and bignums).
+
+;; UPDATE (Slice 62): COMPILE-FILE no longer MACROEXPAND-ALL's / PRIN1's forms —
+;; it is now a no-op that returns the output pathname and lets LOAD fall back to
+;; the .lsp source.  So COMPILE-AND-LOAD no longer exercises the offending
+;; symbol-qualified PRIN1 path, and the ANSI framework loads.  The underlying
+;; GC-rooting bug in the heavy-PRIN1 path may still lurk for other heavy printing;
+;; keep this open until root-caused.  (Much of last session's "hang" was actually
+;; machine saturation from runaway processes + a slow per-char copy, not the GC
+;; bug; the no-op COMPILE-FILE removes that slowness entirely.)

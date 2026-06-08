@@ -2102,6 +2102,8 @@
                             tests))
                     (push `(incf ,v ,step) steps)))
                  ;; FOR v = init [THEN update]
+                 ;; Without THEN, INIT is re-evaluated each iteration (CLHS
+                 ;; 6.1.2.1.2): bind v to init, and step v back to init each time.
                  ((%lkw (pk) "=")
                   (pop!)
                   (let ((init (pop!)))
@@ -2109,7 +2111,9 @@
                         (progn (pop!)
                                (push (list v init) letb)
                                (push `(setq ,v ,(pop!)) steps))
-                        (push (list v init) letb))))
+                        (progn
+                          (push (list v init) letb)
+                          (push `(setq ,v ,init) steps)))))
                  ;; FOR v BEING [EACH|THE] HASH-KEY[S] OF ht [USING (HASH-VALUE vv)]
                  ;; FOR v BEING [EACH|THE] HASH-VALUE[S] OF ht [USING (HASH-KEY kk)]
                  ((%lkw (pk) "BEING")
@@ -7105,60 +7109,23 @@
 
 ;;;; THE END OF SLICE 44
 
-;;; --- COMPILE-FILE: write a fast-load file of macroexpanded forms ------
+;;; --- COMPILE-FILE -----------------------------------------------------
 ;;; (issues: compile-file-output, minimal-compilation)
-(defvar *%compile-time-evaluated*
-  '(in-package defpackage defmacro defstruct defclass define-condition
-    deftype define-setf-expander define-symbol-macro proclaim declaim)
-  "Top-level operators whose compile-time side effect COMPILE-FILE performs so
-   that subsequent forms read and macroexpand correctly (CLHS 3.2.3.1).")
-
-(defun %compile-file-form (form dst)
-  "Process one top-level FORM for COMPILE-FILE: perform its compile-time effect
-   (so later forms see the right *PACKAGE* and macros) and write the load-time
-   form, MACROEXPAND-ALL'd, to DST.  PROGN and EVAL-WHEN are handled per the
-   standard top-level processing rules."
-  (cond
-    ((not (consp form))
-     (prin1 form dst) (terpri dst))
-    ((eq (car form) 'progn)
-     (dolist (sub (cdr form)) (%compile-file-form sub dst)))
-    ((eq (car form) 'eval-when)
-     (let ((situations (cadr form)) (body (cddr form)))
-       (when (or (member :compile-toplevel situations) (member 'compile situations))
-         (dolist (f body) (ignore-errors (eval f))))
-       (when (or (member :load-toplevel situations) (member 'load situations)
-                 (member :execute situations)      (member 'eval situations))
-         (dolist (f body) (%compile-file-form f dst)))))
-    (t
-     ;; Definition forms with compile-time significance: evaluate now (so the
-     ;; compilation environment — *PACKAGE*, macros, types — is updated) AND emit
-     ;; them for load time.
-     (when (member (car form) *%compile-time-evaluated*)
-       (ignore-errors (eval form)))
-     (prin1 (handler-case (macroexpand-all form) (error () form)) dst)
-     (terpri dst))))
-
+;;; bocl is an interpreter and writes no real fast-load file.  COMPILE-FILE just
+;;; returns the conventional output pathname WITHOUT writing it; LOAD of that
+;;; (missing) .fasl transparently falls back to the .lsp source (see LOAD), which
+;;; is exactly the COMPILE-AND-LOAD idiom.  This is correct (LOAD of the source
+;;; handles IN-PACKAGE / macros / EVAL-WHEN in order), instantaneous, and avoids
+;;; both the slow per-char copy and the MACROEXPAND-ALL + package-qualified PRIN1
+;;; path (which also exposes a GC-rooting bug — see issues/open/deferred-compile-
+;;; file-rt-gc-corruption).
 (defun compile-file (input-file &key output-file &allow-other-keys)
-  "Minimal-compile INPUT-FILE to a fast-load file.  Each top-level form is read
-   and processed (compile-time effects performed, MACROEXPAND-ALL'd) and the
-   load-time form written, so LOAD of the result needs no macro expansion.
-   *PACKAGE* is bound locally, and (IN-PACKAGE …) is evaluated as it is read so
-   the rest of the file is read in the right package.  Returns
-   (values output-truename warnings-p failure-p)."
-  (let* ((in     (merge-pathnames input-file *default-pathname-defaults*))
-         (out    (compile-file-pathname in :output-file output-file))
-         (out-ns (namestring out)))
-    (with-open-file (src in :direction :input)
-      (with-open-file (dst out-ns :direction :output
-                                  :if-exists :supersede :if-does-not-exist :create)
-        (format dst ";;; bocl fast-load (minimal-compiled) file. Source: ~A~%"
-                (namestring in))
-        (let ((*package* *package*))           ; compile-time IN-PACKAGE is local
-          (loop
-            (let ((form (read src nil src)))
-              (when (eq form src) (return))
-              (%compile-file-form form dst))))))
+  "Return the conventional fast-load pathname for INPUT-FILE without writing any
+   file.  bocl interprets, so LOAD of the (absent) result falls back to the
+   source.  Returns (values output-truename warnings-p failure-p); failure-p is
+   always NIL."
+  (let* ((in  (merge-pathnames input-file *default-pathname-defaults*))
+         (out (compile-file-pathname in :output-file output-file)))
     (values (pathname out) nil nil)))
 
 ;;; ---- Multi-dimensional arrays (ranks 0..array-rank-limit-1 = 0..7) -------
