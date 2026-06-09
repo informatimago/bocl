@@ -172,15 +172,19 @@
 
 (defun u%plus (base a b)
   "Return (+ a b)"
-  (loop
-     :with cc = 0
-     :for aa = a :then (rest aa)
-     :for bb = b :then (rest bb)
-     :collect (let* ((s (+ (or (first aa) 0) (or (first bb) 0) cc)))
-                (if (< s base)
-                    (progn (setf cc 0) s)
-                    (progn (setf cc 1) (- s base))))
-     :while (or aa bb)))
+  ;; (bocl) Pre-test form.  bocl's LOOP evaluates a trailing :while/:until BEFORE
+  ;; the body of the same iteration (non-conforming — see issues/open/loop-while-
+  ;; until-ordering.issue), which would drop the final carry of a post-test
+  ;; `:collect ... :while`.  Looping `while (or a b (plusp cc))` adds exactly one
+  ;; extra iteration for the carry and is correct on any conforming LOOP too.
+  (let ((cc 0) (r '()))
+    (loop :while (or a b (plusp cc)) :do
+      (let ((s (+ (or (car a) 0) (or (car b) 0) cc)))
+        (if (< s base)
+            (progn (setf cc 0) (push s r))
+            (progn (setf cc 1) (push (- s base) r)))
+        (setf a (cdr a) b (cdr b))))
+    (nreverse r)))
 
 
 (defun u%minus (base a b)
@@ -199,20 +203,19 @@ PRE: (>= a b)"
 
 (defun u%times-digit (base digit a)
   "Return the product of a * digit."
-  (loop
-     :with cc = 0
-     :with p = '()
-     :for aa = a then (rest aa)
-     :do (let ((pp (+ (* digit (or (first aa) 0)) cc)))
-           (if (< pp base)
-               (progn
-                 (setf cc 0)
-                 (push pp p))
-               (multiple-value-bind (quotient remainder) (truncate pp base)
-                 (setf cc quotient)
-                 (push remainder p))))
-     :while aa
-     :finally (return (nreverse p))))
+  ;; (bocl) Pre-test form (see u%plus): flush the final carry explicitly instead
+  ;; of relying on a post-test `:do ... :while aa` (which bocl's LOOP mis-orders).
+  ;; After the loop cc < base, so it is a single extra digit.
+  (let ((cc 0) (p '()))
+    (dolist (ai a)
+      (let ((pp (+ (* digit ai) cc)))
+        (if (< pp base)
+            (progn (setf cc 0) (push pp p))
+            (multiple-value-bind (quotient remainder) (truncate pp base)
+              (setf cc quotient)
+              (push remainder p)))))
+    (when (plusp cc) (push cc p))
+    (nreverse p)))
 
 
 (defvar *u%zero* '())

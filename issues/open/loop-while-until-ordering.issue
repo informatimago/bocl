@@ -1,0 +1,42 @@
+LOOP evaluates a trailing :WHILE / :UNTIL clause BEFORE the body of the same
+iteration, instead of at its textual position.  Per CLHS 6.1.1.4 / 6.1.9, the
+main loop clauses execute in the order written, so a WHILE/UNTIL placed AFTER a
+DO/COLLECT is a *post-test* (the body clause runs, then the test); bocl makes
+every WHILE/UNTIL a *pre-test* at the top of the loop body.
+
+REPRODUCE (bocl gives the second column; a conforming LOOP gives the first):
+  (loop for i from 1 to 3 do (princ i) while (< i 2))   "12"     -> bocl "1"
+  (loop for i from 1 to 3 collect i while (< i 2))       (1 2)    -> bocl (1)
+  (loop for i from 1 to 3 do (princ i) until (>= i 3))   "123"    -> bocl "12"
+
+ROOT CAUSE (bootstrap/prelude.lisp, %loop-expand):
+  WHILE/UNTIL push their test onto `tests` (lines ~2183-2187), and code
+  generation emits ALL of `tests` as `test-forms` at the TOP of the loop body,
+  before `body`:
+        top-tag
+          ,@test-forms      ; <-- every while/until, hoisted here
+          ,@setup-forms
+          ,@body            ; do / collect / ...
+          ,@accum-forms
+          ,@step-forms
+          (go top-tag)
+        end-tag ...
+  So a WHILE/UNTIL written after a DO/COLLECT is tested before it.  (The FOR /
+  REPEAT termination tests legitimately belong at the top; only WHILE/UNTIL must
+  move.)
+
+FIX (sketch):
+  Create end-tag as a gensym BEFORE the parse loop, and when parsing
+  WHILE/UNTIL append `(when <test> (go ,end-tag))` into `body` at the current
+  position instead of pushing to `tests`.  Leave FOR/REPEAT tests in `tests`
+  (top of loop).  Reuse the pre-created end-tag in codegen.
+  Test load-bearing: LOOP is used throughout the prelude, so re-verify the whole
+  prelude loads and the ANSI LOOP tests after the change.
+
+IMPACT
+  - ANSI conformance: any code relying on post-test WHILE/UNTIL is wrong.
+  - Surfaced while integrating the Lisp bignum engine (bootstrap/bignum.lisp):
+    u%plus and u%times-digit used `:collect/:do ... :while ...` to flush the
+    final carry, which bocl dropped, corrupting bignum * and +.  As an interim
+    measure those two functions were rewritten in pre-test form (Slice that
+    cleaned bignum.lisp), but the LOOP bug itself remains and should be fixed.
