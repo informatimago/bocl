@@ -1994,6 +1994,15 @@
       :maximize-body :minimize-body)
      nil)))
 
+(defun %loop-accum-body-kind (kind)
+  "Map an accumulation KIND to its -body marker (whose per-iteration update lives
+inline in the loop body, so accum-forms skips it but binding/result still apply)."
+  (case kind
+    (:collect  :collect-body)  (:append :append-body)  (:nconc :nconc-body)
+    (:sum      :sum-body)      (:count  :count-body)
+    (:maximize :maximize-body) (:minimize :minimize-body)
+    (t kind)))
+
 (defun %loop-expand (all-clauses)
   (let ((rest     all-clauses)
         (name     nil)
@@ -2011,7 +2020,8 @@
         (never-set  nil) ; T if a NEVER clause was seen (never-f may be NIL)
         (thereis-f nil)
         (return-f  nil)
-        (return-set nil))
+        (return-set nil)
+        (end-tag   (gensym "END-")))  ; created here so WHILE/UNTIL can target it
     (flet ((pk  ()     (car rest))
            (pop! ()    (prog1 (car rest) (setq rest (cdr rest))))
            (try! (nm)  (when (%lkw (car rest) nm) (pop!) t))
@@ -2019,7 +2029,14 @@
              (let ((acc nil))
                (do () ((or (null rest) (%loop-kw-p (pk))))
                  (push (pop!) acc))
-               (nreverse acc))))
+               (nreverse acc)))
+           (add-accum (kind var e)
+             ;; Emit the per-iteration accumulation update in the loop BODY at
+             ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
+             ;; CLHS 6.1.1.4), and register the result variable (as its -body
+             ;; kind) for binding + the final result form.
+             (setq body (append body (list (%loop-accum-step kind var e))))
+             (push (list (%loop-accum-body-kind kind) var e) accums)))
       (do () ((null rest))
         (let ((kw (pop!)))
           (cond
@@ -2179,12 +2196,14 @@
                (push (list rv (pop!)) letb)
                (push `(<= ,rv 0)  tests)
                (push `(decf ,rv)  steps)))
-            ;; WHILE cond
+            ;; WHILE / UNTIL are body clauses tested at their TEXTUAL position
+            ;; (CLHS 6.1.9), not hoisted to the loop top with the FOR/REPEAT
+            ;; termination tests — so `do X while Y` tests Y after X, and
+            ;; `collect X while Y` collects before testing.
             ((%lkw kw "WHILE")
-             (push `(not ,(pop!)) tests))
-            ;; UNTIL cond
+             (setq body (append body (list `(when (not ,(pop!)) (go ,end-tag))))))
             ((%lkw kw "UNTIL")
-             (push (pop!) tests))
+             (setq body (append body (list `(when ,(pop!) (go ,end-tag))))))
             ;; DO / DOING
             ((%lkw kw "DO" "DOING")
              (setq body (append body (take-body))))
@@ -2192,31 +2211,31 @@
             ((%lkw kw "COLLECT" "COLLECTING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
-               (push (list :collect (or iv (gensym "C-")) e) accums)))
+               (add-accum :collect (or iv (gensym "C-")) e)))
             ((%lkw kw "APPEND" "APPENDING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
-               (push (list :append (or iv (gensym "A-")) e) accums)))
+               (add-accum :append (or iv (gensym "A-")) e)))
             ((%lkw kw "NCONC" "NCONCING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
-               (push (list :nconc (or iv (gensym "NC-")) e) accums)))
+               (add-accum :nconc (or iv (gensym "NC-")) e)))
             ((%lkw kw "SUM" "SUMMING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
-               (push (list :sum (or iv (gensym "S-")) e) accums)))
+               (add-accum :sum (or iv (gensym "S-")) e)))
             ((%lkw kw "COUNT" "COUNTING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
-               (push (list :count (or iv (gensym "K-")) e) accums)))
+               (add-accum :count (or iv (gensym "K-")) e)))
             ((%lkw kw "MAXIMIZE" "MAXIMIZING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
-               (push (list :maximize (or iv (gensym "MX-")) e) accums)))
+               (add-accum :maximize (or iv (gensym "MX-")) e)))
             ((%lkw kw "MINIMIZE" "MINIMIZING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
-               (push (list :minimize (or iv (gensym "MN-")) e) accums)))
+               (add-accum :minimize (or iv (gensym "MN-")) e)))
             ;; ALWAYS / NEVER / THEREIS
             ((%lkw kw "ALWAYS")   (setq always-f  (pop!) always-set  t))
             ((%lkw kw "NEVER")    (setq never-f   (pop!) never-set   t))
@@ -2375,7 +2394,8 @@
     ;; accums: last pushed = first defined; nreverse so primary = first defined
     (setq accums (nreverse accums))
     (let* ((top-tag      (gensym "TOP-"))
-           (end-tag      (gensym "END-"))
+           ;; end-tag is created at the top of %loop-expand so WHILE/UNTIL can
+           ;; target it while parsing.
            (let*-binds   (nreverse letb))
            (accum-binds  (mapcar (lambda (a)
                                    (list (second a) (%loop-accum-init (first a))))
@@ -2398,14 +2418,18 @@
                            (let ((tv (gensym "TV-")))
                              `((let ((,tv ,thereis-f))
                                  (when ,tv (return-from ,(or name nil) ,tv)))))))
+           ;; COLLECT builds its list reversed (cons); reverse each collect var
+           ;; ONCE at loop end so the value is forward-order for FINALLY, for an
+           ;; INTO variable, and for the loop result alike.  (APPEND/NCONC/SUM/
+           ;; COUNT/MAX/MIN already hold their final value.)
+           (collect-reverses
+                         (let ((rs nil))
+                           (dolist (a accums (nreverse rs))
+                             (when (member (first a) '(:collect :collect-body))
+                               (push `(setq ,(second a) (nreverse ,(second a))) rs)))))
            (primary      (first accums))
            (result-expr  (cond (return-set return-f)
-                               (primary
-                                (let ((k (first primary)) (rv (second primary)))
-                                  ;; both :collect and :collect-body use nreverse
-                                  (if (member k '(:collect :collect-body))
-                                      `(nreverse ,rv)
-                                      rv)))
+                               (primary     (second primary))  ; already forward-order
                                (always-set  t) ; vacuously T when loop never runs
                                (never-set   t) ; vacuously T when loop never runs
                                (t           nil))))
@@ -2424,6 +2448,7 @@
              ,@step-forms
              (go ,top-tag)
              ,end-tag
+             ,@collect-reverses
              ,@finally
              (return-from ,(or name nil) ,result-expr)))))))
 

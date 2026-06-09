@@ -1,3 +1,18 @@
+RESOLVED (Slice 69): fixed in %loop-expand.  WHILE/UNTIL now emit
+`(when <test> (go end-tag))` inline in `body` at their textual position (the
+end-tag is gensym'd up front so they can target it), and top-level accumulation
+updates (COLLECT/APPEND/NCONC/SUM/COUNT/MAX/MIN) are emitted into `body` at
+position too (via a new add-accum helper + %loop-accum-body-kind) so they
+interleave correctly with WHILE/UNTIL/DO.  COLLECT vars are now reversed once at
+loop end (so FINALLY / INTO / result are all forward-order).  Verified on a clean
+build under normal GC: the prelude loads and a conformance battery passes
+(`do X while Y`, `collect X while Y`, `collect X until Y`, `collect into +
+finally`, sum/count/append/when-collect, etc.).
+Known remaining edge case (separate, pre-existing): `if X collect A into a else
+collect B into b` leaves the else INTO var unbound (the ELSE handler reuses the
+WHEN-branch var instead of registering a distinct one).
+
+----------------------------------------------------------------------------
 LOOP evaluates a trailing :WHILE / :UNTIL clause BEFORE the body of the same
 iteration, instead of at its textual position.  Per CLHS 6.1.1.4 / 6.1.9, the
 main loop clauses execute in the order written, so a WHILE/UNTIL placed AFTER a

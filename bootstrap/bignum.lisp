@@ -172,11 +172,11 @@
 
 (defun u%plus (base a b)
   "Return (+ a b)"
-  ;; (bocl) Pre-test form.  bocl's LOOP evaluates a trailing :while/:until BEFORE
-  ;; the body of the same iteration (non-conforming — see issues/open/loop-while-
-  ;; until-ordering.issue), which would drop the final carry of a post-test
-  ;; `:collect ... :while`.  Looping `while (or a b (plusp cc))` adds exactly one
-  ;; extra iteration for the carry and is correct on any conforming LOOP too.
+  ;; (bocl) Pre-test form: loop `while (or a b (plusp cc))`, adding exactly one
+  ;; extra iteration to flush the final carry.  PJB's original used a post-test
+  ;; `:collect ... :while`; this portable shape avoids depending on where LOOP
+  ;; runs a trailing while/until (a bocl LOOP bug found during this integration
+  ;; and since fixed in %loop-expand) and is correct on any conforming LOOP.
   (let ((cc 0) (r '()))
     (loop :while (or a b (plusp cc)) :do
       (let ((s (+ (or (car a) 0) (or (car b) 0) cc)))
