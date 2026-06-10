@@ -37,24 +37,32 @@ Ref structure_class_instance_direct_slots(Ref structure_class){
     return alist;}
 
 
+/* Return an a-list of (slot-name . index) for ALL slots of STRUCTURE_CLASS
+   (including inherited ones).
+
+   MEMOIZED: this used to cons a fresh a-list on EVERY call — and it is called on
+   every variable reference (env_lexical_variable_name/_value etc.) — which was
+   both a severe perf cost and a GC hazard (an allocation deep in the hot
+   variable-lookup path).  The a-list is constant for a given class object, so we
+   cache it in the class's GC-marked `cached_slots` slot.  A class redefinition
+   allocates a fresh StructureClass (cached_slots == NULL), so the cache is
+   automatically rebuilt; the cached list lives and dies with its class. */
 Ref structure_class_instance_slots(Ref structure_class){
-    uword pool=open_live_pool();
-    /*
-    Return an a-list of (slot-name . index) for all the slots of the
-    structure_class (including the slots defined in the superclasses).
-    NOTE: do NOT close the pool before returning the non-NIL result; the
-    returned cons list must remain in the live pool until the caller is done
-    with it.  The caller's own close_live_pool() will clean up these cells.
-    The early-return NIL case is safe to close immediately (no cons cells).
-    */
     check_class(structure_class,STRUCTURE_CLASS_Class);
     if(structure_class==STRUCTURE_OBJECT_Class){
-        close_live_pool(pool);
         return NIL_Symbol;}
+    Ref cached=structure_class->slots->structure_class.cached_slots;
+    if(cached!=NULL){
+        return cached;}
+    uword pool=open_live_pool();
+    add_to_live_pool(structure_class);
     Ref superclass = car(structure_class->slots->structure_class.direct_superclasses);
-    Ref result=nconc(structure_class_instance_slots(superclass),
+    /* copy_list the (memoized) superclass a-list before nconc: nconc is
+       destructive and must not splice onto — and so corrupt — the cache. */
+    Ref result=nconc(copy_list(structure_class_instance_slots(superclass)),
                      structure_class_instance_direct_slots(structure_class));
-    (void)pool; /* pool intentionally left open — caller closes it after use */
+    structure_class->slots->structure_class.cached_slots=result;
+    close_live_pool(pool);   /* result now rooted via the class's cached_slots */
     return result;}
 
 

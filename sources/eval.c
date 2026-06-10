@@ -1329,8 +1329,10 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                    expansion (backquote conses + setf-expander gethash + gensym) on
                    every iteration.  CLHS 3.2.2.2 permits caching macro expansions.
                    Skip the degenerate expansion==form case (would loop forever). */
+                add_to_live_pool(expansion);   /* root across BOTH the displaced
+                    evale(form) below and the fall-through evale(expansion) — the
+                    fall-through previously ran with EXPANSION unrooted. */
                 if(expansion!=form && consp(form)){
-                    add_to_live_pool(expansion);
                     if(consp(expansion)){
                         cons_rplaca(form,cons_car(expansion));
                         cons_rplacd(form,cons_cdr(expansion));
@@ -1383,8 +1385,10 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                expansions.  We only displace GLOBAL macros (a local/lexical macro
                may expand differently in another scope) and skip the degenerate
                expansion==form case (would re-expand forever). */
+            add_to_live_pool(expansion);   /* root across BOTH evale(form) and the
+                fall-through evale(expansion) — the fall-through (e.g. a local
+                macro, where the guard below is false) previously ran unrooted. */
             if(env_global_macro_p(macro) && expansion!=form && consp(form)){
-                add_to_live_pool(expansion);
                 if(consp(expansion)){
                     cons_rplaca(form,cons_car(expansion));
                     cons_rplacd(form,cons_cdr(expansion));

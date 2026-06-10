@@ -1261,11 +1261,12 @@ StructureClass* StructureClass_slots(Ref class_name,Ref direct_superclass,Ref of
     add_to_live_pool(offset);
     add_to_live_pool(slot_names);
     StructureClass* that=allocate(sizeof(*that));
-    that->objcount=4;
+    that->objcount=5;   /* name, direct_superclasses, offset, slot_names, cached_slots */
     that->name=class_name;
     that->direct_superclasses=list(direct_superclass,NULL);
     that->offset=offset;
     that->slot_names=slot_names;
+    that->cached_slots=NULL;   /* not yet computed (allocate() already zeroed it) */
     that->nslots=direct_superclass->slots->structure_class.nslots
             +(uword)integer_value(offset)
             +list_length(slot_names);

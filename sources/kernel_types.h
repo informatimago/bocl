@@ -328,6 +328,10 @@ typedef struct StructureClass {
     CLASS_HEADER;
     Ref offset; /* An integer, number of additionnal slots. */
     Ref slot_names; /* A list of symbols naming the slots. */
+    Ref cached_slots; /* memoized (slot-name . index) a-list for ALL slots, or
+                         NULL until first computed; reset to NULL on redefinition
+                         (a redefinition makes a fresh StructureClass object).
+                         MUST stay among the GC-marked Ref slots (objcount). */
     uword nslots; /* in instances of this instance of structure-class */
     /* Instances of this  instance of structure-class use VectorOfObject to store the slots. */
 } StructureClass;
