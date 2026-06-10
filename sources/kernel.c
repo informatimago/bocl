@@ -820,6 +820,84 @@ int c_bignum_cmp(Ref a, Ref b){
     free(ma); free(mb);
     return r; }
 
+/* Signed division with CL rounding MODE: 't' truncate (toward 0), 'f' floor
+   (toward -inf), 'c' ceiling (toward +inf), 'r' round (half to even).  Writes the
+   quotient to *q_out and remainder to *r_out (n = q*d + r).  Either operand may be
+   a bignum.  GC is disabled across the bounded Ref construction so the
+   intermediates need no live-pool rooting. */
+void c_bignum_divmod(Ref a, Ref b, char mode, Ref* q_out, Ref* r_out){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    if(nb==0){ free(ma); free(mb); ARITHMETIC_ERROR("Division by zero%s",""); }
+    uword* Q=malloc((na?na:1)*sizeof(uword));
+    uword* R=malloc((nb+1)*sizeof(uword));
+    uword* sc=malloc((nb+2)*sizeof(uword));
+    size_t nq,nr;
+    mag_divmod(ma,na,mb,nb,Q,&nq,R,&nr,sc);
+    bool rzero=(nr==0);
+    bool qodd =(nq>0)&&(Q[0]&1u);                  /* parity of truncate quotient */
+    int  rcmp=0;                                   /* round: 2*|R| vs |b| */
+    if(mode=='r'){
+        uword* tr=malloc((nr+1)*sizeof(uword));
+        size_t ntr=mag_mul_limb(R,nr,2,tr);
+        rcmp=mag_cmp(tr,ntr,mb,nb);
+        free(tr); }
+    bool saved=garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    Ref qt=make_integer_from_limbs(sa!=sb,Q,nq);   /* truncate quotient        */
+    Ref rt=make_integer_from_limbs(sa,R,nr);        /* truncate remainder (sa)  */
+    Ref q=qt, r=rt;
+    if(!rzero){
+        bool away=false;
+        switch(mode){
+          case 't': break;
+          case 'f': away=(sa!=sb); break;           /* negative quotient -> down */
+          case 'c': away=(sa==sb); break;           /* positive quotient -> up   */
+          case 'r': away=(rcmp>0)||(rcmp==0&&qodd); break;
+          default:  break; }
+        if(away){
+            if(sa!=sb){ q=c_bignum_sub(qt,integer_from_word(1)); r=c_bignum_add(rt,b); }
+            else      { q=c_bignum_add(qt,integer_from_word(1)); r=c_bignum_sub(rt,b); } } }
+    set_garbage_collection_enabled(saved);
+    free(ma); free(mb); free(Q); free(R); free(sc);
+    *q_out=q; *r_out=r; }
+
+/* Euclid's algorithm on magnitudes; result is the non-negative GCD. */
+Ref c_bignum_gcd(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* x=bn_decompose(a,&na,&sa);
+    uword* y=bn_decompose(b,&nb,&sb);
+    size_t cap=(na>nb?na:nb)+2;
+    uword* X=malloc(cap*sizeof(uword)); uword* Y=malloc(cap*sizeof(uword));
+    uword* Q=malloc(cap*sizeof(uword)); uword* R=malloc(cap*sizeof(uword));
+    uword* sc=malloc(cap*sizeof(uword));
+    for(size_t i=0;i<na;i++){ X[i]=x[i]; } for(size_t i=0;i<nb;i++){ Y[i]=y[i]; }
+    free(x); free(y);
+    size_t nx=na, ny=nb;
+    while(ny>0){
+        size_t nq,nr;
+        mag_divmod(X,nx,Y,ny,Q,&nq,R,&nr,sc);       /* R = X mod Y */
+        for(size_t i=0;i<ny;i++){ X[i]=Y[i]; } nx=ny;
+        for(size_t i=0;i<nr;i++){ Y[i]=R[i]; } ny=nr; }
+    Ref r=make_integer_from_limbs(false,X,nx);
+    free(X); free(Y); free(Q); free(R); free(sc);
+    return r; }
+
+/* LCM = |a|/gcd(a,b) * |b| (divide first to avoid an extra-wide intermediate). */
+Ref c_bignum_lcm(Ref a, Ref b){
+    Ref zero=integer_from_word(0);
+    if(c_bignum_cmp(a,zero)==0 || c_bignum_cmp(b,zero)==0){ return zero; }
+    bool saved=garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    Ref g =c_bignum_gcd(a,b);
+    Ref aa=(c_bignum_cmp(a,zero)<0)?c_bignum_sub(zero,a):a;
+    Ref bb=(c_bignum_cmp(b,zero)<0)?c_bignum_sub(zero,b):b;
+    Ref q =c_bignum_divide(aa,g);
+    Ref result=c_bignum_mul(q,bb);
+    set_garbage_collection_enabled(saved);
+    return result; }
+
 /* Write a BIGNUM's decimal representation straight to OUT.  Each non-top base-10^9
    limb is exactly 9 decimal digits, so no division is needed.  No Ref allocation,
    hence no GC — replaces the interpreted Lisp printer (and its rooting gap). */

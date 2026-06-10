@@ -479,7 +479,7 @@ static intdiv_t int_round(word num, word den){
         else                  { out.q -= 1; out.r += den; }}
     return out;}
 
-#define DIVOP_KERNEL(cname,intop,floatop)                                      \
+#define DIVOP_KERNEL(cname,intop,floatop,modechar)                            \
     void cname(Ref function,Ref arguments,MultipleValues* results){            \
         uword pool=open_live_pool();                                           \
         add_to_live_pool(function);                                            \
@@ -497,6 +497,11 @@ static intdiv_t int_round(word num, word den){
             results->count=2;                                                  \
             results->values[0]=integer_from_word((word)q);                     \
             results->values[1]=float_from_floating(n - q*d);                   \
+        } else if(bignump(num)||bignump(den)){                                 \
+            Ref q,r; c_bignum_divmod(num,den,modechar,&q,&r);                  \
+            results->count=2;                                                  \
+            results->values[0]=q;                                              \
+            results->values[1]=r;                                              \
         } else {                                                               \
             word n=integer_value(num); word d=integer_value(den);              \
             if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }             \
@@ -508,10 +513,10 @@ static intdiv_t int_round(word num, word den){
             results->values[1]=integer_from_word(r.r); }                       \
         close_live_pool(pool);}
 
-DIVOP_KERNEL(kernel_TRUNCATE, int_truncate, trunc)
-DIVOP_KERNEL(kernel_FLOOR,    int_floor,    floor)
-DIVOP_KERNEL(kernel_CEILING,  int_ceiling,  ceil)
-DIVOP_KERNEL(kernel_ROUND,    int_round,    rint)
+DIVOP_KERNEL(kernel_TRUNCATE, int_truncate, trunc, 't')
+DIVOP_KERNEL(kernel_FLOOR,    int_floor,    floor, 'f')
+DIVOP_KERNEL(kernel_CEILING,  int_ceiling,  ceil,  'c')
+DIVOP_KERNEL(kernel_ROUND,    int_round,    rint,  'r')
 
 void kernel_MOD(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
@@ -528,6 +533,9 @@ void kernel_MOD(Ref function,Ref arguments,MultipleValues* results){
         if(d==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
         floating q=floor(n/d);
         results->values[0]=float_from_floating(n - q*d);
+    } else if(bignump(num)||bignump(den)){
+        Ref q,r; c_bignum_divmod(num,den,'f',&q,&r);   /* MOD = floor remainder */
+        results->values[0]=r;
     } else {
         word n=integer_value(num), d=integer_value(den);
         if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
@@ -550,6 +558,9 @@ void kernel_REM(Ref function,Ref arguments,MultipleValues* results){
         if(d==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
         floating q=trunc(n/d);
         results->values[0]=float_from_floating(n - q*d);
+    } else if(bignump(num)||bignump(den)){
+        Ref q,r; c_bignum_divmod(num,den,'t',&q,&r);   /* REM = truncate remainder */
+        results->values[0]=r;
     } else {
         word n=integer_value(num), d=integer_value(den);
         if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
@@ -812,14 +823,20 @@ void kernel_GCD(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref tail = arguments;
-    word acc = 0;
+    word wacc = 0;       /* fast word accumulator (GCD never overflows) */
+    bool big  = false;
+    Ref  acc  = NIL_Symbol;
     while(consp(tail)){
         Ref x = cons_car(tail);
-        if(!integerp(x)){ TYPE_ERROR(x,INTEGER_Class); }
-        acc = gcd2(acc, integer_value(x));
+        if(!(integerp(x)||bignump(x))){ TYPE_ERROR(x,INTEGER_Class); }
+        if(big || bignump(x)){
+            if(!big){ acc=integer_from_word(wacc); big=true; }
+            acc = c_bignum_gcd(acc,x);
+        } else {
+            wacc = gcd2(wacc, integer_value(x)); }
         tail = cons_cdr(tail);}
     results->count=1;
-    results->values[0] = integer_from_word(acc);
+    results->values[0] = big ? acc : integer_from_word(wacc);
     close_live_pool(pool);}
 
 /* (LCM &rest integers) — least common multiple. (lcm) -> 1. */
@@ -827,21 +844,29 @@ void kernel_LCM(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref tail = arguments;
-    word acc = 1;
+    word wacc = 1;
+    bool big  = false;
+    Ref  acc  = NIL_Symbol;
     while(consp(tail)){
         Ref x = cons_car(tail);
-        if(!integerp(x)){ TYPE_ERROR(x,INTEGER_Class); }
-        word v = integer_value(x);
-        if(v == 0){ acc = 0; break; }
-        word g = gcd2(acc, v);
-        word q = v / g;
-        word r = 0;
-        if(__builtin_mul_overflow(acc,q,&r)){
-            ARITHMETIC_ERROR("Integer overflow in LCM%s","");}
-        acc = abs_word(r);
+        if(!(integerp(x)||bignump(x))){ TYPE_ERROR(x,INTEGER_Class); }
+        if(big || bignump(x)){
+            if(!big){ acc=integer_from_word(wacc); big=true; }
+            acc = c_bignum_lcm(acc,x);
+        } else {
+            word v = integer_value(x);
+            if(v == 0){ wacc = 0; }
+            else {
+                word g = gcd2(wacc, v);
+                word q = v / g;
+                word r = 0;
+                if(__builtin_mul_overflow(wacc,q,&r)){
+                    /* overflow -> promote to bignum LCM */
+                    acc=c_bignum_lcm(integer_from_word(wacc),x); big=true;
+                } else { wacc = abs_word(r); } } }
         tail = cons_cdr(tail);}
     results->count=1;
-    results->values[0] = integer_from_word(acc);
+    results->values[0] = big ? acc : integer_from_word(wacc);
     close_live_pool(pool);}
 
 /* (SIGNUM x) — -1, 0, +1 of the same numeric type as x. */

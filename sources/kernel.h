@@ -63,6 +63,9 @@ Ref  c_bignum_sub(Ref a, Ref b);
 Ref  c_bignum_mul(Ref a, Ref b);
 Ref  c_bignum_divide(Ref a, Ref b);               /* exact; else signals (no bignum ratios) */
 int  c_bignum_cmp(Ref a, Ref b);                  /* -1 / 0 / 1 */
+void c_bignum_divmod(Ref a, Ref b, char mode, Ref* q_out, Ref* r_out); /* t/f/c/r */
+Ref  c_bignum_gcd(Ref a, Ref b);
+Ref  c_bignum_lcm(Ref a, Ref b);
 void print_bignum(Ref object, FILE* out);          /* decimal, straight to OUT */
 Ref  parse_bignum_cstring(const char* token, int base);
 
