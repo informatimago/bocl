@@ -145,12 +145,20 @@ unused static void check_arg_count_even(Ref arguments){
         ERROR("Expected an even number of arguments but got %"UWORD_FORMAT"",length);}}
 
 static Ref tagbody_collect_tags(Ref body){
+    /* `body` is rooted (the whole list, so cdr-ing is safe); the accumulated
+       `tags` list must be re-rooted before each push so a GC inside push's cons
+       cannot reclaim the partial list. */
+    uword pool=open_live_pool();
+    add_to_live_pool(body);
     Ref tags=NIL_Symbol;
     while(consp(body)){
         if(symbolp(car(body))
            || integerp(car(body))){
+            add_to_live_pool(tags);
             push(body,&tags);}
         body=cdr(body);}
+    close_live_pool(pool);
+    add_to_live_pool(tags);   /* re-root the result (close trimmed it) */
     return tags;}
 
 

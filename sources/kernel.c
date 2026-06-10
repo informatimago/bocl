@@ -66,7 +66,15 @@ static Environment*              Environment_slots                  (Ref next_en
 /* Object */
 
 Ref Object_new(Ref class,Slots* slots){
+    /* Root class + slots across the allocation: a caller typically writes
+       Object_new(CLASS, X_slots(...)) with the fresh slots held only in a C
+       temporary, so a GC inside allocate() would reclaim it.  Balanced
+       open/close => no live-pool growth (rooted only for the allocation). */
+    uword pool=open_live_pool();
+    add_to_live_pool(class);
+    add_to_live_pool((Ref)slots);
     Ref that=allocate(sizeof(*that));
+    close_live_pool(pool);
     that->objcount=2;
     that->class=class;
     that->slots=slots;
@@ -1314,6 +1322,7 @@ Ref make_structure_instance(Ref structure_class){
     */
     check_class(structure_class,STRUCTURE_CLASS_Class);
     VectorOfObject* slots=VectorOfObject_slots(CHECK_UWORD_TO_HALFWORD(structure_class->slots->structure_class.nslots));
+    add_to_live_pool((Ref)slots);   /* root the fresh slots across Object_new's allocation */
     Ref instance=Object_new(structure_class,(Slots*)slots);
     close_live_pool(pool);
     add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */

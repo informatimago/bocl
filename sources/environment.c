@@ -97,41 +97,49 @@ Ref environment_frames(Ref environment){
     return results;}
 
  
+/* In each of these, the item being pushed must be rooted across push's cons
+   (push X = X-list = cons(X, X-list)); X is a fresh object the caller just made
+   and has not otherwise rooted. */
 Ref environment_add_variable(Ref variable, Ref environment){
-    uword pool=open_live_pool();    
+    uword pool=open_live_pool();
     add_to_live_pool(environment);
+    add_to_live_pool(variable);
     check_class(environment,ENVIRONMENT_Class);
     push(variable,&environment->slots->environment.variables);
     close_live_pool(pool);
     return environment;}
 
 Ref environment_add_function(Ref function, Ref environment){
-    uword pool=open_live_pool();    
+    uword pool=open_live_pool();
     add_to_live_pool(environment);
+    add_to_live_pool(function);
     check_class(environment,ENVIRONMENT_Class);
     push(function,&environment->slots->environment.functions);
     close_live_pool(pool);
     return environment;}
 
 Ref environment_add_block(Ref name, Ref environment){
-    uword pool=open_live_pool();    
+    uword pool=open_live_pool();
     add_to_live_pool(environment);
+    add_to_live_pool(name);
     check_class(environment,ENVIRONMENT_Class);
     push(name,&environment->slots->environment.blocks);
     close_live_pool(pool);
     return environment;}
 
 Ref environment_add_catch(Ref tag, Ref environment){
-    uword pool=open_live_pool();    
+    uword pool=open_live_pool();
     add_to_live_pool(environment);
+    add_to_live_pool(tag);
     check_class(environment,ENVIRONMENT_Class);
     push(tag,&environment->slots->environment.catchs);
     close_live_pool(pool);
     return environment;}
 
 Ref environment_add_declaration(Ref declaration, Ref environment){
-    uword pool=open_live_pool();    
+    uword pool=open_live_pool();
     add_to_live_pool(environment);
+    add_to_live_pool(declaration);
     check_class(environment,ENVIRONMENT_Class);
     push(declaration,&environment->slots->environment.declarations);
     close_live_pool(pool);
