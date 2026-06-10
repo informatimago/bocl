@@ -70,6 +70,20 @@ audit whether the regression is actually a live-pool edge case (overflow/close
 interaction) rather than pure layout — bisect the symbol_intern fix by rooting
 ONLY in the not-found branch (skips the hot found-path executed on every S(...)).
 
+== Test corpus: the SACLA ANSI suite ==
+Loading bootstrap/sacla/lisp/tests/must-*.lisp / should-*.lisp under
+`-on-error appease` is the natural corpus for the fixpoint pass: several files
+SEGV or hang from these latent gaps (heap-layout/timing dependent), e.g.
+must-symbol and must-printer SEGV, must-cons/must-string/must-do/should-cons/
+should-sequence intermittently hang.  NB: a timed-out run leaves a runaway bocl
+spinning at 100% CPU that STARVES later runs into false "hangs" — always
+`pkill -9 -f sources/bocl` and confirm 0 procs between timed runs, or the results
+are confounded (e.g. must-eval loads clean in 0.28s in isolation but "hung" once
+in a back-to-back scan after an earlier file's orphan survived).
+Procedure: hunt each file's first dangling use with BOCL_POISON=1 GCSTRESS=1 on
+that file, fix, rebuild, re-run the whole suite.  Bignum is already clean here
+(0 arithmetic/overflow skips after Slices 74-75).
+
 == Status ==
 Finder: committed and working.  Gap fixes: deferred (this issue).  Normal runs are
 byte-for-byte unaffected by the finder when BOCL_POISON is unset.
