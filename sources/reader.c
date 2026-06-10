@@ -499,6 +499,13 @@ static Ref scan_integer(parser_state* parser){
         if(digit<0){ return NIL_Symbol; }
         if((WORD_MAX/base<value)
             ||((WORD_MAX/base==value)&&(WORD_MAX-base*(WORD_MAX/base)<=(word)digit))){
+            /* Overflow: build a BIGNUM from the whole token via the Lisp glue
+               (which handles the optional sign and trailing decimal point). */
+            if(symbol_fboundp(S(%PARSE-BIGNUM))){
+                MultipleValues mv;
+                kernel_apply(symbol_function(S(%PARSE-BIGNUM)),
+                             list(string_new_cstring(token), I(base), NULL), &mv);
+                return mv.values[0];}
             ARITHMETIC_ERROR("Integer too big maximum %"WORD_FORMAT,WORD_MAX);}
         value=(value*base)+digit;
         value_set=true;

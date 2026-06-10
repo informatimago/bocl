@@ -1,0 +1,31 @@
+BIGNUM integration — operations not yet wired to the bignum engine.
+
+The bignum integration (kernel BIGNUM type, num_combine dispatch, reader/printer
+hooks, bootstrap/bignum-integration.lisp glue over bootstrap/bignum.lisp) covers:
+  +  -  *            (overflow promotion + bignum operands)
+  =  /=  <  >  <=  >=
+  1+  1-  abs  min  max  expt        (these route through num_combine / num_lt)
+  integer literals (reader) ; decimal printing (printer)
+  integerp/rationalp/realp/numberp ; typep/subtypep fixnum|bignum ; demote-on-fit
+  /  (exact only -> integer)
+
+NOT YET wired — these C primitives still call integer_value() and therefore
+signal a TYPE-ERROR on a BIGNUM argument:
+  - truncate / floor / ceiling / round / mod / rem   (kernel_TRUNCATE etc.,
+    arithmetic.c) — the division family.  Needed by much real code + ANSI.
+    Plan: on a BIGNUM operand, dispatch to a Lisp %bignum-truncate built on the
+    engine's i%divide (signed truncating division already exists), then derive
+    floor/ceiling/round/mod/rem from truncate (sign adjustments).
+  - gcd / lcm — Euclid via the bignum truncate above.
+  - ash, logand / logior / logxor / lognot, integer-length, logcount — bitwise.
+    The engine stores sign+magnitude base-10^9 digit lists, so bit ops need
+    either a base-2^k representation or bit extraction by repeated divmod.
+  - isqrt of a bignum (and sqrt -> float via bignum_to_floating, already wired
+    for as_floating).
+  - RATIO with a bignum numerator/denominator: bignum `/` that is NOT exact
+    currently errors ("a ratio with a bignum part is not yet supported").
+    ratio_new() (kernel.c) stores num/den as fixnum words; it needs to accept
+    BIGNUM components (store Refs, compare/reduce via the engine).
+
+Each is a thin sign/representation shim over the existing u%/i% engine; do them
+incrementally and re-run the ANSI numeric tests after each.

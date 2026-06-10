@@ -74,6 +74,14 @@ Ref prin1(Ref object,Ref stream){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
         return object;}
 
+    if(bignump(object)){
+        if(symbol_fboundp(S(%BIGNUM-TO-STRING))){
+            MultipleValues mv;
+            kernel_apply(symbol_function(S(%BIGNUM-TO-STRING)),list(object,NULL),&mv);
+            fputs(string_cstring(mv.values[0]),out);
+        } else { fputs("#<BIGNUM>",out); }
+        return object;}
+
     if(ratiop(object)){
         fprintf(out,"%"WORD_FORMAT"/%"WORD_FORMAT,
                 integer_value(ratio_numerator(object)),
@@ -224,6 +232,14 @@ Ref princ(Ref object,Ref stream){
 
     if(integerp(object)){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
+        return object;}
+
+    if(bignump(object)){
+        if(symbol_fboundp(S(%BIGNUM-TO-STRING))){
+            MultipleValues mv;
+            kernel_apply(symbol_function(S(%BIGNUM-TO-STRING)),list(object,NULL),&mv);
+            fputs(string_cstring(mv.values[0]),out);
+        } else { fputs("#<BIGNUM>",out); }
         return object;}
 
     if(ratiop(object)){

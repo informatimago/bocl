@@ -532,6 +532,120 @@ static void kernel_initialize_integers(void){
         push(integer_table[i-INTEGER_INTERN_MIN],&integerset);}}
 
 
+/* -------------------------------------------------------------------- *
+ *  BIGNUM — arbitrary-precision integers backed by the Lisp engine       *
+ *  (bootstrap/bignum.lisp + bootstrap/bignum-integration.lisp).          *
+ *                                                                        *
+ *  A Bignum boxes one Ref: the (SIGN . DIGITS) i%-format cons.  All       *
+ *  bignum arithmetic lives in Lisp; num_combine() (arithmetic.c) promotes *
+ *  on overflow and dispatches bignum operands to the glue.  This file     *
+ *  provides only the type, the demote-on-fit constructor, and the three   *
+ *  kernel primitives the glue calls.                                      *
+ * -------------------------------------------------------------------- */
+
+Ref BIGNUM_Class = &uninitialized_object;
+
+bool bignump(Ref object){
+    return class_of(object)==BIGNUM_Class;}
+
+Ref bignum_new(Ref value){
+    Bignum* slots=allocate(sizeof(Bignum));
+    slots->value=value;
+    slots->objcount=1;
+    return Object_new(BIGNUM_Class,(Slots*)slots);}
+
+Ref bignum_value(Ref object){
+    check_class(object,BIGNUM_Class);
+    return object->slots->bignum.value;}
+
+/* Base of the Lisp digit representation; MUST match +bignum-base+ in the glue.
+   (10^9)^2 = 10^18 < WORD_MAX (9.22e18), so the engine never overflows a word. */
+#define BIGNUM_BASE ((uword)1000000000)
+
+/* Horner reconstruction of the magnitude of a low-order-first digit list.
+   Sets *overflow when the value exceeds a word.  Recurses to depth = #digits;
+   callers cap that at 3 (a >=4-digit base-10^9 number cannot fit a word). */
+static uword bignum_magnitude(Ref digits, bool* overflow){
+    if(!consp(digits)){ return 0; }
+    uword rest=bignum_magnitude(cons_cdr(digits),overflow);
+    if(*overflow){ return 0; }
+    uword r;
+    if(__builtin_mul_overflow(rest,BIGNUM_BASE,&r)){ *overflow=true; return 0; }
+    if(__builtin_add_overflow(r,(uword)integer_value(cons_car(digits)),&r)){
+        *overflow=true; return 0; }
+    return r;}
+
+/* Given a canonical (SIGN . DIGITS) cons (SIGN is + or -, DIGITS normalized
+   low-order-first), return a fixnum when the value fits in a word, else box it. */
+Ref make_integer_from_bignum(Ref signed_bignum){
+    Ref sign=cons_car(signed_bignum);
+    Ref digits=cons_cdr(signed_bignum);
+    bool neg=(sign==S(-));
+    word n=0;
+    for(Ref d=digits; consp(d) && n<4; d=cons_cdr(d)){ n++; }
+    if(n==0){ return I(0); }
+    if(n<=3){
+        bool overflow=false;
+        uword mag=bignum_magnitude(digits,&overflow);
+        if(!overflow){
+            if(!neg){
+                if(mag<=(uword)WORD_MAX){ return integer_from_word((word)mag); }
+            } else {
+                if(mag<=(uword)WORD_MAX){ return integer_from_word(-(word)mag); }
+                if(mag==(uword)WORD_MAX+1u){ return integer_from_word(WORD_MIN); }
+            }
+        }
+    }
+    return bignum_new(signed_bignum);}
+
+void kernel_BIGNUMP(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=as_boolean(bignump(x));
+    close_live_pool(pool);}
+
+void kernel_BIGNUM_VALUE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=bignum_value(x);
+    close_live_pool(pool);}
+
+void kernel_MAKE_INTEGER_FROM_BIGNUM(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref sb=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=make_integer_from_bignum(sb);
+    close_live_pool(pool);}
+
+void kernel_initialize_bignum(void){
+    /* BIGNUM is a built-in subclass of INTEGER, so TYPEP/INTEGERP/RATIONALP/
+       REALP/NUMBERP all treat a bignum as an integer.  Registered into
+       kernel_classes so FIND-CLASS and the kernel TYPEP resolve the name. */
+    BIGNUM_Class=built_in_class_new(symbol_intern_cstring("BIGNUM"));
+    boot_class_add_superclass(BIGNUM_Class,INTEGER_Class);
+    push(BIGNUM_Class,&kernel_classes);
+    /* Primitives used by bootstrap/bignum-integration.lisp. */
+    Ref ll_x=list(S(X),NULL);
+    set_symbol_function(S(%BIGNUMP),
+        built_in_function_new(S(%BIGNUMP),ll_x,kernel_BIGNUMP));
+    set_symbol_function(S(%BIGNUM-VALUE),
+        built_in_function_new(S(%BIGNUM-VALUE),ll_x,kernel_BIGNUM_VALUE));
+    set_symbol_function(S(%MAKE-INTEGER-FROM-BIGNUM),
+        built_in_function_new(S(%MAKE-INTEGER-FROM-BIGNUM),
+                              list(S(SIGNED-BIGNUM),NULL),kernel_MAKE_INTEGER_FROM_BIGNUM));}
+
+
 /* FLOAT */
 
 Float* Float_slots(floating value){
@@ -631,7 +745,9 @@ Ref cons(Ref car,Ref cdr){
     /* Single-block compact cons (see ConsCell in kernel_types.h): one
        allocation, car/cdr inline.  Fill slots before setting objcount so the
        collector never sees uninitialised reference slots.  car/cdr must already
-       be rooted by the caller (same contract as before). */
+       be rooted by the caller (same contract as before — cons is far too hot to
+       root them here; the unrooted-arg gaps are fixed at the specific call
+       sites: tagbody_collect_tags, environment_add_*, etc.). */
     ConsCell* that=allocate(sizeof(ConsCell));
     that->class=CONS_Class;
     that->car=car;
@@ -2075,6 +2191,7 @@ void kernel_initialize(void){
     kernel_initialize_built_in_functions();
     kernel_initialize_arithmetic();
     kernel_initialize_integers();
+    kernel_initialize_bignum();
     kernel_initialize_characters();
     kernel_initialize_features();
 

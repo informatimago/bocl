@@ -60,6 +60,7 @@ typedef struct VectorOfUWord            VectorOfUWord;
 typedef struct VectorOfOctet            VectorOfOctet;
 typedef struct Character                Character;
 typedef struct Integer                  Integer;
+typedef struct Bignum                   Bignum;
 typedef struct Float                    Float;
 typedef struct Array                    Array;
 typedef struct OctetArray               OctetArray;
@@ -234,6 +235,16 @@ typedef struct Integer {
     BLOCK_HEADER;
     word value;
 } Integer;
+
+/* A BIGNUM boxes an arbitrary-precision integer that does not fit in a word.
+   VALUE is a CONS (SIGN . DIGITS) in the i%-format of bootstrap/bignum.lisp:
+   SIGN is the symbol + or -, DIGITS a low-order-first list of base-10^9 fixnum
+   digits.  The single Ref is GC-traced, so the digit list stays live with no
+   finalizer (this is why the Lisp engine is preferred over a malloc'd GMP). */
+typedef struct Bignum {
+    BLOCK_HEADER;       /* objcount = 1 */
+    Ref value;
+} Bignum;
 
 typedef struct Float {
     BLOCK_HEADER;
@@ -441,6 +452,7 @@ typedef union Slots {
     /* Objects: */
     Character                   character;
     Integer                     integer;
+    Bignum                      bignum;
     Float                       floater;
     Array                       array;
     OctetArray                  octet_array;

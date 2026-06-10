@@ -48,6 +48,14 @@ Ref integer_from_word(word value);
 Ref integer_from_uword(uword value);
 word integer_value(Ref object);
 
+/* BIGNUM — arbitrary-precision integer backed by the Lisp engine. */
+extern Ref BIGNUM_Class;
+bool bignump(Ref object);
+Ref  bignum_new(Ref value);                       /* value = (sign . digits) cons */
+Ref  bignum_value(Ref object);
+Ref  make_integer_from_bignum(Ref signed_bignum); /* demote to fixnum if it fits */
+void kernel_initialize_bignum(void);
+
 /* FLOAT */
 
 Ref float_from_floating(floating value);

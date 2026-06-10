@@ -5899,6 +5899,11 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
     ((and (eql type1 'float)     (eql type2 'real))      (values t t))
     ((and (eql type1 'float)     (eql type2 'number))    (values t t))
     ((and (eql type1 'integer)   (eql type2 'number))    (values t t))
+    ;; FIXNUM / BIGNUM are subtypes of INTEGER (and so of the whole tower).
+    ((and (member type1 '(fixnum bignum)) (eql type2 'integer))  (values t t))
+    ((and (member type1 '(fixnum bignum)) (eql type2 'rational)) (values t t))
+    ((and (member type1 '(fixnum bignum)) (eql type2 'real))     (values t t))
+    ((and (member type1 '(fixnum bignum)) (eql type2 'number))   (values t t))
     ;; Sequence hierarchy
     ((and (eql type1 'string)    (eql type2 'vector))    (values t t))
     ((and (eql type1 'string)    (eql type2 'sequence))  (values t t))
@@ -5930,6 +5935,12 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
   (cond
     ((eq type t) t)
     ((eq type nil) nil)
+    ;; FIXNUM / BIGNUM — both are kernel INTEGERs; a bignum is the boxed kind.
+    ;; Guarded on %bignump so this is correct even when bignum support is absent
+    ;; (then every integer is a fixnum and there are no bignums).
+    ((eq type 'fixnum) (and (typep object 'integer)
+                            (not (and (fboundp '%bignump) (%bignump object)))))
+    ((eq type 'bignum) (and (fboundp '%bignump) (%bignump object)))
     ;; Compound type specifiers
     ((consp type)
      (let ((head (car type))
@@ -7468,3 +7479,19 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
 (export '(*init-hook* *abort-hook* *quit-hook* quit))
 
 (in-package "COMMON-LISP")
+
+;;; ---- BIGNUM support -------------------------------------------------------
+;;; When the kernel was built with bignum support (the %BIGNUMP primitive is
+;;; bound), load the arbitrary-precision integer engine (bootstrap/bignum.lisp)
+;;; and the kernel-integration glue (bootstrap/bignum-integration.lisp), siblings
+;;; of this prelude.  Loaded last, under *PACKAGE* = COMMON-LISP, so the engine
+;;; and glue symbols (u%/i%/%bignum-*) live in the package the kernel's S(...)
+;;; macro interns into.  *LOAD-TRUENAME* is bound to this file by the loader.
+(when (fboundp '%bignump)
+  (let ((here (or *load-truename* *load-pathname*)))
+    (when here
+      (let* ((ns  (if (stringp here) here (namestring here)))
+             (pos (search "prelude.lisp" ns :from-end t))
+             (dir (if pos (subseq ns 0 pos) "")))
+        (load (concatenate 'string dir "bignum.lisp"))
+        (load (concatenate 'string dir "bignum-integration.lisp"))))))
