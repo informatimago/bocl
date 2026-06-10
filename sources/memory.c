@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stddef.h>
 #include <sysexits.h>
+#include <execinfo.h>
+#include <stdint.h>
 #include "memory.h"
 #include "boerror.h"
 #include "kernel.h"
@@ -317,15 +319,72 @@ static void mark_wstack_push(Block* b){
         mark_wstack_cap = new_cap;}
     mark_wstack[mark_wstack_top++] = b;}
 
+/* ---- Use-after-free finder (BOCL_POISON): poison + quarantine -------------
+   When BOCL_POISON is set, the sweep does NOT reclaim dead blocks; it POISONs
+   them (class slot -> a sentinel) and QUARANTINEs them (never reused), recording
+   the C backtrace of the GC that freed them (which contains the function that
+   triggered the allocation->GC while still holding an unrooted Ref to the
+   block).  If a dangling C-local later USES such a block, class_of sees the
+   sentinel and we print that recorded backtrace — pinpointing the missing
+   add_to_live_pool with ZERO false positives.  Run under GCSTRESS to trigger
+   gaps fast; aborts on the first dangling use.  Leaks (bounded by run length). */
+#define POISON_SENTINEL  ((Block*)(uintptr_t)0x015015015015015eULL)
+#define POISON_OBJCOUNT  (((uword)FREE_BLOCK)-1u)
+#define POISON_RING      262144   /* bounded quarantine: most-recent freed blocks */
+#define POISON_BT_DEPTH  24
+
+bool          gc_poison_mode = false;
+/* Lazily malloc'd (only when poison mode is on) so the finder has ZERO static
+   footprint otherwise — a ~50 MB .bss would shift the heap layout and could mask
+   or move layout-dependent GC behaviour in ordinary runs. */
+static Block** poison_ring        = NULL;             /* [POISON_RING]            */
+static void*   (*poison_ring_bt)[POISON_BT_DEPTH] = NULL; /* [POISON_RING][DEPTH] */
+static int*    poison_ring_btlen  = NULL;             /* [POISON_RING]            */
+static int     poison_ring_head   = 0;
+
+static bool poisoned_block_p(Block* b){ return b->objcount==(halfword)POISON_OBJCOUNT; }
+
+/* Poison a dead block + quarantine it in the ring.  When the ring is full, the
+   oldest quarantined block is released (objcount=FREE_BLOCK) so the next sweep
+   reclaims it — bounding memory to POISON_RING blocks while still catching any
+   dangling use that occurs within the last POISON_RING frees (uses almost always
+   happen within a few GCs of the free).  We only touch blocks[0] (class) and
+   objcount, never the payload slots (raw cons_car/->slots read those). */
+static void poison_block(Block* b){
+    Block* old = poison_ring[poison_ring_head];
+    if(old){ old->objcount = FREE_BLOCK; }          /* release oldest -> reclaimable */
+    poison_ring[poison_ring_head]   = b;
+    poison_ring_btlen[poison_ring_head] =
+        backtrace(poison_ring_bt[poison_ring_head], POISON_BT_DEPTH);
+    poison_ring_head = (poison_ring_head + 1) % POISON_RING;
+    b->blocks[0] = POISON_SENTINEL;                 /* class slot -> sentinel       */
+    b->objcount  = (halfword)POISON_OBJCOUNT;}      /* quarantine marker            */
+
+_Noreturn void gc_poison_report(Ref object){
+    Block* b=(Block*)object;
+    fprintf(stderr,"\n*** USE-AFTER-FREE: object %p used after the GC freed it ***\n",(void*)b);
+    int slot=-1;
+    for(int i=0;i<POISON_RING;i++){ if(poison_ring[i]==b){ slot=i; break; } }
+    if(slot>=0){
+        fprintf(stderr,"--- backtrace at the GC that FREED it"
+                       " (the function missing add_to_live_pool is here) ---\n");
+        backtrace_symbols_fd(poison_ring_bt[slot],poison_ring_btlen[slot],fileno(stderr));}
+    else{ fprintf(stderr,"(free backtrace evicted from quarantine ring)\n"); }
+    fprintf(stderr,"--- backtrace at the USE ---\n");
+    void* ub[POISON_BT_DEPTH]; int un=backtrace(ub,POISON_BT_DEPTH);
+    backtrace_symbols_fd(ub,un,fileno(stderr));
+    fflush(stderr);
+    abort();}
+
 static void mark(Block* root){
     /* Seed the worklist — use valid_block_start_p, not just pointer_in_zones,
        to reject refs that land in the middle of another block. */
-    if(!root || !valid_block_start_p(root) || marked_block_p(root)) return;
+    if(!root || !valid_block_start_p(root) || (gc_poison_mode&&poisoned_block_p(root)) || marked_block_p(root)) return;
     mark_wstack_top = 0;
     mark_wstack_push(root);
     while(mark_wstack_top > 0){
         Block* b = mark_wstack[--mark_wstack_top];
-        if(!b || !valid_block_start_p(b) || marked_block_p(b)) continue;
+        if(!b || !valid_block_start_p(b) || (gc_poison_mode&&poisoned_block_p(b)) || marked_block_p(b)) continue;
         mark_block(b);
         uword cnt = block_objcount(b);
         uword max = block_physical_slot_count(b);
@@ -408,10 +467,18 @@ static uword sweep_zone(Zone* zone){
     while(current < end){
         Block* nxt = next_block(current);   /* pre-compute before possible extension */
 
-        if(marked_block_p(current)){
+        if(gc_poison_mode && poisoned_block_p(current)){
+            tail = NULL;   /* quarantined — never reclaimed, never coalesced */
+        }else if(marked_block_p(current)){
             clear_block(current);
             tail = NULL;
+        }else if(gc_poison_mode && !free_block_p(current)){
+            total += current->size;
+            poison_block(current);   /* dead block -> poison + quarantine */
+            tail = NULL;
         }else{
+            /* free block (either mode) or dead block (normal mode) -> reclaim.
+               In poison mode this reclaims ring-evicted blocks (now FREE_BLOCK). */
             if(!free_block_p(current))
                 total += current->size;
             FreeBlock* fb = (FreeBlock*)current;
@@ -534,6 +601,14 @@ uword garbage_collect(void){
 
 
 void memory_initialize(void){
+    gc_poison_mode = getenv("BOCL_POISON")!=NULL;   /* use-after-free finder */
+    if(gc_poison_mode){
+        poison_ring       = calloc(POISON_RING, sizeof(*poison_ring));
+        poison_ring_bt    = calloc(POISON_RING, sizeof(*poison_ring_bt));
+        poison_ring_btlen = calloc(POISON_RING, sizeof(*poison_ring_btlen));
+        if(!poison_ring || !poison_ring_bt || !poison_ring_btlen){
+            fprintf(stderr,"BOCL_POISON: out of memory for quarantine ring\n");
+            gc_poison_mode=false;}}
     zone_allocate(DefaultZoneSize);
     rootset=(RootSet*)allocate_internal(sizeof(*rootset));
     rootset->objcount=2;

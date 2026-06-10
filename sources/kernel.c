@@ -953,6 +953,13 @@ Ref symbol_new_cstring(const char* name){
     return symbol_new(string_new_cstring(name));}
 
 static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
+    /* NB: the BOCL_POISON use-after-free finder flags `name` as freeable by a GC
+       inside Symbol_slots / Object_new here.  Rooting it via the live pool in
+       this (very hot) path perturbs heap layout and wakes a latent gap on the
+       bignum path — see issues/open/deferred-gc-rooting-longtail.issue.  The gap
+       is only reachable under GCSTRESS (a GC must fire mid-allocation while
+       interning a NEW symbol — almost never after bootstrap), so it is deferred
+       rather than fixed with the live-pool approach. */
     Ref symbol=find_symbol(name,obarray);   /* builds/uses the obarray hash index */
     if(symbol){
         (*internal)=true;
@@ -1198,6 +1205,10 @@ bool clos_class_p(Ref cls){
     return clos_cls_sc != NULL && cls != NULL && cls->class == clos_cls_sc;}
 
 Ref class_of(Ref object){
+    /* Use-after-free finder: if this object was freed + quarantined (BOCL_POISON),
+       its class is the poison sentinel — report and abort. */
+    if(gc_poison_mode && object && (uintptr_t)object->class==0x015015015015015eULL){
+        gc_poison_report(object);}
     /* For CLOS instances (%obj structs), return the CLOS class stored in
      * the 'class slot (index 0 in the structure's slot vector).
      * Direct array access avoids allocating via structure_get. */

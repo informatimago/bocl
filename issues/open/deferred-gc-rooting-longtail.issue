@@ -1,0 +1,75 @@
+GC rooting long-tail — BOCL_POISON use-after-free finder + the layout-sensitive
+gaps it exposes.
+
+== The finder (DONE, committed) ==
+sources/memory.c implements a precise use-after-free finder, enabled by the
+BOCL_POISON environment variable (zero static/runtime footprint when off — the
+quarantine ring is lazily malloc'd only in poison mode, so it cannot perturb
+ordinary runs).  How it works:
+
+  - In poison mode the sweep does NOT reclaim dead blocks.  Each dead block is
+    POISONED (its class slot -> a sentinel, 0x015015015015015e) and QUARANTINED in
+    a bounded ring (POISON_RING most-recent frees); the C backtrace of the GC that
+    freed it is recorded alongside.  When the ring is full the oldest entry is
+    released (objcount=FREE_BLOCK) so the next sweep reclaims it — memory stays
+    bounded.
+  - class_of() detects the sentinel: if a dangling C local later dereferences a
+    freed+quarantined block, we print the recorded FREE backtrace (which contains
+    the function that triggered the allocation->GC while still holding an unrooted
+    Ref — i.e. the exact missing add_to_live_pool) plus the USE backtrace, then
+    abort.  ZERO false positives: only refs the code actually dereferences are
+    reported.
+
+Usage:  BOCL_POISON=1 BOCL_GCSTRESS=1 ./bocl ... 2>&1
+        (GCSTRESS=1 makes a GC fire at every allocation so narrow gap windows are
+        hit quickly; the run aborts on the first dangling use.)
+
+== Gaps found, and why their fixes are deferred ==
+The finder precisely located several real gaps in the C bootstrap (each: a fresh,
+unrooted Ref freed by a GC inside a subsequent allocation, then used):
+
+  1. symbol_intern_obarray (kernel.c): the symbol name STRING, freed inside
+     Symbol_slots/Object_new, then hashed by sym_name_hash->string_length.
+  2. bocl_load_cstring (bocl.c): (a) the pathname built for stream_open, freed by
+     the K(...)/S(...) keyword interns in the argument list; (b) the input stream
+     `inp` + *LOAD-PATHNAME*/*LOAD-TRUENAME* saved values, across the read/eval loop.
+  3. package_intern_current_cstring / package_intern_cstring_in /
+     package_find_external_cstring (packages.c): the fresh name STRING, freed by
+     current_package()/pkg_intern()/find_symbol() while it is being hashed.
+
+The OBVIOUS fix (open_live_pool / add_to_live_pool / close_live_pool around each
+body) is balanced and correct in isolation, BUT in the hot load/intern paths it
+PERTURBS HEAP LAYOUT, and that wakes OTHER latent rooting gaps that were dormant
+at the old layout — observed concretely:
+
+  - symbol_intern_obarray rooting -> (princ (+ most-positive-fixnum 1)) hangs.
+  - bocl_load_cstring rooting    -> (princ (expt 2 100)) hangs (while (+ ...) and
+                                    50! still work) — a latent gap on the expt /
+                                    bignum path.
+
+This is the same Heisenbug class as the finder's own .bss footprint (now fixed by
+lazy-malloc): the codebase has a LONG TAIL of latent gaps, and fixing one shifts
+the layout enough to expose another.  So the fixes cannot be landed one at a time
+without a net regression.
+
+== Plan to actually clear the long tail ==
+Iterate the finder to a fixpoint, in a SINGLE focused pass (so layout churn is
+absorbed all at once rather than across commits):
+  loop:
+    BOCL_POISON=1 BOCL_GCSTRESS=1 ./bocl -x '(princ :ok)'   # finds active gap
+    fix the reported site with add_to_live_pool
+    rebuild
+    ALSO run, poison OFF: (+ most-positive-fixnum 1), (expt 2 100), 50!, and a
+      chunk of the ANSI suite — if a NEW hang appears, that is a freshly-woken
+      latent gap; hunt it with the finder too.
+  until: the finder reports nothing under GCSTRESS=1 AND all normal runs are clean.
+Then land the whole batch as one commit.
+
+A complementary/cheaper option worth trying first: raise LivePool robustness or
+audit whether the regression is actually a live-pool edge case (overflow/close
+interaction) rather than pure layout — bisect the symbol_intern fix by rooting
+ONLY in the not-found branch (skips the hot found-path executed on every S(...)).
+
+== Status ==
+Finder: committed and working.  Gap fixes: deferred (this issue).  Normal runs are
+byte-for-byte unaffected by the finder when BOCL_POISON is unset.
