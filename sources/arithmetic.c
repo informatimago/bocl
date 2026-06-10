@@ -26,33 +26,19 @@ static floating bignum_to_floating(Ref b){
     floating mag=bignum_horner_float(cons_cdr(sb));
     return (cons_car(sb)==S(-)) ? -mag : mag;}
 
-/* Call the Lisp binary bignum op FN on integer/bignum operands a,b. */
-static Ref bignum_dispatch2(Ref fn, Ref a, Ref b){
-    uword pool=open_live_pool();
-    add_to_live_pool(a); add_to_live_pool(b);
-    MultipleValues mv;
-    kernel_apply(symbol_function(fn),list(a,b,NULL),&mv);
-    close_live_pool(pool);
-    return mv.count>0 ? mv.values[0] : NIL_Symbol;}
-
 static Ref bignum_combine(char op, Ref a, Ref b){
-    Ref fn;
+    /* Arithmetic now runs in the C engine (kernel.c) — no Lisp dependency.
+       The Lisp glue (%BIGNUM-PLUS …) is retained only for I/O paths. */
     switch(op){
-      case '+': fn=S(%BIGNUM-PLUS);   break;
-      case '-': fn=S(%BIGNUM-MINUS);  break;
-      case '*': fn=S(%BIGNUM-TIMES);  break;
-      case '/': fn=S(%BIGNUM-DIVIDE); break;
-      default:  FATAL("bignum_combine: unknown op %c",op); fn=NIL_Symbol;}
-    if(!symbol_fboundp(fn)){
-        ARITHMETIC_ERROR("Integer overflow (bignum support not loaded)%s","");}
-    return bignum_dispatch2(fn,a,b);}
+      case '+': return c_bignum_add(a,b);
+      case '-': return c_bignum_sub(a,b);
+      case '*': return c_bignum_mul(a,b);
+      case '/': return c_bignum_divide(a,b);
+      default:  FATAL("bignum_combine: unknown op %c",op); return NIL_Symbol;}}
 
 /* Three-way compare of two integers (either may be a BIGNUM): -1, 0, or 1. */
 static int bignum_compare(Ref a, Ref b){
-    Ref fn=S(%BIGNUM-COMPARE);
-    if(!symbol_fboundp(fn)){
-        ARITHMETIC_ERROR("Bignum comparison (support not loaded)%s","");}
-    return (int)integer_value(bignum_dispatch2(fn,a,b));}
+    return c_bignum_cmp(a,b);}
 
 /* -------------------------------------------------------------------- *
  *  Helpers                                                              *

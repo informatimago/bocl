@@ -598,6 +598,283 @@ Ref make_integer_from_bignum(Ref signed_bignum){
     }
     return bignum_new(signed_bignum);}
 
+/* ==================================================================== *
+ *  C bignum engine — schoolbook arithmetic over base-10^9 uword limbs.   *
+ *                                                                        *
+ *  Operands/results use the same (SIGN . DIGITS) i%-format cons that the *
+ *  Lisp reader/printer build, so I/O interoperates unchanged; only the   *
+ *  inner loops move to C (replacing the interpreted Lisp arithmetic).    *
+ *  A "magnitude" is a uword[] of base-10^9 limbs, low-order first,        *
+ *  normalized (no high-order zero limbs).  These helpers are pure C and  *
+ *  allocate no Refs, so no GC can run inside them.                       *
+ * ==================================================================== */
+
+static size_t mag_norm(const uword* a, size_t n){
+    while(n>0 && a[n-1]==0) n--;
+    return n; }
+
+static int mag_cmp(const uword* a, size_t na, const uword* b, size_t nb){
+    na=mag_norm(a,na); nb=mag_norm(b,nb);
+    if(na!=nb){ return na<nb ? -1 : 1; }
+    for(size_t i=na; i-->0;){ if(a[i]!=b[i]){ return a[i]<b[i] ? -1 : 1; } }
+    return 0; }
+
+/* out = a+b ; out needs max(na,nb)+1 limbs ; returns length. */
+static size_t mag_add(const uword* a, size_t na, const uword* b, size_t nb, uword* out){
+    size_t n = na>nb ? na : nb;
+    uword carry=0;
+    for(size_t i=0;i<n;i++){
+        uword s = carry + (i<na?a[i]:0) + (i<nb?b[i]:0);
+        out[i] = s % BIGNUM_BASE;
+        carry  = s / BIGNUM_BASE; }
+    if(carry){ out[n++]=carry; }
+    return n; }
+
+/* out = a-b ; requires a>=b ; out needs na limbs ; returns normalized length. */
+static size_t mag_sub(const uword* a, size_t na, const uword* b, size_t nb, uword* out){
+    word borrow=0;
+    for(size_t i=0;i<na;i++){
+        word d = (word)a[i] - borrow - (word)(i<nb?b[i]:0);
+        if(d<0){ d += (word)BIGNUM_BASE; borrow=1; } else { borrow=0; }
+        out[i]=(uword)d; }
+    return mag_norm(out,na); }
+
+/* out = a*m (m<BIGNUM_BASE) ; out needs na+1 limbs ; returns length. */
+static size_t mag_mul_limb(const uword* a, size_t na, uword m, uword* out){
+    uword carry=0;
+    for(size_t i=0;i<na;i++){
+        uword cur = a[i]*m + carry;
+        out[i] = cur % BIGNUM_BASE;
+        carry  = cur / BIGNUM_BASE; }
+    size_t n=na;
+    if(carry){ out[n++]=carry; }
+    return mag_norm(out,n); }
+
+/* out = a*b ; out needs na+nb limbs (will be written in full) ; returns length. */
+static size_t mag_mul(const uword* a, size_t na, const uword* b, size_t nb, uword* out){
+    size_t no=na+nb;
+    for(size_t i=0;i<no;i++){ out[i]=0; }
+    for(size_t i=0;i<na;i++){
+        uword carry=0;
+        for(size_t j=0;j<nb;j++){
+            uword cur = out[i+j] + a[i]*b[j] + carry;   /* < BIGNUM_BASE^2, fits uword */
+            out[i+j] = cur % BIGNUM_BASE;
+            carry    = cur / BIGNUM_BASE; }
+        size_t k=i+nb;
+        while(carry){ uword cur=out[k]+carry; out[k]=cur%BIGNUM_BASE; carry=cur/BIGNUM_BASE; k++; } }
+    return mag_norm(out,no); }
+
+/* U/V (V nonzero).  Q needs nu limbs, R needs nv+1 limbs.  Long division with a
+   binary search for each base-10^9 quotient digit.  scratch needs nv+2 limbs. */
+static void mag_divmod(const uword* U, size_t nu, const uword* V, size_t nv,
+                       uword* Q, size_t* nq, uword* R, size_t* nr, uword* scratch){
+    nv=mag_norm(V,nv);
+    for(size_t i=0;i<nu;i++){ Q[i]=0; }
+    if(mag_cmp(U,nu,V,nv)<0){
+        *nq=0;
+        for(size_t i=0;i<nu;i++){ R[i]=U[i]; }
+        *nr=mag_norm(R,nu);
+        return; }
+    size_t rn=0;                                  /* current remainder length in R */
+    for(size_t qi=nu; qi-->0;){
+        for(size_t i=rn; i-->0;){ R[i+1]=R[i]; }   /* R = R*BASE + U[qi] */
+        R[0]=U[qi];
+        rn=mag_norm(R,rn+1);
+        uword lo=0, hi=BIGNUM_BASE-1, q=0;          /* find max q with q*V <= R */
+        while(lo<=hi){
+            uword mid = lo + (hi-lo)/2;
+            size_t tn = mag_mul_limb(V,nv,mid,scratch);
+            if(mag_cmp(scratch,tn,R,rn)<=0){ q=mid; lo=mid+1; }
+            else { hi=mid-1; } }
+        Q[qi]=q;
+        size_t tn=mag_mul_limb(V,nv,q,scratch);
+        rn=mag_sub(R,rn,scratch,tn,R); }
+    *nq=mag_norm(Q,nu);
+    *nr=mag_norm(R,rn); }
+
+/* Read a fixnum-or-bignum into a freshly malloc'd magnitude + sign. */
+static uword* bn_decompose(Ref x, size_t* n_out, bool* neg_out){
+    if(bignump(x)){
+        Ref sb=bignum_value(x);                 /* (SIGN . DIGITS) */
+        *neg_out = (cons_car(sb)==S(-));
+        Ref d=cons_cdr(sb);
+        size_t n=0;
+        for(Ref p=d; consp(p); p=cons_cdr(p)){ n++; }
+        uword* mag=malloc((n?n:1)*sizeof(uword));
+        size_t i=0;
+        for(Ref p=d; consp(p); p=cons_cdr(p)){ mag[i++]=(uword)integer_value(cons_car(p)); }
+        *n_out=mag_norm(mag,n);
+        return mag; }
+    word v=integer_value(x);
+    bool neg = v<0;
+    uword u = neg ? (uword)(-(v+1))+1u : (uword)v;   /* |v|, safe at WORD_MIN */
+    uword* mag=malloc(3*sizeof(uword));
+    size_t n=0;
+    while(u){ mag[n++]=u%BIGNUM_BASE; u/=BIGNUM_BASE; }
+    *neg_out=neg;
+    *n_out=n;
+    return mag; }
+
+/* Build an INTEGER (demoted fixnum, or boxed BIGNUM) from a magnitude+sign.
+   GC is disabled across the bounded result-list construction so the partial
+   (SIGN . DIGITS) list never needs live-pool rooting. */
+static Ref make_integer_from_limbs(bool neg, uword* mag, size_t n){
+    n=mag_norm(mag,n);
+    if(n==0){ return integer_from_word(0); }
+    if(n<=3){
+        uword v=0; bool of=false;
+        for(size_t i=n; i-->0;){
+            if(__builtin_mul_overflow(v,BIGNUM_BASE,&v)){ of=true; break; }
+            if(__builtin_add_overflow(v,mag[i],&v)){ of=true; break; } }
+        if(!of){
+            if(!neg){ if(v<=(uword)WORD_MAX){ return integer_from_word((word)v); } }
+            else { if(v<=(uword)WORD_MAX){ return integer_from_word(-(word)v); }
+                   if(v==(uword)WORD_MAX+1u){ return integer_from_word(WORD_MIN); } } } }
+    bool saved=garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    Ref digits=NIL_Symbol;
+    for(size_t i=n; i-->0;){ digits=cons(integer_from_word((word)mag[i]),digits); }
+    Ref sb=cons(neg?S(-):S(+),digits);
+    Ref result=bignum_new(sb);
+    set_garbage_collection_enabled(saved);
+    return result; }
+
+static Ref bn_signed_add(uword* ma, size_t na, bool sa,
+                         uword* mb, size_t nb, bool sb){
+    if(sa==sb){
+        size_t cap=(na>nb?na:nb)+1;
+        uword* out=malloc(cap*sizeof(uword));
+        size_t no=mag_add(ma,na,mb,nb,out);
+        Ref r=make_integer_from_limbs(sa,out,no);
+        free(out);
+        return r; }
+    int c=mag_cmp(ma,na,mb,nb);
+    if(c==0){ return integer_from_word(0); }
+    uword* out=malloc((c>0?na:nb)*sizeof(uword));
+    size_t no = c>0 ? mag_sub(ma,na,mb,nb,out) : mag_sub(mb,nb,ma,na,out);
+    Ref r=make_integer_from_limbs(c>0?sa:sb,out,no);
+    free(out);
+    return r; }
+
+Ref c_bignum_add(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    Ref r=bn_signed_add(ma,na,sa,mb,nb,sb);
+    free(ma); free(mb);
+    return r; }
+
+Ref c_bignum_sub(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    Ref r=bn_signed_add(ma,na,sa,mb,nb,!sb);   /* a-b = a+(-b) */
+    free(ma); free(mb);
+    return r; }
+
+Ref c_bignum_mul(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    Ref r;
+    if(na==0||nb==0){ r=integer_from_word(0); }
+    else {
+        uword* out=malloc((na+nb)*sizeof(uword));
+        size_t no=mag_mul(ma,na,mb,nb,out);
+        r=make_integer_from_limbs(sa!=sb,out,no);
+        free(out); }
+    free(ma); free(mb);
+    return r; }
+
+/* CL '/' on integers: exact quotient, else a ratio (bignum ratios unsupported). */
+Ref c_bignum_divide(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    if(nb==0){ free(ma); free(mb); ARITHMETIC_ERROR("Division by zero%s",""); }
+    Ref r;
+    if(na==0){ r=integer_from_word(0); }
+    else {
+        uword* Q=malloc(na*sizeof(uword));
+        uword* R=malloc((nb+1)*sizeof(uword));
+        uword* sc=malloc((nb+2)*sizeof(uword));
+        size_t nq,nr;
+        mag_divmod(ma,na,mb,nb,Q,&nq,R,&nr,sc);
+        if(nr!=0){
+            free(Q); free(R); free(sc); free(ma); free(mb);
+            ARITHMETIC_ERROR("a ratio with a bignum part is not yet supported%s",""); }
+        r=make_integer_from_limbs(sa!=sb,Q,nq);
+        free(Q); free(R); free(sc); }
+    free(ma); free(mb);
+    return r; }
+
+int c_bignum_cmp(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    if(na==0){ sa=false; }                 /* zero is non-negative */
+    if(nb==0){ sb=false; }
+    int r;
+    if(sa!=sb){ r = sa ? -1 : 1; }
+    else { int m=mag_cmp(ma,na,mb,nb); r = sa ? -m : m; }
+    free(ma); free(mb);
+    return r; }
+
+/* Write a BIGNUM's decimal representation straight to OUT.  Each non-top base-10^9
+   limb is exactly 9 decimal digits, so no division is needed.  No Ref allocation,
+   hence no GC — replaces the interpreted Lisp printer (and its rooting gap). */
+void print_bignum(Ref object, FILE* out){
+    Ref sb=bignum_value(object);
+    bool neg=(cons_car(sb)==S(-));
+    Ref d=cons_cdr(sb);
+    size_t n=0;
+    for(Ref p=d; consp(p); p=cons_cdr(p)){ n++; }
+    if(n==0){ fputc('0',out); return; }
+    uword* mag=malloc(n*sizeof(uword));
+    size_t i=0;
+    for(Ref p=d; consp(p); p=cons_cdr(p)){ mag[i++]=(uword)integer_value(cons_car(p)); }
+    n=mag_norm(mag,n);
+    if(n==0){ free(mag); fputc('0',out); return; }
+    if(neg){ fputc('-',out); }
+    fprintf(out,"%llu",(unsigned long long)mag[n-1]);
+    for(size_t k=n-1; k-->0;){ fprintf(out,"%09llu",(unsigned long long)mag[k]); }
+    free(mag); }
+
+static int bn_digit(unsigned char c, int base){
+    int d;
+    if(c>='0'&&c<='9'){ d=c-'0'; }
+    else if(c>='a'&&c<='z'){ d=c-'a'+10; }
+    else if(c>='A'&&c<='Z'){ d=c-'A'+10; }
+    else { return -1; }
+    return d<base ? d : -1; }
+
+/* Parse a (possibly signed, possibly trailing-'.') integer literal in BASE that
+   overflowed a word, into a BIGNUM (demoted if it somehow fits).  Horner over
+   base-10^9 limbs.  Returns NIL on a malformed token. */
+Ref parse_bignum_cstring(const char* token, int base){
+    bool neg=false;
+    const char* p=token;
+    if(*p=='-'){ neg=true; p++; } else if(*p=='+'){ p++; }
+    size_t len=0; while(p[len]){ len++; }
+    size_t cap=len+2;
+    uword* mag=calloc(cap,sizeof(uword));
+    uword* tmp=calloc(cap,sizeof(uword));
+    size_t n=0;
+    for(; *p; p++){
+        if(*p=='.' && p[1]=='\0'){ break; }            /* trailing decimal point */
+        int dd=bn_digit((unsigned char)*p, base);
+        if(dd<0){ free(mag); free(tmp); return NIL_Symbol; }
+        size_t tn=mag_mul_limb(mag,n,(uword)base,tmp);  /* tmp = mag*base */
+        uword carry=(uword)dd;                           /* tmp += dd */
+        size_t k=0;
+        for(; k<tn && carry; k++){ uword s=tmp[k]+carry; tmp[k]=s%BIGNUM_BASE; carry=s/BIGNUM_BASE; }
+        if(carry){ tmp[tn++]=carry; }
+        uword* t=mag; mag=tmp; tmp=t;                    /* swap */
+        n=tn; }
+    Ref r=make_integer_from_limbs(neg,mag,n);
+    free(mag); free(tmp);
+    return r; }
+
 void kernel_BIGNUMP(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);

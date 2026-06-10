@@ -48,13 +48,23 @@ Ref integer_from_word(word value);
 Ref integer_from_uword(uword value);
 word integer_value(Ref object);
 
-/* BIGNUM — arbitrary-precision integer backed by the Lisp engine. */
+/* BIGNUM — arbitrary-precision integer; (SIGN . DIGITS) i%-format cons, base 10^9. */
 extern Ref BIGNUM_Class;
 bool bignump(Ref object);
 Ref  bignum_new(Ref value);                       /* value = (sign . digits) cons */
 Ref  bignum_value(Ref object);
 Ref  make_integer_from_bignum(Ref signed_bignum); /* demote to fixnum if it fits */
 void kernel_initialize_bignum(void);
+
+/* C bignum engine (kernel.c) — schoolbook arithmetic over base-10^9 limbs.
+   Operands are fixnum-or-bignum; results demote to a fixnum when they fit. */
+Ref  c_bignum_add(Ref a, Ref b);
+Ref  c_bignum_sub(Ref a, Ref b);
+Ref  c_bignum_mul(Ref a, Ref b);
+Ref  c_bignum_divide(Ref a, Ref b);               /* exact; else signals (no bignum ratios) */
+int  c_bignum_cmp(Ref a, Ref b);                  /* -1 / 0 / 1 */
+void print_bignum(Ref object, FILE* out);          /* decimal, straight to OUT */
+Ref  parse_bignum_cstring(const char* token, int base);
 
 /* FLOAT */
 

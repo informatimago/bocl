@@ -75,11 +75,7 @@ Ref prin1(Ref object,Ref stream){
         return object;}
 
     if(bignump(object)){
-        if(symbol_fboundp(S(%BIGNUM-TO-STRING))){
-            MultipleValues mv;
-            kernel_apply(symbol_function(S(%BIGNUM-TO-STRING)),list(object,NULL),&mv);
-            fputs(string_cstring(mv.values[0]),out);
-        } else { fputs("#<BIGNUM>",out); }
+        print_bignum(object,out);   /* C decimal printer (kernel.c) */
         return object;}
 
     if(ratiop(object)){
@@ -235,11 +231,7 @@ Ref princ(Ref object,Ref stream){
         return object;}
 
     if(bignump(object)){
-        if(symbol_fboundp(S(%BIGNUM-TO-STRING))){
-            MultipleValues mv;
-            kernel_apply(symbol_function(S(%BIGNUM-TO-STRING)),list(object,NULL),&mv);
-            fputs(string_cstring(mv.values[0]),out);
-        } else { fputs("#<BIGNUM>",out); }
+        print_bignum(object,out);   /* C decimal printer (kernel.c) */
         return object;}
 
     if(ratiop(object)){
