@@ -1,0 +1,47 @@
+SACLA ANSI test crashes that are GC-INDEPENDENT logic bugs (not rooting gaps).
+
+Found while resuming the SACLA ansi-tests (bootstrap/sacla/lisp/tests/) after the
+bignum + GC-rooting-fixpoint work.  Each crash below was classified by loading the
+file with the GC DISABLED:
+
+    BOCL_POISON unset; normal build
+    ./sources/bocl --no-init --batch -on-error appease \
+        --load bootstrap/sacla/lisp/tests/ansi-tests.lisp \
+        -x '(cl::%gc-enable nil)' \
+        --load bootstrap/sacla/lisp/tests/<FILE>.lisp \
+        -x '(cl::%gc-enable t)' -x '(princ :done)'
+
+A crash that still occurs with the GC disabled is GC-INDEPENDENT — a logic bug,
+not a use-after-free.  ( (cl::%gc-enable x) and (cl::%gc-stress n) are diagnostic
+primitives added in the rooting-fixpoint slice; see
+issues/open/deferred-gc-rooting-longtail.issue. )
+
+Confirmed GC-independent (crash persists with GC off):
+
+  - must-symbol.lisp  — SEGV.  Faults in class_of(object=0x8000) (kernel.c) with a
+    CORRUPTED C stack (lldb recovers only frame #0), i.e. a wild Ref ~0x8000 is
+    passed to class_of.  Preceding recovered errors: "Undefined function: SET",
+    "Unbound variable: *GENSYM-COUNTER*", and repeated "check_class: expected
+    STRING got INTEGER".  Suspect a symbol/gensym/symbol-name path that builds a
+    bogus object once SET / *GENSYM-COUNTER* are exercised.
+
+  - must-printer.lisp — SEGV with GC off.  Not yet localized; capture with
+    lldb -b -o run -o 'bt 20' once it is reduced to a single triggering form.
+
+  - must-cons.lisp    — HANG (infinite loop) with GC off.  Last recovered error
+    before the hang: "Undefined function: NSUBST-IF-NOT".  Likely a destructive
+    cons operator (NSUBST* family) that loops, or a test that builds a circular
+    structure a bocl primitive then traverses unboundedly.
+
+  - must-do.lisp      — HANG with GC off.  Last recovered error: "Unbound
+    variable: VAR".  Likely a DO/DO* expansion or a test macro looping.
+
+How to reduce: load the file with BOCL_DBG_LOAD=1 to print each top-level form
+(F0,F1,...) as it is evaluated; the last F before the crash/hang is the trigger.
+Then minimize that form and fix the underlying primitive/special-form.
+
+These block broad SACLA conformance but are independent of the GC rooting work and
+of the bignum engine (bignum loads clean here: 0 arithmetic/overflow skips).
+Several are gated on missing features (SET, *GENSYM-COUNTER*, NSUBST-IF-NOT,
+&whole, DEFINE-METHOD-COMBINATION) per the project priority order
+(&whole, defclass, bignum [done], define-method-combination).

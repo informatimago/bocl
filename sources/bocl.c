@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 
 
 Ref bocl_eval(Ref sexp){
@@ -105,17 +106,30 @@ Ref bocl_load_cstring(const char* path){
     if(getenv("BOCL_DBG_FILE")){ fprintf(stderr,">>> loading %s\n",path); fflush(stderr); }
     bool do_verbose = is_true(variable_value(S(*LOAD-VERBOSE*)));
     bool do_print   = is_true(variable_value(S(*LOAD-PRINT*)));
-    Ref inp = stream_open(physical_pathname_new_cstring(path),
+    /* Build + root the pathname BEFORE stream_open: the K(...)/S(...) interns in
+       the argument list allocate (first time a keyword is interned) and a GC
+       there would free the just-built pathname waiting as a pending argument.
+       Keep the pool open for the whole load so inp (the stream), its pathname and
+       the saved LOAD-PATHNAME and LOAD-TRUENAME values, all reachable only via C
+       locals, survive every GC the read/eval loop below triggers. */
+    uword load_pool=open_live_pool();
+    Ref pn_in=physical_pathname_new_cstring(path);
+    add_to_live_pool(pn_in);
+    Ref inp = stream_open(pn_in,
                              K(INPUT),
                              S(CHARACTER),
                              NIL_Symbol,        /* if-exists: irrelevant for :input */
                              K(ERROR),          /* if-does-not-exist */
                              K(DEFAULT));
+    add_to_live_pool(inp);
     /* Bind *LOAD-PATHNAME* / *LOAD-TRUENAME* for the duration of this load.
        EVAL-WHEN :LOAD-TOPLEVEL checks these (in eval.c). */
     Ref pn_obj = stream_pathname(inp);
+    add_to_live_pool(pn_obj);
     Ref old_load_pn = variable_value(S(*LOAD-PATHNAME*));
     Ref old_load_tn = variable_value(S(*LOAD-TRUENAME*));
+    add_to_live_pool(old_load_pn);
+    add_to_live_pool(old_load_tn);
     set_symbol_value(S(*LOAD-PATHNAME*), pn_obj);
     set_symbol_value(S(*LOAD-TRUENAME*), pn_obj);
 
@@ -172,8 +186,35 @@ Ref bocl_load_cstring(const char* path){
     set_symbol_value(S(*LOAD-PATHNAME*), old_load_pn);
     set_symbol_value(S(*LOAD-TRUENAME*), old_load_tn);
 
+    close_live_pool(load_pool);
     return T_Symbol;}
 
+
+/* Load cl-exports.lisp (sibling of prelude.lisp) followed by prelude.lisp,
+   with *PACKAGE* bound to COMMON-LISP during loading (mirroring main.c).
+   Tests call this instead of bocl_load_cstring() for the prelude so that
+   (a) the COMMON-LISP external table is populated, and
+   (b) S(DEFMACRO) etc. in eval.c match the symbols the reader interns. */
+Ref bocl_load_prelude(const char* prelude_path){
+    extern Ref COMMON_LISP_Package, COMMON_LISP_USER_Package;
+    /* Set *PACKAGE* = COMMON-LISP for the duration of the bootstrap so the
+       reader interns bare symbols into the CL package, matching eval.c's
+       S(...) caches.  Restore to CL-USER afterwards (as main.c does). */
+    set_symbol_value(S(*PACKAGE*), COMMON_LISP_Package);
+    /* Derive the cl-exports path: replace "prelude.lisp" with
+       "cl-exports.lisp" at the end of the path. */
+    const char* needle = "prelude.lisp";
+    const char* p = strstr(prelude_path, needle);
+    if(p){
+        size_t base=(size_t)(p-prelude_path);
+        char* exports=(char*)malloc(base+sizeof("cl-exports.lisp"));
+        memcpy(exports,prelude_path,base);
+        strcpy(exports+base,"cl-exports.lisp");
+        bocl_load_cstring(exports);
+        free(exports);}
+    Ref result = bocl_load_cstring(prelude_path);
+    set_symbol_value(S(*PACKAGE*), COMMON_LISP_USER_Package);
+    return result;}
 
 /* Kernel-visible (LOAD filespec) — minimal: no &key :verbose / :print /
    :if-does-not-exist yet. Those go on the Lisp side. */

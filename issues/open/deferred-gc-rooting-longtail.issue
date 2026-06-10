@@ -52,38 +52,51 @@ lazy-malloc): the codebase has a LONG TAIL of latent gaps, and fixing one shifts
 the layout enough to expose another.  So the fixes cannot be landed one at a time
 without a net regression.
 
-== Plan to actually clear the long tail ==
-Iterate the finder to a fixpoint, in a SINGLE focused pass (so layout churn is
-absorbed all at once rather than across commits):
-  loop:
-    BOCL_POISON=1 BOCL_GCSTRESS=1 ./bocl -x '(princ :ok)'   # finds active gap
-    fix the reported site with add_to_live_pool
-    rebuild
-    ALSO run, poison OFF: (+ most-positive-fixnum 1), (expt 2 100), 50!, and a
-      chunk of the ANSI suite — if a NEW hang appears, that is a freshly-woken
-      latent gap; hunt it with the finder too.
-  until: the finder reports nothing under GCSTRESS=1 AND all normal runs are clean.
-Then land the whole batch as one commit.
+== RESOLVED — focused fixpoint pass ==
+All three rooting gaps are now FIXED, and the bignum regression did NOT recur.
 
-A complementary/cheaper option worth trying first: raise LivePool robustness or
-audit whether the regression is actually a live-pool edge case (overflow/close
-interaction) rather than pure layout — bisect the symbol_intern fix by rooting
-ONLY in the not-found branch (skips the hot found-path executed on every S(...)).
+Key technique (the hypothesis from the old "complementary option" — confirmed):
+  - symbol_intern_obarray: root name+obarray+symbol ONLY in the COLD not-found
+    branch (interning a brand-new symbol — rare after bootstrap), leaving the hot
+    find_symbol found-path (every S(...) lookup) untouched.  This covers the real
+    gap (a GC inside Symbol_slots/Object_new frees `name`) WITHOUT the hot-path
+    layout churn that previously woke the bignum gap.  Verified: bignum is clean
+    5/5 on a clean slate (expt, 60!, truncate, gcd) AND (+ most-positive-fixnum 1)
+    / (expt 2 100) stay clean.  The Heisenbug did not recur.
+  - bocl_load_cstring: build+root the pathname before stream_open, and keep one
+    pool open across the whole load for inp + LOAD-PATHNAME/LOAD-TRUENAME values.
+  - package_intern_current_cstring / _cstring_in / find_external_cstring: root the
+    fresh name STRING across current_package()/pkg_intern()/find_symbol().
 
-== Test corpus: the SACLA ANSI suite ==
-Loading bootstrap/sacla/lisp/tests/must-*.lisp / should-*.lisp under
-`-on-error appease` is the natural corpus for the fixpoint pass: several files
-SEGV or hang from these latent gaps (heap-layout/timing dependent), e.g.
-must-symbol and must-printer SEGV, must-cons/must-string/must-do/should-cons/
-should-sequence intermittently hang.  NB: a timed-out run leaves a runaway bocl
-spinning at 100% CPU that STARVES later runs into false "hangs" — always
-`pkill -9 -f sources/bocl` and confirm 0 procs between timed runs, or the results
-are confounded (e.g. must-eval loads clean in 0.28s in isolation but "hung" once
-in a back-to-back scan after an earlier file's orphan survived).
-Procedure: hunt each file's first dangling use with BOCL_POISON=1 GCSTRESS=1 on
-that file, fix, rebuild, re-run the whole suite.  Bignum is already clean here
-(0 arithmetic/overflow skips after Slices 74-75).
+Verification (poison OFF, clean slate, procs confirmed 0 between runs):
+  - finder on load path under BOCL_POISON=1 BOCL_GCSTRESS=1: no dangling use.
+  - bignum 5/5 ok; load 3/3 ok; no regression on the SACLA files that load clean.
+
+New diagnostics added (kernel.c): (%gc-stress n) sets the GC-stress period at
+runtime and (%gc-enable x) toggles the GC — so the finder can stress (or the
+investigator can disable GC on) a POST-prelude workload, e.g. one ANSI test file,
+without paying GCSTRESS/poison over the whole 7000-line prelude load.  Call them
+qualified: (cl::%gc-stress 1) / (cl::%gc-enable nil).
+
+== The remaining SACLA crashes are NOT rooting gaps ==
+Classified with (cl::%gc-enable nil) — load the file with the GC DISABLED:
+  - must-symbol  SEGV (class_of(0x8000), corrupted stack) — SEGVs with GC OFF.
+  - must-printer SEGV — SEGVs with GC OFF.
+  - must-cons    HANG (after NSUBST-IF-NOT undefined) — HANGS with GC OFF.
+  - must-do      HANG (after VAR unbound) — HANGS with GC OFF.
+A crash that persists with the GC disabled is GC-INDEPENDENT: these are logic
+bugs in partially-implemented areas (the tests reach SET, *GENSYM-COUNTER*,
+NSUBST-IF-NOT, &whole, etc.), not rooting gaps.  Tracked separately in
+issues/open/deferred-sacla-logic-bugs.issue.
+
+NB (still true): a timed-out run leaves a runaway bocl at 100% CPU that STARVES
+later runs into false "hangs"; always `pkill -9 -f sources/bocl` + confirm 0 procs
+between timed runs (this confounded an earlier must-eval/bignum scan).
 
 == Status ==
-Finder: committed and working.  Gap fixes: deferred (this issue).  Normal runs are
-byte-for-byte unaffected by the finder when BOCL_POISON is unset.
+RESOLVED.  Finder committed and working; the three rooting gaps fixed via the
+cold-branch technique with no bignum regression; load + bignum verified clean.
+Tooling note: BOCL_POISON+GCSTRESS=1 is too slow (a backtrace per freed block) to
+COMPLETE a full post-prelude workload, so deep paths are verified under normal GC
+(multiple clean-slate runs) rather than exhaustively under the finder; (%gc-stress)
+narrows that gap for targeted files.

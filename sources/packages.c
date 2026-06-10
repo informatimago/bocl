@@ -132,17 +132,39 @@ Ref current_package(void){
 Ref package_find_cstring(const char* name){
     return package_find(string_new_cstring(name));}
 
+/* In each of these, the fresh name STRING must be rooted across the call: it is
+   reachable only through this C local, yet current_package() / pkg_intern() /
+   find_symbol() all allocate (interning a symbol, building the obarray index) and
+   a GC there would free the name before it is hashed/stored. */
 Ref package_intern_current_cstring(const char* name){
     Ref status;
-    return pkg_intern(string_new_cstring(name), current_package(), &status);}
+    uword pool=open_live_pool();
+    Ref s=string_new_cstring(name);
+    add_to_live_pool(s);
+    Ref pkg=current_package();
+    add_to_live_pool(pkg);
+    Ref result=pkg_intern(s, pkg, &status);
+    close_live_pool(pool);
+    return result;}
 
 Ref package_intern_cstring_in(const char* name, Ref pkg){
     Ref status;
-    return pkg_intern(string_new_cstring(name), pkg, &status);}
+    uword pool=open_live_pool();
+    Ref s=string_new_cstring(name);
+    add_to_live_pool(s);
+    add_to_live_pool(pkg);
+    Ref result=pkg_intern(s, pkg, &status);
+    close_live_pool(pool);
+    return result;}
 
 Ref package_find_external_cstring(const char* name, Ref pkg){
-    Ref s = find_symbol(string_new_cstring(name), pkg->slots->package.external);
-    return s ? s : NIL_Symbol;}
+    uword pool=open_live_pool();
+    Ref s=string_new_cstring(name);
+    add_to_live_pool(s);
+    add_to_live_pool(pkg);
+    Ref found = find_symbol(s, pkg->slots->package.external);
+    close_live_pool(pool);
+    return found ? found : NIL_Symbol;}
 
 /* Printer support: decide how SYMBOL must be qualified when written (prin1) with
    *PACKAGE* in force.  Sets *package_name_out to the home package's name STRING

@@ -239,6 +239,11 @@ static Block* allocate_internal(size_t size){
 static long gc_stress_n = -1;   /* -1 = unchecked, 0 = off, >0 = period */
 static long gc_stress_c = 0;
 
+/* Runtime override (diagnostic): set the GC-stress period after startup so the
+   finder can stress a post-prelude workload (e.g. one ANSI test file) without
+   paying GCSTRESS over the whole 7000-line prelude load. */
+void set_gc_stress(long n){ gc_stress_n = (n<0?0:n); gc_stress_c = 0; }
+
 void* allocate(size_t size){
     if(gc_stress_n < 0){
         const char* s = getenv("BOCL_GCSTRESS");

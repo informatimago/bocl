@@ -983,6 +983,30 @@ void kernel_MAKE_INTEGER_FROM_BIGNUM(Ref function,Ref arguments,MultipleValues* 
     results->values[0]=make_integer_from_bignum(sb);
     close_live_pool(pool);}
 
+/* (%GC-STRESS n) — diagnostic: set the GC-stress period at runtime (0 = off). */
+void kernel_GC_STRESS(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref n=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    set_gc_stress((long)integer_value(n));
+    results->count=1;
+    results->values[0]=n;
+    close_live_pool(pool);}
+
+/* (%GC-ENABLE x) — diagnostic: enable (x non-nil) or disable (nil) the GC. */
+void kernel_GC_ENABLE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    set_garbage_collection_enabled(!nullp(x));
+    results->count=1;
+    results->values[0]=x;
+    close_live_pool(pool);}
+
 void kernel_initialize_bignum(void){
     /* BIGNUM is a built-in subclass of INTEGER, so TYPEP/INTEGERP/RATIONALP/
        REALP/NUMBERP all treat a bignum as an integer.  Registered into
@@ -998,7 +1022,11 @@ void kernel_initialize_bignum(void){
         built_in_function_new(S(%BIGNUM-VALUE),ll_x,kernel_BIGNUM_VALUE));
     set_symbol_function(S(%MAKE-INTEGER-FROM-BIGNUM),
         built_in_function_new(S(%MAKE-INTEGER-FROM-BIGNUM),
-                              list(S(SIGNED-BIGNUM),NULL),kernel_MAKE_INTEGER_FROM_BIGNUM));}
+                              list(S(SIGNED-BIGNUM),NULL),kernel_MAKE_INTEGER_FROM_BIGNUM));
+    set_symbol_function(S(%GC-STRESS),
+        built_in_function_new(S(%GC-STRESS),ll_x,kernel_GC_STRESS));
+    set_symbol_function(S(%GC-ENABLE),
+        built_in_function_new(S(%GC-ENABLE),ll_x,kernel_GC_ENABLE));}
 
 
 /* FLOAT */
@@ -1308,19 +1336,22 @@ Ref symbol_new_cstring(const char* name){
     return symbol_new(string_new_cstring(name));}
 
 static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
-    /* NB: the BOCL_POISON use-after-free finder flags `name` as freeable by a GC
-       inside Symbol_slots / Object_new here.  Rooting it via the live pool in
-       this (very hot) path perturbs heap layout and wakes a latent gap on the
-       bignum path — see issues/open/deferred-gc-rooting-longtail.issue.  The gap
-       is only reachable under GCSTRESS (a GC must fire mid-allocation while
-       interning a NEW symbol — almost never after bootstrap), so it is deferred
-       rather than fixed with the live-pool approach. */
     Ref symbol=find_symbol(name,obarray);   /* builds/uses the obarray hash index */
     if(symbol){
         (*internal)=true;
         return symbol;}
     (*internal)=false;
+    /* Cold path only (interning a NEW symbol, rare after bootstrap): root
+       name + obarray + the fresh symbol across the Symbol_slots / Object_new /
+       cons / sym_hash_add allocations — a GC in any of them would otherwise free
+       `name` (reachable only through this C local until stored in the symbol).
+       The rooting is kept OUT of the hot found-path above so it does not perturb
+       layout on every S(...) lookup. */
+    uword pool=open_live_pool();
+    add_to_live_pool(name);
+    add_to_live_pool(obarray);
     symbol=Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,obarray));
+    add_to_live_pool(symbol);
     /* Home package: once the package system exists, KERNEL_obarray IS the
        COMMON-LISP package and KEYWORD_obarray IS the KEYWORD package, so set the
        symbol's home package accordingly.  During very early bootstrap (before
@@ -1333,6 +1364,7 @@ static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
             symbol->slots->symbol.package=KEYWORD_Package; }}
     cons_rplacd(obarray,cons(symbol,cons_cdr(obarray)));
     sym_hash_add(sym_hash_for(obarray),symbol);   /* keep the index in sync */
+    close_live_pool(pool);
     return symbol;}
 
 Ref symbol_intern(Ref name){
