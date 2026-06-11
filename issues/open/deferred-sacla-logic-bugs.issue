@@ -64,7 +64,10 @@ in a near-isolation context that the finder CAN complete; (c) audit the C
 sequence/predicate primitives reachable from find/remove-if (eql, the :key/:test
 funcall trampoline) for an unrooted cons held across the predicate call.
 
-== Other (recovered, not crashes) ==
-must-symbol still skips a few forms for missing features: SET, FDEFINITION,
-*GENSYM-COUNTER* (should be bound to 0), and (gensym <integer>) (should accept an
-integer designator instead of signalling a type-error).  Low effort, independent.
+== Small missing features — DONE (Slices 80-81) ==
+must-symbol now loads with ZERO skipped forms.  Implemented:
+  - GENSYM accepts an INTEGER suffix designator and uses the standard
+    *GENSYM-COUNTER* special variable (kernel-side, sources/sequences.c).
+  - SET and FDEFINITION (prelude.lisp).
+  - (setf (get sym ind default) val) — the optional default is now evaluated for
+    effect and ignored, instead of erroring "Too many arguments, unused: (TMP)".
