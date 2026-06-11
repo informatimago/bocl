@@ -3,6 +3,7 @@
 #include <string.h>
 #include "kernel.h"
 #include "cons.h"
+#include "variable.h"
 
 /* Phase 5.2: FUNCALL / APPLY / MAPCAR / MAPC / EVERY / SOME / NOTANY /
    NOTEVERY as kernel built-ins. These all evaluate the function argument
@@ -269,20 +270,37 @@ static void kernel_CHAR_SET(Ref function, Ref arguments, MultipleValues* results
     results->values[0] = ch;
     close_live_pool(pool);}
 
-/* (GENSYM &optional prefix) — return a fresh uninterned symbol whose name
-   is `prefix` followed by an integer counter. Default prefix is "G". */
-static word gensym_counter = 0;
+/* (GENSYM &optional x) — fresh uninterned symbol named PREFIX followed by a
+   number.  X is either a STRING prefix (default "G"), using and incrementing
+   *GENSYM-COUNTER*, or a non-negative INTEGER used directly as the suffix, leaving
+   *GENSYM-COUNTER* unchanged (CLHS GENSYM).  Implemented in C — a Lisp re-impl
+   allocates enough per call to wake a latent GC gap during the prelude load. */
 static void kernel_GENSYM(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
     add_to_live_pool(arguments);
     Ref current = arguments;
-    Ref prefix = nullp(current)
-                 ? string_new_cstring("G")
-                 : pop_mandatory_argument(function, &current);
+    Ref arg = nullp(current) ? NIL_Symbol : pop_mandatory_argument(function, &current);
     check_no_more_arguments(function, current);
-    char* prefix_c = string_cstring(prefix);
-    char counter_buf[32];
-    snprintf(counter_buf, sizeof(counter_buf), "%ld", (long)(++gensym_counter));
+    add_to_live_pool(arg);
+
+    char        counter_buf[32];
+    const char* prefix_c     = "G";
+    char*       prefix_owned = NULL;
+
+    if(integerp(arg)){
+        /* integer designator: use directly, do not touch *GENSYM-COUNTER*. */
+        snprintf(counter_buf, sizeof(counter_buf), "%ld", (long)integer_value(arg));
+    } else {
+        if(!nullp(arg)){
+            if(!stringp(arg)){ TYPE_ERROR(arg, STRING_Class); }
+            prefix_owned = string_cstring(arg);
+            prefix_c     = prefix_owned;}
+        Ref counter_sym = S(*GENSYM-COUNTER*);
+        Ref cv = symbol_value(counter_sym);
+        word n = integerp(cv) ? integer_value(cv) : 0;
+        snprintf(counter_buf, sizeof(counter_buf), "%ld", (long)n);
+        set_symbol_value(counter_sym, integer_from_word(n + 1));}
+
     size_t plen = strlen(prefix_c);
     size_t clen = strlen(counter_buf);
     char* full = malloc(plen + clen + 1);
@@ -291,7 +309,7 @@ static void kernel_GENSYM(Ref function, Ref arguments, MultipleValues* results){
     full[plen + clen] = '\0';
     Ref sym = symbol_new(string_new_cstring(full));
     free(full);
-    free(prefix_c);
+    if(prefix_owned){ free(prefix_owned); }
     results->count = 1;
     results->values[0] = sym;
     close_live_pool(pool);}
@@ -333,6 +351,7 @@ void kernel_initialize_sequences(void){
     register_fn(S(NOTANY),   ll_fn_rest_lists, kernel_NOTANY);
     register_fn(S(IDENTITY), list(S(X), NULL), kernel_IDENTITY);
     register_fn(S(GENSYM),   NIL_Symbol,       kernel_GENSYM);
+    define_variable(S(*GENSYM-COUNTER*), I(0));   /* GENSYM's counter, CLHS */
 
     /* String-library kernel primitives — see prelude.lisp for the Lisp
        layer that sits on top of these. */

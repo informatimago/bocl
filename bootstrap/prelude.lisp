@@ -5051,10 +5051,22 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
 ;;; Broadcast, concatenated, synonym, echo, two-way streams are already
 ;;; stubbed in the stream-constructors section above; no additional stubs needed.
 
-;;; ---- *GENSYM-COUNTER* extension ------------------------------------------
-;;; GENSYM is already a kernel function.  *GENSYM-COUNTER* is the standard
-;;; variable that controls its counter; bocl maintains it internally.
-;;; Expose it as a Lisp variable synced with the kernel if needed.
+;;; ---- SET / FDEFINITION ---------------------------------------------------
+;;; GENSYM and *GENSYM-COUNTER* are kernel-side (sources/sequences.c): GENSYM now
+;;; accepts a string prefix or an integer suffix designator and uses the standard
+;;; *GENSYM-COUNTER* special variable (defined via define_variable).
+
+(defun set (symbol value)
+  "Assign VALUE to the dynamic (special-variable) value cell of SYMBOL; return VALUE."
+  (setf (symbol-value symbol) value))
+
+(defun fdefinition (name)
+  "Return the function definition named by the function-name NAME.  For a symbol
+   this is its SYMBOL-FUNCTION.  bocl has no (SETF f) functions, so only symbol
+   function-names are accepted."
+  (if (symbolp name)
+      (symbol-function name)
+      (error "FDEFINITION: ~S is not a function name." name)))
 
 ;;;; =========================================================================
 ;;;; Slice 26 — string operations with :START/:END, char predicates,
