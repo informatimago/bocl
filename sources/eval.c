@@ -1482,7 +1482,9 @@ static Ref lookup_key_argument(Ref keyword, Ref args, bool* found){
    &REST / &BODY (synonyms), &KEY (with default init forms; bindings
    to the local variable have the keyword's symbol-name without the
    leading colon, per CL convention), &ALLOW-OTHER-KEYS (suppresses the
-   unknown-keyword check). &AUX / &WHOLE / &ENVIRONMENT not yet. */
+   unknown-keyword check), &WHOLE (bound to the whole form, prepended by the
+   macro-call dispatch), &ENVIRONMENT (bound to NIL — bocl has no first-class
+   macro environments), and &AUX (sequential local bindings). */
 static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env){
     Ref ll=lambda_list;
     enum { in_required, in_optional, in_rest_done, in_key } state = in_required;
