@@ -353,25 +353,35 @@
 
 (defmacro do (varlist endlist &body body)
   ;; (DO ((var init [step]) ...) (test result...) body...)
+  ;; DO steps in PARALLEL (unlike DO*): every step-form is evaluated using the
+  ;; OLD variable values, then all variables are assigned at once.  Emitting a
+  ;; sequence of (setq var step) would be DO* semantics and breaks idioms like
+  ;; (do ((i .. (1+ i)) (j .. i)) ...) and in-place NREVERSE.  We instead bind a
+  ;; fresh temp to each step-form, then assign.
   (let ((loop (gensym "DO-LOOP-"))
         (done (gensym "DO-DONE-")))
-    `(block nil
-       (let ,(mapcar (lambda (v)
-                       (if (consp v) (list (car v) (cadr v)) (list v nil)))
-                     varlist)
-         (tagbody
-            ,loop
-            (if ,(car endlist) (go ,done))
-            ,@body
-            ,@(mapcar
-               (lambda (v)
-                 (if (and (consp v) (consp (cddr v)))
-                     `(setq ,(car v) ,(caddr v))
-                     '(progn)))
-               varlist)
-            (go ,loop)
-            ,done)
-         ,@(cdr endlist)))))
+    (labels ((triples (vl)            ; -> ((TEMP VAR STEP) ...) for stepped vars
+               (if (null vl)
+                   nil
+                   (let ((v (car vl)))
+                     (if (and (consp v) (consp (cddr v)))
+                         (cons (list (gensym "DO-STEP-") (car v) (caddr v))
+                               (triples (cdr vl)))
+                         (triples (cdr vl)))))))
+      (let ((trs (triples varlist)))
+        `(block nil
+           (let ,(mapcar (lambda (v)
+                           (if (consp v) (list (car v) (cadr v)) (list v nil)))
+                         varlist)
+             (tagbody
+                ,loop
+                (if ,(car endlist) (go ,done))
+                ,@body
+                (let ,(mapcar (lambda (tr) (list (car tr) (caddr tr))) trs)
+                  ,@(mapcar (lambda (tr) (list 'setq (cadr tr) (car tr))) trs))
+                (go ,loop)
+                ,done)
+             ,@(cdr endlist)))))))
 
 (defmacro do* (varlist endlist &body body)
   ;; Same shape as DO but bindings are sequential and steps fire

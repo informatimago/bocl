@@ -1260,7 +1260,20 @@ void kernel_LIST_LENGTH(Ref function,Ref arguments,MultipleValues* results){
     Ref par_list = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     results->count=1;
-    results->values[0] = integer_from_uword(list_length(par_list));
+    /* CLHS LIST-LENGTH: count via Floyd's tortoise/hare so a CIRCULAR list returns
+       NIL instead of looping forever; a dotted (improper) list is a type-error. */
+    Ref slow=par_list, fast=par_list;
+    uword n=0;
+    for(;;){
+        if(nullp(fast)){ results->values[0]=integer_from_uword(n); break; }
+        if(!consp(fast)){ TYPE_ERROR(par_list,LIST_Class); }
+        fast=cons_cdr(fast); n++;
+        if(nullp(fast)){ results->values[0]=integer_from_uword(n); break; }
+        if(!consp(fast)){ TYPE_ERROR(par_list,LIST_Class); }
+        fast=cons_cdr(fast); n++;
+        slow=cons_cdr(slow);
+        if(fast==slow){ results->values[0]=NIL_Symbol; break; }   /* circular */
+    }
     close_live_pool(pool);
 }
 
@@ -1539,9 +1552,13 @@ void kernel_AREF(Ref function,Ref arguments,MultipleValues* results){
     Ref idx  = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     Ref val;
-    if(typep(arr,VECTOR_Class)){         val = svref(arr,idx); }
-    else if(typep(arr,STRING_Class)){    val = char_ref(arr,idx); }
+    /* STRING and BIT-VECTOR must be tested BEFORE the general VECTOR: both are
+       subtypes of VECTOR (typep "ab" 'vector => T), so checking VECTOR first would
+       send a string/bit-vector through svref, which reads its octet/bit storage as
+       Refs and crashes.  Order specific representations before the general one. */
+    if(typep(arr,STRING_Class)){         val = char_ref(arr,idx); }
     else if(typep(arr,BIT_VECTOR_Class)){ val = bit(arr,idx); }
+    else if(typep(arr,VECTOR_Class)){    val = svref(arr,idx); }
     else { TYPE_ERROR(arr,ARRAY_Class); val=NIL_Symbol; }
     results->count=1;
     results->values[0]=val;
@@ -1556,11 +1573,12 @@ void kernel_AREF_SET(Ref function,Ref arguments,MultipleValues* results){
     Ref arr  = pop_mandatory_argument(function,&current);
     Ref idx  = pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
-    if(typep(arr,VECTOR_Class)){          svref_set(arr,idx,val); }
-    else if(typep(arr,STRING_Class)){
+    /* Specific representations before the general VECTOR — see kernel_AREF. */
+    if(typep(arr,STRING_Class)){
         /* char_set takes (string, index, character) */
         char_set(arr,idx,val);}
     else if(typep(arr,BIT_VECTOR_Class)){ bit_set(arr,idx,val); }
+    else if(typep(arr,VECTOR_Class)){     svref_set(arr,idx,val); }
     else { TYPE_ERROR(arr,ARRAY_Class); }
     results->count=1;
     results->values[0]=val;
