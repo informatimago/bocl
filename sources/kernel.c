@@ -2577,7 +2577,9 @@ static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
         in_handler = 1;
         /* The system may be corrupt: stop the GC and do minimal work. */
         set_garbage_collection_enabled(false);
-        bocl_run_abort_hooks(sig);
+        /* Dump the native backtrace FIRST — before the Lisp abort-hooks, which
+           allocate / walk the (possibly corrupt) heap and can re-fault, costing us
+           the backtrace via the re-entrancy guard. */
         if(getenv("BOCL_BACKTRACE")){
             char buf[128];
             int len = snprintf(buf,sizeof(buf),
@@ -2586,7 +2588,8 @@ static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
             write(2, buf, (size_t)len);
             void* bt[64];
             int n = backtrace(bt, 64);
-            backtrace_symbols_fd(bt, n, 2);}}
+            backtrace_symbols_fd(bt, n, 2);}
+        bocl_run_abort_hooks(sig);}
     signal(sig, SIG_DFL);
     raise(sig);}
 
