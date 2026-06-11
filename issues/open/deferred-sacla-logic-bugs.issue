@@ -64,6 +64,35 @@ in a near-isolation context that the finder CAN complete; (c) audit the C
 sequence/predicate primitives reachable from find/remove-if (eql, the :key/:test
 funcall trampoline) for an unrooted cons held across the predicate call.
 
+== Debugging attempt (payload-poison) — abandoned; lessons ==
+Tried turning the hang into a locatable fault by (1) filling each freed block's
+payload with 0x0505050505050505 so a RAW dangling deref faults at a recognizable
+address, and (2) a (%poison t) runtime toggle to enable the finder only for a
+targeted post-prelude form.  Both produced FALSE faults and were reverted /
+fixed-but-still-limited:
+  - Payload fill is UNSOUND for this allocator: a constructor that reuses an
+    evicted block without initializing every slot then reads the stale 0x0505 as a
+    pointer — a fault that is NOT a use-after-free.  Reverted (poison_block leaves
+    the payload intact again).
+  - The (%poison t) toggle set gc_poison_mode without allocating the quarantine
+    ring (calloc'd only for env BOCL_POISON in memory_initialize) -> poison_block
+    wrote a NULL ring -> crash.  FIXED (set_gc_poison now calls poison_ring_ensure;
+    BOCL_POISON_BT gates the slow per-free backtrace).
+  - Even with the ring allocated, the toggle + heavy post-prelude consing under
+    GCSTRESS faults in allocate: the quarantine EVICTION path (release oldest ->
+    objcount=FREE_BLOCK) corrupts the free list once the ring (262144) fills.  The
+    env finder never hit this because GCSTRESS=1 aborts on the first gap long
+    before the ring fills.  So the poison finder is reliable ONLY for early gaps
+    that abort before the ring fills; for heavy/late workloads it is not.
+Net: F589/F145 remain UNLOCALIZED.  The reliable path is a guard-page debug
+allocator (one mprotect'd region per object) — real infrastructure, and
+incompatible with the packed zone allocator without a rewrite.
+
+== Real gap fixed en route ==
+obarray_add_symbol (kernel.c) — the package-obarray twin of symbol_intern_obarray
+(Slice 76): obarray + sym were not rooted across the cons + sym_hash_add when
+adding a NEW symbol.  Fixed with the same cold-not-found-branch rooting.
+
 == Small missing features — DONE (Slices 80-81) ==
 must-symbol now loads with ZERO skipped forms.  Implemented:
   - GENSYM accepts an INTEGER suffix designator and uses the standard

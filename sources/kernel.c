@@ -1414,8 +1414,15 @@ static void sym_hash_rebuild(Ref obarray){
    already there).  Used to populate a package's present/external tables. */
 void obarray_add_symbol(Ref obarray,Ref sym){
     if(find_symbol(symbol_name(sym),obarray)){ return; }
+    /* Cold path only (adding a NEW symbol): root obarray + sym across the cons +
+       sym_hash_add — a GC in either would free one of these C-local-only Refs.
+       Same gap + fix as symbol_intern_obarray; kept out of the hot found-path. */
+    uword pool=open_live_pool();
+    add_to_live_pool(obarray);
+    add_to_live_pool(sym);
     cons_rplacd(obarray,cons(sym,cons_cdr(obarray)));
-    sym_hash_add(sym_hash_for(obarray),sym);}
+    sym_hash_add(sym_hash_for(obarray),sym);
+    close_live_pool(pool);}
 
 /* Remove a symbol from an obarray (list + index).  Returns true if removed. */
 bool obarray_remove_symbol(Ref obarray,Ref sym){

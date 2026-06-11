@@ -244,12 +244,6 @@ static long gc_stress_c = 0;
    paying GCSTRESS over the whole 7000-line prelude load. */
 void set_gc_stress(long n){ gc_stress_n = (n<0?0:n); gc_stress_c = 0; }
 
-/* Runtime poison toggle (diagnostic): enable the use-after-free finder AFTER the
-   prelude has loaded, so the slow poison sweep + backtrace capture only applies to
-   a targeted post-prelude workload.  Safe to flip on mid-run: the quarantine ring
-   is lazily allocated on the first poisoned block. */
-void set_gc_poison(bool on){ gc_poison_mode = on; }
-
 void* allocate(size_t size){
     if(gc_stress_n < 0){
         const char* s = getenv("BOCL_GCSTRESS");
@@ -345,6 +339,7 @@ static void mark_wstack_push(Block* b){
 #define POISON_BT_DEPTH  24
 
 bool          gc_poison_mode = false;
+static bool   gc_poison_bt   = false;   /* BOCL_POISON_BT: capture per-free backtraces (slow) */
 /* Lazily malloc'd (only when poison mode is on) so the finder has ZERO static
    footprint otherwise — a ~50 MB .bss would shift the heap layout and could mask
    or move layout-dependent GC behaviour in ordinary runs. */
@@ -365,11 +360,14 @@ static void poison_block(Block* b){
     Block* old = poison_ring[poison_ring_head];
     if(old){ old->objcount = FREE_BLOCK; }          /* release oldest -> reclaimable */
     poison_ring[poison_ring_head]   = b;
-    poison_ring_btlen[poison_ring_head] =
-        backtrace(poison_ring_bt[poison_ring_head], POISON_BT_DEPTH);
+    poison_ring_btlen[poison_ring_head] = gc_poison_bt
+        ? backtrace(poison_ring_bt[poison_ring_head], POISON_BT_DEPTH)
+        : 0;   /* per-free backtrace is the slow part; opt in via BOCL_POISON_BT */
     poison_ring_head = (poison_ring_head + 1) % POISON_RING;
     b->blocks[0] = POISON_SENTINEL;                 /* class slot -> sentinel       */
-    b->objcount  = (halfword)POISON_OBJCOUNT;}      /* quarantine marker            */
+    b->objcount  = (halfword)POISON_OBJCOUNT;}      /* quarantine marker; payload left
+       intact — filling it with a bad pointer was unsound (a constructor reusing an
+       evicted block without fully initializing a slot read the stale value). */
 
 _Noreturn void gc_poison_report(Ref object){
     Block* b=(Block*)object;
@@ -611,15 +609,28 @@ uword garbage_collect(void){
 
 
 
+/* Allocate the quarantine ring on demand (env BOCL_POISON or the (%poison t)
+   runtime toggle).  Returns false if it cannot be allocated. */
+static bool poison_ring_ensure(void){
+    if(poison_ring){ return true; }
+    poison_ring       = calloc(POISON_RING, sizeof(*poison_ring));
+    poison_ring_bt    = calloc(POISON_RING, sizeof(*poison_ring_bt));
+    poison_ring_btlen = calloc(POISON_RING, sizeof(*poison_ring_btlen));
+    if(!poison_ring || !poison_ring_bt || !poison_ring_btlen){
+        fprintf(stderr,"BOCL_POISON: out of memory for quarantine ring\n");
+        return false;}
+    return true;}
+
+void set_gc_poison(bool on){
+    /* Must allocate the ring before enabling: poison_block() writes into it.  The
+       runtime toggle bypassed memory_initialize's allocation otherwise (a NULL
+       ring -> crash). */
+    if(on && !poison_ring_ensure()){ gc_poison_mode = false; return; }
+    gc_poison_mode = on;}
+
 void memory_initialize(void){
-    gc_poison_mode = getenv("BOCL_POISON")!=NULL;   /* use-after-free finder */
-    if(gc_poison_mode){
-        poison_ring       = calloc(POISON_RING, sizeof(*poison_ring));
-        poison_ring_bt    = calloc(POISON_RING, sizeof(*poison_ring_bt));
-        poison_ring_btlen = calloc(POISON_RING, sizeof(*poison_ring_btlen));
-        if(!poison_ring || !poison_ring_bt || !poison_ring_btlen){
-            fprintf(stderr,"BOCL_POISON: out of memory for quarantine ring\n");
-            gc_poison_mode=false;}}
+    gc_poison_bt   = getenv("BOCL_POISON_BT")!=NULL; /* per-free backtraces (slow) */
+    if(getenv("BOCL_POISON")){ set_gc_poison(true); }
     zone_allocate(DefaultZoneSize);
     rootset=(RootSet*)allocate_internal(sizeof(*rootset));
     rootset->objcount=2;
