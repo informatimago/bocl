@@ -987,8 +987,17 @@
 
 ;; (SETF (GET sym ind) val) — bocl simple-expander style.
 ;; Note: kernel SET-SYMBOL-PLIST arg order is (new-plist symbol).
-(define-setf-expander get (symbol indicator) (val)
-  `(set-symbol-plist (putf (symbol-plist ,symbol) ,indicator ,val) ,symbol))
+(define-setf-expander get (symbol indicator &rest more) ()
+  ;; (setf (get sym ind [default]) val).  MORE is (val) or (default val): CLHS
+  ;; says the optional DEFAULT place argument is still evaluated (for effect) but
+  ;; otherwise ignored by the store.  Value is always the last subform.
+  (let* ((has-default (cdr more))
+         (value       (if has-default (cadr more) (car more)))
+         (default     (if has-default (car more))))
+    (if has-default
+        `(progn ,default
+                (set-symbol-plist (putf (symbol-plist ,symbol) ,indicator ,value) ,symbol))
+        `(set-symbol-plist (putf (symbol-plist ,symbol) ,indicator ,value) ,symbol))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  String / character library (slice 5).                                ;;
