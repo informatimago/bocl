@@ -244,6 +244,12 @@ static long gc_stress_c = 0;
    paying GCSTRESS over the whole 7000-line prelude load. */
 void set_gc_stress(long n){ gc_stress_n = (n<0?0:n); gc_stress_c = 0; }
 
+/* Runtime poison toggle (diagnostic): enable the use-after-free finder AFTER the
+   prelude has loaded, so the slow poison sweep + backtrace capture only applies to
+   a targeted post-prelude workload.  Safe to flip on mid-run: the quarantine ring
+   is lazily allocated on the first poisoned block. */
+void set_gc_poison(bool on){ gc_poison_mode = on; }
+
 void* allocate(size_t size){
     if(gc_stress_n < 0){
         const char* s = getenv("BOCL_GCSTRESS");

@@ -1,47 +1,70 @@
-SACLA ANSI test crashes that are GC-INDEPENDENT logic bugs (not rooting gaps).
+SACLA ANSI test crashes — GC-independent logic bugs and deep GC use-after-frees.
 
-Found while resuming the SACLA ansi-tests (bootstrap/sacla/lisp/tests/) after the
-bignum + GC-rooting-fixpoint work.  Each crash below was classified by loading the
-file with the GC DISABLED:
+Found while resuming the SACLA ansi-tests (bootstrap/sacla/lisp/tests/).  Reduce a
+crash to its triggering top-level form with BOCL_DBG_LOAD=1 (prints F0,F1,... as
+each form is evaluated; the last F before the crash/hang is the trigger), then
+classify it by loading the file with the GC disabled:
 
-    BOCL_POISON unset; normal build
     ./sources/bocl --no-init --batch -on-error appease \
         --load bootstrap/sacla/lisp/tests/ansi-tests.lisp \
-        -x '(cl::%gc-enable nil)' \
-        --load bootstrap/sacla/lisp/tests/<FILE>.lisp \
-        -x '(cl::%gc-enable t)' -x '(princ :done)'
+        -x '(cl::%gc-enable nil)' --load <FILE> -x '(cl::%gc-enable t)' \
+        -x '(princ :done)'
 
-A crash that still occurs with the GC disabled is GC-INDEPENDENT — a logic bug,
-not a use-after-free.  ( (cl::%gc-enable x) and (cl::%gc-stress n) are diagnostic
-primitives added in the rooting-fixpoint slice; see
-issues/open/deferred-gc-rooting-longtail.issue. )
+A crash that PERSISTS with the GC off is a pure logic bug; one that DISAPPEARS
+with the GC off is a GC use-after-free (rooting gap) that only fires under heap
+pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress n),
+(cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
+target a post-prelude workload without the finder's slow sweep over the prelude.
 
-Confirmed GC-independent (crash persists with GC off):
+== FIXED (Slice 77) ==
+  - must-symbol SEGV  -> AREF/AREF-SET on a STRING crashed (VECTOR_Class tested
+    before STRING_Class; a string IS a vector, so it went through svref and read
+    octet bytes as Refs).  Reordered the type checks.  must-symbol loads clean.
+  - must-do HANG      -> DO stepped variables SEQUENTIALLY (DO* semantics) instead
+    of in parallel, breaking (do ((i ..(1+ i))(j .. i)) ..) and in-place NREVERSE.
+    DO now binds each step into a temp then assigns.  must-do loads clean.
+  - must-cons HANG #1 -> LIST-LENGTH looped forever on a circular list; now uses
+    Floyd's tortoise/hare (NIL for circular, type-error for dotted).
 
-  - must-symbol.lisp  — SEGV.  Faults in class_of(object=0x8000) (kernel.c) with a
-    CORRUPTED C stack (lldb recovers only frame #0), i.e. a wild Ref ~0x8000 is
-    passed to class_of.  Preceding recovered errors: "Undefined function: SET",
-    "Unbound variable: *GENSYM-COUNTER*", and repeated "check_class: expected
-    STRING got INTEGER".  Suspect a symbol/gensym/symbol-name path that builds a
-    bogus object once SET / *GENSYM-COUNTER* are exercised.
+== STILL OPEN: deep GC use-after-frees (DISAPPEAR with the GC off) ==
+Two context-dependent hangs that COMPLETE with (cl::%gc-enable nil) but hang under
+normal GC once the file's heap has grown — i.e. a rooting gap whose freed cons is
+reused (in a destructive op) or whose dangling ref is followed, only when a GC
+happens to fire mid-operation (never in isolation, where the heap is small):
 
-  - must-printer.lisp — SEGV with GC off.  Not yet localized; capture with
-    lldb -b -o run -o 'bt 20' once it is reduced to a single triggering form.
+  - must-cons F589: (set-exclusive-or (intersection l1 l2 :test #'char= :key ..)
+    '("B" "F" "h") :test #'char= :key ..).  intersection/remove-if/find/set-
+    exclusive-or are all Lisp (interpreter-rooted), so the gap is in a C primitive
+    they reach.  Faults as SIGBUS under (%gc-stress 15) or hangs (cycle) under
+    natural GC.
+  - must-printer F145: (symbol-name (read-from-string
+    (write-to-string '|\\| :readably t))).  Backslash-named symbol round-trip;
+    loads clean in isolation, hangs only in the accumulated must-printer context.
+    (Secondary correctness bug: write-to-string :readably of that symbol emits a
+    bare "\" instead of "\\"/"|\|", so the round-trip would error even if it did
+    not hang.)
 
-  - must-cons.lisp    — HANG (infinite loop) with GC off.  Last recovered error
-    before the hang: "Undefined function: NSUBST-IF-NOT".  Likely a destructive
-    cons operator (NSUBST* family) that loops, or a test that builds a circular
-    structure a bocl primitive then traverses unboundedly.
+Why the poison finder has not localized them yet:
+  - GCSTRESS=1+poison sweeps the WHOLE heap on every allocation -> too slow to
+    reach/complete a post-prelude form; moderate stress either misses the window
+    or the gap SIGBUSes via raw pointer arithmetic before the instrumented
+    accessors run.
+  - In poison mode the freed cons is QUARANTINED (not reused), so the reuse-cycle
+    never forms; cons_car/cons_cdr/cons_rplaca/cons_rplacd now report a poisoned
+    cons (Slice 78), but the faulting access here is inside a C primitive's own
+    struct/pointer arithmetic, not these accessors.
+  - bocl's custom zone allocator is opaque to AddressSanitizer (the zones are one
+    big malloc block), so an ASan build would not catch a use-after-free WITHIN a
+    zone.  sample(1) / lldb attach need elevated permissions in this environment.
 
-  - must-do.lisp      — HANG with GC off.  Last recovered error: "Unbound
-    variable: VAR".  Likely a DO/DO* expansion or a test macro looping.
+Next ideas: (a) a "stop the world and verify_no_dangling after every Nth GC under
+moderate stress" mode that names the C frame that allocated the now-freed block;
+(b) shrink DefaultZoneSize so natural GC fires far sooner, making F589 reproduce
+in a near-isolation context that the finder CAN complete; (c) audit the C
+sequence/predicate primitives reachable from find/remove-if (eql, the :key/:test
+funcall trampoline) for an unrooted cons held across the predicate call.
 
-How to reduce: load the file with BOCL_DBG_LOAD=1 to print each top-level form
-(F0,F1,...) as it is evaluated; the last F before the crash/hang is the trigger.
-Then minimize that form and fix the underlying primitive/special-form.
-
-These block broad SACLA conformance but are independent of the GC rooting work and
-of the bignum engine (bignum loads clean here: 0 arithmetic/overflow skips).
-Several are gated on missing features (SET, *GENSYM-COUNTER*, NSUBST-IF-NOT,
-&whole, DEFINE-METHOD-COMBINATION) per the project priority order
-(&whole, defclass, bignum [done], define-method-combination).
+== Other (recovered, not crashes) ==
+must-symbol still skips a few forms for missing features: SET, FDEFINITION,
+*GENSYM-COUNTER* (should be bound to 0), and (gensym <integer>) (should accept an
+integer designator instead of signalling a type-error).  Low effort, independent.

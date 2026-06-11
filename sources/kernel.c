@@ -1007,6 +1007,19 @@ void kernel_GC_ENABLE(Ref function,Ref arguments,MultipleValues* results){
     results->values[0]=x;
     close_live_pool(pool);}
 
+/* (%POISON x) — diagnostic: enable (x non-nil) / disable (nil) the use-after-free
+   finder at runtime, so it can target a post-prelude workload. */
+void kernel_POISON(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    set_gc_poison(!nullp(x));
+    results->count=1;
+    results->values[0]=x;
+    close_live_pool(pool);}
+
 void kernel_initialize_bignum(void){
     /* BIGNUM is a built-in subclass of INTEGER, so TYPEP/INTEGERP/RATIONALP/
        REALP/NUMBERP all treat a bignum as an integer.  Registered into
@@ -1026,7 +1039,9 @@ void kernel_initialize_bignum(void){
     set_symbol_function(S(%GC-STRESS),
         built_in_function_new(S(%GC-STRESS),ll_x,kernel_GC_STRESS));
     set_symbol_function(S(%GC-ENABLE),
-        built_in_function_new(S(%GC-ENABLE),ll_x,kernel_GC_ENABLE));}
+        built_in_function_new(S(%GC-ENABLE),ll_x,kernel_GC_ENABLE));
+    set_symbol_function(S(%POISON),
+        built_in_function_new(S(%POISON),ll_x,kernel_POISON));}
 
 
 /* FLOAT */
@@ -1142,16 +1157,25 @@ bool consp(Ref object){
     return class_of(object)==CONS_Class;}
 
 Ref cons_car(Ref cell){
+    /* Poison finder: catch a raw car/cdr of a freed+quarantined cons — the case
+       class_of misses (a rooting-gap cycle is traversed via these, never through
+       class_of).  gc_poison_mode is false in normal runs (predictable branch). */
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
     return ((ConsCell*)cell)->car;}
 
 Ref cons_cdr(Ref cell){
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
     return ((ConsCell*)cell)->cdr;}
 
 Ref cons_rplaca(Ref cell,Ref newcar){
+    /* Poison finder: a WRITE to a freed+quarantined cons is how rooting-gap cycles
+       get created (rplacd into a reused cell).  Catch it here too. */
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
     ((ConsCell*)cell)->car=newcar;
     return cell;}
 
 Ref cons_rplacd(Ref cell,Ref newcdr){
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
     ((ConsCell*)cell)->cdr=newcdr;
     return cell;}
 

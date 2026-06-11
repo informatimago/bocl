@@ -12,6 +12,7 @@ void* allocate(size_t size);
 extern bool gc_poison_mode;
 _Noreturn void gc_poison_report(Ref object);
 void set_gc_stress(long n);   /* runtime GC-stress period override (diagnostic) */
+void set_gc_poison(bool on);  /* runtime poison-finder toggle (diagnostic)      */
 
 bool garbage_collection_is_enabled(void);
 bool set_garbage_collection_enabled(bool on);
