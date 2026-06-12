@@ -36,6 +36,9 @@ Ref eval_global_environment(void){
    via the live pool, so keeping them on a global stack is GC-safe. */
 Frame* g_frame_stack = NULL;
 
+/* Forward decl: defined below, used by HANDLER-CASE's :no-error clause. */
+static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env);
+
 static void push_frame(Frame* frame,Ref environment){
     /* Global dynamic stack — used by CATCH/THROW, HANDLER-CASE/HANDLER-BIND and
        all non-local-exit unwinding, so those work across function-call
@@ -974,6 +977,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref raw_clauses=cdr(arguments);
             /* Normalise each clause: (type (var) body...) → (type-class var body-form). */
             Ref clauses=NIL_Symbol;
+            Ref no_error_clause=NIL_Symbol;  /* (:no-error lambda-list body...) */
             {dolist(clause,raw_clauses){
                 if(!consp(clause) || !consp(cdr(clause))){
                     ERROR("HANDLER-CASE: malformed clause %s",
@@ -981,6 +985,12 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref type_spec=car(clause);
                 Ref varlist  =cadr(clause);
                 Ref body     =cddr(clause);
+                /* :no-error clause — not a condition type.  It is run (with the
+                   handlers deactivated) when the protected form returns normally,
+                   with its lambda-list bound to the values the form produced. */
+                if(symbolp(type_spec) && type_spec==keyword_intern_cstring("NO-ERROR")){
+                    no_error_clause = list(varlist, cons(PROGN_Symbol, body), NULL);
+                } else {
                 /* Resolve type_spec to a class object.
                  * Kernel classes take priority; if not found, try Lisp find-class
                  * (which searches CLOS *%classes* for user-defined conditions). */
@@ -1005,8 +1015,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref var = nullp(varlist) ? NIL_Symbol : car(varlist);
                 /* body becomes a PROGN form for uniform eval. */
                 Ref body_form = cons(PROGN_Symbol, body);
-                push(list(type_class, var, body_form, NULL), &clauses);}}
+                push(list(type_class, var, body_form, NULL), &clauses);}}}
             clauses = nreverse(clauses);
+            add_to_live_pool(no_error_clause);
             /* Protect the clause list from GC for the entire HANDLER-CASE
                dynamic extent.  It lives only in a C-stack Frame (not a GC
                root), so any allocation triggered while evaluating the
@@ -1025,6 +1036,16 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 push_frame(&frame, environment);
                 evale(form, environment, results);
                 pop_frame(&frame, environment);
+                /* Normal return: if there is a :no-error clause, run it (handlers
+                   now inactive) with its lambda-list bound to the form's values. */
+                if(!nullp(no_error_clause)){
+                    Ref vals=NIL_Symbol;
+                    for(uword _vi=results->count; _vi-->0;){ vals=cons(results->values[_vi],vals); }
+                    add_to_live_pool(vals);
+                    Ref ne_env=environment_new(environment,NIL_Symbol);
+                    add_to_live_pool(ne_env);
+                    bind_required_parameters(NIL_Symbol,car(no_error_clause),vals,ne_env);
+                    evale(cadr(no_error_clause),ne_env,results);}
                 PASS_VALUES();
             } else {
                 /* Non-local entry.  Two cases:
