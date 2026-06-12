@@ -7384,6 +7384,19 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
          (rank (length dims))
          (total (reduce #'* dims :initial-value 1)))
     (cond
+      ;; A 1-D array of characters is a STRING.  (Fill-pointers aren't supported,
+      ;; so a :fill-pointer character array still falls through to a vector.)
+      ((and (= rank 1)
+            (member element-type '(character base-char standard-char extended-char))
+            (not fill-pointer))
+       (let ((s (make-string (car dims)
+                             :initial-element (if (characterp initial-element)
+                                                  initial-element #\Space))))
+         (when initial-contents
+           (let ((i 0))
+             (dolist (e (coerce initial-contents 'list))
+               (when (< i (car dims)) (char-set s i e) (incf i)))))
+         s))
       ((= rank 1)
        (let ((v (%make-vector-filled (car dims) initial-element)))
          (when initial-contents
