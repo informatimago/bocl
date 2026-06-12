@@ -4002,6 +4002,22 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
   (let ((r (find-restart 'continue)))
     (when r (invoke-restart r))))
 
+(defun warn (datum &rest arguments)
+  "Signal a warning with a MUFFLE-WARNING restart active (CLHS WARN).  A handler
+   may (muffle-warning) to suppress it; otherwise it is printed to *error-output*.
+   Overrides the kernel WARN, which did not establish the restart."
+  (let ((condition (cond ((typep datum 'condition) datum)
+                         ((symbolp datum) (apply #'make-condition datum arguments))
+                         (t (make-condition 'simple-warning
+                                            :format-control datum
+                                            :format-arguments arguments)))))
+    (restart-case
+        (progn
+          (signal condition)
+          (format *error-output* ";; WARNING: ~A~%" condition))
+      (muffle-warning () nil))
+    nil))
+
 (defun store-value (value &optional condition)
   "Invoke the STORE-VALUE restart with VALUE."
   condition

@@ -1607,6 +1607,7 @@ Ref class_new(Ref name){
 static Ref clos_obj_sc  = NULL;  /* structure class for %obj (CLOS instances) */
 static Ref clos_cls_sc  = NULL;  /* structure class for %cls (CLOS class objects) */
 static Ref sym_cpl      = NULL;  /* the 'CPL slot of %cls */
+static Ref sym_class_name = NULL;/* the 'NAME slot of %cls */
 static uword clos_obj_class_slot_idx = 0; /* index of 'class slot in %obj storage */
 
 void clos_register_bridge(Ref obj_sc, Ref cls_sc){
@@ -1614,7 +1615,8 @@ void clos_register_bridge(Ref obj_sc, Ref cls_sc){
     clos_cls_sc = cls_sc;
     /* Cache slot index: 'class is the FIRST user slot in %obj after BLOCK_HEADER. */
     clos_obj_class_slot_idx = 0;  /* %obj: (defstruct (%obj) class slots) — class=0 */
-    sym_cpl     = symbol_intern_cstring("CPL");}
+    sym_cpl       = symbol_intern_cstring("CPL");
+    sym_class_name= symbol_intern_cstring("NAME");}
 
 bool clos_instance_p(Ref obj){
     return clos_obj_sc != NULL && obj != NULL && obj->class == clos_obj_sc;}
@@ -1661,14 +1663,35 @@ Ref find_class(Ref name){
                 return class;}}}
     return NULL;}
 
+/* Name of a class designator that may be either a kernel CLASS object or a CLOS
+   %cls structure. */
+static Ref class_designator_name(Ref class){
+    if(class == NULL){ return NIL_Symbol; }
+    if(clos_class_p(class)){
+        return sym_class_name != NULL ? structure_get(class, sym_class_name) : NIL_Symbol;}
+    /* Otherwise a kernel CLASS object (subclassp is only called with class
+       designators, like the ->slots->class access below); class_same's symbolp
+       guard rejects any non-symbol that might be read for a stray non-class. */
+    return class->slots->class.name;}
+
+/* Two class designators name the SAME class iff identical, or — bridging the two
+   parallel condition hierarchies — they have the same non-NIL class name.  bocl
+   has both a kernel built-in class (e.g. WARNING_Class) and a CLOS %cls for each
+   standard condition type; a make-condition'd condition's class is the %cls while
+   a handler type resolves to the kernel class, so identity alone would miss. */
+static bool class_same(Ref a, Ref b){
+    if(a==b){ return true; }
+    Ref na = class_designator_name(a);
+    return na != NIL_Symbol && symbolp(na) && na == class_designator_name(b);}
+
 bool subclassp(Ref class,Ref superclass){
-    if(class==superclass){
+    if(class_same(class, superclass)){
         return true;}
     /* Handle CLOS class objects (%cls): walk the CPL list. */
     if(clos_class_p(class) && sym_cpl != NULL){
         Ref cpl = structure_get(class, sym_cpl);
         while(consp(cpl)){
-            if(cons_car(cpl) == superclass){ return true; }
+            if(class_same(cons_car(cpl), superclass)){ return true; }
             cpl = cons_cdr(cpl);}
         return false;}
     Ref direct_superclasses=class->slots->class.direct_superclasses;

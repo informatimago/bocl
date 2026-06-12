@@ -1,6 +1,33 @@
 Condition system: SIGNAL of a MAKE-CONDITION'd condition doesn't match handlers
 (CLOS / kernel condition-class duality).  + WARN doesn't establish MUFFLE-WARNING.
 
+== RESOLVED (Slice 88) ==
+Fixed by bridging the two hierarchies in subclassp (sources/kernel.c): a class
+designator now matches a superclass either by object identity OR — across the
+kernel-class / CLOS-%cls split — by having the same non-NIL class NAME
+(class_designator_name handles both representations; cached sym_class_name = the
+%cls 'NAME slot).  CL class names are unique, so name equality is exactly the
+"same logical class" relation; the symbolp guard rejects any stray non-class.
+WARN is re-implemented in Lisp (prelude) wrapping the signal in a MUFFLE-WARNING
+restart-case, which now works because the warning (a make-condition'd CLOS
+instance) matches the WARNING handler.
+
+Verified: (signal (make-condition 'simple-warning ...)) is caught by a WARNING
+handler; handler-case/handler-bind catch make-condition'd conditions; a user
+DEFINE-CONDITION subclass of a kernel condition is caught by a kernel-class
+handler; WARN + (invoke-restart 'muffle-warning) muffles (output empty); no
+regression in typep/subtypep/CLOS/defmethod/error/bignum or other SACLA files.
+
+NB: under `-on-error appease` the must-condition skip count rose 3 -> 6 — an
+ARTIFACT, not a regression: the load-recovery handler-case now correctly catches
+deliberately-(signal)'d ERROR conditions that previously slipped past it (the
+duality), so those deftest forms are "skipped" by the wrapper.  In a normal run
+(no wrapper) they pass — verified F1 (signal 'simple-error)->NIL and F36
+(handler-bind type-error + signal type-error).  The remaining genuine skip is one
+"check_number: expected NUMBER got NULL" form.
+
+(Original analysis below.)
+
 Context: after the restart-system work (Slices 84-87) the SACLA must-condition file
 went from 58 skipped forms to 3.  The remaining 3, and a class of test FAILURES
 (forms that now run but return the wrong value), all trace to one root cause.
