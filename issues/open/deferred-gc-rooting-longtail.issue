@@ -93,9 +93,47 @@ NB (still true): a timed-out run leaves a runaway bocl at 100% CPU that STARVES
 later runs into false "hangs"; always `pkill -9 -f sources/bocl` + confirm 0 procs
 between timed runs (this confounded an earlier must-eval/bignum scan).
 
+== STILL OPEN (long tail): GCSTRESS=1 cannot even boot — subclassp/typep gap ==
+Found 2026-06 while validating the fill-pointer-as-a-field change (Slice 96).
+Under BOCL_GCSTRESS=1 the interpreter SEGVs during STARTUP — before any user
+form runs — deterministically (5/5), even with a trivial `-x '(princ :ok)'`:
+
+  BOCL_GCSTRESS=1 ./sources/bocl --no-init --batch -on-error appease -x '(princ :ok)'
+
+  EXC_BAD_ACCESS in class_designator_name (kernel.c:1712, `class->slots->class.name`)
+    class_designator_name      kernel.c:1712   <- `class` is a freed block
+    class_same                 kernel.c:1721
+    subclassp                  kernel.c:1725
+    typep                      kernel.c:1766
+    environment_find_function  environment.c:184
+    evale                      eval.c:1367
+    bocl_load_cstring(.../bootstrap/cl-exports.lisp)   <- during startup load
+
+So a class designator reaching subclassp/typep via environment_find_function is
+freed by a GC fired inside the resolution path (a missing add_to_live_pool on the
+class — or the function name / environment — across an allocation in that path).
+The condition-class NAME bridge (class_designator_name / class_same, Slice 88) is
+where the dangling pointer is finally dereferenced, but the gap is upstream.
+
+PRE-EXISTING and NOT caused by the fill-pointer change: it reproduces identically
+on the parent commit (d3395ac) rebuilt without the kernel change.  The
+fill-pointer field only shifts heap layout, which changes WHICH long-tail gap
+fires first (same Heisenbug class as documented above) — it does not create one.
+
+Next step: BOCL_POISON=1 BOCL_GCSTRESS=1 on the trivial startup run should print
+the FREE backtrace pinpointing the missing root in the subclassp/typep/
+environment_find_function path (the finder aborts on first dangling use, so the
+startup cost is bounded — it dies early here).
+
+NB also: GC under (cl::%gc-stress N) is pathologically slow in general (a tiny
+plain-cons loop times out at 90s, ~85% sys time) — independent of fill pointers.
+So a full post-prelude GCSTRESS workload is impractical; validate layout changes
+via normal-GC suite loads (which still drive thousands of collections) instead.
+
 == Status ==
-RESOLVED.  Finder committed and working; the three rooting gaps fixed via the
-cold-branch technique with no bignum regression; load + bignum verified clean.
+Three named rooting gaps RESOLVED (cold-branch technique, no bignum regression).
+LONG TAIL STILL OPEN: GCSTRESS=1 no longer boots (subclassp/typep gap above) — a
+new concrete entry point for the finder.  Finder committed and working.
 Tooling note: BOCL_POISON+GCSTRESS=1 is too slow (a backtrace per freed block) to
 COMPLETE a full post-prelude workload, so deep paths are verified under normal GC
 (multiple clean-slate runs) rather than exhaustively under the finder; (%gc-stress)
