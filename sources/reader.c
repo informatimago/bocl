@@ -435,7 +435,13 @@ static Ref parse_bit_vector(parser_state* parser){
               parser->token[parser->length++]=parser->ch&1;
               break;
           default:
-              ungetc(parser->ch,stream_cstream(parser->input_stream));
+              /* A non-bit character terminates the bit run.  Leave it in
+                 parser->ch as the one-char lookahead — exactly like parse_token —
+                 and do NOT push it back: the caller (parse_list) and the
+                 top-level read already treat parser->ch as the terminating char.
+                 An ungetc here would DUPLICATE the delimiter (it would sit both
+                 in parser->ch and back in the stream), desyncing the next read
+                 and surfacing as a spurious stray ')' on the following form. */
               return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}}}
 
 /* The value of a digit character in BASE (2..36), or -1 if it is not a digit. */
