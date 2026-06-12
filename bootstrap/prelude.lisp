@@ -5262,6 +5262,27 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
       (and (>= (char-code (car chars)) (char-code (cadr chars)))
            (apply #'char>= (cdr chars)))))
 
+;;; Case-insensitive character comparisons, N-ary (the earlier 2-ary defs are
+;;; superseded here): downcase every argument, then defer to the case-sensitive
+;;; comparison of the same shape.
+(defun char-equal        (&rest chars) (apply #'char=  (mapcar #'char-downcase chars)))
+(defun char-not-equal    (&rest chars) (apply #'char/= (mapcar #'char-downcase chars)))
+(defun char-lessp        (&rest chars) (apply #'char<  (mapcar #'char-downcase chars)))
+(defun char-greaterp     (&rest chars) (apply #'char>  (mapcar #'char-downcase chars)))
+(defun char-not-greaterp (&rest chars) (apply #'char<= (mapcar #'char-downcase chars)))
+(defun char-not-lessp    (&rest chars) (apply #'char>= (mapcar #'char-downcase chars)))
+
+;;; (CHARACTER designator) — the character a character-designator denotes:
+;;; a character itself, a 1-char string, or a symbol with a 1-char name.
+(defun character (designator)
+  (cond ((characterp designator) designator)
+        ((and (stringp designator) (= (length designator) 1)) (char designator 0))
+        ((and (symbolp designator) (not (null designator))
+              (= (length (symbol-name designator)) 1))
+         (char (symbol-name designator) 0))
+        (t (error 'type-error :datum designator
+                  :expected-type '(or character (string 1) (symbol 1))))))
+
 ;;; ---- STANDARD-CHAR-P / GRAPHIC-CHAR-P ------------------------------------
 
 (defun standard-char-p (char)
