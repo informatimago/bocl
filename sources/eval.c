@@ -39,6 +39,14 @@ Frame* g_frame_stack = NULL;
 /* Forward decl: defined below, used by HANDLER-CASE's :no-error clause. */
 static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env);
 
+/* Strip leading (declare ...) forms from an implicit-progn body (HANDLER-CASE /
+   RESTART-CASE clause bodies may begin with declarations; bocl ignores their
+   content but must not evaluate `declare` as a function). */
+static Ref skip_declares(Ref body){
+    while(consp(body) && consp(car(body)) && car(car(body))==S(DECLARE)){
+        body=cdr(body);}
+    return body;}
+
 static void push_frame(Frame* frame,Ref environment){
     /* Global dynamic stack — used by CATCH/THROW, HANDLER-CASE/HANDLER-BIND and
        all non-local-exit unwinding, so those work across function-call
@@ -989,7 +997,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                    handlers deactivated) when the protected form returns normally,
                    with its lambda-list bound to the values the form produced. */
                 if(symbolp(type_spec) && type_spec==keyword_intern_cstring("NO-ERROR")){
-                    no_error_clause = list(varlist, cons(PROGN_Symbol, body), NULL);
+                    no_error_clause = list(varlist, cons(PROGN_Symbol, skip_declares(body)), NULL);
                 } else {
                 /* Resolve type_spec to a class object.
                  * Kernel classes take priority; if not found, try Lisp find-class
@@ -1014,7 +1022,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 /* varlist must be () or (var). */
                 Ref var = nullp(varlist) ? NIL_Symbol : car(varlist);
                 /* body becomes a PROGN form for uniform eval. */
-                Ref body_form = cons(PROGN_Symbol, body);
+                Ref body_form = cons(PROGN_Symbol, skip_declares(body));
                 push(list(type_class, var, body_form, NULL), &clauses);}}}
             clauses = nreverse(clauses);
             add_to_live_pool(no_error_clause);
@@ -1195,7 +1203,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                        car(rest)==K(INTERACTIVE) ||
                        car(rest)==K(TEST))){
                     rest = cddr(rest);}
-                Ref body_form = cons(PROGN_Symbol, rest);
+                Ref body_form = cons(PROGN_Symbol, skip_declares(rest));
                 COLLECT(restarts, list(rname, varlist, body_form, NULL));}
             restarts = nreverse(restarts);
 
