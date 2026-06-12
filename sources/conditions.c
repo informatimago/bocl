@@ -312,10 +312,35 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     (void)results;
     close_live_pool(pool);}
 
-/* (INVOKE-RESTART-INTERACTIVELY name) — same as invoke-restart with no args. */
+/* (INVOKE-RESTART-INTERACTIVELY restart-designator) — invoke the named restart,
+   computing its arguments via the restart's :interactive-function (a restart-bind
+   restart stores it as the 3rd element of its spec).  With no interactive
+   function, invoke with no args. */
 static void kernel_INVOKE_RESTART_INTERACTIVELY(Ref function, Ref arguments, MultipleValues* results){
-    /* Delegate: add NIL args list */
-    kernel_INVOKE_RESTART(function, arguments, results);}
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref name = pop_mandatory_argument(function, &current);
+    if(!symbolp(name)){
+        ERROR("INVOKE-RESTART-INTERACTIVELY: expected a symbol, got %s",
+              string_cstring(prin1_to_string(name)));}
+    Frame* target = find_restart_frame_by_name(name, eval_global_environment());
+    if(target == NULL){
+        ERROR("INVOKE-RESTART-INTERACTIVELY: no active restart named %s",
+              string_cstring(prin1_to_string(name)));}
+    /* Find the restart spec; (name fn interactive-fn) for restart-bind. */
+    Ref spec = NIL_Symbol;
+    {   Ref rs = target->parameters.restart.restarts;
+        while(consp(rs)){ if(consp(car(rs))&&car(car(rs))==name){ spec=car(rs); break; } rs=cdr(rs); }}
+    Ref ifn = (consp(spec)&&consp(cdr(spec))&&consp(cddr(spec))) ? caddr(spec) : NIL_Symbol;
+    Ref args = NIL_Symbol;
+    if(functionp(ifn) || closurep(ifn) || built_in_function_p(ifn)){
+        MultipleValues ir = {0};
+        kernel_apply(ifn, NIL_Symbol, &ir);
+        args = (ir.count > 0) ? ir.values[0] : NIL_Symbol;}
+    /* Delegate to INVOKE-RESTART with (name . args). */
+    kernel_INVOKE_RESTART(function, cons(name, args), results);
+    close_live_pool(pool);}
 
 /* (COMPUTE-RESTARTS &optional condition) — the active restart objects, innermost
    first.  A restart object IS its name symbol in bocl; the optional condition is

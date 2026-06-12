@@ -1151,7 +1151,17 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref rname   = car(binding);
                 MultipleValues fr={0};
                 Ref fn      = evale(cadr(binding), environment, &fr);
-                COLLECT(restarts, list(rname, fn, NULL));
+                /* :interactive-function (used by INVOKE-RESTART-INTERACTIVELY to
+                   compute the args); :report-function / :test-function ignored. */
+                Ref interactive_fn = NIL_Symbol;
+                {   Ref opts=cddr(binding);
+                    while(consp(opts) && consp(cdr(opts))){
+                        if(car(opts)==keyword_intern_cstring("INTERACTIVE-FUNCTION")){
+                            MultipleValues ir={0};
+                            interactive_fn = evale(cadr(opts), environment, &ir);
+                            break;}
+                        opts=cddr(opts);}}
+                COLLECT(restarts, list(rname, fn, interactive_fn, NULL));
                 add_to_live_pool(restarts);}   /* root partial list across the next evale */
             restarts = nreverse(restarts);
             add_to_live_pool(restarts);
