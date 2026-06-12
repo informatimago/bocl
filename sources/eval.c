@@ -520,16 +520,35 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 if(!symbolp(name)){
                     ERROR("SETQ: %s is not a symbol",
                           string_cstring(prin1_to_string(name)));}
-                Ref value=evale(value_form,environment,results);
                 Ref variable=environment_find_variable(name,environment);
-                if(!nullp(variable)){
-                    env_set_variable_value(value,variable);}
+                if(!nullp(variable)
+                   && (env_local_symbol_macro_p(variable)
+                       || env_global_symbol_macro_p(variable))){
+                    /* SETQ of a symbol macro IS, by definition, SETF of its
+                       expansion (CLHS).  Build (SETF expansion value-form) and
+                       evaluate it so SETF handles the place and evaluates the
+                       value-form exactly once.  (Mirrors the read path above,
+                       which expands a symbol-macro reference to its expansion.) */
+                    Ref expansion = env_local_symbol_macro_p(variable)
+                        ? env_local_symbol_macro_expansion(variable)
+                        : env_global_symbol_macro_expansion(variable);
+                    uword pool=open_live_pool();
+                    add_to_live_pool(expansion);
+                    add_to_live_pool(value_form);
+                    Ref form=list(S(SETF),expansion,value_form,NULL);
+                    add_to_live_pool(form);
+                    last_value=evale(form,environment,results);
+                    close_live_pool(pool);}
                 else{
-                    /* Not lexically bound — assign the symbol's global value cell.
-                       Mirrors most CL implementations' implicit-global behaviour
-                       for a bare SETQ at top level. */
-                    set_symbol_value(name,value);}
-                last_value=value;
+                    Ref value=evale(value_form,environment,results);
+                    if(!nullp(variable)){
+                        env_set_variable_value(value,variable);}
+                    else{
+                        /* Not lexically bound — assign the symbol's global value
+                           cell.  Mirrors most CL implementations' implicit-global
+                           behaviour for a bare SETQ at top level. */
+                        set_symbol_value(name,value);}
+                    last_value=value;}
                 tail=cddr(tail);}
             VALUES1(last_value);}
 
