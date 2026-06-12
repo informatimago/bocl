@@ -4059,6 +4059,12 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
          (let ((s (make-string (length sequence))))
            (dotimes (i (length sequence) s)
              (char-set s i (char sequence i)))))
+        ;; bit-vector before vectorp (a bit-vector is a vector subtype); copy
+        ;; keeps the BIT_VECTOR type and the active (fill-pointer) length.
+        ((bit-vector-p sequence)
+         (let ((b (make-bit-vector (length sequence) 0)))
+           (dotimes (i (length sequence) b)
+             (setf (bit b i) (bit sequence i)))))
         ((vectorp sequence)
          (let ((v (make-array (length sequence))))
            (dotimes (i (length sequence) v)
@@ -4740,6 +4746,11 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
 (defun simple-vector-p (object)
   "Return T if OBJECT is a simple (non-adjustable, no fill-pointer) vector."
   (and (vectorp object) (not (%fill-pointer-of object))))
+
+(defun simple-bit-vector-p (object)
+  "Return T if OBJECT is a simple bit-vector (a bit-vector with no fill pointer;
+bocl has no adjustable/displaced bit-vectors)."
+  (and (bit-vector-p object) (not (%fill-pointer-of object))))
 
 (defun vector-fill (vector item &key (start 0) end)
   "Fill elements of VECTOR with ITEM."
@@ -7615,6 +7626,17 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
                (when (< i (car dims)) (char-set s i e) (incf i)))))
          (when fp (%set-fill-pointer s fp))
          s))
+      ;; A 1-D array of bits is a BIT-VECTOR (a real BIT_VECTOR object, so
+      ;; BIT-VECTOR-P / TYPE-OF / the #* printer all see it correctly).
+      ((and (= rank 1) (eq element-type 'bit))
+       (let ((b (make-bit-vector (car dims)
+                                 (if (integerp initial-element) initial-element 0))))
+         (when initial-contents
+           (let ((i 0))
+             (dolist (e (coerce initial-contents 'list))
+               (when (< i (car dims)) (setf (bit b i) e) (incf i)))))
+         (when fp (%set-fill-pointer b fp))
+         b))
       ((= rank 1)
        (let ((v (%make-vector-filled (car dims) initial-element)))
          (when initial-contents

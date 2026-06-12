@@ -281,6 +281,25 @@ Ref princ(Ref object,Ref stream){
         fprintf(out,")");
         return object;}
 
+    /* BIT-VECTOR / VECTOR — the aesthetic (#*… / #(…)) form coincides with the
+       readable one, so PRINC prints them like PRIN1.  BIT-VECTOR before VECTOR
+       (a bit-vector is a vector subtype). */
+    if(bit_vector_p(object)){
+        fprintf(out,"#*");
+        uword blen = bit_vector_length(object);
+        for(uword i=0; i<blen; i++){
+            fprintf(out,"%ld",(long)integer_value(bit(object,integer_from_word((word)i))));}
+        return object;}
+
+    if(vectorp(object)){
+        fprintf(out,"#(");
+        uword len = vector_length(object);
+        for(uword i=0; i<len; i++){
+            if(i>0){ fprintf(out," "); }
+            princ(object->slots->array.elements->elements[i], stream);}
+        fprintf(out,")");
+        return object;}
+
     /* PRINC of a pathname writes its namestring (no #P"…" escaping). */
     if(typep(object,PATHNAME_Class)){
         princ(namestring(object),stream);
