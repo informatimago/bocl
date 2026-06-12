@@ -2974,6 +2974,123 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
   ;; (mapappend fn list) = (apply #'append (mapcar fn list))
   (apply #'append (mapcar fn list)))
 
+;; -------------------------------------------------------------------- ;;
+;;  PROG / PROG* and the parallel/shifting assignment macros.           ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro prog (varlist &body body)
+  ;; (prog (vars) decl* {tag|statement}*) — parallel (LET) binding inside an
+  ;; implicit BLOCK NIL and TAGBODY.  Returns NIL unless RETURN is used.
+  ;; (bocl ignores declaration content, so leading declares are just dropped.)
+  `(block nil
+     (let ,varlist
+       (tagbody ,@(%strip-declares body)))))
+
+(defmacro prog* (varlist &body body)
+  ;; Like PROG but sequential (LET*) binding.
+  `(block nil
+     (let* ,varlist
+       (tagbody ,@(%strip-declares body)))))
+
+(defmacro psetq (&rest pairs)
+  ;; (psetq var1 val1 var2 val2 ...) — evaluate every value, THEN assign in
+  ;; parallel.  Returns NIL.
+  (let ((vars nil) (vals nil) (p pairs))
+    (loop (when (null p) (return))
+          (push (car p) vars) (push (cadr p) vals) (setq p (cddr p)))
+    (setq vars (nreverse vars) vals (nreverse vals))
+    (let ((temps (mapcar (lambda (v) v (gensym "PSET-")) vars)))
+      `(let ,(mapcar #'list temps vals)
+         ,@(mapcar (lambda (var tmp) `(setq ,var ,tmp)) vars temps)
+         nil))))
+
+(defmacro psetf (&rest pairs)
+  ;; (psetf place1 val1 place2 val2 ...) — like PSETQ but for places (SETF).
+  ;; Evaluates every value first, then stores in parallel.  Returns NIL.
+  (let ((places nil) (vals nil) (p pairs))
+    (loop (when (null p) (return))
+          (push (car p) places) (push (cadr p) vals) (setq p (cddr p)))
+    (setq places (nreverse places) vals (nreverse vals))
+    (let ((temps (mapcar (lambda (v) v (gensym "PSETF-")) places)))
+      `(let ,(mapcar #'list temps vals)
+         ,@(mapcar (lambda (place tmp) `(setf ,place ,tmp)) places temps)
+         nil))))
+
+(defmacro shiftf (&rest args)
+  ;; (shiftf place1 place2 ... placeN newvalue) — store place2's old value into
+  ;; place1, place3's into place2, ..., NEWVALUE into placeN; return the OLD
+  ;; value of place1.  Uses GET-SETF-EXPANSION so each place's subforms are
+  ;; evaluated exactly once (correct even when places share structure, e.g.
+  ;; (shiftf y x (cdr x) ...)).
+  (let ((places (butlast args))
+        (newval (car (last args)))
+        (sub-binds nil)    ; (temp val) subform bindings, in place order
+        (olds nil)         ; gensyms holding each place's old value
+        (old-binds nil)    ; (old-gensym access-form)
+        (svars nil)        ; per-place list of store variables
+        (sforms nil))      ; per-place store-form
+    (dolist (p places)
+      (multiple-value-bind (vars vals stores store-form access-form)
+          (get-setf-expansion p)
+        (setq sub-binds (append sub-binds (mapcar #'list vars vals)))
+        (let ((og (gensym "SHIFTF-OLD-")))
+          (setq olds      (append olds (list og)))
+          (setq old-binds (append old-binds (list (list og access-form)))))
+        (setq svars  (append svars  (list stores)))
+        (setq sforms (append sforms (list store-form)))))
+    (let ((nv (gensym "SHIFTF-NEW-")))
+      ;; place_i receives old_{i+1}; the last place receives NEWVALUE.
+      (let ((newvals (append (cdr olds) (list nv))))
+        `(let* (,@sub-binds            ; capture every place subform once
+                ,@old-binds            ; read every old value before any store
+                (,nv ,newval))
+           ,@(mapcar (lambda (sv val sf) `(multiple-value-bind ,sv ,val ,sf))
+                     svars newvals sforms)
+           ,(car olds))))))            ; return old value of place 1
+
+(defun %case-key-tests (tmp clause)
+  ;; The COND test for a (CASE/CCASE) clause: (k ...) keys -> (or (eql tmp 'k) ...).
+  (let ((keys (car clause)))
+    (if (listp keys)
+        `(or ,@(mapcar (lambda (k) `(eql ,tmp ',k)) keys))
+        `(eql ,tmp ',keys))))
+
+(defun %case-all-keys (clauses)
+  ;; Flatten every key across CCASE clauses (for the TYPE-ERROR expected-type).
+  (mapappend (lambda (c) (let ((k (car c))) (if (listp k) k (list k)))) clauses))
+
+(defmacro ccase (keyplace &rest clauses)
+  ;; Like CASE but: KEYPLACE is a place, it is exhaustive (no OTHERWISE), and a
+  ;; non-match signals a correctable TYPE-ERROR with a STORE-VALUE restart that
+  ;; sets KEYPLACE and retries.
+  (let ((blk (gensym "CCASE-")) (tag (gensym "CCASE-TAG-")) (tmp (gensym "CCASE-VAL-")))
+    `(block ,blk
+       (tagbody
+          ,tag
+          (return-from ,blk
+            (let ((,tmp ,keyplace))
+              (cond
+                ,@(mapcar (lambda (c) `(,(%case-key-tests tmp c) ,@(cdr c))) clauses)
+                (t (restart-case
+                       (error 'type-error :datum ,tmp
+                              :expected-type '(member ,@(%case-all-keys clauses)))
+                     (store-value (,tmp) (setf ,keyplace ,tmp) (go ,tag)))))))))))
+
+(defmacro ctypecase (keyplace &rest clauses)
+  ;; Like TYPECASE but exhaustive and correctable (TYPE-ERROR + STORE-VALUE).
+  (let ((blk (gensym "CTYPECASE-")) (tag (gensym "CTC-TAG-")) (tmp (gensym "CTC-VAL-")))
+    `(block ,blk
+       (tagbody
+          ,tag
+          (return-from ,blk
+            (let ((,tmp ,keyplace))
+              (cond
+                ,@(mapcar (lambda (c) `((typep ,tmp ',(car c)) ,@(cdr c))) clauses)
+                (t (restart-case
+                       (error 'type-error :datum ,tmp
+                              :expected-type '(or ,@(mapcar #'car clauses)))
+                     (store-value (,tmp) (setf ,keyplace ,tmp) (go ,tag)))))))))))
+
 (defparameter lambda-list-keywords
   '(&optional &rest &key &allow-other-keys &aux &body &whole &environment))
 
@@ -5072,21 +5189,30 @@ behaves exactly like VECTOR-PUSH and always succeeds."
 ;;; ---- GET-SETF-EXPANSION ---------------------------------------------------
 
 (defun get-setf-expansion (place &optional environment)
-  "Return the five-value setf expansion for PLACE."
+  "Return the five-value setf expansion for PLACE: (temps values stores
+store-form access-form).  Derived from the very *SETF-EXPANDERS* table the SETF
+macro uses, so it covers every place SETF does.  Each place subform is bound to
+a fresh temp (evaluated once), and both the store-form and access-form refer to
+those temps — the property SHIFTF/ROTATEF/INCF rely on for correctness when
+places share structure."
   (declare (ignore environment))
-  ;; Delegate to the existing SETF macro infrastructure.
-  ;; We re-use the setf-expander lookup from the SETF macro.
-  (if (symbolp place)
-      ;; Simple variable
-      (let ((store (gensym "STORE-")))
-        (values nil nil (list store) `(setq ,place ,store) place))
-      ;; Compound place — look up the expander
-      (let* ((op (car place))
-             (args (cdr place))
-             (expander (get op '%setf-expander)))
-        (if expander
-            (apply expander args)
-            (error "GET-SETF-EXPANSION: no setf expander for ~S" op)))))
+  (cond
+    ((symbolp place)
+     (let ((store (gensym "STORE-")))
+       (values nil nil (list store) `(setq ,place ,store) place)))
+    ((consp place)
+     (let ((expander (gethash (car place) *setf-expanders*)))
+       (if expander
+           (let* ((args  (cdr place))
+                  (temps (mapcar (lambda (a) a (gensym "G-")) args))
+                  (store (gensym "STORE-")))
+             (values temps
+                     args
+                     (list store)
+                     (apply expander (append temps (list store)))
+                     (cons (car place) temps)))
+           (error "GET-SETF-EXPANSION: no setf expander for ~S" (car place)))))
+    (t (error "GET-SETF-EXPANSION: invalid place ~S" place))))
 
 ;;; ---- DEFINE-SYMBOL-MACRO --------------------------------------------------
 ;;; Installs a global symbol macro so every reference to SYMBOL
