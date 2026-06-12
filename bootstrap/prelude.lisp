@@ -5440,41 +5440,74 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
         (when (/= xa xb)
           (return-from %string-compare-bounded (- xa xb)))))))
 
+;;; Compare the substrings A[start1,end1) and B[start2,end2) (A and B are string
+;;; designators; CI = case-insensitive).  Returns two values: the absolute index
+;;; in A of the first mismatch (or the end of A's compared region when A is a
+;;; prefix of B), and a relation -1 / 0 / 1.  CLHS string</string<=/... return
+;;; that index (not just a boolean) when the relation holds, else NIL.
+(defun %string-cmp (a b ci start1 end1 start2 end2)
+  (let* ((sa (string a)) (sb (string b))
+         (e1 (or end1 (length sa)))
+         (e2 (or end2 (length sb))))
+    (do ((i start1 (1+ i)) (j start2 (1+ j)))
+        (nil)
+      (cond ((and (>= i e1) (>= j e2)) (return (values i 0)))
+            ((>= i e1)                 (return (values i -1)))
+            ((>= j e2)                 (return (values i 1)))
+            (t (let ((ca (char sa i)) (cb (char sb j)))
+                 (when ci (setq ca (char-downcase ca) cb (char-downcase cb)))
+                 (cond ((char< ca cb) (return (values i -1)))
+                       ((char> ca cb) (return (values i 1))))))))))
+
 (defun string= (a b &key (start1 0) end1 (start2 0) end2)
   (zerop (%string-compare-bounded a b nil start1 end1 start2 end2)))
 
 (defun string/= (a b &key (start1 0) end1 (start2 0) end2)
-  (not (zerop (%string-compare-bounded a b nil start1 end1 start2 end2))))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (zerop rel) nil i)))
 
 (defun string< (a b &key (start1 0) end1 (start2 0) end2)
-  (< (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (< rel 0) i nil)))
 
 (defun string> (a b &key (start1 0) end1 (start2 0) end2)
-  (> (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (> rel 0) i nil)))
 
 (defun string<= (a b &key (start1 0) end1 (start2 0) end2)
-  (<= (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (<= rel 0) i nil)))
 
 (defun string>= (a b &key (start1 0) end1 (start2 0) end2)
-  (>= (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (>= rel 0) i nil)))
 
 (defun string-equal (a b &key (start1 0) end1 (start2 0) end2)
   (zerop (%string-compare-bounded a b t start1 end1 start2 end2)))
 
 (defun string-not-equal (a b &key (start1 0) end1 (start2 0) end2)
-  (not (zerop (%string-compare-bounded a b t start1 end1 start2 end2))))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (zerop rel) nil i)))
 
 (defun string-lessp (a b &key (start1 0) end1 (start2 0) end2)
-  (< (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (< rel 0) i nil)))
 
 (defun string-greaterp (a b &key (start1 0) end1 (start2 0) end2)
-  (> (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (> rel 0) i nil)))
 
 (defun string-not-lessp (a b &key (start1 0) end1 (start2 0) end2)
-  (>= (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (>= rel 0) i nil)))
 
 (defun string-not-greaterp (a b &key (start1 0) end1 (start2 0) end2)
-  (<= (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (<= rel 0) i nil)))
+
+(defun simple-string-p (object)
+  "In bocl every STRING is simple."
+  (stringp object))
 
 ;;; ---- WRITE-TO-STRING with :base ------------------------------------------
 
