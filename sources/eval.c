@@ -1125,6 +1125,44 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 UWCLEANUP{}}
             PASS_VALUES();}
 
+        /* (RESTART-BIND ((name function [keyword form]...) ...) body...)
+           Establishes named restarts whose FUNCTION is called (in the dynamic
+           context of the invocation, NOT by unwinding to a clause — that is
+           RESTART-CASE) when INVOKE-RESTART names them.  The frame is a registry
+           + an unwind pass-through; INVOKE-RESTART detects a restart-bind restart
+           (its 2nd element is a function) and applies it directly. */
+        if(operator==S(RESTART-BIND)){
+            check_arg_count_min(arguments,1);
+            Ref raw_bindings = car(arguments);
+            Ref body         = cdr(arguments);
+            COLLECTING(restarts);
+            dolist(binding, raw_bindings){
+                if(!consp(binding) || !consp(cdr(binding))){
+                    ERROR("RESTART-BIND: malformed binding %s",
+                          string_cstring(prin1_to_string(binding)));}
+                Ref rname   = car(binding);
+                MultipleValues fr={0};
+                Ref fn      = evale(cadr(binding), environment, &fr);
+                COLLECT(restarts, list(rname, fn, NULL));
+                add_to_live_pool(restarts);}   /* root partial list across the next evale */
+            restarts = nreverse(restarts);
+            add_to_live_pool(restarts);
+
+            Frame frame;
+            frame.type = frame_restart;
+            frame.parameters.restart.restarts      = restarts;
+            frame.parameters.restart.matched_name  = NIL_Symbol;
+            frame.parameters.restart.matched_args  = NIL_Symbol;
+            frame.results = results;
+            results->count = 0;   /* empty body -> NIL */
+            int code = setjmp(frame.non_local_exit);
+            UNWIND(code){
+                UWBODY{
+                    dolist(subform, body){
+                        evale(subform, environment, results);}}
+                UWCLEANUP{}}
+            PASS_VALUES();}
+
         /* (RESTART-CASE form (name lambda-list body...) ...)
            Establishes named restarts visible to FIND-RESTART / INVOKE-RESTART
            during the evaluation of `form`.  When a restart is invoked,

@@ -283,7 +283,21 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     if(target == NULL){
         ERROR("INVOKE-RESTART: no active restart named %s",
               string_cstring(prin1_to_string(name)));}
-    /* Set the matched restart on the frame. */
+    /* RESTART-BIND restart: its spec's 2nd element is a callable — apply it in
+       place (in the dynamic context of this INVOKE-RESTART) and return its values,
+       rather than unwinding to a RESTART-CASE clause. */
+    {   Ref rs = target->parameters.restart.restarts;
+        while(consp(rs)){
+            Ref spec = car(rs);
+            if(consp(spec) && car(spec)==name){
+                Ref fn = consp(cdr(spec)) ? cadr(spec) : NIL_Symbol;
+                if(functionp(fn) || closurep(fn) || built_in_function_p(fn)){
+                    kernel_apply(fn, restart_args, results);
+                    close_live_pool(pool);
+                    return;}
+                break;}
+            rs = cdr(rs);}}
+    /* Set the matched restart on the frame (RESTART-CASE: unwind below). */
     target->parameters.restart.matched_name = name;
     target->parameters.restart.matched_args = restart_args;
     /* Trigger a non-local exit toward `target`: longjmp into the current top
@@ -302,6 +316,32 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
 static void kernel_INVOKE_RESTART_INTERACTIVELY(Ref function, Ref arguments, MultipleValues* results){
     /* Delegate: add NIL args list */
     kernel_INVOKE_RESTART(function, arguments, results);}
+
+/* (COMPUTE-RESTARTS &optional condition) — the active restart objects, innermost
+   first.  A restart object IS its name symbol in bocl; the optional condition is
+   ignored (restarts are not condition-associated here). */
+static void kernel_COMPUTE_RESTARTS(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(arguments);
+    Ref acc = NIL_Symbol;
+    for(Frame* frame=g_frame_stack; frame; frame=frame->next){
+        if(frame->type == frame_restart){
+            Ref rs = frame->parameters.restart.restarts;
+            while(consp(rs)){ push(car(car(rs)), &acc); rs = cdr(rs); }}}
+    results->count = 1;
+    results->values[0] = nreverse(acc);
+    close_live_pool(pool);}
+
+/* (RESTART-NAME restart) — the name of a restart object (which is its name). */
+static void kernel_RESTART_NAME(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref restart = pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    results->count = 1;
+    results->values[0] = restart;
+    close_live_pool(pool);}
 
 /* (ABORT) — invoke the innermost ABORT restart or fatal-error if none. */
 static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
@@ -342,5 +382,7 @@ void kernel_initialize_conditions(void){
     register_fn(S(FIND-RESTART),                      ll_restart, kernel_FIND_RESTART);
     register_fn(S(INVOKE-RESTART),                    ll_restart, kernel_INVOKE_RESTART);
     register_fn(S(INVOKE-RESTART-INTERACTIVELY),      ll_restart, kernel_INVOKE_RESTART_INTERACTIVELY);
+    register_fn(S(COMPUTE-RESTARTS),                  list(S(&OPTIONAL),S(CONDITION),NULL), kernel_COMPUTE_RESTARTS);
+    register_fn(S(RESTART-NAME),                      list(S(RESTART),NULL), kernel_RESTART_NAME);
     register_fn(S(ABORT),                             ll_empty,   kernel_ABORT);
 }

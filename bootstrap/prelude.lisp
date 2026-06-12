@@ -4012,6 +4012,12 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
   condition
   (invoke-restart (find-restart 'use-value) value))
 
+(defmacro with-condition-restarts (condition-form restarts-form &body body)
+  "Run BODY with the restarts associated with the condition.  bocl restarts are
+   not condition-associated, so CONDITION-FORM and RESTARTS-FORM are evaluated
+   (for effect) and BODY's values are returned."
+  `(progn ,condition-form ,restarts-form ,@body))
+
 ;;; NOTE: ABORT is already a kernel built-in (conditions.c).
 
 ;;; ---- Debugger / break ----------------------------------------------------
