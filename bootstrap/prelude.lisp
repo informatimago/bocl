@@ -475,9 +475,32 @@
 ;;  support those via &KEY and the new kernel default-evaluation path.  ;;
 ;; -------------------------------------------------------------------- ;;
 
+;; -------------------------------------------------------------------- ;;
+;;  Fill-pointer arrays.  bocl strings/vectors carry no spare field for a ;;
+;;  fill pointer, so we attach it externally: an EQ table keyed on the    ;;
+;;  (genuine) array object maps it to its current fill pointer.  Because  ;;
+;;  the array itself stays a real bocl string/vector, AREF/CHAR/SVREF/    ;;
+;;  STRINGP/VECTORP keep working natively and correctly *ignore* the fill ;;
+;;  pointer (per CLHS aref/char); only the length-sensitive operators —   ;;
+;;  LENGTH, the STRING coercion, and the VECTOR-PUSH/POP family — consult ;;
+;;  this table.  (Defined here, before LENGTH, so the predicate is bound  ;;
+;;  no matter when LENGTH is first called during prelude load.)           ;;
+;; -------------------------------------------------------------------- ;;
+(defvar *fill-pointers* (make-hash-table :test 'eq)
+  "EQ table mapping a fill-pointer array object to its current fill pointer.")
+
+(defun %fill-pointer-of (array)
+  "The current fill pointer of ARRAY, or NIL if ARRAY has none."
+  (gethash array *fill-pointers*))
+
+(defun %set-fill-pointer (array fp)
+  "Set ARRAY's fill pointer to FP (registers ARRAY as fill-pointered)."
+  (setf (gethash array *fill-pointers*) fp))
+
 (defun length (seq)
   (cond ((null seq)        0)
         ((consp seq)       (list-length seq))
+        ((%fill-pointer-of seq))            ; fill-pointer array: active length
         ((stringp seq)     (string-length seq))
         ((vectorp seq)     (vector-length seq))
         ((bit-vector-p seq)(bit-vector-length seq))
@@ -1094,7 +1117,11 @@
 (defun string (designator)
   ;; CL: (string x) returns a string. If x is already a string, it's
   ;; returned as-is; symbol -> its name; character -> a 1-char string.
-  (cond ((stringp designator) designator)
+  (cond ((and (stringp designator) (%fill-pointer-of designator))
+         ;; Char array with a fill pointer: its string value is the active
+         ;; prefix only, so string functions see the correct length.
+         (subseq designator 0 (%fill-pointer-of designator)))
+        ((stringp designator) designator)
         ((symbolp designator) (symbol-name designator))
         ((characterp designator)
          (let ((s (make-string 1)))
@@ -4572,8 +4599,22 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
     result))
 
 (defun array-has-fill-pointer-p (array)
-  "Return T if ARRAY has a fill pointer.  Bocl arrays don't; always NIL."
-  array nil)
+  "Return T if ARRAY has a fill pointer."
+  (if (%fill-pointer-of array) t nil))
+
+(defun fill-pointer (vector)
+  "Return the fill pointer of VECTOR (an error if it has none)."
+  (or (%fill-pointer-of vector)
+      (error "FILL-POINTER: ~S has no fill pointer" vector)))
+
+(defun %set-fill-pointer-checked (vector new)
+  "Backing for (SETF FILL-POINTER): set VECTOR's fill pointer to NEW."
+  (unless (%fill-pointer-of vector)
+    (error "(SETF FILL-POINTER): ~S has no fill pointer" vector))
+  (unless (and (integerp new) (<= 0 new) (<= new (array-total-size vector)))
+    (error "(SETF FILL-POINTER): ~S out of range for ~S" new vector))
+  (%set-fill-pointer vector new)
+  new)
 
 (defun adjustable-array-p (array)
   "Return T if ARRAY is adjustable.  Bocl arrays aren't; always NIL."
@@ -4581,26 +4622,47 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
 
 (defun simple-vector-p (object)
   "Return T if OBJECT is a simple (non-adjustable, no fill-pointer) vector."
-  (vectorp object))
+  (and (vectorp object) (not (%fill-pointer-of object))))
 
 (defun vector-fill (vector item &key (start 0) end)
   "Fill elements of VECTOR with ITEM."
   (fill vector item :start start :end end))
 
 (defun vector-push (new-element vector)
-  "Push NEW-ELEMENT onto VECTOR (fill-pointer based).  Stub: unsupported."
-  new-element vector
-  (error "VECTOR-PUSH: adjustable arrays not supported in bocl"))
+  "Store NEW-ELEMENT at VECTOR's fill pointer and increment it.  Returns the
+index where NEW-ELEMENT was stored, or NIL if VECTOR is already full.  AREF
+and (SETF AREF) operate on the underlying storage, so this works for both
+character (string-backed) and general vectors."
+  (let ((fp (%fill-pointer-of vector)))
+    (unless fp (error "VECTOR-PUSH: ~S has no fill pointer" vector))
+    (when (< fp (array-total-size vector))
+      (setf (aref vector fp) new-element)
+      (%set-fill-pointer vector (1+ fp))
+      fp)))
 
 (defun vector-pop (vector)
-  "Pop last element from VECTOR (fill-pointer based).  Stub: unsupported."
-  vector
-  (error "VECTOR-POP: adjustable arrays not supported in bocl"))
+  "Decrement VECTOR's fill pointer and return the element now just past it."
+  (let ((fp (%fill-pointer-of vector)))
+    (unless fp (error "VECTOR-POP: ~S has no fill pointer" vector))
+    (when (zerop fp) (error "VECTOR-POP: ~S is empty" vector))
+    (let ((new (1- fp)))
+      (%set-fill-pointer vector new)
+      (aref vector new))))
 
 (defun vector-push-extend (new-element vector &optional extension)
-  "Extend VECTOR and push.  Stub: unsupported."
-  new-element vector extension
-  (error "VECTOR-PUSH-EXTEND: adjustable arrays not supported in bocl"))
+  "Like VECTOR-PUSH but grows the storage when full.  bocl cannot grow an
+array object in place (no spare indirection), so when VECTOR is full this
+signals an error rather than silently corrupting; while capacity remains it
+behaves exactly like VECTOR-PUSH and always succeeds."
+  extension                                      ; accepted, ignored
+  (let ((fp (%fill-pointer-of vector)))
+    (unless fp (error "VECTOR-PUSH-EXTEND: ~S has no fill pointer" vector))
+    (unless (< fp (array-total-size vector))
+      (error "VECTOR-PUSH-EXTEND: ~S is full; in-place growth of adjustable ~
+              arrays is not supported in bocl" vector))
+    (setf (aref vector fp) new-element)
+    (%set-fill-pointer vector (1+ fp))
+    fp))
 
 ;;; ---- Bit-vector operations ----------------------------------------------
 
@@ -5517,8 +5579,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
     (if (<= rel 0) i nil)))
 
 (defun simple-string-p (object)
-  "In bocl every STRING is simple."
-  (stringp object))
+  "A simple string: a string with no fill pointer (bocl has no adjustable
+or displaced strings, so absence of a fill pointer is the only distinction)."
+  (and (stringp object) (not (%fill-pointer-of object))))
 
 ;;; ---- WRITE-TO-STRING with :base ------------------------------------------
 
@@ -7391,18 +7454,32 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
         (dolist (sub (coerce contents 'list)) (setq acc (append acc (%md-flatten sub (1- rank)))))
         acc)))
 
+(defun %fill-pointer-value (fill-pointer size)
+  "Resolve the :FILL-POINTER make-array argument to an integer fill pointer
+for a vector of SIZE elements, or NIL when no fill pointer was requested.
+T means \"the whole vector is active\"; an integer is taken verbatim."
+  (cond ((null fill-pointer) nil)
+        ((eq fill-pointer t)  size)
+        ((integerp fill-pointer)
+         (unless (<= 0 fill-pointer size)
+           (error "MAKE-ARRAY: fill pointer ~S out of range for size ~S"
+                  fill-pointer size))
+         fill-pointer)
+        (t size)))
+
 (defun make-array (dimensions &key initial-element initial-contents
                                    element-type adjustable fill-pointer)
-  element-type adjustable fill-pointer        ; accepted, ignored
+  adjustable                                  ; accepted, ignored
   (let* ((dims (if (listp dimensions) dimensions (list dimensions)))
          (rank (length dims))
-         (total (reduce #'* dims :initial-value 1)))
+         (total (reduce #'* dims :initial-value 1))
+         (fp   (and (= rank 1) (%fill-pointer-value fill-pointer (car dims)))))
     (cond
-      ;; A 1-D array of characters is a STRING.  (Fill-pointers aren't supported,
-      ;; so a :fill-pointer character array still falls through to a vector.)
+      ;; A 1-D array of characters is a STRING.  With a fill pointer it is a
+      ;; non-simple string: the storage holds CAR DIMS chars and the fill
+      ;; pointer (registered below) bounds the active portion.
       ((and (= rank 1)
-            (member element-type '(character base-char standard-char extended-char))
-            (not fill-pointer))
+            (member element-type '(character base-char standard-char extended-char)))
        (let ((s (make-string (car dims)
                              :initial-element (if (characterp initial-element)
                                                   initial-element #\Space))))
@@ -7410,11 +7487,13 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
            (let ((i 0))
              (dolist (e (coerce initial-contents 'list))
                (when (< i (car dims)) (char-set s i e) (incf i)))))
+         (when fp (%set-fill-pointer s fp))
          s))
       ((= rank 1)
        (let ((v (%make-vector-filled (car dims) initial-element)))
          (when initial-contents
            (let ((i 0)) (dolist (e (coerce initial-contents 'list)) (setf (svref v i) e) (incf i))))
+         (when fp (%set-fill-pointer v fp))
          v))
       (t
        (let ((storage (%make-vector-filled total initial-element)))
@@ -7454,6 +7533,10 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
   (lambda (array &rest subs-and-val)
     (let* ((rev (reverse subs-and-val)) (val (car rev)) (subs (reverse (cdr rev))))
       `(aref-set ,val ,array ,@subs))))
+
+;; (SETF (FILL-POINTER vector) value) — moves the active boundary of VECTOR.
+(sethash 'fill-pointer *setf-expanders*
+  (lambda (vector val) `(%set-fill-pointer-checked ,vector ,val)))
 
 (defun row-major-aref (array index)
   (if (%md-array-p array) (svref (%md-array-storage array) index)
