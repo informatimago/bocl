@@ -1,0 +1,68 @@
+Condition system: SIGNAL of a MAKE-CONDITION'd condition doesn't match handlers
+(CLOS / kernel condition-class duality).  + WARN doesn't establish MUFFLE-WARNING.
+
+Context: after the restart-system work (Slices 84-87) the SACLA must-condition file
+went from 58 skipped forms to 3.  The remaining 3, and a class of test FAILURES
+(forms that now run but return the wrong value), all trace to one root cause.
+
+== Symptom ==
+A condition built by MAKE-CONDITION and then SIGNALed is NOT seen by a matching
+HANDLER-BIND / HANDLER-CASE handler — not even for the exact class:
+
+    (let ((r nil))
+      (handler-bind ((simple-warning (lambda (c) (setq r t))))
+        (signal (make-condition 'simple-warning :format-control "x")))
+      r)                                  ; => NIL   (handler never ran)
+
+But conditions built the kernel way DO match:
+
+    (handler-case (error "x")          (error (c) :ok))     ; => :OK
+    (handler-case (signal "x")         (condition () :ok))  ; => :OK  (restart tests rely on this)
+
+== Root cause ==
+MAKE-CONDITION is overridden in the prelude (bootstrap/prelude.lisp ~4273,
+"prefer CLOS class lookup, fall back to kernel"): for a class that is %is-cls it
+calls (make-instance cls ...), producing a CLOS instance.  SIGNAL's handler
+matching (signal_condition in sources/conditions.c) tests
+subclassp(class_of(cond), handler-type-class), where the handler type is resolved
+to a KERNEL condition class (e.g. WARNING_Class).  subclassp does not bridge the
+CLOS instance's class to the kernel condition classes, so the match fails.
+(error "x") / (signal "x") build kernel conditions via build_condition ->
+make_simple_condition, whose class IS a kernel condition class, so subclassp via
+direct_superclasses (wired in kernel_objects.c ~670-694) succeeds.
+
+== The 3 remaining must-condition skips ==
+  - 2x  "INVOKE-RESTART: no active restart named MUFFLE-WARNING" — WARN
+        (kernel_WARN, conditions.c) signals a warning but does NOT establish a
+        MUFFLE-WARNING restart, so a handler that (invoke-restart 'muffle-warning)
+        errors.  CLHS requires WARN to bind that restart around the signal.
+  - 1x  "check_number: expected NUMBER, got NULL" — a separate, unexamined form.
+
+== Attempts (reverted) ==
+  - Lisp WARN wrapping (signal cond) in (restart-case ... (muffle-warning () nil)):
+    establishes the restart correctly, BUT builds the warning with MAKE-CONDITION
+    -> CLOS instance -> the warning handler doesn't match (same root cause), so
+    the warning is not muffled.  Reverted (it is worse than the kernel WARN for
+    handler matching).
+  - subclassp fall-through to direct_superclasses when a clos_class_p class has an
+    empty CPL (kernel.c): did NOT fix the symptom (so class_of of the
+    make-condition'd object is not simply the kernel class, or the CPL is
+    non-empty-but-wrong) and had no observable benefit; reverted.
+
+== Fix options (pick one) ==
+  (a) Make MAKE-CONDITION use the KERNEL constructor for kernel built-in condition
+      classes (simple-warning, simple-error, …) and CLOS make-instance only for
+      user DEFINE-CONDITION classes — so all standard conditions are kernel
+      conditions that subclassp matches.  Cleanest if "is this a kernel condition
+      class" is cheaply testable.
+  (b) Bridge CLOS condition instances to the kernel hierarchy in subclassp /
+      class_of so a CLOS instance of (a subclass of) a kernel condition class
+      matches kernel-class handler types.  Investigate what class_of returns for a
+      (make-instance SIMPLE_WARNING_Class) and whether its CPL includes the kernel
+      condition class objects.
+  (c) Resolve HANDLER-BIND / HANDLER-CASE handler types through the SAME path
+      MAKE-CONDITION uses (CLOS find-class) so both sides are CLOS, and make
+      subclassp consistent across both.
+
+Once (a)/(b)/(c) lands, WARN can be the Lisp restart-case wrapper and the muffle
+tests pass, taking must-condition to ~1 skip (the check_number form).
