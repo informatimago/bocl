@@ -1247,17 +1247,11 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                           string_cstring(prin1_to_string(matched_name)));}
                 Ref varlist   = cadr(restart_spec);
                 Ref body_form = caddr(restart_spec);
-                /* Bind restart arguments to the lambda-list variables. */
+                /* Bind the restart arguments to the clause's lambda-list — a full
+                   ordinary lambda list, so &OPTIONAL / &REST / &KEY are honoured
+                   (the naive positional bind treated &OPTIONAL as a variable). */
                 Ref new_env = environment_new(environment, NIL_Symbol);
-                Ref args = matched_args;
-                dolist(param, varlist){
-                    if(consp(args)){
-                        Ref wrap = env_make_lexical_variable(param, car(args));
-                        environment_add_variable(wrap, new_env);
-                        args = cdr(args);}
-                    else {
-                        Ref wrap = env_make_lexical_variable(param, NIL_Symbol);
-                        environment_add_variable(wrap, new_env);}}
+                bind_required_parameters(NIL_Symbol, varlist, matched_args, new_env);
                 evale(body_form, new_env, results);
                 PASS_VALUES();}}
 
