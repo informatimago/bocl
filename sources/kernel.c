@@ -1580,6 +1580,43 @@ bool bit_vector_equal(Ref a,Ref b){
     return true;}
 
 
+/* FILL POINTERS ----------------------------------------------------------
+   A fill pointer lives inline in the vector's slots block: the untraced
+   `fill_pointer` word of Array (for VECTOR) / OctetArray (for STRING and
+   BIT-VECTOR).  Encoding: 0 = no fill pointer, active length N stored as N+1
+   (so a zeroed/fresh vector has none — see kernel_types.h).  Storing it in the
+   object — rather than an external table — means a vector that becomes garbage
+   is collected normally, with no pinning.  AREF/CHAR/SVREF and *_length keep
+   reading dimensions[0] (the physical size), so they correctly ignore the fill
+   pointer per CLHS; only LENGTH/ELT/STRING and the VECTOR-PUSH family use it. */
+static uword* fill_pointer_loc(Ref v){
+    Ref c=class_of(v);
+    if(c==VECTOR_Class)     return &v->slots->array.fill_pointer;
+    if(c==STRING_Class)     return &v->slots->octet_array.fill_pointer;
+    if(c==BIT_VECTOR_Class) return &v->slots->octet_array.fill_pointer;
+    return NULL;}   /* not a fill-pointer-capable object */
+
+bool array_has_fill_pointer(Ref v){
+    uword* loc=fill_pointer_loc(v);
+    return loc && (*loc!=0);}
+
+/* The fill pointer of V as an INTEGER, or NIL when V has none (or is not a
+   vector at all — callers pass arbitrary objects, e.g. LENGTH). */
+Ref array_fill_pointer(Ref v){
+    uword* loc=fill_pointer_loc(v);
+    return (loc && *loc!=0) ? integer_from_uword(*loc-1) : NIL_Symbol;}
+
+/* Set V's fill pointer to FP (a non-negative integer), registering V as having
+   one.  Errors if V cannot carry a fill pointer. */
+Ref array_set_fill_pointer(Ref v,Ref fp){
+    uword* loc=fill_pointer_loc(v);
+    if(!loc){ TYPE_ERROR(v,VECTOR_Class); }
+    word f=integer_value(fp);
+    if(f<0){ ERROR("fill pointer must be non-negative, got %" WORD_FORMAT,f); }
+    *loc=(uword)f+1;
+    return fp;}
+
+
 /* CLASS */
 
 Class* Class_slots(Ref name,Ref superclasses){

@@ -476,26 +476,26 @@
 ;; -------------------------------------------------------------------- ;;
 
 ;; -------------------------------------------------------------------- ;;
-;;  Fill-pointer arrays.  bocl strings/vectors carry no spare field for a ;;
-;;  fill pointer, so we attach it externally: an EQ table keyed on the    ;;
-;;  (genuine) array object maps it to its current fill pointer.  Because  ;;
-;;  the array itself stays a real bocl string/vector, AREF/CHAR/SVREF/    ;;
-;;  STRINGP/VECTORP keep working natively and correctly *ignore* the fill ;;
-;;  pointer (per CLHS aref/char); only the length-sensitive operators —   ;;
-;;  LENGTH, the STRING coercion, and the VECTOR-PUSH/POP family — consult ;;
-;;  this table.  (Defined here, before LENGTH, so the predicate is bound  ;;
-;;  no matter when LENGTH is first called during prelude load.)           ;;
+;;  Fill-pointer arrays.  The fill pointer is stored INLINE in the        ;;
+;;  vector's kernel slots block (an untraced word on Array for VECTOR and ;;
+;;  OctetArray for STRING / BIT-VECTOR), reached via the kernel           ;;
+;;  primitives %ARRAY-FILL-POINTER / %SET-ARRAY-FILL-POINTER.  Storing it ;;
+;;  on the object — rather than an external table — means a fill-pointer  ;;
+;;  vector is collected normally once dead, with no pinning.  The array   ;;
+;;  itself stays a real bocl string/vector, so AREF/CHAR/SVREF/STRINGP/   ;;
+;;  VECTORP keep working natively and correctly *ignore* the fill pointer ;;
+;;  (per CLHS aref/char); only the length-sensitive operators — LENGTH,   ;;
+;;  the STRING coercion, and the VECTOR-PUSH/POP family — consult it.     ;;
+;;  %ARRAY-FILL-POINTER returns NIL for any non-fill-pointer object, so   ;;
+;;  %FILL-POINTER-OF is safe to call on arbitrary values (e.g. in LENGTH).;;
 ;; -------------------------------------------------------------------- ;;
-(defvar *fill-pointers* (make-hash-table :test 'eq)
-  "EQ table mapping a fill-pointer array object to its current fill pointer.")
-
 (defun %fill-pointer-of (array)
-  "The current fill pointer of ARRAY, or NIL if ARRAY has none."
-  (gethash array *fill-pointers*))
+  "The current fill pointer of ARRAY (an integer), or NIL if it has none."
+  (%array-fill-pointer array))
 
 (defun %set-fill-pointer (array fp)
   "Set ARRAY's fill pointer to FP (registers ARRAY as fill-pointered)."
-  (setf (gethash array *fill-pointers*) fp))
+  (%set-array-fill-pointer array fp))
 
 (defun length (seq)
   (cond ((null seq)        0)

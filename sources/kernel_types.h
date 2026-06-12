@@ -251,10 +251,17 @@ typedef struct Float {
     floating value;
 } Float;
 
+/* fill_pointer is an UNTRACED inline word (objcount stays 2, so the collector
+   marks only element_type + elements and ignores it).  Encoding: 0 means "no
+   fill pointer"; an active length of N is stored as N+1.  Because allocate()
+   zeroes every block body, a freshly built vector/string/bit-vector carries no
+   fill pointer automatically — no constructor change, and no missed allocation
+   site can masquerade as fill pointer 0.  See array_fill_pointer() in kernel.c. */
 typedef struct Array {
     BLOCK_HEADER;
     Ref element_type;
     VectorOfObject* elements;
+    uword fill_pointer;        /* 0 = none; else active-length + 1 (see above) */
     uword VARRAY(dimensions);
 } Array;
 
@@ -262,6 +269,7 @@ typedef struct OctetArray {
     BLOCK_HEADER;
     Ref element_type;
     VectorOfOctet* elements;
+    uword fill_pointer;        /* 0 = none; else active-length + 1 (see above) */
     uword VARRAY(dimensions);
 } OctetArray;
 

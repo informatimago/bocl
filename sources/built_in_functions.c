@@ -1490,6 +1490,36 @@ void kernel_VECTOR_LENGTH(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);
 }
 
+/* %ARRAY-FILL-POINTER vector  ->  the fill pointer (integer) or NIL.
+   Accepts any object (LENGTH calls it on arbitrary values): non-vectors and
+   vectors without a fill pointer both return NIL. */
+void kernel_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_vector = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = array_fill_pointer(par_vector);
+    close_live_pool(pool);
+}
+
+/* %SET-ARRAY-FILL-POINTER vector fill-pointer  ->  fill-pointer.  Stores the
+   fill pointer inline in the vector's slots block. */
+void kernel_SET_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_vector = pop_mandatory_argument(function,&current);
+    Ref par_fill_pointer = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = array_set_fill_pointer(par_vector,par_fill_pointer);
+    close_live_pool(pool);
+}
+
 void kernel_SVREF(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function);
@@ -2846,6 +2876,12 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(VECTOR-LENGTH);
         Ref lambda_list=list(S(VECTOR),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_VECTOR_LENGTH));}
+    {   Ref fname=symbol_intern_cstring("%ARRAY-FILL-POINTER");
+        Ref lambda_list=list(S(VECTOR),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ARRAY_FILL_POINTER));}
+    {   Ref fname=symbol_intern_cstring("%SET-ARRAY-FILL-POINTER");
+        Ref lambda_list=list(S(VECTOR),S(FILL-POINTER),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SET_ARRAY_FILL_POINTER));}
     {   Ref fname=S(SVREF);
         Ref lambda_list=list(S(VECTOR),S(INDEX),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SVREF));}
