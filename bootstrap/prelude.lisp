@@ -218,8 +218,17 @@
 ;;  Iteration macros.                                                    ;;
 ;; -------------------------------------------------------------------- ;;
 
+(defun %strip-declares (body)
+  "Drop leading (declare ...) forms from an implicit-progn BODY (bocl ignores
+   declaration content but must not evaluate `declare` as a function)."
+  (if (and (consp body) (consp (car body)) (eq (caar body) 'declare))
+      (%strip-declares (cdr body))
+      body))
+
 (defmacro dolist (head &body body)
-  ;; (dolist (var list-form [result-form]) body...) — minimal form.
+  ;; (dolist (var list-form [result-form]) declaration* body...)
+  ;; The result-form is evaluated INSIDE the var's binding (var bound to NIL,
+  ;; per CLHS), not outside it.
   (let ((var       (first head))
         (list-form (second head))
         (result    (third head)))
@@ -232,13 +241,15 @@
                   (go dolist-done))
               (setq ,var (car dolist-list))
               (setq dolist-list (cdr dolist-list))
-              ,@body
+              ,@(%strip-declares body)
               (go dolist-loop)
-              dolist-done))
-         ,result))))
+              dolist-done)
+           (setq ,var nil)
+           ,result)))))
 
 (defmacro dotimes (head &body body)
-  ;; (dotimes (var count-form [result-form]) body...)
+  ;; (dotimes (var count-form [result-form]) declaration* body...)
+  ;; The result-form is evaluated INSIDE the var's binding, with var = count.
   (let ((var         (first head))
         (count-form  (second head))
         (result      (third head)))
@@ -249,11 +260,11 @@
               dotimes-loop
               (if (>= ,var dotimes-count)
                   (go dotimes-done))
-              ,@body
+              ,@(%strip-declares body)
               (setq ,var (+ ,var 1))
               (go dotimes-loop)
-              dotimes-done))
-         ,result))))
+              dotimes-done)
+           ,result)))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Control macros (slice 3): CASE / ECASE / TYPECASE / ETYPECASE,       ;;
@@ -376,7 +387,7 @@
              (tagbody
                 ,loop
                 (if ,(car endlist) (go ,done))
-                ,@body
+                ,@(%strip-declares body)
                 (let ,(mapcar (lambda (tr) (list (car tr) (caddr tr))) trs)
                   ,@(mapcar (lambda (tr) (list 'setq (cadr tr) (car tr))) trs))
                 (go ,loop)
@@ -395,7 +406,7 @@
          (tagbody
             ,loop
             (if ,(car endlist) (go ,done))
-            ,@body
+            ,@(%strip-declares body)
             ,@(mapcar
                (lambda (v)
                  (if (and (consp v) (consp (cddr v)))
@@ -7166,8 +7177,10 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
               (setq dolist-list (cdr dolist-list))
               ,@real-body
               (go dolist-loop)
-              dolist-done))
-         ,result))))
+              dolist-done)
+           ;; CLHS: result-form is evaluated INSIDE var's scope, with var = NIL.
+           (setq ,var nil)
+           ,result)))))
 
 (defmacro dotimes (head &body body)
   (let ((var        (first head))
@@ -7183,8 +7196,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
               ,@real-body
               (setq ,var (+ ,var 1))
               (go dotimes-loop)
-              dotimes-done))
-         ,result))))
+              dotimes-done)
+           ;; CLHS: result-form evaluated INSIDE var's scope, with var = count.
+           ,result)))))
 
 ;;; ---- Per-form LOAD recovery (used under -on-error appease) ----------------
 ;;; LOAD normally aborts the whole file on the first error.  When the kernel
@@ -7415,6 +7429,10 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
 (defun array-dimensions (array)
   (if (%md-array-p array) (copy-list (%md-array-dimensions array))
       (funcall *%kernel-array-dimensions* array)))
+
+(defun array-dimension (array axis-number)
+  "The length of dimension AXIS-NUMBER of ARRAY."
+  (nth axis-number (array-dimensions array)))
 
 (defun aref (array &rest subscripts)
   (if (%md-array-p array)
