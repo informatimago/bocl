@@ -489,18 +489,32 @@
 ;;  %ARRAY-FILL-POINTER returns NIL for any non-fill-pointer object, so   ;;
 ;;  %FILL-POINTER-OF is safe to call on arbitrary values (e.g. in LENGTH).;;
 ;; -------------------------------------------------------------------- ;;
+
+;; Forward placeholder: the real predicate comes from the %md-array DEFSTRUCT
+;; (much later in this file).  Several early functions — %FILL-POINTER-OF,
+;; STRING, LENGTH — must consult it, but no %md-array exists until MAKE-ARRAY
+;; runs (well after the defstruct), so NIL is the correct answer during load.
+(defun %md-array-p (x) x nil)
+
+;; A complex array (adjustable / displaced / multi-dimensional) is represented
+;; by a %md-array struct and keeps its fill pointer in a struct slot; a simple
+;; vector/string/bit-vector keeps it in the kernel object field.
 (defun %fill-pointer-of (array)
   "The current fill pointer of ARRAY (an integer), or NIL if it has none."
-  (%array-fill-pointer array))
+  (if (%md-array-p array) (%md-array-fill-pointer array) (%array-fill-pointer array)))
 
 (defun %set-fill-pointer (array fp)
   "Set ARRAY's fill pointer to FP (registers ARRAY as fill-pointered)."
-  (%set-array-fill-pointer array fp))
+  (if (%md-array-p array) (setf (%md-array-fill-pointer array) fp) (%set-array-fill-pointer array fp)))
 
 (defun length (seq)
   (cond ((null seq)        0)
         ((consp seq)       (list-length seq))
         ((%fill-pointer-of seq))            ; fill-pointer array: active length
+        ((%md-array-p seq)                  ; adjustable/displaced 1-D vector
+         (let ((d (%md-array-dimensions seq)))
+           (if (and d (null (cdr d))) (car d)
+               (error "LENGTH: ~S is not a sequence" seq))))
         ((stringp seq)     (string-length seq))
         ((vectorp seq)     (vector-length seq))
         ((bit-vector-p seq)(bit-vector-length seq))
@@ -510,6 +524,7 @@
   ;; NOTE: bit-vector-p and stringp must come BEFORE vectorp because
   ;; bit-vectors and strings are subtypes of vector in bocl.
   (cond ((consp seq)        (nth i seq))
+        ((%md-array-p seq)  (row-major-aref seq i)) ; 1-D adjustable/displaced vector
         ((stringp seq)      (char seq i))
         ((bit-vector-p seq) (bit seq i))
         ((vectorp seq)      (svref seq i))
@@ -745,7 +760,7 @@
          (cond ((null seq))
                ((consp seq)
                 (dolist (x seq) (push x acc)))
-               ((or (stringp seq) (vectorp seq) (bit-vector-p seq))
+               ((or (stringp seq) (vectorp seq) (bit-vector-p seq) (%md-array-p seq))
                 (dotimes (i (length seq))
                   (push (elt seq i) acc)))
                (t (error "CONCATENATE: not a sequence"))))
@@ -1122,6 +1137,13 @@
          ;; prefix only, so string functions see the correct length.
          (subseq designator 0 (%fill-pointer-of designator)))
         ((stringp designator) designator)
+        ;; A character %md-array (an adjustable or displaced string): build a
+        ;; fresh simple string from its active elements in row-major order.
+        ((and (%md-array-p designator)
+              (eq (%md-array-element-type designator) 'character))
+         (let* ((n (or (%fill-pointer-of designator) (array-total-size designator)))
+                (s (make-string n)))
+           (dotimes (i n s) (char-set s i (row-major-aref designator i)))))
         ((symbolp designator) (symbol-name designator))
         ((characterp designator)
          (let ((s (make-string 1)))
@@ -4757,8 +4779,8 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
   new)
 
 (defun adjustable-array-p (array)
-  "Return T if ARRAY is adjustable.  Bocl arrays aren't; always NIL."
-  array nil)
+  "Return T if ARRAY is adjustable."
+  (and (%md-array-p array) (%md-array-adjustable array) t))
 
 (defun simple-vector-p (object)
   "Return T if OBJECT is a simple (non-adjustable, no fill-pointer) vector."
@@ -7585,21 +7607,85 @@ result array; return that array."
 (defvar *%kernel-array-dimensions* (symbol-function 'array-dimensions))
 (defvar *%kernel-arrayp*           (symbol-function 'arrayp))
 
+;; %md-array is the representation for every "complex" array — multi-dimensional,
+;; adjustable, or displaced — of any element type.  Simple 1-D vectors/strings/
+;; bit-vectors stay kernel objects.
 (defstruct (%md-array (:predicate %md-array-p) (:copier nil))
-  dimensions   ; list of dimension sizes
-  storage)     ; flat row-major simple-vector
+  dimensions            ; list of dimension sizes
+  storage               ; flat row-major storage (simple-vector / string / bit-vector); NIL if displaced
+  (element-type t)      ; canonical element type: T / CHARACTER / BIT
+  (fill-pointer nil)    ; integer fill pointer, or NIL
+  (displaced-to nil)    ; the array this one is displaced onto, or NIL
+  (displaced-offset 0)  ; index offset into the target's row-major storage
+  (adjustable nil))     ; T if adjustable
 
 (defun %make-vector-filled (n initial-element)
   (let ((lst nil)) (dotimes (i n) (push initial-element lst)) (apply #'vector lst)))
 
-;; A %md-array's STORAGE is normally a simple-vector, but a multi-dimensional
-;; :ELEMENT-TYPE BIT array stores its bits in a BIT-VECTOR instead.  SVREF would
-;; misread that (octet bytes as object refs), so all flat storage access goes
-;; through these two dispatchers.
+;; Flat storage access dispatches on the storage kind: strings hold octets read
+;; with CHAR, bit-vectors with BIT, everything else with SVREF.  (SVREF would
+;; misread octet storage as object references.)
 (defun %storage-ref (storage index)
-  (if (bit-vector-p storage) (bit storage index) (svref storage index)))
+  (cond ((stringp storage) (char storage index))
+        ((bit-vector-p storage) (bit storage index))
+        (t (svref storage index))))
 (defun %storage-set (storage index value)
-  (if (bit-vector-p storage) (bit-set storage index value) (setf (svref storage index) value)))
+  (cond ((stringp storage) (char-set storage index value))
+        ((bit-vector-p storage) (bit-set storage index value))
+        (t (setf (svref storage index) value)))
+  value)
+
+;; Row-major element access on a %md-array, FOLLOWING displacement: a displaced
+;; array reads/writes its target's storage at (displaced-offset + index).
+(defun %md-rmref (array index)
+  (let ((target (%md-array-displaced-to array)))
+    (if target
+        (row-major-aref target (+ (%md-array-displaced-offset array) index))
+        (%storage-ref (%md-array-storage array) index))))
+(defun %md-rmset (array index value)
+  (let ((target (%md-array-displaced-to array)))
+    (if target
+        (setf (row-major-aref target (+ (%md-array-displaced-offset array) index)) value)
+        (%storage-set (%md-array-storage array) index value)))
+  value)
+
+;; Canonical element type (T / CHARACTER / BIT) for storage selection.
+(defun %canon-element-type (element-type)
+  (cond ((member element-type '(character base-char standard-char extended-char)) 'character)
+        ((eq element-type 'bit) 'bit)
+        (t t)))
+
+;; Make + fill flat storage of TOTAL elements of (canonical) ELEMENT-TYPE.
+(defun %make-typed-storage (element-type total initial-element initial-contents rank)
+  (let ((storage (cond ((eq element-type 'character)
+                        (make-string total :initial-element
+                                     (if (characterp initial-element) initial-element #\Space)))
+                       ((eq element-type 'bit)
+                        (make-bit-vector total (if (integerp initial-element) initial-element 0)))
+                       (t (%make-vector-filled total initial-element)))))
+    (when initial-contents
+      (let ((flat (if (<= rank 1) (coerce initial-contents 'list) (%md-flatten initial-contents rank)))
+            (i 0))
+        (dolist (e flat) (when (< i total) (%storage-set storage i e) (incf i)))))
+    storage))
+
+;; Decode a row-major index back to its subscript list for an array of DIMS.
+(defun %decode-subscripts (rm dims)
+  (let ((subs nil) (r rm))
+    (dolist (d (reverse dims) subs)
+      (push (mod r d) subs)
+      (setq r (floor r d)))))
+
+;; Copy elements at coinciding SUBSCRIPTS (not row-major positions) from OLD
+;; (its current storage) into NEW-STORAGE — the element-preserving rule of
+;; ADJUST-ARRAY when dimensions change.
+(defun %array-copy-overlap (old old-dims new-storage new-dims)
+  (let* ((overlap (mapcar #'min old-dims new-dims))
+         (otot    (reduce #'* overlap :initial-value 1)))
+    (dotimes (k otot)
+      (let ((subs (%decode-subscripts k overlap)))
+        (%storage-set new-storage (%md-row-major-index new-dims subs)
+                      (row-major-aref old (%md-row-major-index old-dims subs)))))))
 
 (defun %md-row-major-index (dimensions subscripts)
   (let ((index 0) (ss subscripts))
@@ -7638,13 +7724,27 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
         (t size)))
 
 (defun make-array (dimensions &key initial-element initial-contents
-                                   element-type adjustable fill-pointer)
-  adjustable                                  ; accepted, ignored
+                                   element-type adjustable fill-pointer
+                                   displaced-to displaced-index-offset)
   (let* ((dims (if (listp dimensions) dimensions (list dimensions)))
          (rank (length dims))
          (total (reduce #'* dims :initial-value 1))
+         (et   (%canon-element-type element-type))
          (fp   (and (= rank 1) (%fill-pointer-value fill-pointer (car dims)))))
     (cond
+      ;; Displaced array: shares the target's storage; element access redirects
+      ;; to the target at the given offset.  Any rank, any element type.
+      (displaced-to
+       (make-%md-array :dimensions dims :storage nil :element-type et :fill-pointer fp
+                       :displaced-to displaced-to
+                       :displaced-offset (or displaced-index-offset 0)
+                       :adjustable (and adjustable t)))
+      ;; Adjustable array: a %md-array wrapper (any rank) with its own typed
+      ;; storage, so ADJUST-ARRAY can resize it in place, preserving identity.
+      (adjustable
+       (make-%md-array :dimensions dims
+                       :storage (%make-typed-storage et total initial-element initial-contents rank)
+                       :element-type et :fill-pointer fp :adjustable t))
       ;; A 1-D array of characters is a STRING.  With a fill pointer it is a
       ;; non-simple string: the storage holds CAR DIMS chars and the fill
       ;; pointer (registered below) bounds the active portion.
@@ -7688,7 +7788,7 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
            (let ((flat (if (= rank 0) (list initial-contents) (%md-flatten initial-contents rank)))
                  (i 0))
              (dolist (e flat) (%storage-set storage i e) (incf i))))
-         (make-%md-array :dimensions dims :storage storage))))))
+         (make-%md-array :dimensions dims :storage storage :element-type et))))))
 
 (defun arrayp (x) (or (%md-array-p x) (funcall *%kernel-arrayp* x)))
 
@@ -7702,16 +7802,12 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
 
 (defun aref (array &rest subscripts)
   (if (%md-array-p array)
-      (%storage-ref (%md-array-storage array)
-                    (%md-row-major-index (%md-array-dimensions array) subscripts))
+      (%md-rmref array (%md-row-major-index (%md-array-dimensions array) subscripts))
       (apply *%kernel-aref* array subscripts)))
 
 (defun aref-set (value array &rest subscripts)
   (if (%md-array-p array)
-      (progn (%storage-set (%md-array-storage array)
-                           (%md-row-major-index (%md-array-dimensions array) subscripts)
-                           value)
-             value)
+      (%md-rmset array (%md-row-major-index (%md-array-dimensions array) subscripts) value)
       (apply *%kernel-aref-set* value array subscripts)))
 
 ;; (SETF (AREF array sub...) value) — variadic; the value is the last arg the
@@ -7727,8 +7823,8 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
 
 (defun row-major-aref (array index)
   ;; Strings and bit-vectors are vector subtypes whose storage is octets, so
-  ;; SVREF would misread them — use CHAR / BIT.
-  (cond ((%md-array-p array)   (%storage-ref (%md-array-storage array) index))
+  ;; SVREF would misread them — use CHAR / BIT.  %md-arrays follow displacement.
+  (cond ((%md-array-p array)   (%md-rmref array index))
         ((stringp array)       (char array index))
         ((bit-vector-p array)  (bit array index))
         (t                     (svref array index))))
@@ -7736,13 +7832,63 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
 (define-setf-expander row-major-aref (array index) (val)
   `(row-major-aref-set ,val ,array ,index))
 (defun row-major-aref-set (value array index)
-  (cond ((%md-array-p array)   (%storage-set (%md-array-storage array) index value) value)
+  (cond ((%md-array-p array)   (%md-rmset array index value))
         ((stringp array)       (char-set array index value) value)
         ((bit-vector-p array)  (bit-set array index value) value)
         (t                     (setf (svref array index) value) value)))
 
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
+
+;;; ---- Displaced and adjustable arrays -------------------------------------
+
+(defun array-displacement (array)
+  "Two values: the array ARRAY is displaced to (or NIL), and the displacement
+offset (0 when not displaced)."
+  (if (%md-array-p array)
+      (values (%md-array-displaced-to array) (%md-array-displaced-offset array))
+      (values nil 0)))
+
+(defun adjust-array (array new-dimensions &key (initial-element nil)
+                                               initial-contents fill-pointer
+                                               element-type
+                                               displaced-to displaced-index-offset)
+  "Change the dimensions of ARRAY.  When ARRAY is a %md-array (i.e. adjustable),
+it is modified in place and the SAME object is returned; otherwise a fresh
+adjustable %md-array is returned.  Without :DISPLACED-TO or :INITIAL-CONTENTS,
+elements at subscripts present in both the old and new array are preserved and
+the rest take :INITIAL-ELEMENT."
+  (let* ((new-dims (if (listp new-dimensions) new-dimensions (list new-dimensions)))
+         (rank     (length new-dims))
+         (new-total (reduce #'* new-dims :initial-value 1))
+         (et       (if element-type
+                       (%canon-element-type element-type)
+                       (if (%md-array-p array) (%md-array-element-type array) t)))
+         (old-dims (array-dimensions array))
+         (new-fp   (and fill-pointer (= rank 1) (%fill-pointer-value fill-pointer (car new-dims))))
+         ;; Storage / displacement for the result.
+         (target   displaced-to)
+         (offset   (or displaced-index-offset 0))
+         (storage  (cond (displaced-to nil)
+                         (initial-contents
+                          (%make-typed-storage et new-total initial-element initial-contents rank))
+                         (t
+                          (let ((s (%make-typed-storage et new-total initial-element nil 0)))
+                            (%array-copy-overlap array old-dims s new-dims)
+                            s)))))
+    (cond
+      ((%md-array-p array)
+       (setf (%md-array-dimensions array)       new-dims
+             (%md-array-storage array)          storage
+             (%md-array-element-type array)     et
+             (%md-array-displaced-to array)     target
+             (%md-array-displaced-offset array) offset)
+       (when fill-pointer (setf (%md-array-fill-pointer array) new-fp))
+       array)
+      (t
+       (make-%md-array :dimensions new-dims :storage storage :element-type et
+                       :fill-pointer new-fp :adjustable t
+                       :displaced-to target :displaced-offset offset)))))
 
 ;;; ---- EQUALP on vectors and arrays ----------------------------------------
 ;;; The kernel EQUALP handles numbers/characters/strings/conses but falls back
