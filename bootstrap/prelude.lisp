@@ -7726,17 +7726,20 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
   (lambda (vector val) `(%set-fill-pointer-checked ,vector ,val)))
 
 (defun row-major-aref (array index)
-  (if (%md-array-p array) (%storage-ref (%md-array-storage array) index)
-      (if (bit-vector-p array) (bit array index) (svref array index))))
+  ;; Strings and bit-vectors are vector subtypes whose storage is octets, so
+  ;; SVREF would misread them — use CHAR / BIT.
+  (cond ((%md-array-p array)   (%storage-ref (%md-array-storage array) index))
+        ((stringp array)       (char array index))
+        ((bit-vector-p array)  (bit array index))
+        (t                     (svref array index))))
 
 (define-setf-expander row-major-aref (array index) (val)
   `(row-major-aref-set ,val ,array ,index))
 (defun row-major-aref-set (value array index)
-  (if (%md-array-p array)
-      (progn (%storage-set (%md-array-storage array) index value) value)
-      (if (bit-vector-p array)
-          (progn (bit-set array index value) value)
-          (progn (setf (svref array index) value) value))))
+  (cond ((%md-array-p array)   (%storage-set (%md-array-storage array) index value) value)
+        ((stringp array)       (char-set array index value) value)
+        ((bit-vector-p array)  (bit-set array index value) value)
+        (t                     (setf (svref array index) value) value)))
 
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
