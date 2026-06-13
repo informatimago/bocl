@@ -6348,18 +6348,29 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
 ;;; bit-vector stores the result there.  Reads are always taken before the
 ;;; same-index write, so destructive use (result EQ an input) is safe.
 
+;; The bit-* ops accept bit-vectors AND multi-dimensional bit arrays.  Both are
+;; addressed through their flat row-major storage via ROW-MAJOR-AREF (which knows
+;; how to reach the bits of either), %BIT-SIZE gives the element count, and a NIL
+;; result-arg makes a fresh bit array of the SAME shape as the first operand.
+(defun %bit-size (a)
+  (if (%md-array-p a) (array-total-size a) (length a)))
+
 (defun %bit-result-vector (v1 result-bit-array)
-  (cond ((null result-bit-array) (make-bit-vector (length v1) 0))
+  (cond ((null result-bit-array)
+         (if (%md-array-p v1)
+             (make-array (array-dimensions v1) :element-type 'bit)
+             (make-bit-vector (length v1) 0)))
         ((eq result-bit-array t) v1)
         (t result-bit-array)))
 
 (defun %bit-binop (fn v1 v2 result-bit-array)
   "Apply binary bit function FN element-wise to V1 and V2 into the resolved
-result vector; return that vector."
+result array; return that array."
   (let ((out (%bit-result-vector v1 result-bit-array))
-        (len (length v1)))
-    (dotimes (i len out)
-      (bit-set out i (logand 1 (funcall fn (bit v1 i) (bit v2 i)))))))
+        (n   (%bit-size v1)))
+    (dotimes (i n out)
+      (setf (row-major-aref out i)
+            (logand 1 (funcall fn (row-major-aref v1 i) (row-major-aref v2 i)))))))
 
 (defun bit-and   (v1 v2 &optional r) (%bit-binop #'logand v1 v2 r))
 (defun bit-ior   (v1 v2 &optional r) (%bit-binop #'logior v1 v2 r))
@@ -6374,11 +6385,11 @@ result vector; return that vector."
 (defun bit-orc2  (v1 v2 &optional r) (%bit-binop (lambda (a b) (logior a (logxor b 1))) v1 v2 r))
 
 (defun bit-not (v1 &optional result-bit-array)
-  "Return a bit-vector with all bits of V1 flipped (see RESULT-BIT-ARRAY above)."
+  "Return a bit array with all bits of V1 flipped (see RESULT-BIT-ARRAY above)."
   (let ((out (%bit-result-vector v1 result-bit-array))
-        (len (length v1)))
-    (dotimes (i len out)
-      (bit-set out i (logxor (bit v1 i) 1)))))
+        (n   (%bit-size v1)))
+    (dotimes (i n out)
+      (setf (row-major-aref out i) (logxor (row-major-aref v1 i) 1)))))
 
 ;;; ---- REVERSE for strings and vectors (kernel handles lists) ---------------
 
@@ -7581,6 +7592,15 @@ result vector; return that vector."
 (defun %make-vector-filled (n initial-element)
   (let ((lst nil)) (dotimes (i n) (push initial-element lst)) (apply #'vector lst)))
 
+;; A %md-array's STORAGE is normally a simple-vector, but a multi-dimensional
+;; :ELEMENT-TYPE BIT array stores its bits in a BIT-VECTOR instead.  SVREF would
+;; misread that (octet bytes as object refs), so all flat storage access goes
+;; through these two dispatchers.
+(defun %storage-ref (storage index)
+  (if (bit-vector-p storage) (bit storage index) (svref storage index)))
+(defun %storage-set (storage index value)
+  (if (bit-vector-p storage) (bit-set storage index value) (setf (svref storage index) value)))
+
 (defun %md-row-major-index (dimensions subscripts)
   (let ((index 0) (ss subscripts))
     (dolist (d dimensions)
@@ -7657,11 +7677,17 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
          (when fp (%set-fill-pointer v fp))
          v))
       (t
-       (let ((storage (%make-vector-filled total initial-element)))
+       ;; A multi-dimensional :ELEMENT-TYPE BIT array stores its bits in a
+       ;; bit-vector (so AREF/ROW-MAJOR-AREF read/write real bits, and the bit-*
+       ;; ops can operate on the flat storage); other element types use a
+       ;; simple-vector.
+       (let ((storage (if (eq element-type 'bit)
+                          (make-bit-vector total (if (integerp initial-element) initial-element 0))
+                          (%make-vector-filled total initial-element))))
          (when initial-contents
            (let ((flat (if (= rank 0) (list initial-contents) (%md-flatten initial-contents rank)))
                  (i 0))
-             (dolist (e flat) (setf (svref storage i) e) (incf i))))
+             (dolist (e flat) (%storage-set storage i e) (incf i))))
          (make-%md-array :dimensions dims :storage storage))))))
 
 (defun arrayp (x) (or (%md-array-p x) (funcall *%kernel-arrayp* x)))
@@ -7676,15 +7702,15 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
 
 (defun aref (array &rest subscripts)
   (if (%md-array-p array)
-      (svref (%md-array-storage array)
-             (%md-row-major-index (%md-array-dimensions array) subscripts))
+      (%storage-ref (%md-array-storage array)
+                    (%md-row-major-index (%md-array-dimensions array) subscripts))
       (apply *%kernel-aref* array subscripts)))
 
 (defun aref-set (value array &rest subscripts)
   (if (%md-array-p array)
-      (progn (setf (svref (%md-array-storage array)
-                          (%md-row-major-index (%md-array-dimensions array) subscripts))
-                   value)
+      (progn (%storage-set (%md-array-storage array)
+                           (%md-row-major-index (%md-array-dimensions array) subscripts)
+                           value)
              value)
       (apply *%kernel-aref-set* value array subscripts)))
 
@@ -7700,18 +7726,52 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
   (lambda (vector val) `(%set-fill-pointer-checked ,vector ,val)))
 
 (defun row-major-aref (array index)
-  (if (%md-array-p array) (svref (%md-array-storage array) index)
-      (svref array index)))
+  (if (%md-array-p array) (%storage-ref (%md-array-storage array) index)
+      (if (bit-vector-p array) (bit array index) (svref array index))))
 
 (define-setf-expander row-major-aref (array index) (val)
   `(row-major-aref-set ,val ,array ,index))
 (defun row-major-aref-set (value array index)
   (if (%md-array-p array)
-      (progn (setf (svref (%md-array-storage array) index) value) value)
-      (progn (setf (svref array index) value) value)))
+      (progn (%storage-set (%md-array-storage array) index value) value)
+      (if (bit-vector-p array)
+          (progn (bit-set array index value) value)
+          (progn (setf (svref array index) value) value))))
 
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
+
+;;; ---- EQUALP on vectors and arrays ----------------------------------------
+;;; The kernel EQUALP handles numbers/characters/strings/conses but falls back
+;;; to EQUAL (identity) for vectors and arrays.  CLHS requires EQUALP to compare
+;;; arrays of the same rank/dimensions element-wise (each pair EQUALP).  Wrap it.
+(defvar *%old-equalp* (symbol-function 'equalp))
+
+(defun %equalp-seq (a b n)
+  "True if ROW-MAJOR elements [0,N) of arrays A and B are pairwise EQUALP."
+  (dotimes (i n t)
+    (unless (equalp (row-major-aref a i) (row-major-aref b i))
+      (return nil))))
+
+(defun equalp (a b)
+  (cond
+    ((eq a b) t)
+    ;; Conses: recurse with THIS equalp so nested arrays compare by content too.
+    ((consp a) (and (consp b) (equalp (car a) (car b)) (equalp (cdr a) (cdr b))))
+    ;; Multi-dimensional arrays: same dimensions + element-wise EQUALP.
+    ((%md-array-p a)
+     (and (%md-array-p b)
+          (equal (array-dimensions a) (array-dimensions b))
+          (%equalp-seq a b (array-total-size a))))
+    ;; Vectors (incl. bit-vectors), but NOT strings — the kernel does those,
+    ;; case-insensitively.  A vector is EQUALP only to another non-string vector
+    ;; of the same length with element-wise-EQUALP contents.
+    ((and (vectorp a) (not (stringp a)))
+     (and (vectorp b) (not (stringp b))
+          (= (length a) (length b))
+          (%equalp-seq a b (length a))))
+    ;; Numbers, characters, strings, structures, hash-tables: the kernel EQUALP.
+    (t (funcall *%old-equalp* a b))))
 
 ;;; ---- #n= / #n# label fixup (shared and circular structure) --------------
 ;;; A #n# read before its #n= finishes yields a placeholder %READ-REF; once the
