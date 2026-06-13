@@ -2660,6 +2660,23 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
     ;; List identity
     ((and (listp object) (member result-type '(list cl:list)))
      object)
+    ;; ---- BIT-VECTOR branches MUST precede the VECTOR branches: a bit-vector
+    ;; is a vector subtype, but its storage is octets, so SVREF would misread it
+    ;; (reading octet bytes as object references).  Use the BIT accessor instead.
+    ((and (bit-vector-p object) (member result-type '(bit-vector simple-bit-vector)))
+     object)
+    ((and (bit-vector-p object) (member result-type '(list cl:list)))
+     (let ((acc nil))
+       (dotimes (i (length object) (nreverse acc))
+         (push (bit object i) acc))))
+    ((and (bit-vector-p object) (member result-type '(vector simple-vector)))
+     (let* ((len (length object)) (v (make-array len)))
+       (dotimes (i len v) (setf (svref v i) (bit object i)))))
+    ;; LIST / VECTOR / STRING → BIT-VECTOR
+    ((and (or (listp object) (vectorp object))
+          (member result-type '(bit-vector simple-bit-vector)))
+     (let* ((len (length object)) (b (make-bit-vector len 0)))
+       (dotimes (i len b) (setf (bit b i) (elt object i)))))
     ;; Vector identity
     ((and (vectorp object) (member result-type '(vector simple-vector)))
      object)
@@ -4792,25 +4809,7 @@ behaves exactly like VECTOR-PUSH and always succeeds."
     (%set-fill-pointer vector (1+ fp))
     fp))
 
-;;; ---- Bit-vector operations ----------------------------------------------
-
-;; Bit-vector operations — the kernel's BIT accessor has a struct-layout
-;; mismatch (Array vs OctetArray) that causes it to return wrong values.
-;; These stubs accept the args and raise a clear error for now.
-(defun %bv-unimplemented (name &rest args)
-  args  ; ignored
-  (error "Bit-vector operation ~S not yet supported in bocl (kernel bug)" name))
-(defun bit-and   (v1 v2 &optional r) r (%bv-unimplemented 'bit-and   v1 v2))
-(defun bit-or    (v1 v2 &optional r) r (%bv-unimplemented 'bit-or    v1 v2))
-(defun bit-xor   (v1 v2 &optional r) r (%bv-unimplemented 'bit-xor   v1 v2))
-(defun bit-eqv   (v1 v2 &optional r) r (%bv-unimplemented 'bit-eqv   v1 v2))
-(defun bit-nand  (v1 v2 &optional r) r (%bv-unimplemented 'bit-nand  v1 v2))
-(defun bit-nor   (v1 v2 &optional r) r (%bv-unimplemented 'bit-nor   v1 v2))
-(defun bit-andc1 (v1 v2 &optional r) r (%bv-unimplemented 'bit-andc1 v1 v2))
-(defun bit-andc2 (v1 v2 &optional r) r (%bv-unimplemented 'bit-andc2 v1 v2))
-(defun bit-orc1  (v1 v2 &optional r) r (%bv-unimplemented 'bit-orc1  v1 v2))
-(defun bit-orc2  (v1 v2 &optional r) r (%bv-unimplemented 'bit-orc2  v1 v2))
-(defun bit-not   (v   &optional r)   r (%bv-unimplemented 'bit-not   v))
+;;; ---- Bit-vector operations: implemented below (search "BIT-VECTOR ops"). ----
 
 ;;; ---- LOOP-FINISH --------------------------------------------------------
 
@@ -6340,30 +6339,44 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
   (or (eq type 'integer) (eq type 'fixnum) (eq type 'bignum)
       (and (consp type) (eq (car type) 'integer))))
 
-;;; ---- BIT-VECTOR operations -----------------------------------------------
-;;; Use bit-set/bit directly to avoid the map→plain-vector pitfall.
+;;; ---- BIT-VECTOR ops ------------------------------------------------------
+;;; The 11 CL bit-array logical operations.  Implemented over BIT / BIT-SET
+;;; (which work on real BIT_VECTOR objects), element by element.
+;;;
+;;; Each op takes an optional RESULT-BIT-ARRAY: NIL (the default) makes a fresh
+;;; bit-vector; T means update the first argument in place; an explicit
+;;; bit-vector stores the result there.  Reads are always taken before the
+;;; same-index write, so destructive use (result EQ an input) is safe.
 
-(defun %bit-binop (fn v1 v2)
-  "Apply binary function FN element-wise to two bit-vectors."
-  (let* ((len (min (length v1) (length v2)))
-         (out (make-bit-vector len 0)))
+(defun %bit-result-vector (v1 result-bit-array)
+  (cond ((null result-bit-array) (make-bit-vector (length v1) 0))
+        ((eq result-bit-array t) v1)
+        (t result-bit-array)))
+
+(defun %bit-binop (fn v1 v2 result-bit-array)
+  "Apply binary bit function FN element-wise to V1 and V2 into the resolved
+result vector; return that vector."
+  (let ((out (%bit-result-vector v1 result-bit-array))
+        (len (length v1)))
     (dotimes (i len out)
       (bit-set out i (logand 1 (funcall fn (bit v1 i) (bit v2 i)))))))
 
-(defun bit-and   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logand  v1 v2))
-(defun bit-or    (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logior  v1 v2))
-(defun bit-xor   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logxor  v1 v2))
-(defun bit-eqv   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logxor a b) 1)) v1 v2))
-(defun bit-nand  (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logand a b) 1)) v1 v2))
-(defun bit-nor   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logior a b) 1)) v1 v2))
-(defun bit-andc1 (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logand (logxor a 1) b)) v1 v2))
-(defun bit-andc2 (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logand a (logxor b 1))) v1 v2))
+(defun bit-and   (v1 v2 &optional r) (%bit-binop #'logand v1 v2 r))
+(defun bit-ior   (v1 v2 &optional r) (%bit-binop #'logior v1 v2 r))
+(defun bit-or    (v1 v2 &optional r) (bit-ior v1 v2 r))   ; non-standard alias for BIT-IOR
+(defun bit-xor   (v1 v2 &optional r) (%bit-binop #'logxor v1 v2 r))
+(defun bit-eqv   (v1 v2 &optional r) (%bit-binop (lambda (a b) (logxor (logxor a b) 1)) v1 v2 r))
+(defun bit-nand  (v1 v2 &optional r) (%bit-binop (lambda (a b) (logxor (logand a b) 1)) v1 v2 r))
+(defun bit-nor   (v1 v2 &optional r) (%bit-binop (lambda (a b) (logxor (logior a b) 1)) v1 v2 r))
+(defun bit-andc1 (v1 v2 &optional r) (%bit-binop (lambda (a b) (logand (logxor a 1) b)) v1 v2 r))
+(defun bit-andc2 (v1 v2 &optional r) (%bit-binop (lambda (a b) (logand a (logxor b 1))) v1 v2 r))
+(defun bit-orc1  (v1 v2 &optional r) (%bit-binop (lambda (a b) (logior (logxor a 1) b)) v1 v2 r))
+(defun bit-orc2  (v1 v2 &optional r) (%bit-binop (lambda (a b) (logior a (logxor b 1))) v1 v2 r))
 
-(defun bit-not (v1 &optional result)
-  "Return a bit-vector with all bits flipped."
-  (declare (ignore result))
-  (let* ((len (length v1))
-         (out (make-bit-vector len 0)))
+(defun bit-not (v1 &optional result-bit-array)
+  "Return a bit-vector with all bits of V1 flipped (see RESULT-BIT-ARRAY above)."
+  (let ((out (%bit-result-vector v1 result-bit-array))
+        (len (length v1)))
     (dotimes (i len out)
       (bit-set out i (logxor (bit v1 i) 1)))))
 
