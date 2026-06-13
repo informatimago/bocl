@@ -79,10 +79,13 @@ static test_fn resolve_test(Ref test_symbol){
 
 static HashTable* HashTable_slots(Ref test){
     HashTable* that = allocate(sizeof(*that));
-    that->objcount = 3;
+    that->objcount = 6;
     that->test    = test;
     that->entries = NIL_Symbol;
     that->count   = I(0);
+    that->nominal_size     = I(16);    /* CL defaults; overridden by MAKE-HASH-TABLE */
+    that->rehash_size      = F(1.5);
+    that->rehash_threshold = F(1.0);
     return that;}
 
 Ref hash_table_new(Ref test){
@@ -119,9 +122,18 @@ static void kernel_MAKE_HASH_TABLE(Ref function, Ref arguments, MultipleValues* 
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current = arguments;
     Ref test = pop_key_argument(function, &current, K(TEST), S(EQL));
-    /* Other keywords (:size, :rehash-size, …) are accepted and ignored. */
+    Ref ht   = hash_table_new(test);
+    add_to_live_pool(ht);
+    /* Store :SIZE / :REHASH-SIZE / :REHASH-THRESHOLD verbatim for the accessors
+       (bocl's alist table never rehashes, so they are only carried, not used).
+       Each is popped then stored straight into the rooted HT — no allocation in
+       between, so no rooting gap. */
+    HashTable* slots = &ht->slots->hash_table;
+    slots->nominal_size     = pop_key_argument(function, &current, K(SIZE),             I(16));
+    slots->rehash_size      = pop_key_argument(function, &current, K(REHASH-SIZE),      F(1.5));
+    slots->rehash_threshold = pop_key_argument(function, &current, K(REHASH-THRESHOLD), F(1.0));
     results->count = 1;
-    results->values[0] = hash_table_new(test);
+    results->values[0] = ht;
     close_live_pool(pool);}
 
 static void kernel_HASH_TABLE_P(Ref function, Ref arguments, MultipleValues* results){
@@ -152,6 +164,36 @@ static void kernel_HASH_TABLE_TEST(Ref function, Ref arguments, MultipleValues* 
     check_no_more_arguments(function, current);
     results->count = 1;
     results->values[0] = check_ht(ht)->test;
+    close_live_pool(pool);}
+
+static void kernel_HASH_TABLE_SIZE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref ht = pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    results->count = 1;
+    results->values[0] = check_ht(ht)->nominal_size;
+    close_live_pool(pool);}
+
+static void kernel_HASH_TABLE_REHASH_SIZE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref ht = pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    results->count = 1;
+    results->values[0] = check_ht(ht)->rehash_size;
+    close_live_pool(pool);}
+
+static void kernel_HASH_TABLE_REHASH_THRESHOLD(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref ht = pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    results->count = 1;
+    results->values[0] = check_ht(ht)->rehash_threshold;
     close_live_pool(pool);}
 
 /* (GETHASH key hash-table &optional default) — returns two values:
@@ -301,6 +343,9 @@ void kernel_initialize_hash_tables(void){
     register_fn(S(HASH-TABLE-P),      list(S(OBJECT), NULL), kernel_HASH_TABLE_P);
     register_fn(S(HASH-TABLE-COUNT),  ll_ht,     kernel_HASH_TABLE_COUNT);
     register_fn(S(HASH-TABLE-TEST),   ll_ht,     kernel_HASH_TABLE_TEST);
+    register_fn(S(HASH-TABLE-SIZE),              ll_ht, kernel_HASH_TABLE_SIZE);
+    register_fn(S(HASH-TABLE-REHASH-SIZE),       ll_ht, kernel_HASH_TABLE_REHASH_SIZE);
+    register_fn(S(HASH-TABLE-REHASH-THRESHOLD),  ll_ht, kernel_HASH_TABLE_REHASH_THRESHOLD);
     register_fn(S(GETHASH),           ll_k_ht,   kernel_GETHASH);
     register_fn(S(SETHASH),           ll_k_v_ht, kernel_SETHASH);
     register_fn(S(REMHASH),           ll_k_ht,   kernel_REMHASH);

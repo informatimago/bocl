@@ -408,10 +408,16 @@ typedef struct Package {
    "alists for simplicity"). test is one of the symbols EQ, EQL, EQUAL,
    EQUALP and selects the comparator. */
 typedef struct HashTable {
-    BLOCK_HEADER;
-    Ref test;        /* SYMBOL — EQ / EQL / EQUAL / EQUALP */
-    Ref entries;     /* alist: ((key . value) ...) */
-    Ref count;       /* INTEGER — number of entries */
+    BLOCK_HEADER;            /* objcount = 6 */
+    Ref test;             /* SYMBOL — EQ / EQL / EQUAL / EQUALP */
+    Ref entries;          /* alist: ((key . value) ...) */
+    Ref count;            /* INTEGER — number of entries */
+    /* Stored verbatim for the CL accessors; bocl's alist table doesn't rehash,
+       so these are cosmetic (returned by HASH-TABLE-SIZE / -REHASH-SIZE /
+       -REHASH-THRESHOLD and accepted back by MAKE-HASH-TABLE). */
+    Ref nominal_size;     /* INTEGER — nominal size (the BLOCK_HEADER `size` is unrelated) */
+    Ref rehash_size;      /* REAL */
+    Ref rehash_threshold; /* REAL in (0,1] */
 } HashTable;
 
 /* CL Condition object. Minimal: the class slot already lives in Object;
