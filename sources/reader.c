@@ -607,9 +607,11 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
         return keyword_intern_cstring(name_part);}
     if(internal_access){
         return package_intern_cstring_in(name_part,pkg);}   /* pkg::sym */
-    /* pkg:sym — the symbol must be present AND external in pkg. */
+    /* pkg:sym — the symbol must be present AND external in pkg.  NULL (not
+       NIL_Symbol) means not-found, so reading CL:NIL yields the symbol NIL
+       rather than spuriously erroring. */
     Ref sym = package_find_external_cstring(name_part,pkg);
-    if(nullp(sym)){
+    if(!sym){
         ERROR("READ: symbol %s is not external in package %s",name_part,pkg_buf);}
     return sym;}
 

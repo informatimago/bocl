@@ -63,13 +63,25 @@ Ref package_new(const char* name, const char* const* nicknames){
 /*  Lookups                                                             */
 /* ------------------------------------------------------------------ */
 
+/* The string named by a CL string designator: a string is itself, a symbol
+   gives its symbol-name, a character gives a one-character string.  Anything
+   else is a type error.  (Package functions take string designators.) */
+Ref string_designator_name(Ref designator){
+    if(typep(designator, STRING_Class)){ return designator; }
+    if(symbolp(designator))            { return symbol_name(designator); }
+    if(characterp(designator)){
+        char buf[2];
+        buf[0] = (char)(octet)integer_value(character_code(designator));
+        buf[1] = '\0';
+        return string_new_cstring(buf);}
+    TYPE_ERROR(designator, STRING_Class);
+    return NIL_Symbol;   /* unreachable: TYPE_ERROR does not return */
+}
+
 Ref package_find(Ref designator){
-    /* Accept STRING, SYMBOL (use symbol-name), or PACKAGE (return as-is). */
+    /* Accept STRING / SYMBOL / CHARACTER name designators, or a PACKAGE. */
     if(typep(designator, PACKAGE_Class)){ return designator; }
-    Ref name;
-    if(typep(designator, STRING_Class)){ name = designator; }
-    else if(symbolp(designator))       { name = symbol_name(designator); }
-    else                                { TYPE_ERROR(designator, STRING_Class); }
+    Ref name = string_designator_name(designator);
     Ref entry = cons_cdr(all_packages);
     while(consp(entry)){
         Ref pair = cons_car(entry);
@@ -157,6 +169,9 @@ Ref package_intern_cstring_in(const char* name, Ref pkg){
     close_live_pool(pool);
     return result;}
 
+/* Returns the external symbol named NAME in PKG, or C NULL if there is none.
+   NULL (not NIL_Symbol) is the not-found sentinel precisely so that finding the
+   symbol NIL — e.g. reading CL:NIL — is distinguishable from finding nothing. */
 Ref package_find_external_cstring(const char* name, Ref pkg){
     uword pool=open_live_pool();
     Ref s=string_new_cstring(name);
@@ -164,7 +179,7 @@ Ref package_find_external_cstring(const char* name, Ref pkg){
     add_to_live_pool(pkg);
     Ref found = find_symbol(s, pkg->slots->package.external);
     close_live_pool(pool);
-    return found ? found : NIL_Symbol;}
+    return found;}
 
 /* Printer support: decide how SYMBOL must be qualified when written (prin1) with
    *PACKAGE* in force.  Sets *package_name_out to the home package's name STRING
@@ -235,18 +250,12 @@ static void kernel_MAKE_PACKAGE(Ref function, Ref arguments, MultipleValues* res
     Ref name_designator = pop_mandatory_argument(function, &current);
     Ref nicknames = pop_key_argument(function, &current, K(NICKNAMES), NIL_Symbol);
     Ref use = pop_key_argument(function, &current, K(USE), NIL_Symbol);
-    Ref name;
-    if(typep(name_designator, STRING_Class)){ name = name_designator; }
-    else if(symbolp(name_designator))       { name = symbol_name(name_designator); }
-    else                                     { TYPE_ERROR(name_designator, STRING_Class); }
-    /* Coerce nicknames entries to strings. */
+    Ref name = string_designator_name(name_designator);
+    /* Coerce nicknames entries (string designators) to strings. */
     Ref clean_nn = NIL_Symbol;
     Ref it = nicknames;
     while(consp(it)){
-        Ref n = cons_car(it);
-        if(symbolp(n))                       { n = symbol_name(n); }
-        else if(!typep(n, STRING_Class))     { TYPE_ERROR(n, STRING_Class); }
-        push(n, &clean_nn);
+        push(string_designator_name(cons_car(it)), &clean_nn);
         it = cons_cdr(it);}
     clean_nn = nreverse(clean_nn);
     Ref pkg = make_package(name, clean_nn);
