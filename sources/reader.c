@@ -817,6 +817,7 @@ static Ref parse_object(parser_state* parser){
                 if(parser->ch != ')'){
                     READER_ERROR(parser->input_stream,"Expected ')' after #C parts%s","");}
                 advance_character(parser);   /* skip ')' */
+                parser->eof=false;           /* a closing ')' at EOF is fine (as in parse_list) */
                 return complex_new(re, im);}
 
             case '\'': {  /* #'name => (FUNCTION name) */
@@ -835,10 +836,12 @@ static Ref parse_object(parser_state* parser){
                     else if(prev=='|' && parser->ch=='#'){ depth--; prev=0; }
                     else { prev=parser->ch; }}
                 advance_character(parser);    /* past the closing # */
-                skip_spaces(parser);
-                /* Return the next object — block comments are whitespace. */
-                if(parser->eof){ return NIL_Symbol; }
-                return parse_object(parser); }
+                /* A block comment is whitespace.  Return the skip marker so the
+                   caller (parse_list / kernel_read) resumes scanning rather than
+                   forcing another object — correct even when the comment abuts
+                   ')' or EOF, e.g. "(a #| |# )".  (The old code recursively read
+                   the next object, which mis-read the ')' as an object.) */
+                return get_skip_marker(); }
             case '+':
             case '-': {  /* #+feature form / #-feature form */
                 bool negate = (parser->ch == '-');
