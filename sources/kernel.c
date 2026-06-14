@@ -2380,7 +2380,15 @@ Ref environment_new(Ref next_environment,Ref toplevelp){
 Closure* Closure_slots(Ref function,Ref environment){
     check_type(function,FUNCTION_Class);
     check_type(environment,ENVIRONMENT_Class);
+    /* Root the args across allocate(): a caller typically passes a FUNCTION that
+       is itself a fresh Object_new() result held only in a C temporary (e.g.
+       closure_new(function_new(...), env)), so a GC inside allocate() would
+       reclaim it and leave that->function dangling. */
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(environment);
     Closure* that=allocate(sizeof(*that));
+    close_live_pool(pool);
     that->objcount=2;
     that->function=function;
     that->environment=environment;
@@ -2394,7 +2402,12 @@ Function* Function_slots(Ref lisp_name,Ref lambda_list,Ref body){
     check_type(lisp_name,SYMBOL_Class);
     check_type(lambda_list,LIST_Class);
     check_type(body,LIST_Class);
+    uword pool=open_live_pool();           /* root args across allocate() */
+    add_to_live_pool(lisp_name);
+    add_to_live_pool(lambda_list);
+    add_to_live_pool(body);
     Function* that=allocate(sizeof(*that));
+    close_live_pool(pool);
     that->objcount=3;
     that->lisp_name=lisp_name;
     that->lambda_list=lambda_list;

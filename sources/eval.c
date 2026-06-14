@@ -1516,6 +1516,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
 
         /* Function call: evaluate the arguments in order, then apply. */
         {uword fc_pool=open_live_pool();
+         add_to_live_pool(function);   /* a freshly closure_new()'d FUNCTION is
+            unrooted; protect it across the argument evale()s below, which
+            allocate and may GC (otherwise it is freed before kernel_apply). */
          COLLECTING(args);
          {dolist(subform,arguments){
                  add_to_live_pool(args);           /* protect accumulated list across evale */
