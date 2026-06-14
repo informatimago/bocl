@@ -375,7 +375,15 @@ static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
     Ref env = eval_global_environment();
     Frame* target = find_restart_frame_by_name(S(ABORT), env);
     if(target == NULL){
-        FATAL("ABORT: no active %s restart", "ABORT");}
+        /* CLHS: ABORT with no applicable abort restart signals a CONTROL-ERROR
+           (a recoverable condition), not a process abort. */
+        Ref cond = make_simple_condition(CONTROL_ERROR_Class,
+                                         T("ABORT: no active ABORT restart"),
+                                         NIL_Symbol);
+        add_to_live_pool(cond);
+        signal_condition(cond, env);
+        /* No handler caught it — surface as an ordinary error, never FATAL. */
+        ERROR("ABORT: no active ABORT restart%s", "");}
     target->parameters.restart.matched_name = S(ABORT);
     target->parameters.restart.matched_args = NIL_Symbol;
     Frame* top = g_frame_stack;
