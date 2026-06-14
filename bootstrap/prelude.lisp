@@ -1923,6 +1923,10 @@
                        (eof-error-p t) eof-value recursive-p)
   (kernel-read stream eof-error-p eof-value recursive-p))
 
+(defun read-preserving-whitespace (&optional (stream *standard-input*)
+                                             (eof-error-p t) eof-value recursive-p)
+  (kernel-read-preserving-whitespace stream eof-error-p eof-value recursive-p))
+
 (defun read-char (&optional (stream *standard-input*)
                              (eof-error-p t) eof-value recursive-p)
   (kernel-read-char stream eof-error-p eof-value recursive-p))

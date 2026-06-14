@@ -985,7 +985,7 @@ Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_valu
         TYPE_ERROR(peek_type,CHARACTER_Class);}}
 
 
-Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
+static Ref read_impl(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p,bool preserve){
     /* #n= / #n# labels are scoped to one top-level read: clear the label table
        at the start of a non-recursive read (a recursive read — e.g. (read
        stream) inside a reader macro — keeps the labels currently in scope). */
@@ -1030,14 +1030,20 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
        that belongs to an enclosing list for the outer parse_list to consume.  We
        push back any non-whitespace, non-EOF char (a genuine stray top-level ')'
        then surfaces as an error on the next read, which is conforming).
-       Whitespace is dropped (harmless, and read_octet already translated newlines
-       so re-reading a pushed-back NEL would misbehave). */
-    if(parser.ch != (octet)EOF && !whitespacep(parser.ch)){
+       Plain READ drops trailing whitespace (harmless, and read_octet already
+       translated newlines so re-reading a pushed-back NEL would misbehave);
+       READ-PRESERVING-WHITESPACE (preserve=true) pushes it back so the caller
+       sees it (e.g. (read-preserving-whitespace) then (read-char) yields the
+       separating space). */
+    if(parser.ch != (octet)EOF && (preserve || !whitespacep(parser.ch))){
         ungetc((int)parser.ch, stream_cstream(input_stream));}
     return object;}
 
-Ref kernel_read_preserving_whitespace(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
-    return kernel_read(input_stream,eof_error_p,eof_value,recursive_p);}
+Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p){
+    return read_impl(input_stream,eof_error_p,eof_value,recursive_p,false);}
+
+Ref kernel_read_preserving_whitespace(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p){
+    return read_impl(input_stream,eof_error_p,eof_value,recursive_p,true);}
 
 Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursive_p){
     NOT_IMPLEMENTED_YET();
