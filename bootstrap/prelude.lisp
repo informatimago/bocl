@@ -757,6 +757,14 @@
   (cond
     ((stringp sequence)
      (subseq-string sequence start (or end (string-length sequence))))
+    ;; BIT-VECTOR before VECTORP: a bit-vector is also a VECTORP, but SVREF on it
+    ;; reads garbage — copy bits with BIT/BIT-SET into a fresh bit-vector.
+    ((bit-vector-p sequence)
+     (let* ((len (or end (bit-vector-length sequence)))
+            (count (- len start))
+            (out (make-bit-vector count 0)))
+       (dotimes (i count out)
+         (bit-set out i (bit sequence (+ start i))))))
     ((vectorp sequence)
      (let* ((len (or end (vector-length sequence)))
             (count (- len start))
