@@ -77,7 +77,13 @@
                  ((consp place)
                   (let ((expander (gethash (car place) *setf-expanders*)))
                     (if expander
-                        (apply expander (append (cdr place) (list value)))
+                        ;; SETF must return the newly-stored value, but the kernel
+                        ;; setters (RPLACA/RPLACD/...) return the cons.  Bind the
+                        ;; value to a gensym, run the setter on it, then yield it.
+                        (let ((g (gensym "SETF-V")))
+                          `(let ((,g ,value))
+                             ,(apply expander (append (cdr place) (list g)))
+                             ,g))
                         (error "SETF: no expander for place operator"))))
                  (t (error "SETF: invalid place")))))
         (t
@@ -573,8 +579,16 @@
                                                       (funcall function acc x))))
          acc)))))
 
-(defun member (item list &key (test #'eql) (key #'identity))
+(defun %xtest (test test-not)
+  "Collapse :TEST / :TEST-NOT into one 2-arg predicate (TEST-NOT wins)."
+  (cond (test-not (lambda (a b) (not (funcall test-not a b))))
+        (test test)
+        (t #'eql)))
+
+(defun member (item list &key (test #'eql) test-not (key #'identity))
   "Return the first cons in LIST whose CAR satisfies TEST with ITEM, or NIL."
+  (unless key (setq key #'identity))     ; :KEY NIL means identity
+  (setq test (%xtest test test-not))
   (do ((l list (cdr l)))
       ((null l) nil)
     (when (funcall test item (funcall key (car l)))
@@ -840,8 +854,21 @@
 ;;  Set operations (on lists).                                           ;;
 ;; -------------------------------------------------------------------- ;;
 
-(defun adjoin (item list &key (test #'eql) (key #'identity))
-  (if (find item list :test test :key key) list (cons item list)))
+(defun adjoin (item list &key (test #'eql) test-not (key #'identity))
+  ;; Per CLHS, the KEY is applied to ITEM as well as to each list element when
+  ;; testing membership.  Self-contained so it needs neither FIND's :TEST-NOT
+  ;; support nor a non-NIL KEY.
+  (let* ((kfn (or key #'identity))
+         (ki  (funcall kfn item)))
+    (if (do ((l list (cdr l)))
+            ((null l) nil)
+          (let ((ke (funcall kfn (car l))))
+            (when (if test-not
+                      (not (funcall test-not ki ke))
+                      (funcall test ki ke))
+              (return t))))
+        list
+        (cons item list))))
 
 (defun union (list1 list2 &key (test #'eql) (key #'identity))
   ;; Result contains every element of list2, plus every element of list1
@@ -855,7 +882,8 @@
   (remove-if (lambda (x) (not (find (funcall key x) list2 :test test :key key)))
              list1))
 
-(defun set-difference (list1 list2 &key (test #'eql) (key #'identity))
+(defun set-difference (list1 list2 &key (test #'eql) test-not (key #'identity))
+  (setq test (%xtest test test-not))
   (remove-if (lambda (x) (find (funcall key x) list2 :test test :key key))
              list1))
 
@@ -991,8 +1019,9 @@
 ;;  Tree operations (slice 12).                                          ;;
 ;; -------------------------------------------------------------------- ;;
 
-(defun subst (new old tree &key (test #'eql) (key #'identity))
+(defun subst (new old tree &key (test #'eql) test-not (key #'identity))
   "Copy TREE substituting NEW for every subtree EQL to OLD."
+  (setq test (%xtest test test-not))
   (cond ((funcall test old (funcall key tree)) new)
         ((atom tree) tree)
         (t (let ((new-car (subst new old (car tree) :test test :key key))
@@ -1017,8 +1046,9 @@
 
 ;; Destructive substitution: like SUBST/SUBST-IF/... but modify TREE in place
 ;; (RPLACA/RPLACD) and return the same object when the top isn't replaced.
-(defun nsubst (new old tree &key (test #'eql) (key #'identity))
+(defun nsubst (new old tree &key (test #'eql) test-not (key #'identity))
   "Like SUBST but destructive."
+  (setq test (%xtest test test-not))
   (cond ((funcall test old (funcall key tree)) new)
         ((atom tree) tree)
         (t (rplaca tree (nsubst new old (car tree) :test test :key key))
@@ -1037,10 +1067,11 @@
   "Like SUBST-IF-NOT but destructive."
   (nsubst-if new (lambda (x) (not (funcall predicate x))) tree :key key))
 
-(defun sublis (alist tree &key (test #'eql) (key #'identity))
+(defun sublis (alist tree &key (test #'eql) test-not (key #'identity))
   "Copy TREE substituting, for every subtree found as a key (under TEST/KEY) in
 ALIST, the corresponding value.  Subtrees with no substitution keep their
 identity."
+  (setq test (%xtest test test-not))
   (let ((pair (assoc (funcall key tree) alist :test test)))
     (cond (pair (cdr pair))
           ((atom tree) tree)
@@ -1050,8 +1081,9 @@ identity."
                    tree
                    (cons new-car new-cdr)))))))
 
-(defun nsublis (alist tree &key (test #'eql) (key #'identity))
+(defun nsublis (alist tree &key (test #'eql) test-not (key #'identity))
   "Like SUBLIS but destructive."
+  (setq test (%xtest test test-not))
   (let ((pair (assoc (funcall key tree) alist :test test)))
     (cond (pair (cdr pair))
           ((atom tree) tree)
@@ -1093,8 +1125,9 @@ identity."
                 (setq lead (cdr lead) trail (cdr trail))
                 (return trail))))))
 
-(defun tree-equal (tree1 tree2 &key (test #'eql))
+(defun tree-equal (tree1 tree2 &key (test #'eql) test-not)
   "T if TREE1 and TREE2 have the same shape and leaves (by TEST)."
+  (setq test (%xtest test test-not))
   (cond ((and (atom tree1) (atom tree2))
          (funcall test tree1 tree2))
         ((or  (atom tree1) (atom tree2)) nil)
@@ -1108,6 +1141,25 @@ identity."
 (defun get (symbol indicator &optional default)
   "Return the value for INDICATOR on SYMBOL's property list, or DEFAULT."
   (getf (symbol-plist symbol) indicator default))
+
+;; REMF must be a place-modifying macro: removing the first pair (or the sole
+;; pair, leaving NIL) requires updating PLACE — which the kernel REMF function
+;; cannot do.  %REMF returns (new-plist . removed-p); the macro stores the new
+;; plist back into PLACE and yields the boolean.
+(defun %remf (plist indicator)
+  (cond ((null plist) (cons nil nil))
+        ((eql (car plist) indicator) (cons (cddr plist) t))
+        (t (do ((prev plist (cddr prev)))
+               ((null (cddr prev)) (cons plist nil))
+             (when (eql (caddr prev) indicator)
+               (rplacd (cdr prev) (cddddr prev))
+               (return (cons plist t)))))))
+
+(defmacro remf (place indicator)
+  (let ((g (gensym "REMF-")))
+    `(let ((,g (%remf ,place ,indicator)))
+       (setf ,place (car ,g))
+       (cdr ,g))))
 
 (defun remprop (symbol indicator)
   "Remove INDICATOR and its value from SYMBOL's property list.
@@ -1869,6 +1921,42 @@ identity."
 (defun write-to-string (object &rest keys)
   (with-output-to-string (s)
     (apply #'write object :stream s keys)))
+
+;; SETF expanders for every cXr accessor (cAR/cDR access paths of length 2-4):
+;; (setf (c<L><rest>r cell) v) == (rpla<L> (c<rest>r cell) v).  All 28 written as
+;; explicit top-level SETHASH forms (the proven pattern, cf. the GETF expander
+;; above) — string-capable CONCATENATE is defined later in the prelude, so a
+;; name-generating loop cannot run here.  Each closure rewrites the place into a
+;; destructive RPLACA/RPLACD on the appropriate inner accessor.
+(sethash 'caar   *setf-expanders* (lambda (c v) (list 'rplaca (list 'car   c) v)))
+(sethash 'cadr   *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdr   c) v)))
+(sethash 'cdar   *setf-expanders* (lambda (c v) (list 'rplacd (list 'car   c) v)))
+(sethash 'cddr   *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdr   c) v)))
+(sethash 'caaar  *setf-expanders* (lambda (c v) (list 'rplaca (list 'caar  c) v)))
+(sethash 'caadr  *setf-expanders* (lambda (c v) (list 'rplaca (list 'cadr  c) v)))
+(sethash 'cadar  *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdar  c) v)))
+(sethash 'caddr  *setf-expanders* (lambda (c v) (list 'rplaca (list 'cddr  c) v)))
+(sethash 'cdaar  *setf-expanders* (lambda (c v) (list 'rplacd (list 'caar  c) v)))
+(sethash 'cdadr  *setf-expanders* (lambda (c v) (list 'rplacd (list 'cadr  c) v)))
+(sethash 'cddar  *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdar  c) v)))
+(sethash 'cdddr  *setf-expanders* (lambda (c v) (list 'rplacd (list 'cddr  c) v)))
+(sethash 'caaaar *setf-expanders* (lambda (c v) (list 'rplaca (list 'caaar c) v)))
+(sethash 'caaadr *setf-expanders* (lambda (c v) (list 'rplaca (list 'caadr c) v)))
+(sethash 'caadar *setf-expanders* (lambda (c v) (list 'rplaca (list 'cadar c) v)))
+(sethash 'caaddr *setf-expanders* (lambda (c v) (list 'rplaca (list 'caddr c) v)))
+(sethash 'cadaar *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdaar c) v)))
+(sethash 'cadadr *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdadr c) v)))
+(sethash 'caddar *setf-expanders* (lambda (c v) (list 'rplaca (list 'cddar c) v)))
+(sethash 'cadddr *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdddr c) v)))
+(sethash 'cdaaar *setf-expanders* (lambda (c v) (list 'rplacd (list 'caaar c) v)))
+(sethash 'cdaadr *setf-expanders* (lambda (c v) (list 'rplacd (list 'caadr c) v)))
+(sethash 'cdadar *setf-expanders* (lambda (c v) (list 'rplacd (list 'cadar c) v)))
+(sethash 'cdaddr *setf-expanders* (lambda (c v) (list 'rplacd (list 'caddr c) v)))
+(sethash 'cddaar *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdaar c) v)))
+(sethash 'cddadr *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdadr c) v)))
+(sethash 'cdddar *setf-expanders* (lambda (c v) (list 'rplacd (list 'cddar c) v)))
+(sethash 'cddddr *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdddr c) v)))
+
 
 ;;;; -----------------------------------------------------------------------
 ;;;; Slice 14 — MAKE-ARRAY, RANDOM, file-system ops, timing, FILL/REPLACE
@@ -3093,12 +3181,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
            nil))))
 
 (defmacro pushnew (item place &rest keys)
-  ;; Push ITEM onto PLACE unless already a MEMBER.  Keys (:test :key) passed to MEMBER.
-  (let ((g (gensym "PN-")))
-    `(let ((,g ,item))
-       (unless (member ,g ,place ,@keys)
-         (push ,g ,place))
-       ,place)))
+  ;; (pushnew item place keys...) == (setf place (adjoin item place keys...)).
+  ;; ADJOIN applies :KEY to ITEM and honours :TEST/:TEST-NOT, as CL requires.
+  `(setf ,place (adjoin ,item ,place ,@keys)))
 
 (defun get-properties (plist indicator-list)
   ;; Search PLIST for any key in INDICATOR-LIST.
@@ -4745,26 +4830,27 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
             (if (consp pair) (cons (car pair) (cdr pair)) pair))
           alist))
 
-(defun set-exclusive-or (list1 list2 &key (test #'eql) (key #'identity))
+(defun set-exclusive-or (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Return the symmetric set difference of LIST1 and LIST2."
+  (setq test (%xtest test test-not))
   (append (set-difference list1 list2 :test test :key key)
           (set-difference list2 list1 :test test :key key)))
 
-(defun nset-exclusive-or (list1 list2 &key (test #'eql) (key #'identity))
+(defun nset-exclusive-or (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive version of SET-EXCLUSIVE-OR."
-  (set-exclusive-or list1 list2 :test test :key key))
+  (set-exclusive-or list1 list2 :test (%xtest test test-not) :key key))
 
-(defun nintersection (list1 list2 &key (test #'eql) (key #'identity))
+(defun nintersection (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive INTERSECTION — modifies LIST1."
-  (intersection list1 list2 :test test :key key))
+  (intersection list1 list2 :test (%xtest test test-not) :key key))
 
-(defun nset-difference (list1 list2 &key (test #'eql) (key #'identity))
+(defun nset-difference (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive SET-DIFFERENCE — modifies LIST1."
-  (set-difference list1 list2 :test test :key key))
+  (set-difference list1 list2 :test (%xtest test test-not) :key key))
 
-(defun nunion (list1 list2 &key (test #'eql) (key #'identity))
+(defun nunion (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive UNION — may modify LIST1 or LIST2."
-  (union list1 list2 :test test :key key))
+  (union list1 list2 :test (%xtest test test-not) :key key))
 
 ;;; ---- Hash-table utilities -----------------------------------------------
 
