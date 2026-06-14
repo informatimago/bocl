@@ -589,6 +589,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             /* evaluate the initial-values in environment, and */
             /* bind the symbols to the values in new_environment */
             Ref new_environment=environment_new(environment,false);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted;
+              protect across the initial-value evale() calls below, which allocate
+              and may GC (otherwise new_environment is freed and reused). */
             bool has_dynamic_binding=false;
             {dolist(binding,bindings){
                     Ref name;
@@ -672,6 +675,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 if(eql(SPECIAL_Symbol,caadr(decl))){
                     dolist(sym,cdadr(decl)){ push(sym,&specials_star);}}}
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             environment=new_environment;
             bool has_dynamic_star=false;
             {dolist(binding,bindings){
@@ -732,6 +736,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref body=cddr(arguments);
             /* bind the symbols to the values */
             Ref new_environment=environment_new(environment,false);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(name,symbols){
                     bool boundp=symbol_boundp(name);
                     Ref value=boundp?symbol_value(name):NIL_Symbol;
@@ -782,6 +787,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 pop(&body);}
             /* Build the new env. Local-function bodies see the OUTER env (parent of new). */
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding)){
                         ERROR("FLET: %s","each binding must be (name lambda-list . body)");}
@@ -808,6 +814,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                evaluated only when the function is called, by which point all siblings
                are bound). */
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding)){
                         ERROR("LABELS: %s","each binding must be (name lambda-list . body)");}
@@ -834,6 +841,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding)){
                         ERROR("MACROLET: %s","each binding must be (name lambda-list . body)");}
@@ -860,6 +868,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding) || !consp(cdr(binding))){
                         ERROR("SYMBOL-MACROLET: %s","each binding must be (name expansion)");}
@@ -1095,6 +1104,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref body_form = caddr(clause);
                 /* Bind var to the condition in a fresh env and eval body. */
                 Ref new_env = environment_new(environment, NIL_Symbol);
+                add_to_live_pool(new_env); /* Object_new leaves it unrooted */
                 if(!nullp(var)){
                     Ref wrap = env_make_lexical_variable(var, cond);
                     environment_add_variable(wrap, new_env);}
@@ -1274,6 +1284,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                    ordinary lambda list, so &OPTIONAL / &REST / &KEY are honoured
                    (the naive positional bind treated &OPTIONAL as a variable). */
                 Ref new_env = environment_new(environment, NIL_Symbol);
+                add_to_live_pool(new_env); /* Object_new leaves it unrooted */
                 bind_required_parameters(NIL_Symbol, varlist, matched_args, new_env);
                 evale(body_form, new_env, results);
                 PASS_VALUES();}}
