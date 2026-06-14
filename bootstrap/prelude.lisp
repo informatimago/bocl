@@ -93,6 +93,12 @@
 (define-setf-expander second         (cell)         (val) `(rplaca (cdr ,cell) ,val))
 (define-setf-expander third          (cell)         (val) `(rplaca (cddr ,cell) ,val))
 (define-setf-expander fourth         (cell)         (val) `(rplaca (cdddr ,cell) ,val))
+(define-setf-expander fifth          (cell)         (val) `(rplaca (nthcdr 4 ,cell) ,val))
+(define-setf-expander sixth          (cell)         (val) `(rplaca (nthcdr 5 ,cell) ,val))
+(define-setf-expander seventh        (cell)         (val) `(rplaca (nthcdr 6 ,cell) ,val))
+(define-setf-expander eighth         (cell)         (val) `(rplaca (nthcdr 7 ,cell) ,val))
+(define-setf-expander ninth          (cell)         (val) `(rplaca (nthcdr 8 ,cell) ,val))
+(define-setf-expander tenth          (cell)         (val) `(rplaca (nthcdr 9 ,cell) ,val))
 (define-setf-expander rest           (cell)         (val) `(rplacd ,cell ,val))
 (define-setf-expander caar           (cell)         (val) `(rplaca (car ,cell) ,val))
 (define-setf-expander cadr           (cell)         (val) `(rplaca (cdr ,cell) ,val))
@@ -711,9 +717,15 @@
 ;;  Sub-sequences.                                                       ;;
 ;; -------------------------------------------------------------------- ;;
 
+(defun %cons-length (list)
+  "Number of cons cells in LIST (works on proper AND dotted lists)."
+  (let ((n 0))
+    (do ((x list (cdr x))) ((atom x) n) (setq n (1+ n)))))
+
 (defun butlast (list &optional (n 1))
-  ;; List minus the last n elements. Naive but correct.
-  (let* ((len (length list))
+  ;; LIST minus its last N cons cells (works on dotted lists too — count conses,
+  ;; not elements, since LENGTH rejects an improper list).
+  (let* ((len (%cons-length list))
          (keep (- len n)))
     (if (<= keep 0)
         nil
@@ -1002,6 +1014,84 @@
 (defun subst-if-not (new predicate tree &key (key #'identity))
   "Copy TREE substituting NEW for every subtree NOT satisfying PREDICATE."
   (subst-if new (lambda (x) (not (funcall predicate x))) tree :key key))
+
+;; Destructive substitution: like SUBST/SUBST-IF/... but modify TREE in place
+;; (RPLACA/RPLACD) and return the same object when the top isn't replaced.
+(defun nsubst (new old tree &key (test #'eql) (key #'identity))
+  "Like SUBST but destructive."
+  (cond ((funcall test old (funcall key tree)) new)
+        ((atom tree) tree)
+        (t (rplaca tree (nsubst new old (car tree) :test test :key key))
+           (rplacd tree (nsubst new old (cdr tree) :test test :key key))
+           tree)))
+
+(defun nsubst-if (new predicate tree &key (key #'identity))
+  "Like SUBST-IF but destructive."
+  (cond ((funcall predicate (funcall key tree)) new)
+        ((atom tree) tree)
+        (t (rplaca tree (nsubst-if new predicate (car tree) :key key))
+           (rplacd tree (nsubst-if new predicate (cdr tree) :key key))
+           tree)))
+
+(defun nsubst-if-not (new predicate tree &key (key #'identity))
+  "Like SUBST-IF-NOT but destructive."
+  (nsubst-if new (lambda (x) (not (funcall predicate x))) tree :key key))
+
+(defun sublis (alist tree &key (test #'eql) (key #'identity))
+  "Copy TREE substituting, for every subtree found as a key (under TEST/KEY) in
+ALIST, the corresponding value.  Subtrees with no substitution keep their
+identity."
+  (let ((pair (assoc (funcall key tree) alist :test test)))
+    (cond (pair (cdr pair))
+          ((atom tree) tree)
+          (t (let ((new-car (sublis alist (car tree) :test test :key key))
+                   (new-cdr (sublis alist (cdr tree) :test test :key key)))
+               (if (and (eq new-car (car tree)) (eq new-cdr (cdr tree)))
+                   tree
+                   (cons new-car new-cdr)))))))
+
+(defun nsublis (alist tree &key (test #'eql) (key #'identity))
+  "Like SUBLIS but destructive."
+  (let ((pair (assoc (funcall key tree) alist :test test)))
+    (cond (pair (cdr pair))
+          ((atom tree) tree)
+          (t (rplaca tree (nsublis alist (car tree) :test test :key key))
+             (rplacd tree (nsublis alist (cdr tree) :test test :key key))
+             tree))))
+
+(defun revappend (list tail)
+  "(append (reverse LIST) TAIL); LIST is not modified, TAIL is shared."
+  (nconc (reverse list) tail))
+
+(defun nreconc (list tail)
+  "(nconc (nreverse LIST) TAIL) — destructive REVAPPEND."
+  (nconc (nreverse list) tail))
+
+;; (SETF (GETF place indicator) value): update the indicator's value in the plist
+;; held by PLACE, extending it (and updating PLACE) if the indicator is absent.
+(defun %put-getf (plist indicator value)
+  (labels ((scan (tail)
+             (cond ((null tail) (list* indicator value plist))
+                   ((eq (car tail) indicator) (setf (cadr tail) value) plist)
+                   (t (scan (cddr tail))))))
+    (scan plist)))
+
+;; (SETF (GETF place indicator [default]) value) — DEFAULT is accepted (CL allows
+;; it in the place) and ignored.  Registered directly because the value is the
+;; LAST argument and an optional default sits between indicator and value.
+(sethash 'getf *setf-expanders*
+  (lambda (place indicator &rest default-and-val)
+    (let ((val (car (last default-and-val))))
+      `(setf ,place (%put-getf ,place ,indicator ,val)))))
+
+(defun last (list &optional (n 1))
+  "Return the last N cons cells of LIST (default 1).  Works on dotted lists."
+  (let ((lead list))
+    (dotimes (i n) (when (consp lead) (setq lead (cdr lead))))
+    (let ((trail list))
+      (loop (if (consp lead)
+                (setq lead (cdr lead) trail (cdr trail))
+                (return trail))))))
 
 (defun tree-equal (tree1 tree2 &key (test #'eql))
   "T if TREE1 and TREE2 have the same shape and leaves (by TEST)."
@@ -2625,8 +2715,8 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
       (apply function tails))))
 
 (defun nbutlast (list &optional (n 1))
-  ;; Destructive BUTLAST: trim the last N elements from LIST in place.
-  (let* ((len  (length list))
+  ;; Destructive BUTLAST: trim the last N cons cells from LIST in place.
+  (let* ((len  (%cons-length list))
          (keep (- len n)))
     (if (<= keep 0)
         nil
