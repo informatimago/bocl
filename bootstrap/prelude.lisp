@@ -109,6 +109,7 @@
 (define-setf-expander aref           (array idx)    (val) `(aref-set ,val ,array ,idx))
 (define-setf-expander char           (str idx)      (val) `(char-set ,str ,idx ,val))
 (define-setf-expander schar          (str idx)      (val) `(char-set ,str ,idx ,val))
+(define-setf-expander readtable-case (rt)           (val) `(%set-readtable-case ,rt ,val))
 (define-setf-expander nth            (n lst)        (val) `(rplaca (nthcdr ,n ,lst) ,val))
 ;; ELT setter — dispatches on sequence type; uses gensyms to avoid
 ;; multiple evaluation of sub-forms.

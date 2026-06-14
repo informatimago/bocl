@@ -567,12 +567,30 @@ static Ref scan_float(parser_state* parser){
         return NIL_Symbol;}
     return float_from_floating(value);}
 
+/* Fold an (unescaped) token's case per the current readtable's READTABLE-CASE,
+   in place; returns the token.  :INVERT inverts a single-case token and leaves a
+   mixed-case one untouched. */
+static char* apply_readtable_case(octet* token){
+    Ref rc = current_readtable()->slots->readtable.readcase;
+    if(rc == K(DOWNCASE)){ return (char*)octet_downcase(token); }
+    if(rc == K(PRESERVE)){ return (char*)token; }
+    if(rc == K(INVERT)){
+        bool up=false, lo=false;
+        for(octet* p=token; *p; p++){
+            if(*p>='A'&&*p<='Z'){ up=true; }
+            else if(*p>='a'&&*p<='z'){ lo=true; }}
+        if(up && !lo){ return (char*)octet_downcase(token); }
+        if(lo && !up){ return (char*)octet_upcase(token); }
+        return (char*)token;}                    /* mixed or no letters → preserve */
+    return (char*)octet_upcase(token);           /* :UPCASE (the default) */
+}
+
 static Ref scan_symbol(parser_state* parser,bool* valid){
     /* Under *READ-SUPPRESS* (reading a #+/#- discarded form) the token is
        consumed but produces no symbol: don't intern, and don't error on an
        unknown package qualifier. */
     if(parser->suppress){ (*valid)=true; return NIL_Symbol; }
-    const char* token=(const char*)octet_upcase(parser->token);
+    const char* token=apply_readtable_case(parser->token);
     const char* colon=strchr(token,':');
     (*valid)=false;
     /* No colon: a plain symbol interned in the current package (*PACKAGE*),
@@ -1254,6 +1272,27 @@ static void k_COPY_READTABLE(Ref function, Ref arguments, MultipleValues* result
     close_live_pool(pool); add_to_live_pool(result);
     results->count=1; results->values[0]=result;}
 
+static void k_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments; Ref rt=readtable_arg(&current, function);
+    check_no_more_arguments(function,current);
+    results->count=1; results->values[0]=rt->slots->readtable.readcase;
+    close_live_pool(pool);}
+
+/* Backing for (SETF (READTABLE-CASE rt) mode). */
+static void k_SET_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref rt=readtable_arg(&current, function);
+    Ref mode=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(mode!=K(UPCASE)&&mode!=K(DOWNCASE)&&mode!=K(PRESERVE)&&mode!=K(INVERT)){
+        ERROR("(SETF READTABLE-CASE): invalid mode %s",
+              string_cstring(prin1_to_string(mode)));}
+    rt->slots->readtable.readcase=mode;
+    results->count=1; results->values[0]=mode;
+    close_live_pool(pool);}
+
 static void register_reader_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
     set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
 
@@ -1279,7 +1318,10 @@ void reader_initialize(){
     register_reader_fn(S(GET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),NULL),          k_GET_DISPATCH_MACRO_CHARACTER);
     register_reader_fn(S(SET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(FN),NULL),    k_SET_DISPATCH_MACRO_CHARACTER);
     register_reader_fn(S(MAKE-DISPATCH-MACRO-CHARACTER), list(S(CHAR),NULL),                 k_MAKE_DISPATCH_MACRO_CHARACTER);
-    register_reader_fn(S(COPY-READTABLE),                NIL_Symbol,                         k_COPY_READTABLE);}
+    register_reader_fn(S(COPY-READTABLE),                NIL_Symbol,                         k_COPY_READTABLE);
+    register_reader_fn(S(READTABLE-CASE),                NIL_Symbol,                         k_READTABLE_CASE);
+    register_reader_fn(symbol_intern_cstring("%SET-READTABLE-CASE"),
+                       NIL_Symbol,                                                           k_SET_READTABLE_CASE);}
 
 
 /**** THE END ****/

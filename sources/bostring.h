@@ -3,5 +3,6 @@
 #include "kernel_types.h"
 
 octet* octet_upcase(octet* string);
+octet* octet_downcase(octet* string);
 
 #endif
