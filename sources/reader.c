@@ -615,13 +615,54 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
         ERROR("READ: symbol %s is not external in package %s",name_part,pkg_buf);}
     return sym;}
 
+/* CL upcase of a single octet (matches octet_upcase in bostring.c). */
+static octet reader_upcase1(octet c){
+    if(((97<=c)&&(c<=122)) || ((224<=c)&&(c<=254)&&(c!=247))){ return (octet)(c-32); }
+    return c;}
+
 static Ref parse_token(parser_state* parser){
     Ref rt=current_readtable();
     parser->length=0;
-    while(!parser->error && !parser->eof && token_continues(rt,parser->ch)){
-        check_token_too_long(parser,"Token");
-        parser->token[parser->length++]=parser->ch;
-        advance_character(parser);}
+    /* `escaped` becomes true at the first single-escape (\) or multi-escape (|…|)
+       in the token: such a token is unconditionally a SYMBOL whose name keeps the
+       case of escaped characters (unescaped ones still get readtable case).  We
+       fold case inline once escaping starts (retro-folding the unescaped prefix),
+       so the finished name can be interned verbatim. */
+    bool escaped=false;
+    while(!parser->error && !parser->eof){
+        if(parser->ch=='\\'){
+            if(!escaped){
+                for(halfword i=0;i<parser->length;i++){
+                    parser->token[i]=reader_upcase1(parser->token[i]);}
+                escaped=true;}
+            advance_character(parser);
+            if(parser->eof){
+                READER_ERROR(parser->input_stream,"Single escape \\ at end of input%s","");}
+            check_token_too_long(parser,"Token");
+            parser->token[parser->length++]=parser->ch;   /* escaped: verbatim */
+            advance_character(parser);}
+        else if(parser->ch=='|'){
+            if(!escaped){
+                for(halfword i=0;i<parser->length;i++){
+                    parser->token[i]=reader_upcase1(parser->token[i]);}
+                escaped=true;}
+            for(;;){
+                advance_character(parser);
+                if(parser->eof){
+                    READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}
+                if(parser->ch=='\\'){
+                    advance_character(parser);   /* the escaped char, taken literally */
+                    if(parser->eof){
+                        READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}}
+                else if(parser->ch=='|'){ break; }
+                check_token_too_long(parser,"Token");
+                parser->token[parser->length++]=parser->ch;}
+            advance_character(parser);}           /* past the closing | */
+        else if(token_continues(rt,parser->ch)){
+            check_token_too_long(parser,"Token");
+            parser->token[parser->length++]=escaped?reader_upcase1(parser->ch):parser->ch;
+            advance_character(parser);}
+        else{ break; }}
     /* A token terminated by end-of-file is still a complete token: clear the EOF
        flag (as parse_list does after ')') so kernel_read returns the object
        instead of signalling end-of-file.  e.g. (read-from-string "foo"), or a
@@ -629,6 +670,11 @@ static Ref parse_token(parser_state* parser){
     if(parser->eof && parser->length>0){ parser->eof=false; }
     check_parser_error(parser);
     parser->token[parser->length]='\0';
+    if(escaped){
+        /* Escaped tokens are always symbols; the name is already correctly cased,
+           so intern it verbatim (no number scan, no further case folding). */
+        parser->eof=false;
+        return package_intern_current_cstring((const char*)parser->token);}
     bool valid=true;
     Ref result=scan_integer(parser);
     if(result==NIL_Symbol){
@@ -853,7 +899,9 @@ static Ref parse_object(parser_state* parser){
                 READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}}
           break;}
       default:
-          if(constituentp(parser->ch)){
+          if(constituentp(parser->ch) || parser->ch=='\\'){
+              /* '\' is the single-escape: it begins a symbol token whose first
+                 character is taken literally (parse_token handles the escape). */
               return parse_token(parser);}
           else{
               /* TODO: free the name! */

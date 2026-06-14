@@ -4880,11 +4880,14 @@ behaves exactly like VECTOR-PUSH and always succeeds."
 
 (defun char-name (char)
   "Return the name of CHARACTER as a string, or NIL."
+  ;; bocl's newline is NEL (code 133, the internal line separator); ASCII LF
+  ;; (code 10) is #\Linefeed.  Keep this consistent with NAME-CHAR and the reader
+  ;; so (name-char (char-name #\Newline)) round-trips.
   (case (char-code char)
     (0   "Null")     (7  "Bell")    (8  "Backspace")
-    (9   "Tab")      (10 "Newline") (11 "Page")
+    (9   "Tab")      (10 "Linefeed")(11 "Page")
     (12  "Page")     (13 "Return")  (27 "Escape")
-    (32  "Space")    (127 "Rubout") (t nil)))
+    (32  "Space")    (127 "Rubout") (133 "Newline") (t nil)))
 
 (defun name-char (name)
   "Return the character with the given NAME, or NIL."
@@ -4893,7 +4896,9 @@ behaves exactly like VECTOR-PUSH and always succeeds."
           ((string= n "BELL")      (code-char 7))
           ((string= n "BACKSPACE") (code-char 8))
           ((string= n "TAB")       (code-char 9))
-          ((string= n "NEWLINE")   (code-char 10))
+          ((string= n "LINEFEED")  (code-char 10))
+          ((string= n "NEWLINE")   (code-char 133)) ; NEL — bocl's newline
+          ((string= n "LINE_SEPARATOR") (code-char 133))
           ((string= n "RETURN")    (code-char 13))
           ((string= n "ESCAPE")    (code-char 27))
           ((string= n "SPACE")     (code-char 32))
