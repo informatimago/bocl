@@ -54,7 +54,14 @@ static void kernel_APPLY(Ref function, Ref arguments, MultipleValues* results){
    invoke `visit` with the result. Stop when ANY list is exhausted. */
 typedef void (*tuple_visitor)(Ref result_value, void* ctx);
 
-static void map_walk(Ref fn, Ref lists, tuple_visitor visit, void* ctx){
+static void map_walk(Ref fn, Ref lists, tuple_visitor visit, void* ctx, Ref* keep){
+    /* KEEP (or NULL): a pointer to the head of a result list the visitor
+       accumulates across iterations.  The visitor conses inside MW_POOL, whose
+       close (below) trims those cells out of the live pool — so without this the
+       partial result is unrooted across the next kernel_apply and gets freed and
+       reused (heap corruption).  We re-root *KEEP after each close, trimming to
+       ACC_POOL first so the live pool does not grow per iteration. */
+    uword acc_pool = open_live_pool();
     while(true){
         /* If any list is empty, stop. */
         {Ref it = lists;
@@ -90,7 +97,8 @@ static void map_walk(Ref fn, Ref lists, tuple_visitor visit, void* ctx){
         Ref result = (r.count > 0) ? r.values[0] : NIL_Symbol;
         add_to_live_pool(result);
         visit(result, ctx);
-        close_live_pool(mw_pool);}}
+        close_live_pool(mw_pool);
+        if(keep){ close_live_pool(acc_pool); add_to_live_pool(*keep); }}}
 
 /* MAPCAR — collect the results. */
 typedef struct {
@@ -116,7 +124,7 @@ static void kernel_MAPCAR(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("MAPCAR: %s","needs at least one list");}
     collect_ctx c = { NIL_Symbol, NIL_Symbol };
-    map_walk(fn, current, collect_visit, &c);
+    map_walk(fn, current, collect_visit, &c, &c.head);
     results->count = 1;
     results->values[0] = c.head;
     close_live_pool(pool);}
@@ -134,7 +142,7 @@ static void kernel_MAPC(Ref function, Ref arguments, MultipleValues* results){
         ERROR("MAPC: %s","needs at least one list");}
     Ref first_list = cons_car(current);
     discard_ctx c = { 0 };
-    map_walk(fn, current, discard_visit, &c);
+    map_walk(fn, current, discard_visit, &c, NULL);
     results->count = 1;
     results->values[0] = first_list;
     close_live_pool(pool);}
@@ -156,7 +164,7 @@ static void kernel_EVERY(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("EVERY: %s","needs at least one list");}
     pred_ctx c = { 0, 0 };
-    map_walk(fn, current, every_visit, &c);
+    map_walk(fn, current, every_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.found_false ? NIL_Symbol : T_Symbol;
     close_live_pool(pool);}
@@ -177,7 +185,7 @@ static void kernel_SOME(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("SOME: %s","needs at least one list");}
     some_ctx c = { NIL_Symbol, 0 };
-    map_walk(fn, current, some_visit, &c);
+    map_walk(fn, current, some_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.captured ? c.first_true : NIL_Symbol;
     close_live_pool(pool);}
@@ -192,7 +200,7 @@ static void kernel_NOTEVERY(Ref function, Ref arguments, MultipleValues* results
     if(nullp(current)){
         ERROR("NOTEVERY: %s","needs at least one list");}
     pred_ctx c = { 0, 0 };
-    map_walk(fn, current, every_visit, &c);
+    map_walk(fn, current, every_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.found_false ? T_Symbol : NIL_Symbol;
     close_live_pool(pool);}
@@ -205,7 +213,7 @@ static void kernel_NOTANY(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("NOTANY: %s","needs at least one list");}
     some_ctx c = { NIL_Symbol, 0 };
-    map_walk(fn, current, some_visit, &c);
+    map_walk(fn, current, some_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.captured ? NIL_Symbol : T_Symbol;
     close_live_pool(pool);}
