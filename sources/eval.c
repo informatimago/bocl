@@ -625,17 +625,21 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                          dolist(subform,body){
                              evale(subform,environment,results);}}
                      UWCLEANUP{
-                         /* restore on non-local exit */
+                         /* Restore the special bindings on non-local exit.  Only
+                          * the special variables among BINDINGS were dynamically
+                          * bound; lexical ones (the common case in a mixed LET)
+                          * are simply skipped — same as the normal-return path
+                          * below.  (Treating a lexical binding as an error here
+                          * was wrong: a non-local exit out of a LET that binds
+                          * even one special alongside lexicals would FATAL.) */
                          {dolist(binding,bindings){
                                  Ref name=consp(binding)?car(binding):binding;
                                  Ref var=environment_find_variable(name,environment);
-                                 if(!env_local_special_variable_p(var)){
-                                     FATAL("Oops unwinding dynamic binding of a nonn local special variable! %s",
-                                           string_cstring(symbol_name(name)));}
-                                 if(is_true(env_local_special_variable_saved_boundp(var))){
-                                     set_symbol_value(name,env_local_special_variable_saved_value(var));}
-                                 else{
-                                     symbol_make_unbound(name);}}}}}
+                                 if(env_local_special_variable_p(var)){
+                                     if(is_true(env_local_special_variable_saved_boundp(var))){
+                                         set_symbol_value(name,env_local_special_variable_saved_value(var));}
+                                     else{
+                                         symbol_make_unbound(name);}}}}}}
                  /* Normal-return restore: UWCLEANUP didn't run for normal exit.
                   * Non-local exits throw via unwind_next_frame so never reach here. */
                  {dolist(binding,bindings){
