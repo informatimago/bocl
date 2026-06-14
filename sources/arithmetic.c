@@ -236,6 +236,13 @@ void kernel_DIVIDE(Ref function,Ref arguments,MultipleValues* results){
 
 static bool num_eq(Ref a, Ref b){
     check_number(a); check_number(b);
+    /* Complex: equal iff real and imaginary parts are each =.  complex_realpart/
+       imagpart of a real return the number / 0, so (= 1 #C(1 1)) is correctly
+       false and (= #C(0 1) #C(0 1)) true.  (Reading #C(x 0) already collapses to
+       the real x, so a complex here has a non-zero imaginary part.) */
+    if(complexp(a) || complexp(b)){
+        return num_eq(complex_realpart(a), complex_realpart(b))
+            && num_eq(complex_imagpart(a), complex_imagpart(b));}
     if(either_float(a,b) || either_ratio(a,b))
         return as_floating(a)==as_floating(b);
     if(bignump(a)||bignump(b)) return bignum_compare(a,b)==0;
