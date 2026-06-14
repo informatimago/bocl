@@ -363,7 +363,7 @@ static void kp_INTERN(Ref function, Ref arguments, MultipleValues* results){
     Ref name = pop_mandatory_argument(function, &current);
     Ref pkg_des = nullp(current) ? current_package() : pop_mandatory_argument(function, &current);
     check_no_more_arguments(function, current);
-    if(!typep(name, STRING_Class)){ TYPE_ERROR(name, STRING_Class); }
+    name = string_designator_name(name);   /* accept string / symbol / character */
     Ref pkg = package_find(pkg_des);
     if(nullp(pkg)){ ERROR("INTERN: no such package %s",
                           string_cstring(prin1_to_string(pkg_des))); }
@@ -381,7 +381,7 @@ static void kp_FIND_SYMBOL(Ref function, Ref arguments, MultipleValues* results)
     Ref name = pop_mandatory_argument(function, &current);
     Ref pkg_des = nullp(current) ? current_package() : pop_mandatory_argument(function, &current);
     check_no_more_arguments(function, current);
-    if(!typep(name, STRING_Class)){ TYPE_ERROR(name, STRING_Class); }
+    name = string_designator_name(name);   /* accept string / symbol / character */
     Ref pkg = package_find(pkg_des);
     if(nullp(pkg)){ ERROR("FIND-SYMBOL: no such package %s",
                           string_cstring(prin1_to_string(pkg_des))); }

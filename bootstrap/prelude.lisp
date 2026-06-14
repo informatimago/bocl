@@ -846,6 +846,12 @@
   (remove-if (lambda (x) (find (funcall key x) list2 :test test :key key))
              list1))
 
+(defun subsetp (list1 list2 &key (test #'eql) (key #'identity))
+  "True if every element of LIST1 appears (under TEST/KEY) in LIST2."
+  (dolist (x list1 t)
+    (unless (find (funcall key x) list2 :test test :key key)
+      (return nil))))
+
 (defun pairlis (keys values &optional (alist nil))
   ;; (PAIRLIS '(a b c) '(1 2 3)) -> ((C . 3) (B . 2) (A . 1))
   ;; per CL: keys and values are pushed onto alist in order, so the
