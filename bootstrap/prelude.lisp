@@ -4196,16 +4196,14 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
 ;;; ---- Restart invocation functions ----------------------------------------
 
 (defun muffle-warning (&optional condition)
-  "Invoke the MUFFLE-WARNING restart established by WARN."
-  condition
-  (let ((r (find-restart 'muffle-warning)))
+  "Invoke the MUFFLE-WARNING restart; signal CONTROL-ERROR if none is active."
+  (let ((r (find-restart 'muffle-warning condition)))
     (if r (invoke-restart r)
-        (error "No MUFFLE-WARNING restart available"))))
+        (error 'control-error))))
 
 (defun continue (&optional condition)
-  "Invoke the CONTINUE restart if one is available."
-  condition
-  (let ((r (find-restart 'continue)))
+  "Invoke the CONTINUE restart if one is available, else return NIL."
+  (let ((r (find-restart 'continue condition)))
     (when r (invoke-restart r))))
 
 (defun warn (datum &rest arguments)
@@ -4225,14 +4223,14 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
     nil))
 
 (defun store-value (value &optional condition)
-  "Invoke the STORE-VALUE restart with VALUE."
-  condition
-  (invoke-restart (find-restart 'store-value) value))
+  "Invoke the STORE-VALUE restart with VALUE, or return NIL if none is active."
+  (let ((r (find-restart 'store-value condition)))
+    (when r (invoke-restart r value))))
 
 (defun use-value (value &optional condition)
-  "Invoke the USE-VALUE restart with VALUE."
-  condition
-  (invoke-restart (find-restart 'use-value) value))
+  "Invoke the USE-VALUE restart with VALUE, or return NIL if none is active."
+  (let ((r (find-restart 'use-value condition)))
+    (when r (invoke-restart r value))))
 
 (defmacro with-condition-restarts (condition-form restarts-form &body body)
   "Run BODY with the restarts associated with the condition.  bocl restarts are
