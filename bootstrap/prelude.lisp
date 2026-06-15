@@ -2385,9 +2385,14 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                           ((%lkw sub "DOWNTO")      (setq end-f (pop!) incl  t  downp t))
                           ((%lkw sub "ABOVE")       (setq end-f (pop!) incl  nil downp t))
                           ((%lkw sub "BY")          (setq step  (pop!) by-supplied t)))))
-                    ;; If DOWNTO/ABOVE was found but no BY was given, default step = -1
-                    (unless by-supplied
-                      (setq step (if downp -1 1)))
+                    ;; BY supplies a POSITIVE step magnitude; DOWNTO/ABOVE/DOWNFROM
+                    ;; count downward, so the effective step is negated.  Without
+                    ;; BY, default to -1 (down) or 1 (up).  (Otherwise FROM 3 DOWNTO
+                    ;; 1 BY 1 would increment forever — the test never fires.)
+                    (cond ((not by-supplied) (setq step (if downp -1 1)))
+                          (downp             (setq step (if (numberp step)
+                                                            (- step)
+                                                            (list '- step)))))
                     (when end-f
                       (push (if downp
                                 (if incl `(< ,v ,end-f)  `(<= ,v ,end-f))
@@ -2518,7 +2523,11 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
             ((%lkw kw "THEREIS")  (setq thereis-f (pop!)))
             ;; RETURN
             ((%lkw kw "RETURN")
-             (setq return-f (pop!) return-set t))
+             ;; RETURN form terminates the loop IMMEDIATELY (CLHS 6.1.5), so emit
+             ;; (return-from nil form) into the body — NOT a deferred post-loop
+             ;; result-expr, which a loop with no iteration clause never reaches.
+             (setq body (append body
+                                 (list `(return-from ,(or name nil) ,(pop!))))))
             ;; INITIALLY / FINALLY
             ((%lkw kw "INITIALLY")
              (setq initially (append initially (take-body))))
