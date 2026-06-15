@@ -781,6 +781,21 @@
          (push (car rem) acc)
          (setq rem (cdr rem)))))))
 
+;; (SETF (SUBSEQ seq start [end]) new): replace seq[start:end] with elements of
+;; NEW, copying the shorter of the subsequence length and (length NEW) (CLHS).
+(defun %set-subseq (sequence start end new)
+  (let* ((slen (length sequence))
+         (stop (min (or end slen) slen))
+         (n    (min (- stop start) (length new))))
+    (dotimes (i n new)
+      (setf (elt sequence (+ start i)) (elt new i)))))
+
+(sethash 'subseq *setf-expanders*
+  (lambda (sequence start &rest end-and-val)
+    (let ((val (car (last end-and-val)))
+          (end (if (cdr end-and-val) (car end-and-val) nil)))
+      `(%set-subseq ,sequence ,start ,end ,val))))
+
 ;; -------------------------------------------------------------------- ;;
 ;;  Concatenation — list result-type only for now.                       ;;
 ;; -------------------------------------------------------------------- ;;
@@ -5849,14 +5864,42 @@ places share structure."
                        (coerce suffix (if (stringp sequence) 'string 'vector)))))))
 
 (defun remove (item sequence
-               &key (test #'eql) (start 0) end from-end count (key #'identity))
-  (remove-if (lambda (x) (funcall test item x)) sequence
+               &key (test #'eql) test-not (start 0) end from-end count (key #'identity))
+  (remove-if (if test-not
+                 (lambda (x) (not (funcall test-not item x)))
+                 (lambda (x) (funcall test item x)))
+             sequence
              :start start :end end :from-end from-end :count count :key key))
 
 (defun remove-if-not (predicate sequence
                       &key (start 0) end from-end count (key #'identity))
   (remove-if (lambda (x) (not (funcall predicate x))) sequence
              :start start :end end :from-end from-end :count count :key key))
+
+;; DELETE family: CL permits DELETE/DELETE-IF/DELETE-IF-NOT to be non-destructive,
+;; so reuse the generic REMOVE family (handles lists, strings, vectors, and — as
+;; general vectors — bit-vectors).  This also gives them the full keyword set the
+;; kernel DELETE (object+list only) and the early list-only DELETE-IF lacked.
+(defun delete (item sequence &rest keys)
+  (apply #'remove item sequence keys))
+(defun delete-if (predicate sequence &rest keys)
+  (apply #'remove-if predicate sequence keys))
+(defun delete-if-not (predicate sequence &rest keys)
+  (apply #'remove-if-not predicate sequence keys))
+
+(defun merge (result-type sequence1 sequence2 predicate &key (key #'identity))
+  "Merge two sorted sequences into one sorted sequence of RESULT-TYPE (stable:
+ties take from SEQUENCE1 first)."
+  (let ((l1 (length sequence1)) (l2 (length sequence2))
+        (acc nil) (i 0) (j 0))
+    (do () ((and (>= i l1) (>= j l2)))
+      (cond ((>= i l1) (push (elt sequence2 j) acc) (setq j (1+ j)))
+            ((>= j l2) (push (elt sequence1 i) acc) (setq i (1+ i)))
+            ((funcall predicate (funcall key (elt sequence2 j))
+                                (funcall key (elt sequence1 i)))
+             (push (elt sequence2 j) acc) (setq j (1+ j)))
+            (t (push (elt sequence1 i) acc) (setq i (1+ i)))))
+    (coerce (nreverse acc) result-type)))
 
 ;;; ---- STRING= / STRING< etc. with bounds ----------------------------------
 
