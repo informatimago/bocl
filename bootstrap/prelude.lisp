@@ -6168,12 +6168,28 @@ FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
 ;; so reuse the generic REMOVE family (handles lists, strings, vectors, and — as
 ;; general vectors — bit-vectors).  This also gives them the full keyword set the
 ;; kernel DELETE (object+list only) and the early list-only DELETE-IF lacked.
+(defun %delete-into-list (orig kept)
+  "Destructively reshape ORIG's conses to hold KEPT's elements (KEPT is the
+REMOVE result, so it is ORIG minus the deleted items, in order), and return it.
+This makes DELETE mutate its list argument, as the destructive variant should."
+  (cond ((null kept) nil)            ; everything deleted -> empty result
+        ((null orig) kept)
+        (t (do ((o orig (cdr o)) (k kept (cdr k)) (prev nil o))
+               ((null k) (setf (cdr prev) nil) orig)
+             (setf (car o) (car k))))))
+
 (defun delete (item sequence &rest keys)
-  (apply #'remove item sequence keys))
+  (if (listp sequence)
+      (%delete-into-list sequence (apply #'remove item sequence keys))
+      (apply #'remove item sequence keys)))
 (defun delete-if (predicate sequence &rest keys)
-  (apply #'remove-if predicate sequence keys))
+  (if (listp sequence)
+      (%delete-into-list sequence (apply #'remove-if predicate sequence keys))
+      (apply #'remove-if predicate sequence keys)))
 (defun delete-if-not (predicate sequence &rest keys)
-  (apply #'remove-if-not predicate sequence keys))
+  (if (listp sequence)
+      (%delete-into-list sequence (apply #'remove-if-not predicate sequence keys))
+      (apply #'remove-if-not predicate sequence keys)))
 
 (defun merge (result-type sequence1 sequence2 predicate &key (key #'identity))
   "Merge two sorted sequences into one sorted sequence of RESULT-TYPE (stable:
