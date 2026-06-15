@@ -2042,6 +2042,19 @@ identity."
 ;; ---- REPLACE ------------------------------------------------------------
 ;; (replace seq1 seq2 &key start1 end1 start2 end2) → seq1
 
+;; The kernel NREVERSE is list-only (returns NIL on a vector/string).  Make it
+;; generic: lists go to the kernel; vectors/strings/bit-vectors are reversed in
+;; place by swapping ends.
+(defvar *%kernel-nreverse* (symbol-function 'nreverse))
+(defun nreverse (sequence)
+  (if (listp sequence)
+      (funcall *%kernel-nreverse* sequence)
+      (let ((len (length sequence)))
+        (dotimes (i (truncate len 2) sequence)
+          (let ((tmp (elt sequence i)) (j (- len 1 i)))
+            (setf (elt sequence i) (elt sequence j))
+            (setf (elt sequence j) tmp))))))
+
 (defun replace (sequence1 sequence2
                 &key (start1 0) end1 (start2 0) end2)
   "Destructively replace SEQUENCE1[START1,END1) with SEQUENCE2[START2,END2),
@@ -6427,31 +6440,31 @@ FROM-END returns the rightmost such index."
 ;;; ---- COUNT-IF / COUNT / COUNT-IF-NOT with :start/:end -------------------
 
 (defun count-if (predicate sequence
-                 &key (start 0) end (key #'identity))
-  "Count elements in SEQUENCE[START,END) satisfying PREDICATE."
+                 &key (start 0) end from-end (key #'identity))
+  "Count elements in SEQUENCE[START,END) satisfying PREDICATE.  FROM-END does not
+change the count, but PREDICATE is called in that order (it may have effects)."
   (let* ((len  (length sequence))
          (stop (min (or end len) len))
          (n    0))
-    (do ((i start (1+ i)))
-        ((>= i stop) n)
-      (when (funcall predicate (funcall key (elt sequence i)))
-        (setq n (1+ n))))))
+    (if from-end
+        (do ((i (1- stop) (1- i))) ((< i start) n)
+          (when (funcall predicate (funcall key (elt sequence i))) (setq n (1+ n))))
+        (do ((i start (1+ i))) ((>= i stop) n)
+          (when (funcall predicate (funcall key (elt sequence i))) (setq n (1+ n)))))))
 
 (defun count (item sequence
               &key (test #'eql) test-not (start 0) end from-end (key #'identity))
-  "Count occurrences of ITEM in SEQUENCE[START,END).  FROM-END accepted (it does
-not affect the count) but ignored."
-  (declare (ignore from-end))
+  "Count occurrences of ITEM in SEQUENCE[START,END)."
   (count-if (if test-not
                 (lambda (x) (not (funcall test-not item x)))
                 (lambda (x) (funcall test item x)))
             sequence
-            :start start :end end :key key))
+            :start start :end end :from-end from-end :key key))
 
 (defun count-if-not (predicate sequence
-                     &key (start 0) end (key #'identity))
+                     &key (start 0) end from-end (key #'identity))
   (count-if (lambda (x) (not (funcall predicate x))) sequence
-            :start start :end end :key key))
+            :start start :end end :from-end from-end :key key))
 
 ;;; ---- REDUCE with :start/:end --------------------------------------------
 
