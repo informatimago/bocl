@@ -2464,21 +2464,30 @@ binds the remaining CDR."
                                     (list (cons 'progn (%loop-destr-form fvar v))))))
                (skip-type-spec)   ; optional OF-TYPE / bare type spec (ignored)
                (cond
-                 ;; FOR v IN list
+                 ;; FOR v IN list [BY step-fn]
                  ((%lkw (pk) "IN")
                   (pop!)
-                  (let ((lv (gensym "LV-")))
+                  (let ((lv (gensym "LV-")) (bv nil))
                     (push (list lv (pop!)) letb)   ; lv bound first (LET* order)
+                    (when (%lkw (pk) "BY")         ; step-fn (e.g. #'cddr), eval'd once
+                      (pop!) (setq bv (gensym "BY-"))
+                      (push (list bv (pop!)) letb))
                     (push (list v  nil)    letb)
                     (push `(null ,lv)            tests)
                     (push `(setq ,v (car ,lv))   setups)
-                    (push `(setq ,lv (cdr ,lv))  steps)))
-                 ;; FOR v ON list
+                    (push (if bv `(setq ,lv (funcall ,bv ,lv))
+                                 `(setq ,lv (cdr ,lv))) steps)))
+                 ;; FOR v ON list [BY step-fn]
                  ((%lkw (pk) "ON")
                   (pop!)
-                  (push (list v (pop!)) letb)
-                  (push `(null ,v)      tests)
-                  (push `(setq ,v (cdr ,v)) steps))
+                  (let ((bv nil))
+                    (push (list v (pop!)) letb)
+                    (when (%lkw (pk) "BY")
+                      (pop!) (setq bv (gensym "BY-"))
+                      (push (list bv (pop!)) letb))
+                    (push `(atom ,v)      tests)   ; ON ends by ENDP/ATOM, not NULL
+                    (push (if bv `(setq ,v (funcall ,bv ,v))
+                                 `(setq ,v (cdr ,v))) steps)))
                  ;; FOR v ACROSS vector/string
                  ((%lkw (pk) "ACROSS")
                   (pop!)
@@ -2579,7 +2588,7 @@ binds the remaining CDR."
                          (keys-var (gensym "HKEYS-"))
                          (vals-var (gensym "HVALS-"))
                          (other-v  nil))
-                    (when (%lkw (pk) "OF") (pop!))
+                    (when (%lkw (pk) "OF" "IN") (pop!))   ; OF or IN (CLHS 6.1.2.1.4)
                     (let ((ht-form (pop!)))
                       (when (%lkw (pk) "USING")
                         (pop!)
