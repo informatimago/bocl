@@ -2379,6 +2379,32 @@ binds the remaining CDR."
                                    (%loop-destr-form (cdr pattern) (list 'cdr access))))
         (t                 nil)))
 
+(defun %loop-parallel-steps (forms)
+  "Fuse a FOR/AND group's step forms (each (SETQ v e) / (INCF v d) / (DECF v d))
+into one form that evaluates every new value with the iteration's CURRENT
+bindings, then assigns — so AND-joined steppers see each other's old values
+(CLHS 6.1.2.2).  0 or 1 form needs no temporaries; anything not a simple
+SETQ/INCF/DECF is left in place (sequential)."
+  (cond ((null forms) nil)
+        ((null (cdr forms)) (car forms))
+        (t (let ((tmps nil) (assigns nil))
+             (dolist (f forms)
+               (let ((op (and (consp f) (car f))))
+                 (cond ((eq op 'setq)
+                        (let ((g (gensym "PS-")))
+                          (push (list g (third f)) tmps)
+                          (push (list 'setq (second f) g) assigns)))
+                       ((eq op 'incf)
+                        (let ((g (gensym "PS-")))
+                          (push (list g (list '+ (second f) (or (third f) 1))) tmps)
+                          (push (list 'setq (second f) g) assigns)))
+                       ((eq op 'decf)
+                        (let ((g (gensym "PS-")))
+                          (push (list g (list '- (second f) (or (third f) 1))) tmps)
+                          (push (list 'setq (second f) g) assigns)))
+                       (t (push f assigns)))))
+             (cons 'let (cons (nreverse tmps) (nreverse assigns)))))))
+
 (defun %loop-expand (all-clauses)
   (let ((rest     all-clauses)
         (name     nil)
@@ -2448,7 +2474,14 @@ binds the remaining CDR."
                        letb))))
             ;; FOR / AS
             ((%lkw kw "FOR" "AS")
-             (let* ((fvar  (pop!))
+             ;; A FOR clause may bind several variables joined by AND; they step
+             ;; in PARALLEL (CLHS 6.1.2.2) — each AND-clause's stepper sees the
+             ;; others' values from the start of the iteration.  Process each
+             ;; variable, then (if AND was used) fuse this group's steps.
+             (let ((%old-steps steps) (%nvars 0))
+              (flet ((%one-for ()
+               (setq %nvars (+ %nvars 1))
+               (let* ((fvar  (pop!))
                     ;; A cons FOR variable is a destructuring pattern: iterate a
                     ;; hidden gensym and destructure it into the pattern's leaves
                     ;; each iteration (after the sub-clause sets the gensym).
@@ -2634,7 +2667,16 @@ binds the remaining CDR."
                             (when other-v
                               (push `(setq ,other-v (car ,keys-var)) steps)))))))
                  (t
-                  (error "LOOP FOR: unknown sub-clause ~S" (pk))))))
+                  (error "LOOP FOR: unknown sub-clause ~S" (pk)))))))
+              (%one-for)
+              (do () ((not (%lkw (pk) "AND"))) (pop!) (%one-for)))
+             ;; AND joined >1 variable: fuse this group's steps into one parallel
+             ;; assignment (the new steps are at the front of STEPS, before
+             ;; %OLD-STEPS) so each stepper sees the others' old values.
+             (when (> %nvars 1)
+               (let ((%new nil))
+                 (do () ((eq steps %old-steps)) (push (pop steps) %new))
+                 (push (%loop-parallel-steps (nreverse %new)) steps)))))
             ;; REPEAT n
             ((%lkw kw "REPEAT")
              (let ((rv (gensym "R-")))
