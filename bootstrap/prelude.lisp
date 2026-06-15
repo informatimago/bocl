@@ -1259,7 +1259,9 @@ identity."
     (if (and v (< v radix)) v nil)))
 
 (defun alphanumericp (char)
-  (or (alpha-char-p char) (digit-char-p char)))
+  ;; Canonical boolean: DIGIT-CHAR-P returns the digit's weight, which must not
+  ;; leak out (e.g. as a REMOVE-DUPLICATES :key value).
+  (if (or (alpha-char-p char) (digit-char-p char)) t nil))
 
 (defun digit-char (weight &optional (radix 10))
   ;; Return the character representing WEIGHT in RADIX, or NIL if impossible.
@@ -3104,11 +3106,16 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
 ;; -------------------------------------------------------------------- ;;
 
 (defun map-into (result-sequence function &rest sequences)
-  ;; Write (apply function (nth-element-of-each-sequence i)) into
-  ;; result-sequence[i].  Returns result-sequence.  Stops at the
-  ;; shortest sequence (including result-sequence itself).
-  (let ((n (reduce #'min (cons (length result-sequence)
-                               (mapcar #'length sequences)))))
+  ;; Write (apply function (i-th of each SEQUENCE)) into result-sequence[i].
+  ;; For a fill-pointered result the limit is ARRAY-TOTAL-SIZE (not the current
+  ;; fill pointer) and the fill pointer is then set to the number stored (CLHS).
+  (let* ((fp?  (and (vectorp result-sequence)
+                    (array-has-fill-pointer-p result-sequence)))
+         (cap  (if fp? (array-total-size result-sequence) (length result-sequence)))
+         (n    (if sequences
+                   (reduce #'min (cons cap (mapcar #'length sequences)))
+                   cap)))
+    (when fp? (setf (fill-pointer result-sequence) n))
     (dotimes (i n result-sequence)
       (setf (elt result-sequence i)
             (apply function (mapcar (lambda (s) (elt s i)) sequences))))))
