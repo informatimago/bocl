@@ -2340,9 +2340,12 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
   ;; Kinds ending in -body are handled inline in the loop body (via WHEN/UNLESS);
   ;; returning nil here suppresses double-generation.
   (case kind
+    ;; List accumulation builds REVERSED (cons / revappend / nreconc) so that
+    ;; collect/append/nconc can share one variable; collect-reverses flips it
+    ;; once at loop end.
     (:collect  `(setq ,var (cons ,expr ,var)))
-    (:append   `(setq ,var (append ,var ,expr)))
-    (:nconc    `(setq ,var (nconc ,var ,expr)))
+    (:append   `(setq ,var (revappend ,expr ,var)))
+    (:nconc    `(setq ,var (nreconc ,expr ,var)))
     (:sum      `(incf ,var ,expr))
     (:count    `(when ,expr (incf ,var)))
     (:maximize `(let ((%v ,expr)) (when (or (null ,var) (> %v ,var)) (setq ,var %v))))
@@ -2417,6 +2420,10 @@ SETQ/INCF/DECF is left in place (sequential)."
         (finally   nil)
         (accums    nil)   ; (kind result-var expr) — first in = last pushed; nreverse
         (into-vars nil)   ; accumulation vars named by INTO — never the loop result
+        (anon-list nil)   ; shared var for anonymous collect/append/nconc
+        (anon-sum  nil)   ; shared var for anonymous sum/count
+        (anon-max  nil)   ; shared var for anonymous maximize
+        (anon-min  nil)   ; shared var for anonymous minimize
         (always-f  nil)
         (always-set nil) ; T if an ALWAYS clause was seen (always-f may be NIL)
         (never-f   nil)
@@ -2449,9 +2456,24 @@ SETQ/INCF/DECF is left in place (sequential)."
              ;; Emit the per-iteration accumulation update in the loop BODY at
              ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
              ;; CLHS 6.1.1.4), and register the result variable (as its -body
-             ;; kind) for binding + the final result form.
+             ;; kind) for binding + the final result form — but only ONCE per var,
+             ;; so several clauses sharing a var (anonymous or same INTO) bind and
+             ;; reverse it a single time.
              (setq body (append body (list (%loop-accum-step kind var e))))
-             (push (list (%loop-accum-body-kind kind) var e) accums)))
+             (unless (dolist (a accums nil) (when (eq (second a) var) (return t)))
+               (push (list (%loop-accum-body-kind kind) var e) accums)))
+           (anon-var (kind)
+             ;; The shared accumulation variable for an anonymous clause of KIND's
+             ;; category, created on first use: like-typed anonymous accumulations
+             ;; all merge into one place (CLHS 6.1.3).
+             (cond ((member kind '(:collect :append :nconc))
+                    (or anon-list (setq anon-list (gensym "ACC-L-"))))
+                   ((member kind '(:sum :count))
+                    (or anon-sum (setq anon-sum (gensym "ACC-N-"))))
+                   ((eq kind :maximize)
+                    (or anon-max (setq anon-max (gensym "ACC-MX-"))))
+                   ((eq kind :minimize)
+                    (or anon-min (setq anon-min (gensym "ACC-MN-")))))))
       (do () ((null rest))
         (let ((kw (pop!)))
           (cond
@@ -2721,43 +2743,43 @@ SETQ/INCF/DECF is left in place (sequential)."
                (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
-               (add-accum :collect (or iv (gensym "C-")) e)))
+               (add-accum :collect (or iv (anon-var :collect)) e)))
             ((%lkw kw "APPEND" "APPENDING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
-               (add-accum :append (or iv (gensym "A-")) e)))
+               (add-accum :append (or iv (anon-var :append)) e)))
             ((%lkw kw "NCONC" "NCONCING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
-               (add-accum :nconc (or iv (gensym "NC-")) e)))
+               (add-accum :nconc (or iv (anon-var :nconc)) e)))
             ((%lkw kw "SUM" "SUMMING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
-               (add-accum :sum (or iv (gensym "S-")) e)))
+               (add-accum :sum (or iv (anon-var :sum)) e)))
             ((%lkw kw "COUNT" "COUNTING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
-               (add-accum :count (or iv (gensym "K-")) e)))
+               (add-accum :count (or iv (anon-var :count)) e)))
             ((%lkw kw "MAXIMIZE" "MAXIMIZING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
-               (add-accum :maximize (or iv (gensym "MX-")) e)))
+               (add-accum :maximize (or iv (anon-var :maximize)) e)))
             ((%lkw kw "MINIMIZE" "MINIMIZING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
-               (add-accum :minimize (or iv (gensym "MN-")) e)))
+               (add-accum :minimize (or iv (anon-var :minimize)) e)))
             ;; ALWAYS / NEVER / THEREIS
             ((%lkw kw "ALWAYS")   (setq always-f  (pop!) always-set  t))
             ((%lkw kw "NEVER")    (setq never-f   (pop!) never-set   t))
@@ -2818,9 +2840,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   ;; Reuse shared var for ELSE branch so both
                                   ;; halves accumulate into the same list.
-                                  (v  (or iv reuse-var (gensym "C-"))))
+                                  (v  (or iv reuse-var (anon-var :collect))))
                              (setf (car shared-box) v) (when iv (push iv into-vars)) ; remember for possible ELSE
-                             (unless (and reuse-var (eq v reuse-var))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :collect-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (setq ,v (cons ,e ,v)))
@@ -2831,35 +2853,35 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or iv reuse-var (gensym "A-"))))
+                                  (v  (or iv reuse-var (anon-var :append))))
                              (setf (car shared-box) v) (when iv (push iv into-vars))
-                             (unless (and reuse-var (eq v reuse-var))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :append-body v e) accums))
                              (list (if neg
-                                       `(unless ,cond (setq ,v (append ,v ,e)))
-                                       `(when ,cond (setq ,v (append ,v ,e)))))))
+                                       `(unless ,cond (setq ,v (revappend ,e ,v)))
+                                       `(when ,cond (setq ,v (revappend ,e ,v)))))))
                           ;; NCONC / NCONCING
                           ((%lkw sub "NCONC" "NCONCING")
                            (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or iv reuse-var (gensym "NC-"))))
+                                  (v  (or iv reuse-var (anon-var :nconc))))
                              (setf (car shared-box) v) (when iv (push iv into-vars))
-                             (unless (and reuse-var (eq v reuse-var))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :nconc-body v e) accums))
                              (list (if neg
-                                       `(unless ,cond (setq ,v (nconc ,v ,e)))
-                                       `(when ,cond (setq ,v (nconc ,v ,e)))))))
+                                       `(unless ,cond (setq ,v (nreconc ,e ,v)))
+                                       `(when ,cond (setq ,v (nreconc ,e ,v)))))))
                           ;; SUM / SUMMING
                           ((%lkw sub "SUM" "SUMMING")
                            (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or iv reuse-var (gensym "S-"))))
+                                  (v  (or iv reuse-var (anon-var :sum))))
                              (setf (car shared-box) v) (when iv (push iv into-vars))
-                             (unless (and reuse-var (eq v reuse-var))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :sum-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (incf ,v ,e))
@@ -2870,9 +2892,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or iv reuse-var (gensym "K-"))))
+                                  (v  (or iv reuse-var (anon-var :count))))
                              (setf (car shared-box) v) (when iv (push iv into-vars))
-                             (unless (and reuse-var (eq v reuse-var))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :count-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (when ,e (incf ,v)))
@@ -2883,9 +2905,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or iv reuse-var (gensym "MX-"))))
+                                  (v  (or iv reuse-var (anon-var :maximize))))
                              (setf (car shared-box) v) (when iv (push iv into-vars))
-                             (unless (and reuse-var (eq v reuse-var))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :maximize-body v e) accums))
                              (list (if neg
                                        `(unless ,cond
@@ -2900,9 +2922,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or iv reuse-var (gensym "MN-"))))
+                                  (v  (or iv reuse-var (anon-var :minimize))))
                              (setf (car shared-box) v) (when iv (push iv into-vars))
-                             (unless (and reuse-var (eq v reuse-var))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :minimize-body v e) accums))
                              (list (if neg
                                        `(unless ,cond
@@ -2986,7 +3008,9 @@ SETQ/INCF/DECF is left in place (sequential)."
            (collect-reverses
                          (let ((rs nil))
                            (dolist (a accums (nreverse rs))
-                             (when (member (first a) '(:collect :collect-body))
+                             (when (member (first a) '(:collect :collect-body
+                                                       :append :append-body
+                                                       :nconc :nconc-body))
                                (push `(setq ,(second a) (nreverse ,(second a))) rs)))))
            ;; The loop's default result is the first ANONYMOUS accumulation; an
            ;; INTO-named accumulation goes only to its variable (CLHS 6.1.3), so
