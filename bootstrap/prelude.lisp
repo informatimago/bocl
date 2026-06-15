@@ -2986,6 +2986,20 @@ SETQ/INCF/DECF is left in place (sequential)."
     ;; PROGRAM-ERROR, signalled here so it surfaces at macro-expansion time.
     (when (and accums (or always-set never-set thereis-f))
       (error 'program-error))
+    ;; A variable bound by WITH/FOR twice, or an iteration variable also named by
+    ;; INTO, is a PROGRAM-ERROR (CLHS 6.1.1.7).  An INTO name MAY be shared by
+    ;; several accumulation clauses, so duplicates among INTO names alone are
+    ;; fine — only collisions with a binding variable count.  Gensyms are
+    ;; uninterned, so SYMBOL-PACKAGE filters out the macro's own temporaries.
+    (let ((seen nil) (dup nil))
+      (dolist (b letb)
+        (let ((v (car b)))
+          (when (and v (symbolp v) (symbol-package v))
+            (if (member v seen) (setq dup t) (push v seen)))))
+      (dolist (v (remove-duplicates into-vars))
+        (when (and v (symbolp v) (symbol-package v) (member v seen))
+          (setq dup t)))
+      (when dup (error 'program-error)))
     ;; --- code generation ---
     ;; accums: last pushed = first defined; nreverse so primary = first defined
     (setq accums (nreverse accums))
