@@ -2824,11 +2824,15 @@ SETQ/INCF/DECF is left in place (sequential)."
             ;; COUNT, MAXIMIZE, MINIMIZE.  AND chains more sub-clauses
             ;; under the same condition.  ELSE introduces an alternative.
             ((%lkw kw "WHEN" "UNLESS" "IF")
+             ;; IT is anaphoric only in the FIRST clause after the test/THEN (and
+             ;; after ELSE); in an AND-chained clause IT is an ordinary variable
+             ;; (CLHS 6.1.2.1.4).  IT-LIVE gates the substitution per sub-clause.
+             (let ((it-live t))
                (labels
                    ((pop-it (c)
                       ;; Pop an accumulation expression, resolving the anaphoric
-                      ;; IT to the guard's test form C (CLHS 6.1.2.1.4).
-                      (let ((x (pop!))) (if (%lkw x "IT") c x)))
+                      ;; IT to the guard's test form C only while IT-LIVE.
+                      (let ((x (pop!))) (if (and it-live (%lkw x "IT")) c x)))
                     (parse-guarded-sub (neg cond reuse-var shared-box)
                       ;; REUSE-VAR: if non-nil, the ELSE branch shares this var.
                       ;; SHARED-BOX: a 1-cons cell recording the accumulation var
@@ -2969,7 +2973,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                              (sbox   (list nil))
                              (forms  nil))
                         (when (%lkw (pk) "THEN") (pop!)) ; optional THEN after IF
+                        (setq it-live t)
                         (setq forms (parse-guarded-sub negate cond-expr nil sbox))
+                        (setq it-live nil)
                         ;; AND chains more sub-clauses under the same condition.
                         (do () ((not (%lkw (pk) "AND")))
                           (pop!)
@@ -2979,8 +2985,10 @@ SETQ/INCF/DECF is left in place (sequential)."
                         ;; halves fill one list.
                         (when (%lkw (pk) "ELSE")
                           (pop!)
+                          (setq it-live t)
                           (setq forms (append forms
                                               (parse-guarded-sub (not negate) cond-expr (car sbox) sbox)))
+                          (setq it-live nil)
                           (do () ((not (%lkw (pk) "AND")))
                             (pop!)
                             (setq forms (append forms
@@ -2989,7 +2997,7 @@ SETQ/INCF/DECF is left in place (sequential)."
                         (when (%lkw (pk) "END") (pop!))
                         (when out-box (setf (car out-box) (car sbox)))
                         forms)))
-                 (setq body (append body (parse-cond kw nil)))))
+                 (setq body (append body (parse-cond kw nil))))))
             ;; AND at top level (outside WHEN) — absorb so it doesn't error
             ((%lkw kw "AND") nil) ; parallel FOR clauses already handle AND
             ;; END at top level — ignore (close of a WHEN block)
