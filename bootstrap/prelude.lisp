@@ -2644,32 +2644,40 @@ SETQ/INCF/DECF is left in place (sequential)."
                       (push (list keys-var `(car ,both-var)) letb)
                       (push (list vals-var `(cdr ,both-var)) letb)
                       (push (list v nil)                     letb)
-                      (when other-v (push (list other-v nil) letb))
-                      ;; Terminate when keys list is exhausted.
-                      (push `(null ,keys-var) tests)
-                      ;; Per-iteration setup: bind v (and co-var) from head of lists.
-                      (if key-p
-                          (progn
-                            (push `(setq ,v (car ,keys-var)) setups)
-                            (when other-v
-                              (push `(setq ,other-v (car ,vals-var)) setups)))
-                          (progn
-                            (push `(setq ,v (car ,vals-var)) setups)
-                            (when other-v
-                              (push `(setq ,other-v (car ,keys-var)) setups))))
-                      ;; Per-iteration step: advance both lists, then rebind v.
-                      (push `(progn (setq ,keys-var (cdr ,keys-var))
-                                    (setq ,vals-var (cdr ,vals-var)))
-                             steps)
-                      (if key-p
-                          (progn
-                            (push `(setq ,v (car ,keys-var)) steps)
-                            (when other-v
-                              (push `(setq ,other-v (car ,vals-var)) steps)))
-                          (progn
-                            (push `(setq ,v (car ,vals-var)) steps)
-                            (when other-v
-                              (push `(setq ,other-v (car ,keys-var)) steps)))))))
+                      ;; The USING co-variable may itself be a destructuring
+                      ;; pattern (e.g. USING (HASH-VALUE (v vv))): step a gensym
+                      ;; OV and destructure it into the leaves each iteration.
+                      (let ((ov (if (consp other-v) (gensym "USING-") other-v)))
+                       (when other-v (push (list ov nil) letb))
+                       (when (consp other-v)
+                         (dolist (pv (%loop-pattern-vars other-v)) (push (list pv nil) letb))
+                         (setq body (append body
+                                            (list (cons 'progn (%loop-destr-form other-v ov))))))
+                       ;; Terminate when keys list is exhausted.
+                       (push `(null ,keys-var) tests)
+                       ;; Per-iteration setup: bind v (and co-var) from head of lists.
+                       (if key-p
+                           (progn
+                             (push `(setq ,v (car ,keys-var)) setups)
+                             (when other-v
+                               (push `(setq ,ov (car ,vals-var)) setups)))
+                           (progn
+                             (push `(setq ,v (car ,vals-var)) setups)
+                             (when other-v
+                               (push `(setq ,ov (car ,keys-var)) setups))))
+                       ;; Per-iteration step: advance both lists, then rebind v.
+                       (push `(progn (setq ,keys-var (cdr ,keys-var))
+                                     (setq ,vals-var (cdr ,vals-var)))
+                              steps)
+                       (if key-p
+                           (progn
+                             (push `(setq ,v (car ,keys-var)) steps)
+                             (when other-v
+                               (push `(setq ,ov (car ,vals-var)) steps)))
+                           (progn
+                             (push `(setq ,v (car ,vals-var)) steps)
+                             (when other-v
+                               (push `(setq ,ov (car ,keys-var)) steps))))))))
                  (t
                   (error "LOOP FOR: unknown sub-clause ~S" (pk)))))))
               (%one-for)
