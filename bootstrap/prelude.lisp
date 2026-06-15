@@ -3022,24 +3022,27 @@ SETQ/INCF/DECF is left in place (sequential)."
                                (always-set  t) ; vacuously T when loop never runs
                                (never-set   t) ; vacuously T when loop never runs
                                (t           nil))))
+      ;; LOOP-FINISH jumps to the loop epilogue (END-TAG) so the collect-reversal
+      ;; and FINALLY still run — shadow the global LOOP-FINISH within this loop.
       `(block ,(or name nil)
-         (let* (,@let*-binds ,@accum-binds)
-           (tagbody
-             ,@initially
-             ,top-tag
-             ,@test-forms
-             ,@setup-forms
-             ,@always-chk
-             ,@never-chk
-             ,@thereis-chk
-             ,@body
-             ,@accum-forms
-             ,@step-forms
-             (go ,top-tag)
-             ,end-tag
-             ,@collect-reverses
-             ,@finally
-             (return-from ,(or name nil) ,result-expr)))))))
+         (macrolet ((loop-finish () (list 'go ',end-tag)))
+           (let* (,@let*-binds ,@accum-binds)
+             (tagbody
+               ,@initially
+               ,top-tag
+               ,@test-forms
+               ,@setup-forms
+               ,@always-chk
+               ,@never-chk
+               ,@thereis-chk
+               ,@body
+               ,@accum-forms
+               ,@step-forms
+               (go ,top-tag)
+               ,end-tag
+               ,@collect-reverses
+               ,@finally
+               (return-from ,(or name nil) ,result-expr))))))))
 
 (defmacro loop (&rest clauses)
   (if (%loop-simple-p clauses)
