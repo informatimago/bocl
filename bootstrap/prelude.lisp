@@ -2458,20 +2458,24 @@ SETQ/INCF/DECF is left in place (sequential)."
             ((%lkw kw "NAMED")
              (setq name (pop!)))
             ;; WITH var [OF-TYPE type] [= init] [AND ...]
+            ;; VAR may be a destructuring pattern: bind a gensym to the init once
+            ;; and bind the pattern's leaves from it (LET* order makes the leaf
+            ;; accessors see the gensym).
             ((%lkw kw "WITH")
-             (let ((v (pop!)))
-               (skip-type-spec)
-               (try! "=")
-               (push (list v (if (and rest (not (%loop-kw-p (pk))))
-                                 (pop!) nil))
-                     letb))
-             (do () ((not (try! "AND")))
-               (let ((v (pop!)))
-                 (skip-type-spec)
-                 (try! "=")
-                 (push (list v (if (and rest (not (%loop-kw-p (pk))))
-                                   (pop!) nil))
-                       letb))))
+             (flet ((with-bind ()
+                      (let ((v (pop!)))
+                        (skip-type-spec)
+                        (try! "=")
+                        (let ((init (if (and rest (not (%loop-kw-p (pk))))
+                                        (pop!) nil)))
+                          (if (consp v)
+                              (let ((g (gensym "WITH-")))
+                                (push (list g init) letb)
+                                (dolist (b (%loop-destr-form v g))
+                                  (push (list (second b) (third b)) letb)))
+                              (push (list v init) letb))))))
+               (with-bind)
+               (do () ((not (try! "AND"))) (with-bind))))
             ;; FOR / AS
             ((%lkw kw "FOR" "AS")
              ;; A FOR clause may bind several variables joined by AND; they step
@@ -2779,7 +2783,7 @@ SETQ/INCF/DECF is left in place (sequential)."
                                            `(when ,cond ,@forms)))))
                           ;; RETURN
                           ((%lkw sub "RETURN")
-                           (let ((val (pop!)))
+                           (let ((val (pop-it cond)))   ; IT -> the guard's value
                              (list (if neg
                                        `(unless ,cond (return-from ,(or name nil) ,val))
                                        `(when ,cond (return-from ,(or name nil) ,val))))))
@@ -2797,9 +2801,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   ;; Reuse shared var for ELSE branch so both
                                   ;; halves accumulate into the same list.
-                                  (v  (or reuse-var iv (gensym "C-"))))
+                                  (v  (or iv reuse-var (gensym "C-"))))
                              (setf (car shared-box) v) ; remember for possible ELSE
-                             (unless reuse-var
+                             (unless (and reuse-var (eq v reuse-var))
                                (push (list :collect-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (setq ,v (cons ,e ,v)))
@@ -2810,9 +2814,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or reuse-var iv (gensym "A-"))))
+                                  (v  (or iv reuse-var (gensym "A-"))))
                              (setf (car shared-box) v)
-                             (unless reuse-var
+                             (unless (and reuse-var (eq v reuse-var))
                                (push (list :append-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (setq ,v (append ,v ,e)))
@@ -2823,9 +2827,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or reuse-var iv (gensym "NC-"))))
+                                  (v  (or iv reuse-var (gensym "NC-"))))
                              (setf (car shared-box) v)
-                             (unless reuse-var
+                             (unless (and reuse-var (eq v reuse-var))
                                (push (list :nconc-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (setq ,v (nconc ,v ,e)))
@@ -2836,9 +2840,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or reuse-var iv (gensym "S-"))))
+                                  (v  (or iv reuse-var (gensym "S-"))))
                              (setf (car shared-box) v)
-                             (unless reuse-var
+                             (unless (and reuse-var (eq v reuse-var))
                                (push (list :sum-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (incf ,v ,e))
@@ -2849,9 +2853,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or reuse-var iv (gensym "K-"))))
+                                  (v  (or iv reuse-var (gensym "K-"))))
                              (setf (car shared-box) v)
-                             (unless reuse-var
+                             (unless (and reuse-var (eq v reuse-var))
                                (push (list :count-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (when ,e (incf ,v)))
@@ -2862,9 +2866,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or reuse-var iv (gensym "MX-"))))
+                                  (v  (or iv reuse-var (gensym "MX-"))))
                              (setf (car shared-box) v)
-                             (unless reuse-var
+                             (unless (and reuse-var (eq v reuse-var))
                                (push (list :maximize-body v e) accums))
                              (list (if neg
                                        `(unless ,cond
@@ -2879,9 +2883,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                                   (iv (when (try! "INTO") (pop!)))
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
-                                  (v  (or reuse-var iv (gensym "MN-"))))
+                                  (v  (or iv reuse-var (gensym "MN-"))))
                              (setf (car shared-box) v)
-                             (unless reuse-var
+                             (unless (and reuse-var (eq v reuse-var))
                                (push (list :minimize-body v e) accums))
                              (list (if neg
                                        `(unless ,cond
