@@ -2973,6 +2973,11 @@ SETQ/INCF/DECF is left in place (sequential)."
             ((%lkw kw "END") nil)
             (t
              (error "LOOP: unknown clause keyword: ~S" kw))))))
+    ;; A value-accumulation clause and a boolean ALWAYS/NEVER/THEREIS clause have
+    ;; conflicting result semantics and may not be combined (CLHS 6.1.2.3) — a
+    ;; PROGRAM-ERROR, signalled here so it surfaces at macro-expansion time.
+    (when (and accums (or always-set never-set thereis-f))
+      (error 'program-error))
     ;; --- code generation ---
     ;; accums: last pushed = first defined; nreverse so primary = first defined
     (setq accums (nreverse accums))
