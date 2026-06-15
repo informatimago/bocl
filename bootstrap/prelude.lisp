@@ -5657,41 +5657,33 @@ places share structure."
 
 ;;; ---- REMOVE-DUPLICATES for all sequence types ----------------------------
 
-(defun remove-duplicates (sequence &key (test #'eql) (key #'identity)
+(defun remove-duplicates (sequence &key (test #'eql) test-not (key #'identity)
                                         from-end (start 0) end)
-  "Return a new sequence with duplicate elements removed."
-  (declare (ignore from-end))   ; simplified: keep last occurrence
-  (let* ((len   (length sequence))
+  "Return SEQUENCE with duplicate elements in [START,END) removed.  Without
+FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
+  (let* ((test  (if test-not (lambda (a b) (not (funcall test-not a b))) test))
+         (len   (length sequence))
          (stop  (min (or end len) len))
          (seen  nil)
          (acc   nil))
-    (if (listp sequence)
-        ;; List path — traverse in reverse so push gives correct order
-        (progn
-          (do ((i (1- stop) (1- i)))
-              ((< i start))
-            (let* ((elt (elt sequence i))
-                   (k   (funcall key elt)))
-              (unless (find k seen :test test)
-                (push k seen)
-                (push elt acc))))
-          ;; Prepend elements before START unchanged
-          (nconc (subseq sequence 0 start) acc
-                 (subseq sequence stop len)))
-        ;; Vector/string path — build result list, then coerce
-        (progn
-          (do ((i (1- stop) (1- i)))
-              ((< i start))
-            (let* ((elt (elt sequence i))
-                   (k   (funcall key elt)))
-              (unless (find k seen :test test)
-                (push k seen)
-                (push elt acc))))
-          (let* ((prefix (subseq sequence 0 start))
-                 (suffix (subseq sequence stop len))
-                 (middle (coerce acc (if (stringp sequence) 'string 'vector))))
-            (concatenate (if (stringp sequence) 'string 'vector)
-                         prefix middle suffix))))))
+    (if from-end
+        ;; keep FIRST occurrence: scan forward, keep the first-seen of each key
+        (do ((i start (1+ i))) ((>= i stop))
+          (let* ((e (elt sequence i)) (k (funcall key e)))
+            (unless (member k seen :test test) (push k seen) (push e acc))))
+        ;; keep LAST occurrence: scan backward, keep the first-seen from the right
+        (do ((i (1- stop) (1- i))) ((< i start))
+          (let* ((e (elt sequence i)) (k (funcall key e)))
+            (unless (member k seen :test test) (push k seen) (push e acc)))))
+    (let ((middle (if from-end (nreverse acc) acc))
+          (prefix (subseq sequence 0 start))
+          (suffix (subseq sequence stop len)))
+      (if (listp sequence)
+          (append (coerce prefix 'list) middle (coerce suffix 'list))
+          (concatenate (cond ((stringp sequence) 'string)
+                             ((bit-vector-p sequence) 'bit-vector)
+                             (t 'vector))
+                       prefix middle suffix)))))
 
 (defun delete-duplicates (sequence &rest keys)
   "Destructive version of REMOVE-DUPLICATES (non-destructive in bocl)."
@@ -6022,9 +6014,13 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
 ;;; ---- SUBSTITUTE with bounds/count ----------------------------------------
 
 (defun substitute (new old sequence
-                   &key (test #'eql) (start 0) end count from-end (key #'identity))
+                   &key (test #'eql) test-not (start 0) end count from-end (key #'identity))
   "Return copy of SEQUENCE with occurrences of OLD replaced by NEW."
-  (substitute-if new (lambda (x) (funcall test old x)) sequence
+  (substitute-if new
+                 (if test-not
+                     (lambda (x) (not (funcall test-not old x)))
+                     (lambda (x) (funcall test old x)))
+                 sequence
                  :start start :end end :count count :from-end from-end :key key))
 
 (defun substitute-if (new predicate sequence
@@ -6065,15 +6061,35 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
 (defun substitute-if-not (new predicate sequence &rest keys)
   (apply #'substitute-if new (lambda (x) (not (funcall predicate x))) sequence keys))
 
-(defun nsubstitute (new old sequence &rest keys)
-  "Destructive SUBSTITUTE — non-destructive in bocl."
-  (apply #'substitute new old sequence keys))
+(defun nsubstitute-if (new predicate sequence
+                       &key (start 0) end count from-end (key #'identity))
+  "Destructive SUBSTITUTE-IF: replace matching elements of SEQUENCE in place."
+  (let* ((len  (length sequence))
+         (stop (min (or end len) len))
+         (n    0))
+    (if from-end
+        (do ((i (1- stop) (1- i)))
+            ((or (< i start) (and count (>= n count))))
+          (when (funcall predicate (funcall key (elt sequence i)))
+            (setf (elt sequence i) new) (setq n (1+ n))))
+        (do ((i start (1+ i)))
+            ((or (>= i stop) (and count (>= n count))))
+          (when (funcall predicate (funcall key (elt sequence i)))
+            (setf (elt sequence i) new) (setq n (1+ n)))))
+    sequence))
 
-(defun nsubstitute-if (new predicate sequence &rest keys)
-  (apply #'substitute-if new predicate sequence keys))
+(defun nsubstitute (new old sequence
+                    &key (test #'eql) test-not (start 0) end count from-end (key #'identity))
+  "Destructive SUBSTITUTE."
+  (nsubstitute-if new
+                  (if test-not
+                      (lambda (x) (not (funcall test-not old x)))
+                      (lambda (x) (funcall test old x)))
+                  sequence
+                  :start start :end end :count count :from-end from-end :key key))
 
 (defun nsubstitute-if-not (new predicate sequence &rest keys)
-  (apply #'substitute-if-not new predicate sequence keys))
+  (apply #'nsubstitute-if new (lambda (x) (not (funcall predicate x))) sequence keys))
 
 ;;; ---- MEMBER with :key ----------------------------------------------------
 
