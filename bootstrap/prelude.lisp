@@ -2716,24 +2716,25 @@ binds the remaining CDR."
             ;; COUNT, MAXIMIZE, MINIMIZE.  AND chains more sub-clauses
             ;; under the same condition.  ELSE introduces an alternative.
             ((%lkw kw "WHEN" "UNLESS" "IF")
-             (let* ((cond-expr (pop!))
-                    (negate (%lkw kw "UNLESS")))
-               (when (%lkw (pk) "THEN") (pop!)) ; optional THEN after IF
-               ;; Inner helper: parse one sub-clause guarded by cond-expr.
-               ;; Returns a list of body forms.
-               ;; shared-var: when parsing IF ... collect ... ELSE collect ...,
-               ;; both sides share the same accumulation variable so the loop
-               ;; builds one unified result list.
-               (let ((shared-var nil))
-                 (labels
+               (labels
                    ((pop-it (c)
                       ;; Pop an accumulation expression, resolving the anaphoric
                       ;; IT to the guard's test form C (CLHS 6.1.2.1.4).
                       (let ((x (pop!))) (if (%lkw x "IT") c x)))
-                    (parse-guarded-sub (neg cond reuse-var)
-                      ;; REUSE-VAR: if non-nil, the ELSE collect shares this var.
+                    (parse-guarded-sub (neg cond reuse-var shared-box)
+                      ;; REUSE-VAR: if non-nil, the ELSE branch shares this var.
+                      ;; SHARED-BOX: a 1-cons cell recording the accumulation var
+                      ;; created here, so a following ELSE at this level reuses it.
                       (let ((sub (pop!)))
                         (cond
+                          ;; Nested conditional as the sub-clause (CLHS 6.1.2.1.4):
+                          ;; parse it (its own ELSE/END), then guard its forms by
+                          ;; COND and propagate its accumulator up to SHARED-BOX so
+                          ;; an enclosing ELSE collects into the same list.
+                          ((%lkw sub "WHEN" "UNLESS" "IF")
+                           (let ((forms (parse-cond sub shared-box)))
+                             (list (if neg `(unless ,cond ,@forms)
+                                           `(when ,cond ,@forms)))))
                           ;; RETURN
                           ((%lkw sub "RETURN")
                            (let ((val (pop!)))
@@ -2755,7 +2756,7 @@ binds the remaining CDR."
                                   ;; Reuse shared var for ELSE branch so both
                                   ;; halves accumulate into the same list.
                                   (v  (or reuse-var iv (gensym "C-"))))
-                             (setq shared-var v) ; remember for possible ELSE
+                             (setf (car shared-box) v) ; remember for possible ELSE
                              (unless reuse-var
                                (push (list :collect-body v e) accums))
                              (list (if neg
@@ -2768,7 +2769,7 @@ binds the remaining CDR."
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   (v  (or reuse-var iv (gensym "A-"))))
-                             (setq shared-var v)
+                             (setf (car shared-box) v)
                              (unless reuse-var
                                (push (list :append-body v e) accums))
                              (list (if neg
@@ -2781,7 +2782,7 @@ binds the remaining CDR."
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   (v  (or reuse-var iv (gensym "NC-"))))
-                             (setq shared-var v)
+                             (setf (car shared-box) v)
                              (unless reuse-var
                                (push (list :nconc-body v e) accums))
                              (list (if neg
@@ -2794,7 +2795,7 @@ binds the remaining CDR."
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   (v  (or reuse-var iv (gensym "S-"))))
-                             (setq shared-var v)
+                             (setf (car shared-box) v)
                              (unless reuse-var
                                (push (list :sum-body v e) accums))
                              (list (if neg
@@ -2807,7 +2808,7 @@ binds the remaining CDR."
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   (v  (or reuse-var iv (gensym "K-"))))
-                             (setq shared-var v)
+                             (setf (car shared-box) v)
                              (unless reuse-var
                                (push (list :count-body v e) accums))
                              (list (if neg
@@ -2820,7 +2821,7 @@ binds the remaining CDR."
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   (v  (or reuse-var iv (gensym "MX-"))))
-                             (setq shared-var v)
+                             (setf (car shared-box) v)
                              (unless reuse-var
                                (push (list :maximize-body v e) accums))
                              (list (if neg
@@ -2837,7 +2838,7 @@ binds the remaining CDR."
                                   (%ot (when (try! "OF-TYPE") (pop!)))
                                   (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   (v  (or reuse-var iv (gensym "MN-"))))
-                             (setq shared-var v)
+                             (setf (car shared-box) v)
                              (unless reuse-var
                                (push (list :minimize-body v e) accums))
                              (list (if neg
@@ -2848,23 +2849,39 @@ binds the remaining CDR."
                                           (let ((%nv ,e))
                                             (when (or (null ,v) (< %nv ,v)) (setq ,v %nv))))))))
                           (t
-                           (error "LOOP WHEN/UNLESS: unhandled sub-clause ~S" sub))))))
-                   ;; Parse first sub-clause (no reuse-var for the IF/WHEN branch)
-                   (setq body (append body (parse-guarded-sub negate cond-expr nil)))
-                   ;; AND chains more sub-clauses under the same condition.
-                   (do () ((not (%lkw (pk) "AND")))
-                     (pop!) ; consume AND
-                     (setq body (append body (parse-guarded-sub negate cond-expr nil))))
-                   ;; ELSE introduces a negated branch. For COLLECT/SUM etc.,
-                   ;; reuse the shared-var so both halves fill one accumulator.
-                   (when (%lkw (pk) "ELSE")
-                     (pop!) ; consume ELSE
-                     (setq body (append body (parse-guarded-sub (not negate) cond-expr shared-var)))
-                     (do () ((not (%lkw (pk) "AND")))
-                       (pop!)
-                       (setq body (append body (parse-guarded-sub (not negate) cond-expr shared-var)))))
-                   ;; END terminates a WHEN/UNLESS/IF block.
-                   (when (%lkw (pk) "END") (pop!))))))
+                           (error "LOOP WHEN/UNLESS: unhandled sub-clause ~S" sub)))))
+                    (parse-cond (ckw out-box)
+                      ;; CKW (WHEN/UNLESS/IF) already consumed.  Parse the test,
+                      ;; the guarded sub-clause(s), an optional ELSE branch and a
+                      ;; closing END; return the list of body forms.  OUT-BOX, when
+                      ;; given, receives this conditional's accumulation var so an
+                      ;; enclosing ELSE collects into the same list.
+                      (let* ((cond-expr (pop!))
+                             (negate (%lkw ckw "UNLESS"))
+                             (sbox   (list nil))
+                             (forms  nil))
+                        (when (%lkw (pk) "THEN") (pop!)) ; optional THEN after IF
+                        (setq forms (parse-guarded-sub negate cond-expr nil sbox))
+                        ;; AND chains more sub-clauses under the same condition.
+                        (do () ((not (%lkw (pk) "AND")))
+                          (pop!)
+                          (setq forms (append forms
+                                              (parse-guarded-sub negate cond-expr nil sbox))))
+                        ;; ELSE: negated branch; reuse the THEN accumulator so both
+                        ;; halves fill one list.
+                        (when (%lkw (pk) "ELSE")
+                          (pop!)
+                          (setq forms (append forms
+                                              (parse-guarded-sub (not negate) cond-expr (car sbox) sbox)))
+                          (do () ((not (%lkw (pk) "AND")))
+                            (pop!)
+                            (setq forms (append forms
+                                                (parse-guarded-sub (not negate) cond-expr (car sbox) sbox)))))
+                        ;; END terminates a WHEN/UNLESS/IF block.
+                        (when (%lkw (pk) "END") (pop!))
+                        (when out-box (setf (car out-box) (car sbox)))
+                        forms)))
+                 (setq body (append body (parse-cond kw nil)))))
             ;; AND at top level (outside WHEN) — absorb so it doesn't error
             ((%lkw kw "AND") nil) ; parallel FOR clauses already handle AND
             ;; END at top level — ignore (close of a WHEN block)
