@@ -2102,6 +2102,7 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
 ;; CONCATENATE and COERCE all dispatch on this so they accept the full range of
 ;; sequence type specifiers, not just the bare symbols.
 (defun %seq-type-kind (type)
+  "Base kind of a sequence type-spec, or NIL if TYPE is not a sequence type."
   (let ((head (if (consp type) (car type) type))
         (elt  (and (consp type) (cdr type) (cadr type))))
     (cond ((member head '(list cons null)) :list)
@@ -2111,7 +2112,7 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
            (cond ((member elt '(character base-char standard-char)) :string)
                  ((eq elt 'bit) :bit-vector)
                  (t :vector)))
-          (t :vector))))
+          (t nil))))   ; not a sequence type (e.g. SYMBOL, HASH-TABLE) -> caller errors
 
 (defun concatenate (result-type &rest sequences)
   (let ((kind (%seq-type-kind result-type)))
@@ -2126,10 +2127,11 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
          (dotimes (i len v) (bit-set v i (nth i all)))))
       ((eq kind :list)
        (apply *%old-concatenate* 'list sequences))
-      (t  ;; :vector
+      ((eq kind :vector)
        (let* ((all (apply *%old-concatenate* 'list sequences))
               (v   (make-array (length all))))
-         (dotimes (i (length all) v) (setf (aref v i) (elt all i))))))))
+         (dotimes (i (length all) v) (setf (aref v i) (elt all i)))))
+      (t (error 'type-error :datum result-type :expected-type 'sequence)))))
 
 ;; ---- POSITION-IF / FIND-IF with :from-end (additional keyword) ---------
 ;; The prelude versions above don't support :from-end; don't need to yet.
@@ -6773,7 +6775,8 @@ result array; return that array."
     (:list       (make-list length :initial-element initial-element))
     (:string     (make-string length :initial-element (or initial-element #\Space)))
     (:bit-vector (make-bit-vector length (if (integerp initial-element) initial-element 0)))
-    (t           (make-array length :initial-element initial-element))))
+    (:vector     (make-array length :initial-element initial-element))
+    (t           (error 'type-error :datum result-type :expected-type 'sequence))))
 
 ;;; ---- COERCE to sequence types --------------------------------------------
 ;;; Kernel handles 'character, 'float, 'integer; prelude handles sequences.
@@ -6843,9 +6846,10 @@ result array; return that array."
           (:bit-vector
            (let ((v (make-bit-vector len 0)))
              (dotimes (i len v) (bit-set v i (logand 1 (nth i vals))))))
-          (t   ;; :vector
+          (:vector
            (let ((v (make-array len)))
-             (dotimes (i len v) (setf (aref v i) (nth i vals)))))))))
+             (dotimes (i len v) (setf (aref v i) (nth i vals)))))
+          (t (error 'type-error :datum result-type :expected-type 'sequence))))))
 
 ;;;; =========================================================================
 ;;;; Slice 32 additions (bundled with TODO-driven fixes)
