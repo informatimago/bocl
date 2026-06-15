@@ -2361,6 +2361,24 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
     (:maximize :maximize-body) (:minimize :minimize-body)
     (t kind)))
 
+(defun %loop-pattern-vars (pattern)
+  "Symbol leaves of a LOOP destructuring pattern, in order (NIL = ignore)."
+  (cond ((null pattern)    nil)
+        ((symbolp pattern) (list pattern))
+        ((consp pattern)   (append (%loop-pattern-vars (car pattern))
+                                   (%loop-pattern-vars (cdr pattern))))
+        (t                 nil)))
+
+(defun %loop-destr-form (pattern access)
+  "List of (SETQ var <car/cdr access>) forms binding PATTERN's leaves from the
+value reached by ACCESS (a form).  NIL leaves are skipped; a dotted/atom tail
+binds the remaining CDR."
+  (cond ((null pattern)    nil)
+        ((symbolp pattern) (list (list 'setq pattern access)))
+        ((consp pattern)   (append (%loop-destr-form (car pattern) (list 'car access))
+                                   (%loop-destr-form (cdr pattern) (list 'cdr access))))
+        (t                 nil)))
+
 (defun %loop-expand (all-clauses)
   (let ((rest     all-clauses)
         (name     nil)
@@ -2430,7 +2448,20 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                        letb))))
             ;; FOR / AS
             ((%lkw kw "FOR" "AS")
-             (let ((v (pop!)))
+             (let* ((fvar  (pop!))
+                    ;; A cons FOR variable is a destructuring pattern: iterate a
+                    ;; hidden gensym and destructure it into the pattern's leaves
+                    ;; each iteration (after the sub-clause sets the gensym).
+                    (destr (consp fvar))
+                    (v     (if destr (gensym "DSTR-") fvar)))
+               (when destr
+                 ;; Bind the pattern's leaves, and make destructuring the first
+                 ;; body step each iteration — it runs after the sub-clause has
+                 ;; set the hidden gensym V (in setups) or stepped it, and before
+                 ;; the later DO/COLLECT clauses, which append after this point.
+                 (dolist (pv (%loop-pattern-vars fvar)) (push (list pv nil) letb))
+                 (setq body (append body
+                                    (list (cons 'progn (%loop-destr-form fvar v))))))
                (skip-type-spec)   ; optional OF-TYPE / bare type spec (ignored)
                (cond
                  ;; FOR v IN list
