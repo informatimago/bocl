@@ -1518,6 +1518,24 @@ identity."
 ;; CL packages (size, position) into a single byte-specifier object.
 ;; We represent it as a cons (size . position) — opaque to user code.
 
+;; The kernel LOGAND/LOGIOR/LOGXOR take exactly two arguments; CL makes them
+;; variadic (with identities -1 / 0 / 0).  Wrap them to fold pairwise.
+(defvar *%logand2* (symbol-function 'logand))
+(defvar *%logior2* (symbol-function 'logior))
+(defvar *%logxor2* (symbol-function 'logxor))
+(defun logand (&rest integers)
+  (if (null integers) -1
+      (let ((acc (car integers)))
+        (dolist (x (cdr integers) acc) (setq acc (funcall *%logand2* acc x))))))
+(defun logior (&rest integers)
+  (if (null integers) 0
+      (let ((acc (car integers)))
+        (dolist (x (cdr integers) acc) (setq acc (funcall *%logior2* acc x))))))
+(defun logxor (&rest integers)
+  (if (null integers) 0
+      (let ((acc (car integers)))
+        (dolist (x (cdr integers) acc) (setq acc (funcall *%logxor2* acc x))))))
+
 (defun byte (size position) (cons size position))
 (defun byte-size     (b) (car b))
 (defun byte-position (b) (cdr b))
@@ -2026,14 +2044,17 @@ identity."
 
 (defun replace (sequence1 sequence2
                 &key (start1 0) end1 (start2 0) end2)
+  "Destructively replace SEQUENCE1[START1,END1) with SEQUENCE2[START2,END2),
+copying min of the two lengths.  Snapshot the source first so an overlapping
+self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
   (let* ((len1  (length sequence1))
          (len2  (length sequence2))
          (stop1 (min (or end1 len1) len1))
          (stop2 (min (or end2 len2) len2))
-         (n     (min (- stop1 start1) (- stop2 start2))))
-    (dotimes (i n sequence1)
-      (setf (elt sequence1 (+ start1 i))
-            (elt sequence2 (+ start2 i))))))
+         (n     (max 0 (min (- stop1 start1) (- stop2 start2))))
+         (tmp   (make-array n)))
+    (dotimes (i n) (setf (aref tmp i) (elt sequence2 (+ start2 i))))
+    (dotimes (i n sequence1) (setf (elt sequence1 (+ start1 i)) (aref tmp i)))))
 
 ;; ---- MISMATCH -----------------------------------------------------------
 ;; (mismatch seq1 seq2 &key test start1 end1 start2 end2) → index or nil
@@ -2891,6 +2912,7 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
   ;; Extend the C kernel's numeric COERCE with sequence conversions.
   ;; NOTE: in bocl, (vectorp string) is T, so string branches MUST precede
   ;; vector branches.
+  (when (member result-type '(cons null)) (setq result-type 'list))  ; CONS/NULL == LIST
   (cond
     ;; String identity
     ((and (stringp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
