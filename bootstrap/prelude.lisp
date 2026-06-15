@@ -2547,26 +2547,32 @@ SETQ/INCF/DECF is left in place (sequential)."
                   ;; TO/UPTO/BELOW/DOWNTO/ABOVE and BY may appear in ANY order, and
                   ;; FROM may be omitted (START defaults to 0).
                   (let ((start 0) (downp nil) (end-f nil) (incl t)
-                        (by-supplied nil) (step nil))
-                    (do () ((or (null rest)
-                                (not (%lkw (pk) "FROM" "UPFROM" "DOWNFROM" "TO"
-                                                "UPTO" "BELOW" "DOWNTO" "ABOVE" "BY"))))
-                      (let ((sub (pop!)))
-                        (cond
-                          ((%lkw sub "FROM" "UPFROM") (setq start (pop!)))
-                          ((%lkw sub "DOWNFROM")      (setq start (pop!) downp t))
-                          ((%lkw sub "TO" "UPTO")     (setq end-f (pop!) incl  t))
-                          ((%lkw sub "BELOW")         (setq end-f (pop!) incl  nil))
-                          ((%lkw sub "DOWNTO")        (setq end-f (pop!) incl  t  downp t))
-                          ((%lkw sub "ABOVE")         (setq end-f (pop!) incl  nil downp t))
-                          ((%lkw sub "BY")            (setq step  (pop!) by-supplied t)))))
+                        (by-supplied nil) (step nil) (once nil))
+                    ;; Each of FROM/TO/BY is evaluated exactly ONCE, in the order
+                    ;; written (CLHS 6.1.2.1.1): bind each to a gensym in source
+                    ;; order, so a side-effecting or sibling-referencing bound is
+                    ;; not re-run in the per-iteration test/step.
+                    (flet ((bind1 (form)
+                             (let ((g (gensym "AR-"))) (push (cons g form) once) g)))
+                      (do () ((or (null rest)
+                                  (not (%lkw (pk) "FROM" "UPFROM" "DOWNFROM" "TO"
+                                                  "UPTO" "BELOW" "DOWNTO" "ABOVE" "BY"))))
+                        (let ((sub (pop!)))
+                          (cond
+                            ((%lkw sub "FROM" "UPFROM") (setq start (bind1 (pop!))))
+                            ((%lkw sub "DOWNFROM")      (setq start (bind1 (pop!)) downp t))
+                            ((%lkw sub "TO" "UPTO")     (setq end-f (bind1 (pop!)) incl  t))
+                            ((%lkw sub "BELOW")         (setq end-f (bind1 (pop!)) incl  nil))
+                            ((%lkw sub "DOWNTO")        (setq end-f (bind1 (pop!)) incl  t  downp t))
+                            ((%lkw sub "ABOVE")         (setq end-f (bind1 (pop!)) incl  nil downp t))
+                            ((%lkw sub "BY")            (setq step  (bind1 (pop!)) by-supplied t))))))
+                    ;; Bind the once-evaluated bounds (in source order) before V.
+                    (dolist (pr (reverse once)) (push (list (car pr) (cdr pr)) letb))
                     ;; BY supplies a POSITIVE step magnitude; DOWNTO/ABOVE/DOWNFROM
                     ;; count downward, so the effective step is negated.  Without
                     ;; BY, default to -1 (down) or 1 (up).
                     (cond ((not by-supplied) (setq step (if downp -1 1)))
-                          (downp             (setq step (if (numberp step)
-                                                            (- step)
-                                                            (list '- step)))))
+                          (downp             (setq step (list '- step))))
                     (push (list v start) letb)
                     (when end-f
                       (push (if downp
