@@ -100,7 +100,10 @@ VectorOfObject* VectorOfObject_slots(halfword size){
 
 VectorOfUWord* VectorOfUWord_slots(halfword size){
     VectorOfUWord* that=allocate(offsetof(VectorOfUWord,elements)+sizeof(that->elements[0])*VARRAY_MIN(size));
-    memset(that->elements,CHECK_HALFWORD_TO_INT(size),sizeof(that->elements[0]));
+    /* Count must be SIZE elements, not one: a SIZE==0 vector has no element
+       storage, so writing one element here overruns into the next block's
+       header (see VectorOfOctet_slots).  No-op for SIZE==0. */
+    memset(that->elements,0,(size_t)size*sizeof(that->elements[0]));
     return that;}
 
 
@@ -109,7 +112,13 @@ VectorOfUWord* VectorOfUWord_slots(halfword size){
 VectorOfOctet* VectorOfOctet_slots(halfword length){
     VectorOfOctet* that=allocate(offsetof(VectorOfOctet,elements)+sizeof(that->elements[0])*VARRAY_MIN(length));
     that->length=length;
-    memset(that->elements,CHECK_HALFWORD_TO_INT(length),sizeof(that->elements[0]));
+    /* Zero exactly the LENGTH allocated element bytes.  The count must be LENGTH,
+       not sizeof(element): with the zero-length-array layout a LENGTH==0 vector
+       has no element storage, and writing even one byte at that->elements lands
+       in the next block's header (clobbering its size field -> size-0 block ->
+       next_block() self-loop -> heap-walk hang).  allocate() already zeroed the
+       body, so this is belt-and-braces for LENGTH>0 and a no-op for LENGTH==0. */
+    memset(that->elements,0,(size_t)length);
     return that;}
 
 VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){

@@ -102,7 +102,12 @@ static bool free_block_p(Block* block){
     return block->objcount==FREE_BLOCK;}
 
 static bool marked_block_p(Block* block){
-    return 0!=(block->objcount&(~(FREE_BLOCK>>1)));}
+    /* The mark bit is the high bit of objcount.  FREE_BLOCK (all-ones) also has
+       that bit set, so a free block must NOT be reported as marked — otherwise
+       sweep_zone (which tests marked_block_p before reclaiming) would clear_block
+       a free block to FREE_BLOCK>>1 and drop it from the free list, leaking and
+       corrupting the heap. */
+    return block->objcount!=FREE_BLOCK && 0!=(block->objcount&(~(FREE_BLOCK>>1)));}
 
 static void mark_block(Block* block){
     block->objcount|=(~(FREE_BLOCK>>1));}
@@ -216,6 +221,12 @@ static Block* allocate_internal(size_t size){
     If no free block is available, the garbage collector is invoked (unless disabled).
     */
     halfword hsize=CHECK_SIZE_TO_HALFWORD(((size+sizeof(word)-1)/sizeof(word))*sizeof(word));
+    /* Every block must be at least MinimumBlockSize so that, once freed, it can
+       hold a FreeBlock's `next` pointer.  Sub-minimum blocks (e.g. zero-length
+       VectorOfObject storage for #()) would otherwise overwrite the FOLLOWING
+       block's header when sweep writes fb->next at offset 8 — clobbering its size
+       field with an in-zone pointer (heap-walk skips the rest of the zone). */
+    if(hsize < MinimumBlockSize){ hsize = MinimumBlockSize; }
     Block* block=NULL;
     if(DefaultZoneSize<hsize+sizeof(Zone)){
         Zone* new_zone=zone_allocate(hsize+sizeof(Zone));
@@ -244,12 +255,74 @@ static long gc_stress_c = 0;
    paying GCSTRESS over the whole 7000-line prelude load. */
 void set_gc_stress(long n){ gc_stress_n = (n<0?0:n); gc_stress_c = 0; }
 
+/* Heap-integrity walk (BOCL_HEAPCHECK=N): every N allocations, walk every zone
+   block-by-block and verify the blocks tile the zone exactly with plausible
+   sizes/objcounts.  A stray out-of-bounds write that clobbers a block header is
+   caught here (the next walk lands mid-block or overruns the zone), pinpointing
+   the form whose evaluation corrupted the heap.  Aborts with a backtrace on the
+   first inconsistency. */
+static long  heap_check_n = -1;
+static long  heap_check_c = 0;
+static uword heap_check_after = 0;     /* BOCL_HEAPCHECK_AFTER: skip the first N allocs (the prelude) */
+static uword heap_total_allocs = 0;
+static uword block_physical_slot_count(Block* b);   /* defined below (mark phase) */
+
+static void heap_dump_and_abort(const char* msg, Zone* z, Block* b){
+    fprintf(stderr,"\nHEAPCHECK: %s  (zone %p [%p..%p], block %p size=%lu objcount=%ld)\n",
+            msg,(void*)z,(void*)first_block(z),(void*)end_block(z),
+            (void*)b,(unsigned long)(b?b->size:0),(long)(b?b->objcount:0));
+    fflush(stderr);
+    void* bt[40]; int n=backtrace(bt,40); backtrace_symbols_fd(bt,n,fileno(stderr));
+    abort();
+}
+
+static void heap_verify_free_list(Zone* z, FreeBlock* sentinel, const char* which){
+    char* zstart = (char*)first_block(z);
+    char* zend   = (char*)end_block(z);
+    uword guard  = 0;
+    for(FreeBlock* f = sentinel->next; f != NULL; f = f->next){
+        if((char*)f < zstart || (char*)f >= zend) heap_dump_and_abort(which, z, (Block*)f);
+        if((uword)f % sizeof(void*) != 0)         heap_dump_and_abort(which, z, (Block*)f);
+        if(f->size == 0 || f->size % sizeof(word) != 0 || (char*)f + f->size > zend)
+                                                  heap_dump_and_abort(which, z, (Block*)f);
+        if(!free_block_p((Block*)f))              heap_dump_and_abort(which, z, (Block*)f);
+        if(++guard > (zend - zstart) / (uword)MinimumBlockSize + 16)
+                                                  heap_dump_and_abort("free-list cycle", z, (Block*)f);}
+}
+
+static void heap_verify(void){
+    for(Zone* z=Zones; z!=NULL; z=z->next_zone){
+        Block* end = end_block(z);
+        Block* b   = first_block(z);
+        while(b < end){
+            uword bsz = b->size;
+            if(bsz == 0)                          heap_dump_and_abort("block size is zero", z, b);
+            if(bsz % sizeof(word) != 0)           heap_dump_and_abort("block size not word-aligned", z, b);
+            if(((char*)b + bsz) > (char*)end)     heap_dump_and_abort("block overruns zone end", z, b);
+            if(!free_block_p(b) && marked_block_p(b))
+                                                  heap_dump_and_abort("non-free block has GC mark bit set outside GC", z, b);
+            if(!free_block_p(b) && block_objcount(b) > block_physical_slot_count(b))
+                                                  heap_dump_and_abort("objcount > physical slots", z, b);
+            b = next_block(b);}
+        if(b != end)                              heap_dump_and_abort("blocks did not tile zone exactly", z, b);
+        heap_verify_free_list(z, &z->large_list, "large free-list node corrupt");
+        heap_verify_free_list(z, &z->small_list, "small free-list node corrupt");}
+}
+
 void* allocate(size_t size){
     if(gc_stress_n < 0){
         const char* s = getenv("BOCL_GCSTRESS");
         gc_stress_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;}
     if(gc_stress_n > 0 && garbage_collection_is_enabled()){
         if(++gc_stress_c >= gc_stress_n){ gc_stress_c = 0; garbage_collect(); }}
+    if(heap_check_n < 0){
+        const char* s = getenv("BOCL_HEAPCHECK");
+        heap_check_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;
+        const char* a = getenv("BOCL_HEAPCHECK_AFTER");
+        heap_check_after = a ? (uword)atol(a) : 0;}
+    heap_total_allocs++;
+    if(heap_check_n > 0 && heap_total_allocs >= heap_check_after){
+        if(++heap_check_c >= heap_check_n){ heap_check_c = 0; heap_verify(); }}
     Block* result=allocate_internal(size);
     /* Zero the object body.  A constructor that sets `objcount` before filling
        its reference slots (with a nested allocation in between that can trigger
