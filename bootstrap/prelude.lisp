@@ -5790,9 +5790,12 @@ FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
               (return-from find-if x)))))))
 
 (defun find (item sequence
-             &key (test #'eql) (start 0) end from-end (key #'identity))
+             &key (test #'eql) test-not (start 0) end from-end (key #'identity))
   "Return first occurrence of ITEM in SEQUENCE[START,END)."
-  (find-if (lambda (x) (funcall test item x)) sequence
+  (find-if (if test-not
+               (lambda (x) (not (funcall test-not item x)))
+               (lambda (x) (funcall test item x)))
+           sequence
            :start start :end end :from-end from-end :key key))
 
 (defun find-if-not (predicate sequence
@@ -5816,9 +5819,12 @@ FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
             (return-from position-if i))))))
 
 (defun position (item sequence
-                 &key (test #'eql) (start 0) end from-end (key #'identity))
+                 &key (test #'eql) test-not (start 0) end from-end (key #'identity))
   "Return index of first occurrence of ITEM in SEQUENCE[START,END)."
-  (position-if (lambda (x) (funcall test item x)) sequence
+  (position-if (if test-not
+                   (lambda (x) (not (funcall test-not item x)))
+                   (lambda (x) (funcall test item x)))
+               sequence
                :start start :end end :from-end from-end :key key))
 
 (defun position-if-not (predicate sequence
@@ -6146,11 +6152,12 @@ position at which the two subranges differ, or NIL if they match."
 ;;; ---- SEARCH with full kwargs (update for CL compliance) -----------------
 
 (defun search (pattern target
-               &key (test #'eql) (key #'identity)
+               &key (test #'eql) test-not (key #'identity)
                     (start1 0) end1
                     (start2 0) end2
                     from-end)
-  "Return start index of PATTERN in TARGET, or NIL."
+  "Return the start index in TARGET of a subsequence matching PATTERN, or NIL.
+FROM-END returns the rightmost such index."
   (let* ((plen  (length pattern))
          (tlen  (length target))
          (pe    (min (or end1 plen) plen))
@@ -6159,22 +6166,18 @@ position at which the two subranges differ, or NIL if they match."
          (tn    (- te start2))
          (limit (- tn pn)))
     (when (< limit 0) (return-from search nil))
-    (if from-end
-        (do ((i (+ start2 limit) (1- i)))
-            ((< i start2) nil)
-          (when (= 0 (or (mismatch pattern target
-                                   :start1 start1 :end1 pe
-                                   :start2 i :end2 (+ i pn)
-                                   :test test :key key)
-                         0))
-            (return i)))
-        (do ((i start2 (1+ i)))
-            ((> i (+ start2 limit)) nil)
-          (when (null (mismatch pattern target
-                                :start1 start1 :end1 pe
-                                :start2 i :end2 (+ i pn)
-                                :test test :key key))
-            (return i))))))
+    (flet ((match-at (i)
+             (null (mismatch pattern target
+                             :start1 start1 :end1 pe
+                             :start2 i :end2 (+ i pn)
+                             :test test :test-not test-not :key key))))
+      (if from-end
+          (do ((i (+ start2 limit) (1- i)))
+              ((< i start2) nil)
+            (when (match-at i) (return i)))
+          (do ((i start2 (1+ i)))
+              ((> i (+ start2 limit)) nil)
+            (when (match-at i) (return i)))))))
 
 ;;;; =========================================================================
 ;;;; Slice 28 — multi-sequence predicates, hash iteration, string utilities,
@@ -6413,9 +6416,14 @@ position at which the two subranges differ, or NIL if they match."
         (setq n (1+ n))))))
 
 (defun count (item sequence
-              &key (test #'eql) (start 0) end (key #'identity))
-  "Count occurrences of ITEM in SEQUENCE[START,END)."
-  (count-if (lambda (x) (funcall test item x)) sequence
+              &key (test #'eql) test-not (start 0) end from-end (key #'identity))
+  "Count occurrences of ITEM in SEQUENCE[START,END).  FROM-END accepted (it does
+not affect the count) but ignored."
+  (declare (ignore from-end))
+  (count-if (if test-not
+                (lambda (x) (not (funcall test-not item x)))
+                (lambda (x) (funcall test item x)))
+            sequence
             :start start :end end :key key))
 
 (defun count-if-not (predicate sequence
