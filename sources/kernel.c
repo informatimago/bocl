@@ -1124,9 +1124,11 @@ floating ratio_to_float(Ref r){
 /* COMPLEX */
 
 Ref complex_new(Ref re, Ref im){
-    /* (complex r 0) = r when r is real */
-    if(integerp(im) && integer_value(im) == 0) return re;
-    if(floatp(im)   && float_value(im)    == 0.0) return re;
+    /* (complex r 0) collapses to the real R only when BOTH parts are rational
+       and the imaginary part is the integer 0 (CLHS 12.1.5.3): a float part
+       forces a complex result even when the imaginary part is 0.0, so
+       #C(1.0 0.0) stays complex. */
+    if(integerp(im) && integer_value(im) == 0 && !floatp(re)) return re;
     /* re/im are already-rooted Refs; set slots before objcount so a GC during
        Object_new() never sees a half-built Complex. */
     Complex* slots = allocate(sizeof(Complex));

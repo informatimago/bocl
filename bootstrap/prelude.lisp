@@ -3348,9 +3348,12 @@ SETQ/INCF/DECF is left in place (sequential)."
   (let* ((fp?  (and (vectorp result-sequence)
                     (array-has-fill-pointer-p result-sequence)))
          (cap  (if fp? (array-total-size result-sequence) (length result-sequence)))
+         ;; The count is the minimum of the result capacity and the source
+         ;; lengths; with NO source sequences there is nothing to map, so the
+         ;; result is left untouched (SACLA must-sequence form-272/274).
          (n    (if sequences
                    (reduce #'min (cons cap (mapcar #'length sequences)))
-                   cap)))
+                   0)))
     (when fp? (setf (fill-pointer result-sequence) n))
     (dotimes (i n result-sequence)
       (setf (elt result-sequence i)
