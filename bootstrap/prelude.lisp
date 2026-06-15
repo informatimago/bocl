@@ -2638,16 +2638,31 @@ SETQ/INCF/DECF is left in place (sequential)."
                                         "EXTERNAL-SYMBOLS")))
                   (pop!)  ; BEING
                   (when (or (%lkw (pk) "EACH") (%lkw (pk) "THE")) (pop!))
-                  (let* ((variant (pop!))
-                         (extp    (%lkw variant "EXTERNAL-SYMBOL" "EXTERNAL-SYMBOLS"))
-                         (lv      (gensym "SYMS-")))
+                  (let* ((variant  (pop!))
+                         (extp     (%lkw variant "EXTERNAL-SYMBOL" "EXTERNAL-SYMBOLS"))
+                         ;; PRESENT-SYMBOLS iterates only the package's OWN symbols
+                         ;; (internal + external), excluding those inherited from
+                         ;; used packages; plain SYMBOLS includes inherited.
+                         (presentp (%lkw variant "PRESENT-SYMBOL" "PRESENT-SYMBOLS"))
+                         (lv       (gensym "SYMS-")))
                     (when (or (%lkw (pk) "OF") (%lkw (pk) "IN")) (pop!))
                     (let ((pkg-form (pop!)))
-                      (push (list lv (if extp
-                                         `(let ((%a nil))
-                                            (do-external-symbols (%s ,pkg-form) (push %s %a)) %a)
-                                         `(let ((%a nil))
-                                            (do-symbols (%s ,pkg-form) (push %s %a)) %a)))
+                      (push (list lv
+                                  (cond
+                                    (extp
+                                     `(let ((%a nil))
+                                        (do-external-symbols (%s ,pkg-form) (push %s %a)) %a))
+                                    (presentp
+                                     `(let ((%a nil) (%pk ,pkg-form))
+                                        (do-symbols (%s %pk)
+                                          (unless (eq (second (multiple-value-list
+                                                               (find-symbol (symbol-name %s) %pk)))
+                                                      :inherited)
+                                            (push %s %a)))
+                                        %a))
+                                    (t
+                                     `(let ((%a nil))
+                                        (do-symbols (%s ,pkg-form) (push %s %a)) %a))))
                             letb)
                       (push (list v nil)        letb)
                       (push `(null ,lv)             tests)
