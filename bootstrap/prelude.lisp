@@ -2377,6 +2377,18 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                (do () ((or (null rest) (%loop-kw-p (pk))))
                  (push (pop!) acc))
                (nreverse acc)))
+           (skip-type-spec ()
+             ;; Consume an optional LOOP type specifier after a variable: either
+             ;; "OF-TYPE <type>" or a bare type spec (FIXNUM, FLOAT, T, a cons
+             ;; like (INTEGER 0 9)).  bocl ignores the declaration.  Stop before
+             ;; the keywords that legitimately follow the variable.
+             (when (%lkw (pk) "OF-TYPE") (pop!) (pop!))
+             (when (and rest
+                        (not (%lkw (pk) "IN" "ON" "ACROSS" "FROM" "UPFROM"
+                                     "DOWNFROM" "BEING" "=" "TO" "UPTO" "BELOW"
+                                     "DOWNTO" "ABOVE" "BY" "THEN" "AND"))
+                        (not (%loop-kw-p (pk))))
+               (pop!)))
            (add-accum (kind var e)
              ;; Emit the per-iteration accumulation update in the loop BODY at
              ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
@@ -2390,15 +2402,17 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
             ;; NAMED
             ((%lkw kw "NAMED")
              (setq name (pop!)))
-            ;; WITH var [= init] [AND ...]
+            ;; WITH var [OF-TYPE type] [= init] [AND ...]
             ((%lkw kw "WITH")
              (let ((v (pop!)))
+               (skip-type-spec)
                (try! "=")
                (push (list v (if (and rest (not (%loop-kw-p (pk))))
                                  (pop!) nil))
                      letb))
              (do () ((not (try! "AND")))
                (let ((v (pop!)))
+                 (skip-type-spec)
                  (try! "=")
                  (push (list v (if (and rest (not (%loop-kw-p (pk))))
                                    (pop!) nil))
@@ -2406,6 +2420,7 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
             ;; FOR / AS
             ((%lkw kw "FOR" "AS")
              (let ((v (pop!)))
+               (skip-type-spec)   ; optional OF-TYPE / bare type spec (ignored)
                (cond
                  ;; FOR v IN list
                  ((%lkw (pk) "IN")
@@ -2437,33 +2452,33 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                     (push `(setq ,v (elt ,sv ,iv))   setups)
                     (push `(incf ,iv)                steps)))
                  ;; FOR v FROM start [TO/BELOW/DOWNTO/ABOVE end] [BY step]
-                 ((%lkw (pk) "FROM" "UPFROM" "DOWNFROM")
-                  (let* ((dir   (pop!))
-                         (start (pop!))
-                         (downp (%lkw dir "DOWNFROM"))
-                         (end-f nil)
-                         (incl  t)
-                         (by-supplied nil)
-                         (step  (if downp -1 1)))
-                    (push (list v start) letb)
+                 ((%lkw (pk) "FROM" "UPFROM" "DOWNFROM"
+                              "TO" "UPTO" "BELOW" "DOWNTO" "ABOVE" "BY")
+                  ;; Arithmetic stepping.  The prepositions FROM/UPFROM/DOWNFROM,
+                  ;; TO/UPTO/BELOW/DOWNTO/ABOVE and BY may appear in ANY order, and
+                  ;; FROM may be omitted (START defaults to 0).
+                  (let ((start 0) (downp nil) (end-f nil) (incl t)
+                        (by-supplied nil) (step nil))
                     (do () ((or (null rest)
-                                (not (%lkw (pk) "TO" "UPTO" "BELOW"
-                                                "DOWNTO" "ABOVE" "BY"))))
+                                (not (%lkw (pk) "FROM" "UPFROM" "DOWNFROM" "TO"
+                                                "UPTO" "BELOW" "DOWNTO" "ABOVE" "BY"))))
                       (let ((sub (pop!)))
                         (cond
-                          ((%lkw sub "TO" "UPTO")  (setq end-f (pop!) incl  t))
-                          ((%lkw sub "BELOW")       (setq end-f (pop!) incl  nil))
-                          ((%lkw sub "DOWNTO")      (setq end-f (pop!) incl  t  downp t))
-                          ((%lkw sub "ABOVE")       (setq end-f (pop!) incl  nil downp t))
-                          ((%lkw sub "BY")          (setq step  (pop!) by-supplied t)))))
+                          ((%lkw sub "FROM" "UPFROM") (setq start (pop!)))
+                          ((%lkw sub "DOWNFROM")      (setq start (pop!) downp t))
+                          ((%lkw sub "TO" "UPTO")     (setq end-f (pop!) incl  t))
+                          ((%lkw sub "BELOW")         (setq end-f (pop!) incl  nil))
+                          ((%lkw sub "DOWNTO")        (setq end-f (pop!) incl  t  downp t))
+                          ((%lkw sub "ABOVE")         (setq end-f (pop!) incl  nil downp t))
+                          ((%lkw sub "BY")            (setq step  (pop!) by-supplied t)))))
                     ;; BY supplies a POSITIVE step magnitude; DOWNTO/ABOVE/DOWNFROM
                     ;; count downward, so the effective step is negated.  Without
-                    ;; BY, default to -1 (down) or 1 (up).  (Otherwise FROM 3 DOWNTO
-                    ;; 1 BY 1 would increment forever — the test never fires.)
+                    ;; BY, default to -1 (down) or 1 (up).
                     (cond ((not by-supplied) (setq step (if downp -1 1)))
                           (downp             (setq step (if (numberp step)
                                                             (- step)
                                                             (list '- step)))))
+                    (push (list v start) letb)
                     (when end-f
                       (push (if downp
                                 (if incl `(< ,v ,end-f)  `(<= ,v ,end-f))
@@ -2563,30 +2578,37 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
             ((%lkw kw "COLLECT" "COLLECTING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (add-accum :collect (or iv (gensym "C-")) e)))
             ((%lkw kw "APPEND" "APPENDING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (add-accum :append (or iv (gensym "A-")) e)))
             ((%lkw kw "NCONC" "NCONCING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (add-accum :nconc (or iv (gensym "NC-")) e)))
             ((%lkw kw "SUM" "SUMMING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (add-accum :sum (or iv (gensym "S-")) e)))
             ((%lkw kw "COUNT" "COUNTING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (add-accum :count (or iv (gensym "K-")) e)))
             ((%lkw kw "MAXIMIZE" "MAXIMIZING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (add-accum :maximize (or iv (gensym "MX-")) e)))
             ((%lkw kw "MINIMIZE" "MINIMIZING")
              (let ((e (pop!)) (iv nil))
                (when (try! "INTO") (setq iv (pop!)))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (add-accum :minimize (or iv (gensym "MN-")) e)))
             ;; ALWAYS / NEVER / THEREIS
             ((%lkw kw "ALWAYS")   (setq always-f  (pop!) always-set  t))
@@ -2619,7 +2641,11 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                ;; builds one unified result list.
                (let ((shared-var nil))
                  (labels
-                   ((parse-guarded-sub (neg cond reuse-var)
+                   ((pop-it (c)
+                      ;; Pop an accumulation expression, resolving the anaphoric
+                      ;; IT to the guard's test form C (CLHS 6.1.2.1.4).
+                      (let ((x (pop!))) (if (%lkw x "IT") c x)))
+                    (parse-guarded-sub (neg cond reuse-var)
                       ;; REUSE-VAR: if non-nil, the ELSE collect shares this var.
                       (let ((sub (pop!)))
                         (cond
@@ -2637,8 +2663,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                        `(when ,cond ,@forms)))))
                           ;; COLLECT / COLLECTING
                           ((%lkw sub "COLLECT" "COLLECTING")
-                           (let* ((e  (pop!))
+                           (let* ((e  (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
                                   ;; Reuse shared var for ELSE branch so both
                                   ;; halves accumulate into the same list.
                                   (v  (or reuse-var iv (gensym "C-"))))
@@ -2650,8 +2677,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                        `(when ,cond (setq ,v (cons ,e ,v)))))))
                           ;; APPEND / APPENDING
                           ((%lkw sub "APPEND" "APPENDING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
                                   (v  (or reuse-var iv (gensym "A-"))))
                              (setq shared-var v)
                              (unless reuse-var
@@ -2661,8 +2689,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                        `(when ,cond (setq ,v (append ,v ,e)))))))
                           ;; NCONC / NCONCING
                           ((%lkw sub "NCONC" "NCONCING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
                                   (v  (or reuse-var iv (gensym "NC-"))))
                              (setq shared-var v)
                              (unless reuse-var
@@ -2672,8 +2701,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                        `(when ,cond (setq ,v (nconc ,v ,e)))))))
                           ;; SUM / SUMMING
                           ((%lkw sub "SUM" "SUMMING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
                                   (v  (or reuse-var iv (gensym "S-"))))
                              (setq shared-var v)
                              (unless reuse-var
@@ -2683,8 +2713,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                        `(when ,cond (incf ,v ,e))))))
                           ;; COUNT / COUNTING
                           ((%lkw sub "COUNT" "COUNTING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
                                   (v  (or reuse-var iv (gensym "K-"))))
                              (setq shared-var v)
                              (unless reuse-var
@@ -2694,8 +2725,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                        `(when ,cond (when ,e (incf ,v)))))))
                           ;; MAXIMIZE / MAXIMIZING
                           ((%lkw sub "MAXIMIZE" "MAXIMIZING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
                                   (v  (or reuse-var iv (gensym "MX-"))))
                              (setq shared-var v)
                              (unless reuse-var
@@ -2709,8 +2741,9 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                             (when (or (null ,v) (> %mv ,v)) (setq ,v %mv))))))))
                           ;; MINIMIZE / MINIMIZING
                           ((%lkw sub "MINIMIZE" "MINIMIZING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
                                   (v  (or reuse-var iv (gensym "MN-"))))
                              (setq shared-var v)
                              (unless reuse-var
