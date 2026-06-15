@@ -2480,25 +2480,33 @@ SETQ/INCF/DECF is left in place (sequential)."
             ;; NAMED
             ((%lkw kw "NAMED")
              (setq name (pop!)))
-            ;; WITH var [OF-TYPE type] [= init] [AND ...]
-            ;; VAR may be a destructuring pattern: bind a gensym to the init once
-            ;; and bind the pattern's leaves from it (LET* order makes the leaf
-            ;; accessors see the gensym).
+            ;; WITH var [OF-TYPE type] [= init] [AND var ...]
+            ;; VAR may be a destructuring pattern.  Variables joined by AND are
+            ;; bound in PARALLEL (CLHS 6.1.2.2): every init is evaluated in the
+            ;; outer scope (into a temp) BEFORE any of the group's variables is
+            ;; bound, so `with a = 1 and b = (+ a 2)` sees the outer A, not 1.
             ((%lkw kw "WITH")
-             (flet ((with-bind ()
-                      (let ((v (pop!)))
-                        (skip-type-spec)
-                        (try! "=")
-                        (let ((init (if (and rest (not (%loop-kw-p (pk))))
-                                        (pop!) nil)))
-                          (if (consp v)
-                              (let ((g (gensym "WITH-")))
-                                (push (list g init) letb)
-                                (dolist (b (%loop-destr-form v g))
-                                  (push (list (second b) (third b)) letb)))
-                              (push (list v init) letb))))))
-               (with-bind)
-               (do () ((not (try! "AND"))) (with-bind))))
+             (let ((pairs nil))
+               (flet ((one ()
+                        (let ((v (pop!)))
+                          (skip-type-spec)
+                          (try! "=")
+                          (push (cons v (if (and rest (not (%loop-kw-p (pk))))
+                                            (pop!) nil))
+                                pairs))))
+                 (one)
+                 (do () ((not (try! "AND"))) (one)))
+               (let ((temps (mapcar (lambda (p) (cons (gensym "WITH-") p))
+                                    (nreverse pairs))))
+                 ;; all inits first (outer scope) ...
+                 (dolist (tp temps) (push (list (car tp) (cddr tp)) letb))
+                 ;; ... then bind each variable / pattern from its temp
+                 (dolist (tp temps)
+                   (let ((v (cadr tp)) (g (car tp)))
+                     (if (consp v)
+                         (dolist (b (%loop-destr-form v g))
+                           (push (list (second b) (third b)) letb))
+                         (push (list v g) letb)))))))
             ;; FOR / AS
             ((%lkw kw "FOR" "AS")
              ;; A FOR clause may bind several variables joined by AND; they step
