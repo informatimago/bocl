@@ -2063,21 +2063,39 @@ identity."
 ;; result-types.  Store the old binding in a global to work around bocl's
 ;; lack of closure capture over LET bindings.
 (defvar *%old-concatenate* (symbol-function 'concatenate))
+;; Map a sequence type-specifier (atom OR compound like (VECTOR T 3),
+;; (STRING 5), (ARRAY CHARACTER (3))) to a base kind.  MAKE-SEQUENCE, MAP,
+;; CONCATENATE and COERCE all dispatch on this so they accept the full range of
+;; sequence type specifiers, not just the bare symbols.
+(defun %seq-type-kind (type)
+  (let ((head (if (consp type) (car type) type))
+        (elt  (and (consp type) (cdr type) (cadr type))))
+    (cond ((member head '(list cons null)) :list)
+          ((member head '(string simple-string base-string simple-base-string)) :string)
+          ((member head '(bit-vector simple-bit-vector)) :bit-vector)
+          ((member head '(vector simple-vector array simple-array sequence))
+           (cond ((member elt '(character base-char standard-char)) :string)
+                 ((eq elt 'bit) :bit-vector)
+                 (t :vector)))
+          (t :vector))))
+
 (defun concatenate (result-type &rest sequences)
-  (cond
-    ((member result-type '(vector simple-vector))
-     (let* ((all (apply *%old-concatenate* 'list sequences))
-            (v   (make-array (length all))))
-       (dotimes (i (length all) v)
-         (setf (aref v i) (elt all i)))))
-    ((member result-type '(string cl:string simple-string base-string simple-base-string))
-     ;; Flatten all sequences to a list of characters, then build a string.
-     (let* ((all (apply *%old-concatenate* 'list sequences))
-            (len (length all))
-            (s   (make-string len)))
-       (dotimes (i len s)
-         (char-set s i (nth i all)))))
-    (t (apply *%old-concatenate* result-type sequences))))
+  (let ((kind (%seq-type-kind result-type)))
+    (cond
+      ((eq kind :string)
+       (let* ((all (apply *%old-concatenate* 'list sequences))
+              (len (length all)) (s (make-string len)))
+         (dotimes (i len s) (char-set s i (nth i all)))))
+      ((eq kind :bit-vector)
+       (let* ((all (apply *%old-concatenate* 'list sequences))
+              (len (length all)) (v (make-bit-vector len 0)))
+         (dotimes (i len v) (bit-set v i (nth i all)))))
+      ((eq kind :list)
+       (apply *%old-concatenate* 'list sequences))
+      (t  ;; :vector
+       (let* ((all (apply *%old-concatenate* 'list sequences))
+              (v   (make-array (length all))))
+         (dotimes (i (length all) v) (setf (aref v i) (elt all i))))))))
 
 ;; ---- POSITION-IF / FIND-IF with :from-end (additional keyword) ---------
 ;; The prelude versions above don't support :from-end; don't need to yet.
@@ -6092,21 +6110,23 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
          (len2  (length sequence2))
          (stop1 (min (or end1 len1) len1))
          (stop2 (min (or end2 len2) len2))
-         (n     (min (- stop1 start1) (- stop2 start2))))
+         ;; Clamp subrange lengths to >= 0: an empty/over-bounded range (start
+         ;; >= stop) must not yield a negative N and out-of-bounds ELT access.
+         (sub1  (max 0 (- stop1 start1)))
+         (sub2  (max 0 (- stop2 start2)))
+         (n     (min sub1 sub2)))
     (if from-end
         (do ((i 1 (1+ i)))
             ((> i n)
-             (if (= (- stop1 start1) (- stop2 start2)) nil
-                 (if (> (- stop1 start1) (- stop2 start2))
-                     (- stop1 i)
-                     start2)))
+             (if (= sub1 sub2) nil
+                 (if (> sub1 sub2) (- stop1 i) start2)))
           (unless (funcall test
                            (funcall key (elt sequence1 (- stop1 i)))
                            (funcall key (elt sequence2 (- stop2 i))))
             (return (- stop1 i))))
         (do ((i 0 (1+ i)))
             ((= i n)
-             (if (= (- stop1 start1) (- stop2 start2)) nil
+             (if (= sub1 sub2) nil
                  (+ start1 i)))
           (unless (funcall test
                            (funcall key (elt sequence1 (+ start1 i)))
@@ -6696,16 +6716,11 @@ result array; return that array."
 (defun make-sequence (result-type length &key (initial-element nil))
   "Return a sequence of type RESULT-TYPE and LENGTH.
   :INITIAL-ELEMENT fills every position."
-  (cond
-    ((member result-type '(list cl:list))
-     (make-list length :initial-element initial-element))
-    ((member result-type '(string cl:string simple-string base-string simple-base-string))
-     (make-string length :initial-element (or initial-element #\Space)))
-    ((member result-type '(vector simple-vector))
-     (make-array length :initial-element initial-element))
-    ((member result-type '(bit-vector simple-bit-vector))
-     (make-bit-vector length (if (integerp initial-element) initial-element 0)))
-    (t (error "MAKE-SEQUENCE: unsupported result-type ~S" result-type))))
+  (case (%seq-type-kind result-type)
+    (:list       (make-list length :initial-element initial-element))
+    (:string     (make-string length :initial-element (or initial-element #\Space)))
+    (:bit-vector (make-bit-vector length (if (integerp initial-element) initial-element 0)))
+    (t           (make-array length :initial-element initial-element))))
 
 ;;; ---- COERCE to sequence types --------------------------------------------
 ;;; Kernel handles 'character, 'float, 'integer; prelude handles sequences.
@@ -6765,21 +6780,19 @@ result array; return that array."
                    (push (apply function
                                 (mapcar (lambda (s) (elt s i)) sequences))
                          acc)))))
-    (cond
-      ((null result-type) nil)
-      ((member result-type '(list cl:list)) vals)
-      ((member result-type '(string cl:string simple-string base-string simple-base-string))
-       (let ((s (make-string len)))
-         (dotimes (i len s)
-           (setf (char s i) (nth i vals)))))
-      ((member result-type '(bit-vector simple-bit-vector))
-       (let ((v (make-bit-vector len 0)))
-         (dotimes (i len v)
-           (bit-set v i (logand 1 (nth i vals))))))
-      (t   ;; VECTOR, SIMPLE-VECTOR, etc.
-       (let ((v (make-array len)))
-         (dotimes (i len v)
-           (setf (aref v i) (nth i vals))))))))
+    (if (null result-type)
+        nil
+        (case (%seq-type-kind result-type)
+          (:list vals)
+          (:string
+           (let ((s (make-string len)))
+             (dotimes (i len s) (setf (char s i) (nth i vals)))))
+          (:bit-vector
+           (let ((v (make-bit-vector len 0)))
+             (dotimes (i len v) (bit-set v i (logand 1 (nth i vals))))))
+          (t   ;; :vector
+           (let ((v (make-array len)))
+             (dotimes (i len v) (setf (aref v i) (nth i vals)))))))))
 
 ;;;; =========================================================================
 ;;;; Slice 32 additions (bundled with TODO-driven fixes)
