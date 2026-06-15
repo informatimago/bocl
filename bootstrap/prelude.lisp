@@ -5838,48 +5838,37 @@ places share structure."
 
 (defun remove-if (predicate sequence
                   &key (start 0) end from-end (count nil) (key #'identity))
-  "Return sequence with elements matching PREDICATE removed."
+  "Return SEQUENCE with elements (in [START,END)) satisfying PREDICATE removed.
+:COUNT limits how many; :FROM-END chooses which when COUNT is given."
   (let* ((len  (length sequence))
          (stop (min (or end len) len))
-         (n    0)
-         (acc  nil))
-    (if from-end
-        ;; from-end: collect right to left, reverse prefix/suffix
-        (let ((keep (make-array (max 0 (- stop start)) :initial-element nil))
-              (i    0))
-          (do ((j (1- stop) (1- j)))
-              ((< j start))
-            (let ((x (elt sequence j)))
-              (if (and (or (null count) (< n count))
-                       (funcall predicate (funcall key x)))
-                  (setq n (1+ n))
-                  (setf (aref keep i) (list x)))
-              (setq i (1+ i))))
-          (let ((middle nil))
-            (dotimes (k i)
-              (when (aref keep k) (push (car (aref keep k)) middle)))
-            (setq acc middle)))
-        ;; forward direction
-        (do ((i start (1+ i)))
-            ((>= i stop))
-          (let ((x (elt sequence i)))
-            (unless (and (or (null count) (< n count))
-                         (funcall predicate (funcall key x)))
-              (push x acc))
-            (when (and (or (null count) (< n count))
-                       (funcall predicate (funcall key x)))
-              (setq n (1+ n)))))
-        )
-    ;; build result preserving elements outside [start,stop)
-    (let ((prefix (subseq sequence 0 start))
-          (middle (nreverse acc))
-          (suffix (subseq sequence stop len)))
-      (if (listp sequence)
-          (nconc (coerce prefix 'list) middle (coerce suffix 'list))
-          (concatenate (if (stringp sequence) 'string 'vector)
-                       (coerce prefix (if (stringp sequence) 'string 'vector))
-                       (coerce middle (if (stringp sequence) 'string 'vector))
-                       (coerce suffix (if (stringp sequence) 'string 'vector)))))))
+         (mark (make-array len :initial-element nil))
+         (n    0))
+    ;; Mark the positions to delete, scanning in the :FROM-END direction so
+    ;; :COUNT removes the rightmost (resp. leftmost) matches.
+    (flet ((maybe (i)
+             (when (and (or (null count) (< n count))
+                        (funcall predicate (funcall key (elt sequence i))))
+               (setf (aref mark i) t)
+               (setq n (1+ n)))))
+      (if from-end
+          (do ((i (1- stop) (1- i))) ((< i start)) (maybe i))
+          (do ((i start (1+ i)))     ((>= i stop)) (maybe i))))
+    ;; Build the result (same sequence kind) from the unmarked elements.
+    (let ((kept nil))
+      (dotimes (i len) (unless (aref mark i) (push (elt sequence i) kept)))
+      (setq kept (nreverse kept))
+      (let ((klen (length kept)))
+        (cond ((listp sequence) kept)
+              ((stringp sequence)
+               (let ((s (make-string klen)))
+                 (dotimes (i klen s) (char-set s i (nth i kept)))))
+              ((bit-vector-p sequence)
+               (let ((v (make-bit-vector klen 0)))
+                 (dotimes (i klen v) (bit-set v i (nth i kept)))))
+              (t
+               (let ((v (make-array klen)))
+                 (dotimes (i klen v) (setf (aref v i) (nth i kept))))))))))
 
 (defun remove (item sequence
                &key (test #'eql) test-not (start 0) end from-end count (key #'identity))
@@ -6101,12 +6090,14 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
 ;;; ---- MISMATCH with full kwargs -------------------------------------------
 
 (defun mismatch (sequence1 sequence2
-                 &key (test #'eql) (key #'identity)
+                 &key (test #'eql) test-not (key #'identity)
                       (start1 0) end1
                       (start2 0) end2
                       from-end)
-  "Return index of first mismatch between two sequence subranges, or NIL."
-  (let* ((len1  (length sequence1))
+  "Return the index in SEQUENCE1 of the first (or, FROM-END, one past the last)
+position at which the two subranges differ, or NIL if they match."
+  (let* ((test  (if test-not (lambda (a b) (not (funcall test-not a b))) test))
+         (len1  (length sequence1))
          (len2  (length sequence2))
          (stop1 (min (or end1 len1) len1))
          (stop2 (min (or end2 len2) len2))
@@ -6118,12 +6109,15 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
     (if from-end
         (do ((i 1 (1+ i)))
             ((> i n)
-             (if (= sub1 sub2) nil
-                 (if (> sub1 sub2) (- stop1 i) start2)))
+             ;; matched the common tail; if lengths differ the mismatch is at
+             ;; the boundary — one past SEQUENCE1's extra prefix.
+             (cond ((= sub1 sub2) nil)
+                   ((> sub1 sub2) (+ start1 (- sub1 sub2)))
+                   (t             start1)))
           (unless (funcall test
                            (funcall key (elt sequence1 (- stop1 i)))
                            (funcall key (elt sequence2 (- stop2 i))))
-            (return (- stop1 i))))
+            (return (1+ (- stop1 i)))))
         (do ((i 0 (1+ i)))
             ((= i n)
              (if (= sub1 sub2) nil
