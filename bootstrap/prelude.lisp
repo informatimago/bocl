@@ -186,14 +186,25 @@
 (defun rest    (l) (cdr l))
 
 (defun nth (n list)
-  (if (= n 0)
-      (car list)
-      (nth (- n 1) (cdr list))))
+  ;; Iterative: a recursive walk has no TCO here, so (nth i list) for a large
+  ;; index would recurse i frames deep and overflow the C stack — and since ELT
+  ;; on a list calls NTH, that took out FIND/POSITION over long lists.
+  (let ((k n) (l list))
+    (tagbody
+     top
+       (when (= k 0) (return-from nth (car l)))
+       (setq k (- k 1))
+       (setq l (cdr l))
+       (go top))))
 
 (defun nthcdr (n list)
-  (if (= n 0)
-      list
-      (nthcdr (- n 1) (cdr list))))
+  (let ((k n) (l list))
+    (tagbody
+     top
+       (when (= k 0) (return-from nthcdr l))
+       (setq k (- k 1))
+       (setq l (cdr l))
+       (go top))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Predicates and small helpers.                                        ;;
@@ -2500,6 +2511,33 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                           (push `(setq ,v ,init) steps)))))
                  ;; FOR v BEING [EACH|THE] HASH-KEY[S] OF ht [USING (HASH-VALUE vv)]
                  ;; FOR v BEING [EACH|THE] HASH-VALUE[S] OF ht [USING (HASH-KEY kk)]
+                 ;; FOR v BEING [EACH|THE] symbol[s]/present-symbol[s]/
+                 ;; external-symbol[s] [OF|IN] package  — iterate a package's symbols.
+                 ((and (%lkw (pk) "BEING")
+                       (let ((r2 (cdr rest)))
+                         (when (or (%lkw (car r2) "EACH") (%lkw (car r2) "THE"))
+                           (setq r2 (cdr r2)))
+                         (%lkw (car r2) "SYMBOL" "SYMBOLS" "PRESENT-SYMBOL"
+                                        "PRESENT-SYMBOLS" "EXTERNAL-SYMBOL"
+                                        "EXTERNAL-SYMBOLS")))
+                  (pop!)  ; BEING
+                  (when (or (%lkw (pk) "EACH") (%lkw (pk) "THE")) (pop!))
+                  (let* ((variant (pop!))
+                         (extp    (%lkw variant "EXTERNAL-SYMBOL" "EXTERNAL-SYMBOLS"))
+                         (lv      (gensym "SYMS-")))
+                    (when (or (%lkw (pk) "OF") (%lkw (pk) "IN")) (pop!))
+                    (let ((pkg-form (pop!)))
+                      (push (list lv (if extp
+                                         `(let ((%a nil))
+                                            (do-external-symbols (%s ,pkg-form) (push %s %a)) %a)
+                                         `(let ((%a nil))
+                                            (do-symbols (%s ,pkg-form) (push %s %a)) %a)))
+                            letb)
+                      (push (list v nil)        letb)
+                      (push `(null ,lv)             tests)
+                      (push `(setq ,v (car ,lv))    setups)
+                      (push `(setq ,lv (cdr ,lv))   steps)
+                      (push `(setq ,v (car ,lv))    steps))))
                  ((%lkw (pk) "BEING")
                   (pop!)  ; consume BEING
                   (when (or (%lkw (pk) "EACH") (%lkw (pk) "THE")) (pop!))
