@@ -4640,6 +4640,23 @@ SETQ/INCF/DECF is left in place (sequential)."
          (let ((v (make-array (length sequence))))
            (dotimes (i (length sequence) v)
              (setf (svref v i) (svref sequence i)))))
+        ;; A 1-D %md-array is an adjustable or displaced VECTOR (a string when its
+        ;; element type is CHARACTER, a bit-vector when BIT): copy it into a fresh
+        ;; SIMPLE sequence of the same type, reading through ELT (which follows
+        ;; displacement).  Kernel STRINGP/VECTORP don't see %md-arrays, so this
+        ;; must come before the error.
+        ((and (%md-array-p sequence)
+              (= (length (%md-array-dimensions sequence)) 1))
+         (let ((n  (length sequence))
+               (et (%md-array-element-type sequence)))
+           (cond ((eq et 'character)
+                  (let ((s (make-string n)))
+                    (dotimes (i n s) (char-set s i (elt sequence i)))))
+                 ((eq et 'bit)
+                  (let ((b (make-bit-vector n 0)))
+                    (dotimes (i n b) (setf (bit b i) (elt sequence i)))))
+                 (t (let ((v (make-array n)))
+                      (dotimes (i n v) (setf (svref v i) (elt sequence i))))))))
         (t (error "COPY-SEQ: not a sequence: ~S" sequence))))
 
 ;;; ---- String utilities -----------------------------------------------------
