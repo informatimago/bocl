@@ -909,28 +909,66 @@
         list
         (cons item list))))
 
+(defun %std-hash-test (test)
+  "The HASH-TABLE test name (EQ/EQL/EQUAL/EQUALP) equivalent to the standard test
+function TEST, or NIL if TEST is not one of those — so a set operation can use an
+O(n+m) hash table instead of an O(n*m) MEMBER scan."
+  (cond ((eq test #'eq)     'eq)
+        ((eq test #'eql)    'eql)
+        ((eq test #'equal)  'equal)
+        ((eq test #'equalp) 'equalp)
+        (t nil)))
+
+(defun %set-op-hash (list test key)
+  "A hash table (under TEST's hashable equivalent) of (KEY x) for x in LIST, or
+NIL when TEST has no hashable equivalent."
+  (let ((ht-test (%std-hash-test test)))
+    (when ht-test
+      (let ((h (make-hash-table :test ht-test)))
+        (dolist (x list h) (setf (gethash (funcall key x) h) t))))))
+
 (defun union (list1 list2 &key (test #'eql) (key #'identity))
-  ;; Result contains every element of list2, plus every element of list1
-  ;; not already in list2 (by key + test).
-  (let ((acc (copy-list list2)))
-    (dolist (x list1 acc)
-      (unless (find (funcall key x) acc :test test :key key)
-        (setq acc (cons x acc))))))
+  ;; Result contains every element of list2, plus every element of list1 not
+  ;; already present (by key + test).
+  (let ((h (%set-op-hash list2 test key)))
+    (if h
+        (let ((acc (reverse list2)))
+          (dolist (x list1 (nreverse acc))
+            (let ((k (funcall key x)))
+              (unless (gethash k h) (setf (gethash k h) t) (push x acc)))))
+        (let ((acc (copy-list list2)))
+          (dolist (x list1 acc)
+            (unless (find (funcall key x) acc :test test :key key)
+              (setq acc (cons x acc))))))))
 
 (defun intersection (list1 list2 &key (test #'eql) (key #'identity))
-  (remove-if (lambda (x) (not (find (funcall key x) list2 :test test :key key)))
-             list1))
+  (let ((h (%set-op-hash list2 test key)))
+    (if h
+        (let ((acc nil))
+          (dolist (x list1 (nreverse acc))
+            (when (gethash (funcall key x) h) (push x acc))))
+        (remove-if (lambda (x) (not (find (funcall key x) list2 :test test :key key)))
+                   list1))))
 
 (defun set-difference (list1 list2 &key (test #'eql) test-not (key #'identity))
-  (setq test (%xtest test test-not))
-  (remove-if (lambda (x) (find (funcall key x) list2 :test test :key key))
-             list1))
+  (let ((h (and (null test-not) (%set-op-hash list2 test key))))
+    (if h
+        (let ((acc nil))
+          (dolist (x list1 (nreverse acc))
+            (unless (gethash (funcall key x) h) (push x acc))))
+        (let ((tf (%xtest test test-not)) (acc nil))
+          (dolist (x list1 (nreverse acc))
+            (unless (member (funcall key x) list2 :test tf :key key) (push x acc)))))))
 
 (defun subsetp (list1 list2 &key (test #'eql) (key #'identity))
   "True if every element of LIST1 appears (under TEST/KEY) in LIST2."
-  (dolist (x list1 t)
-    (unless (find (funcall key x) list2 :test test :key key)
-      (return nil))))
+  (let ((h (%set-op-hash list2 test key)))
+    (if h
+        (dolist (x list1 t)
+          (unless (gethash (funcall key x) h) (return nil)))
+        (dolist (x list1 t)
+          (unless (find (funcall key x) list2 :test test :key key)
+            (return nil))))))
 
 (defun pairlis (keys values &optional (alist nil))
   ;; (PAIRLIS '(a b c) '(1 2 3)) -> ((C . 3) (B . 2) (A . 1))
@@ -6214,6 +6252,15 @@ FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
 (defun find-if (predicate sequence
                 &key (start 0) end from-end (key #'identity))
   "Return first element in SEQUENCE[START,END) satisfying PREDICATE."
+  ;; Forward list scan walks the conses directly — ELT on a list is O(n), so
+  ;; the index loop below would be O(n^2) (and made e.g. SET-DIFFERENCE hang).
+  (when (and (listp sequence) (not from-end))
+    (return-from find-if
+      (do ((tail (nthcdr start sequence) (cdr tail))
+           (i start (1+ i)))
+          ((or (null tail) (and end (>= i end))) nil)
+        (when (funcall predicate (funcall key (car tail)))
+          (return-from find-if (car tail))))))
   (let* ((len  (length sequence))
          (stop (min (or end len) len)))
     (if from-end
@@ -6245,6 +6292,13 @@ FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
 (defun position-if (predicate sequence
                     &key (start 0) end from-end (key #'identity))
   "Return index of first element in SEQUENCE[START,END) satisfying PREDICATE."
+  (when (and (listp sequence) (not from-end))   ; O(n) cdr-walk (see FIND-IF)
+    (return-from position-if
+      (do ((tail (nthcdr start sequence) (cdr tail))
+           (i start (1+ i)))
+          ((or (null tail) (and end (>= i end))) nil)
+        (when (funcall predicate (funcall key (car tail)))
+          (return-from position-if i)))))
   (let* ((len  (length sequence))
          (stop (min (or end len) len)))
     (if from-end
