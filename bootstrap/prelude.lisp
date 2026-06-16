@@ -2372,6 +2372,23 @@ inline in the loop body, so accum-forms skips it but binding/result still apply)
                                    (%loop-pattern-vars (cdr pattern))))
         (t                 nil)))
 
+(defun %loop-numeric-type-p (type)
+  "True if TYPE (a LOOP OF-TYPE spec) names a numeric type — so an uninitialised
+variable of that type defaults to 0 rather than NIL (CLHS 6.1.1.7)."
+  (let ((head (if (consp type) (car type) type)))
+    (and (symbolp head)
+         (member head '(number real rational integer fixnum bignum bit
+                        float single-float double-float short-float long-float
+                        ratio signed-byte unsigned-byte mod)))))
+
+(defun %loop-typed-default (type)
+  "Initial value for an uninitialised LOOP variable declared OF-TYPE TYPE:
+0.0 for a float type, 0 for another numeric type, NIL otherwise (CLHS 6.1.1.7)."
+  (let ((head (if (consp type) (car type) type)))
+    (cond ((member head '(float single-float double-float short-float long-float)) 0.0)
+          ((%loop-numeric-type-p type) 0)
+          (t nil))))
+
 (defun %loop-destr-form (pattern access)
   "List of (SETQ var <car/cdr access>) forms binding PATTERN's leaves from the
 value reached by ACCESS (a form).  NIL leaves are skipped; a dotted/atom tail
@@ -2487,26 +2504,49 @@ SETQ/INCF/DECF is left in place (sequential)."
             ;; bound, so `with a = 1 and b = (+ a 2)` sees the outer A, not 1.
             ((%lkw kw "WITH")
              (let ((pairs nil))
-               (flet ((one ()
-                        (let ((v (pop!)))
-                          (skip-type-spec)
-                          (try! "=")
-                          (push (cons v (if (and rest (not (%loop-kw-p (pk))))
-                                            (pop!) nil))
-                                pairs))))
+               (flet ((grab-type ()
+                        ;; OF-TYPE <type>, or a bare type spec; NIL if neither.
+                        (cond ((%lkw (pk) "OF-TYPE") (pop!) (pop!))
+                              ((and rest (not (%lkw (pk) "=")) (not (%loop-kw-p (pk))))
+                               (pop!))
+                              (t nil)))
+                      (one ()
+                        (let* ((v    (pop!))
+                               (type (grab-type))
+                               (eq?  (try! "="))
+                               (init (if (and eq? rest (not (%loop-kw-p (pk))))
+                                         (pop!) nil)))
+                          (push (list v init eq? type) pairs))))   ; (var init had-init type)
                  (one)
                  (do () ((not (try! "AND"))) (one)))
                (let ((temps (mapcar (lambda (p) (cons (gensym "WITH-") p))
                                     (nreverse pairs))))
-                 ;; all inits first (outer scope) ...
-                 (dolist (tp temps) (push (list (car tp) (cddr tp)) letb))
-                 ;; ... then bind each variable / pattern from its temp
+                 ;; All inits first (evaluated in the outer scope -> parallel) ...
                  (dolist (tp temps)
-                   (let ((v (cadr tp)) (g (car tp)))
-                     (if (consp v)
-                         (dolist (b (%loop-destr-form v g))
-                           (push (list (second b) (third b)) letb))
-                         (push (list v g) letb)))))))
+                   (when (fourth tp) (push (list (first tp) (third tp)) letb)))
+                 ;; ... then bind each variable / pattern.
+                 (dolist (tp temps)
+                   (let ((g (first tp)) (v (second tp))
+                         (eq? (fourth tp)) (type (fifth tp)))
+                     (cond
+                       ;; initialised: bind from the temp (destructure if a pattern)
+                       (eq?
+                        (if (consp v)
+                            (dolist (b (%loop-destr-form v g))
+                              (push (list (second b) (third b)) letb))
+                            (push (list v g) letb)))
+                       ;; uninitialised pattern: each leaf takes its type's default
+                       ;; (a per-leaf type list mirrors the pattern; a lone type
+                       ;; applies to every leaf).
+                       ((consp v)
+                        (let ((i 0))
+                          (dolist (leaf (%loop-pattern-vars v))
+                            (push (list leaf (%loop-typed-default
+                                              (if (consp type) (nth i type) type)))
+                                  letb)
+                            (setq i (+ i 1)))))
+                       ;; uninitialised single variable
+                       (t (push (list v (%loop-typed-default type)) letb))))))))
             ;; FOR / AS
             ((%lkw kw "FOR" "AS")
              ;; A FOR clause may bind several variables joined by AND; they step
