@@ -237,6 +237,22 @@
 (defun hash-table-p (x) (typep x 'hash-table))
 (defun random-state-p (x) (typep x 'random-state))
 
+;; The kernel RANDOM handles only fixnum and float limits.  Extend it to BIGNUM
+;; integer limits (the ANSI tests use e.g. (random (* big big))) by assembling a
+;; random integer from 30-bit words and reducing modulo LIMIT.  Built with only
+;; * / + / FLOOR / MOD, since the kernel's bignum INTEGER-LENGTH/ASH/LOGIOR are
+;; incomplete.
+(defparameter *%kernel-random* (symbol-function 'random))
+(defun random (limit &optional state)
+  (declare (ignore state))
+  (if (and (integerp limit) (> limit most-positive-fixnum))
+      (let ((base (ash 1 30)) (words 0) (m limit) (r 0))
+        (do () ((zerop m)) (setq m (floor m base)) (setq words (+ words 1)))
+        (dotimes (i (+ words 1))
+          (setq r (+ (* r base) (funcall *%kernel-random* base))))
+        (mod r limit))
+      (funcall *%kernel-random* limit)))
+
 (defun zerop  (n) (= n 0))
 (defun plusp  (n) (> n 0))
 (defun minusp (n) (< n 0))
