@@ -2013,7 +2013,6 @@ identity."
 (defun write (object &key (stream    *standard-output*)
                           (escape    *print-escape*)
                           (readably  *print-readably*)
-                          ;; honoured in future; accepted now so callers compile
                           (radix     *print-radix*)
                           (base      *print-base*)
                           (circle    *print-circle*)
@@ -2023,10 +2022,18 @@ identity."
                           (case      *print-case*)
                           (gensym    *print-gensym*)
                           (array     *print-array*))
-  ;; radix/base/circle/pretty/level/length/case/gensym/array not yet wired up
-  (if (or readably escape)
-      (prin1 object stream)
-      (princ object stream))
+  ;; Bind the *PRINT-…* variables to the keyword arguments for the dynamic extent
+  ;; of the output, so the (C) printer honours them — :CIRCLE / :LENGTH / :LEVEL
+  ;; etc. now take effect (the printer reads the specials).
+  (let ((*print-escape*   escape)   (*print-readably* readably)
+        (*print-radix*    radix)    (*print-base*     base)
+        (*print-circle*   circle)   (*print-pretty*   pretty)
+        (*print-level*    level)    (*print-length*   length)
+        (*print-case*     case)     (*print-gensym*   gensym)
+        (*print-array*    array))
+    (if (or readably escape)
+        (prin1 object stream)
+        (princ object stream)))
   object)
 
 ;; ---- PPRINT — pretty-print (simplified: prin1 + terpri) ----------------
@@ -6581,20 +6588,15 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
 
 ;;; ---- WRITE-TO-STRING with :base ------------------------------------------
 
-(defun write-to-string (object &rest keys
-                        &key (base *print-base*)
-                             (radix *print-radix*)
-                             (readably *print-readably*)
-                             (escape *print-escape*)
-                             &allow-other-keys)
-  "Produce a string representation of OBJECT."
-  (declare (ignore readably escape radix keys))
+(defun write-to-string (object &rest keys &key (base *print-base*) &allow-other-keys)
+  "Produce a string representation of OBJECT, honouring the print keywords
+(:CIRCLE/:LENGTH/:LEVEL/:ESCAPE/… via WRITE) — needed so e.g. circular structure
+prints with #n= labels instead of looping forever."
   (if (and (integerp object) base (/= base 10))
-      ;; Non-decimal integer: use number-to-string
+      ;; Non-decimal integer shortcut.
       (number-to-string object base)
-      ;; Default: prin1
       (with-output-to-string (s)
-        (prin1 object s))))
+        (apply #'write object :stream s keys))))
 
 (defun princ-to-string (obj)
   "Produce a PRINC string representation of OBJ."

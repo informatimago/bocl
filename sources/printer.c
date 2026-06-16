@@ -55,7 +55,58 @@ static bool print_condition_via_print_object(Ref object,Ref stream,bool escape){
     g_in_condition_print=false;
     return true;}
 
+/* ---- *PRINT-CIRCLE* support + recursion backstop ------------------------- */
+/* When *PRINT-CIRCLE* is true, a pre-pass records every cons reachable from the
+   object and marks the ones referenced more than once; the print pass labels
+   those with #n= on first appearance and #n# afterwards, so shared and circular
+   structure prints (and reads back) correctly instead of recursing forever.
+   PRIN1_MAX_DEPTH is a backstop against deep/uncircle-printed structure. */
+#define PRIN1_MAX_DEPTH 16384
+static int g_prin1_depth = 0;
+
+typedef struct { Ref obj; int label; } CircleEntry;  /* label: 0 once, -1 shared, >0 assigned */
+static CircleEntry* g_circle = NULL;
+static int g_circle_count = 0, g_circle_cap = 0, g_circle_next_label = 0;
+static bool g_circle_active = false;
+
+static int circle_index(Ref obj){
+    for(int i=0;i<g_circle_count;i++){ if(g_circle[i].obj==obj){ return i; } }
+    return -1;}
+
+static void circle_scan(Ref obj,int depth){
+    if(depth>PRIN1_MAX_DEPTH){ return; }
+    bool is_cons=consp(obj), is_vec=vectorp(obj);
+    if(!is_cons && !is_vec){ return; }
+    int idx=circle_index(obj);
+    if(idx>=0){ g_circle[idx].label=-1; return; }   /* second visit: shared */
+    if(g_circle_count>=g_circle_cap){
+        g_circle_cap = g_circle_cap ? g_circle_cap*2 : 256;
+        g_circle = realloc(g_circle,(size_t)g_circle_cap*sizeof(CircleEntry)); }
+    g_circle[g_circle_count].obj=obj;
+    g_circle[g_circle_count].label=0;
+    g_circle_count++;
+    if(is_cons){ circle_scan(car(obj),depth+1); circle_scan(cdr(obj),depth+1); }
+    else { uword len=vector_length(obj);
+           for(uword i=0;i<len;i++){ circle_scan(obj->slots->array.elements->elements[i],depth+1); } }}
+
+static Ref prin1_inner(Ref object,Ref stream);
 Ref prin1(Ref object,Ref stream){
+    if(g_prin1_depth >= PRIN1_MAX_DEPTH){
+        fprintf(stream_output_cstream(stream),"...");
+        return object;}
+    bool top = (g_prin1_depth==0);
+    bool saved_active=g_circle_active; int saved_count=g_circle_count, saved_label=g_circle_next_label;
+    if(top){
+        Ref pc=variable_value(S(*PRINT-CIRCLE*));
+        if(!nullp(pc)){ g_circle_count=0; g_circle_next_label=0; circle_scan(object,0); g_circle_active=true; }
+        else { g_circle_active=false; }}
+    g_prin1_depth++;
+    Ref r = prin1_inner(object,stream);
+    g_prin1_depth--;
+    if(top){ g_circle_active=saved_active; g_circle_count=saved_count; g_circle_next_label=saved_label; }
+    return r;}
+
+static Ref prin1_inner(Ref object,Ref stream){
     FILE* out=stream_output_cstream(stream);
 
     if(characterp(object)){
@@ -115,6 +166,15 @@ Ref prin1(Ref object,Ref stream){
         return object;}
 
     if(consp(object)){
+        /* *PRINT-CIRCLE*: emit #n# for an already-printed shared cons, #n= the
+           first time. */
+        if(g_circle_active){
+            int idx=circle_index(object);
+            if(idx>=0){
+                int lab=g_circle[idx].label;
+                if(lab>0){ fprintf(out,"#%d#",lab); return object; }
+                if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
+                             fprintf(out,"#%d=",g_circle_next_label); }}}
         /* Respect *PRINT-LENGTH* — truncate after this many elements. */
         Ref plen_ref = variable_value(S(*PRINT-LENGTH*));
         word print_length = (integerp(plen_ref)) ? integer_value(plen_ref) : -1;
@@ -123,14 +183,26 @@ Ref prin1(Ref object,Ref stream){
         word elem=0;
         prin1(car(current),stream); elem++;
         current=cdr(current);
+        /* Floyd cycle detection on the CDR spine is the backstop when
+           *PRINT-CIRCLE* is OFF; when ON, a shared CDR cell is printed via its
+           label (". #n#") instead of being walked. */
+        Ref slow=object; int advance_slow=0;
         while(consp(current)){
+            if(g_circle_active){
+                int idx=circle_index(current);
+                if(idx>=0 && g_circle[idx].label!=0){
+                    fprintf(out," . "); prin1(current,stream);
+                    current=NIL_Symbol; break; }}
             if(print_length >= 0 && elem >= print_length){
                 fprintf(out," ...");
                 break;}
             fprintf(out," ");
             prin1(car(current),stream);
             current=cdr(current);
-            elem++;}
+            elem++;
+            if(advance_slow){ slow=cdr(slow); }
+            advance_slow=!advance_slow;
+            if(current==slow){ fprintf(out," . #<circular>"); current=NIL_Symbol; break; }}
         if(!nullp(current) && !consp(current)){
             fprintf(out," . ");
             prin1(current, stream);}
@@ -162,6 +234,13 @@ Ref prin1(Ref object,Ref stream){
     if(vectorp(object)){
         /* A vector prints as #(e1 e2 …). Vectors are
            Array-backed under the hood, so iterate via array.elements. */
+        if(g_circle_active){
+            int idx=circle_index(object);
+            if(idx>=0){
+                int lab=g_circle[idx].label;
+                if(lab>0){ fprintf(out,"#%d#",lab); return object; }
+                if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
+                             fprintf(out,"#%d=",g_circle_next_label); }}}
         fprintf(out,"#(");
         uword len = vector_length(object);
         for(uword i=0; i<len; i++){
