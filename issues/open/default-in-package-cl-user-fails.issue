@@ -1,0 +1,103 @@
+Default (IN-PACKAGE "COMMON-LISP-USER") fails after the prelude is loaded
+=========================================================================
+
+Symptom
+-------
+
+When bocl starts normally (prelude loaded), the default end-of-startup
+IN-PACKAGE to COMMON-LISP-USER fails with:
+
+    In bocl_in_package:
+    ERROR: IN-PACKAGE: no such package COMMON-LISP-USER
+
+In --batch -q mode this is accompanied by the user expression producing
+NO output, e.g.:
+
+    $ printf '(print (+ 40 2))\n' | sources/bocl --batch -q
+    In bocl_in_package:
+    ERROR: IN-PACKAGE: no such package COMMON-LISP-USER
+    (no "42" is printed)
+
+With --no-prelude the error does NOT occur and evaluation works:
+
+    $ echo '(print (+ 1 2))' | sources/bocl --no-prelude --batch
+    3
+    bocl>
+
+So the failure is tied to the prelude having been loaded.
+
+Where it happens
+----------------
+
+main() drives, in order (sources/main.c):
+
+  1. kernel_initialize()                       (main.c:379)
+       -> packages.c:325 creates COMMON-LISP-USER:
+          COMMON_LISP_USER_Package = package_new("COMMON-LISP-USER", ...)
+  2. load bootstrap/prelude.lisp               (main.c:386-395)
+  3. default package designator = "COMMON-LISP-USER" (main.c:285)
+  4. if(package) bocl_in_package(bocl_read_cstring(package))  (main.c:445-446)
+
+bocl_in_package (sources/bocl.c:57):
+
+    Ref bocl_in_package(Ref package_designator){
+        Ref pkg = package_find(package_designator);
+        if(nullp(pkg)){
+            ERROR("IN-PACKAGE: no such package %s", ...); }
+        set_symbol_value(S(*PACKAGE*), pkg);
+        return pkg; }
+
+The package IS created at step 1, yet package_find() returns NIL at step 4
+(after the prelude). The error is therefore not "package never existed"
+but "package no longer resolvable through this lookup once the prelude has
+run".
+
+Likely cause (to confirm)
+-------------------------
+
+bocl uses the hybrid C/Lisp true-package design: the prelude (re)builds the
+real CL package structures in Lisp (cl-exports.lisp is auto-generated, the
+prelude loads under *PACKAGE* = CL). Two plausible mechanisms, to be
+verified:
+
+  a. The prelude replaces / re-registers the package table, so the C-side
+     COMMON_LISP_USER_Package created by package_new() at startup is no
+     longer the object the post-prelude registry returns for the name
+     "COMMON-LISP-USER" (stale binding / shadowed registry).
+
+  b. bocl_read_cstring("COMMON-LISP-USER") returns a SYMBOL designator
+     interned in the current *PACKAGE*, and package_find()'s symbol-
+     designator path does not resolve it the same way after the prelude
+     (e.g. it compares the package object rather than the name string).
+
+Either way the *default* startup path emits an error on every normal run.
+
+Impact
+------
+
+  - Every normal (prelude-loaded) startup prints a spurious-looking error.
+  - In --batch -q, the user form after it appears to be dropped (no output),
+    which suggests *PACKAGE* is left in a bad state (or the REPL/eval path is
+    disturbed) rather than this being a cosmetic notice only. This is the
+    part that makes it a likely real bug rather than a harmless message.
+
+Suggested investigation
+-----------------------
+
+  1. Add a probe just before main.c:446 to print whether package_find()
+     resolves "COMMON-LISP-USER" both as a string designator and as the
+     symbol returned by bocl_read_cstring(), to distinguish causes (a)/(b).
+  2. Check whether the prelude DELETE-PACKAGE / re-creates COMMON-LISP-USER
+     (or USE-PACKAGE rewiring) such that the C COMMON_LISP_USER_Package
+     handle goes stale; if so, look it up by name at IN-PACKAGE time instead
+     of relying on the startup handle.
+  3. Confirm whether *PACKAGE* is left NIL/garbage after the failed
+     IN-PACKAGE, which would explain the suppressed --batch -q output.
+
+Notes
+-----
+
+  - Reproduced on Darwin/arm64 (Apple clang) at v0.0.59. The prelude load is
+    slow (~45 s), so iterate with a probe rather than many full runs.
+  - Found incidentally while validating the build/packaging deliverables; not
+    introduced by them (it reproduces on the unmodified startup path).
