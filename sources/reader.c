@@ -647,6 +647,10 @@ static Ref parse_token(parser_state* parser){
        fold case inline once escaping starts (retro-folding the unescaped prefix),
        so the finished name can be interned verbatim. */
     bool escaped=false;
+    /* Positions of the first (and immediately-following second) UNESCAPED colon:
+       these are package markers even in an escaped token, so :|a| is the keyword
+       |a|, not a symbol named ":a". -1 = none seen. */
+    int colon1=-1, colon2=-1;
     while(!parser->error && !parser->eof){
         if(parser->ch=='\\'){
             if(!escaped){
@@ -678,6 +682,9 @@ static Ref parse_token(parser_state* parser){
             advance_character(parser);}           /* past the closing | */
         else if(token_continues(rt,parser->ch)){
             check_token_too_long(parser,"Token");
+            if(parser->ch==':'){
+                if(colon1<0){ colon1=(int)parser->length; }
+                else if(colon2<0 && (int)parser->length==colon1+1){ colon2=(int)parser->length; }}
             parser->token[parser->length++]=escaped?reader_upcase1(parser->ch):parser->ch;
             advance_character(parser);}
         else{ break; }}
@@ -690,9 +697,27 @@ static Ref parse_token(parser_state* parser){
     parser->token[parser->length]='\0';
     if(escaped){
         /* Escaped tokens are always symbols; the name is already correctly cased,
-           so intern it verbatim (no number scan, no further case folding). */
+           so no number scan or further case folding.  An UNESCAPED colon is still
+           a package marker (so :|a| is the keyword |a|, foo:|bar| qualifies in
+           FOO), while an escaped colon is just a name character. */
         parser->eof=false;
-        return package_intern_current_cstring((const char*)parser->token);}
+        const char* tok=(const char*)parser->token;
+        if(colon1<0){
+            return package_intern_current_cstring(tok);}
+        if(colon1==0){
+            return keyword_intern_cstring(tok + (colon2==1 ? 2 : 1));}
+        {   char pkg_buf[256];
+            if((size_t)colon1>=sizeof(pkg_buf)){ return NIL_Symbol; }
+            for(int i=0;i<colon1;i++){ pkg_buf[i]=tok[i]; }
+            pkg_buf[colon1]='\0';
+            const char* name_part=tok + (colon2==colon1+1 ? colon1+2 : colon1+1);
+            Ref pkg=package_find_cstring(pkg_buf);
+            if(nullp(pkg)){ ERROR("READ: there is no package named %s",pkg_buf); }
+            if(pkg==KEYWORD_Package){ return keyword_intern_cstring(name_part); }
+            if(colon2==colon1+1){ return package_intern_cstring_in(name_part,pkg); }
+            Ref sym=package_find_external_cstring(name_part,pkg);
+            if(sym){ return sym; }
+            ERROR("READ: %s is not external in package %s",name_part,pkg_buf); }}
     bool valid=true;
     Ref result=scan_integer(parser);
     if(result==NIL_Symbol){
@@ -886,14 +911,34 @@ static Ref parse_object(parser_state* parser){
             case ':': {  /* #:name => a fresh uninterned symbol named NAME */
                 advance_character(parser);   /* skip ':' */
                 parser->length=0;
-                while(!parser->error && !parser->eof && constituentp(parser->ch)){
-                    check_token_too_long(parser,"Token");
-                    parser->token[parser->length++]=parser->ch;
-                    advance_character(parser);}
+                bool esc=false;   /* | … | or \ used — keep escaped case verbatim */
+                while(!parser->error && !parser->eof){
+                    if(parser->ch=='\\'){
+                        if(!esc){ for(halfword i=0;i<parser->length;i++){ parser->token[i]=reader_upcase1(parser->token[i]); } esc=true; }
+                        advance_character(parser);
+                        if(parser->eof){ break; }
+                        check_token_too_long(parser,"Token");
+                        parser->token[parser->length++]=parser->ch;
+                        advance_character(parser);}
+                    else if(parser->ch=='|'){
+                        if(!esc){ for(halfword i=0;i<parser->length;i++){ parser->token[i]=reader_upcase1(parser->token[i]); } esc=true; }
+                        for(;;){
+                            advance_character(parser);
+                            if(parser->eof){ break; }
+                            if(parser->ch=='\\'){ advance_character(parser); if(parser->eof){ break; } }
+                            else if(parser->ch=='|'){ break; }
+                            check_token_too_long(parser,"Token");
+                            parser->token[parser->length++]=parser->ch;}
+                        advance_character(parser);}
+                    else if(constituentp(parser->ch)){
+                        check_token_too_long(parser,"Token");
+                        parser->token[parser->length++]=esc?reader_upcase1(parser->ch):parser->ch;
+                        advance_character(parser);}
+                    else{ break; }}
                 check_parser_error(parser);
                 parser->token[parser->length]='\0';
                 parser->eof=false;   /* a name terminated by EOF is still valid */
-                octet_upcase(parser->token);
+                if(!esc){ octet_upcase(parser->token); }
                 return symbol_new(string_new_cstring((const char*)parser->token)); }
             case '.': {  /* #.form => evaluate FORM at read time (read-eval) */
                 extern Ref bocl_eval(Ref);
