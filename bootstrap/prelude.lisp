@@ -224,7 +224,12 @@
 (defun realp     (x) (typep x 'real))
 (defun complexp  (x) (typep x 'complex))
 (defun characterp (x) (typep x 'character))
-(defun vectorp   (x) (typep x 'vector))
+(defun vectorp   (x)
+  ;; A 1-D array is a vector — including a displaced/adjustable one, which bocl
+  ;; represents as a %md-array.  (Sequence functions that follow VECTORP with
+  ;; SVREF guard %md-array-p first, so they stay correct.)
+  (or (typep x 'vector)
+      (and (%md-array-p x) (= (length (%md-array-dimensions x)) 1))))
 (defun arrayp    (x) (typep x 'array))
 (defun packagep  (x) (typep x 'package))
 (defun pathnamep (x) (typep x 'pathname))
@@ -4724,6 +4729,23 @@ SETQ/INCF/DECF is left in place (sequential)."
 (defun copy-seq (sequence)
   "Return a fresh copy of SEQUENCE."
   (cond ((listp sequence) (copy-list sequence))
+        ;; A 1-D %md-array is an adjustable or displaced VECTOR (a string when its
+        ;; element type is CHARACTER, a bit-vector when BIT): copy it into a fresh
+        ;; SIMPLE sequence of the same type, reading through ELT (which follows
+        ;; displacement).  Must precede the VECTORP branch — VECTORP is true for a
+        ;; %md-array, but SVREF would misread its storage.
+        ((and (%md-array-p sequence)
+              (= (length (%md-array-dimensions sequence)) 1))
+         (let ((n  (length sequence))
+               (et (%md-array-element-type sequence)))
+           (cond ((eq et 'character)
+                  (let ((s (make-string n)))
+                    (dotimes (i n s) (char-set s i (elt sequence i)))))
+                 ((eq et 'bit)
+                  (let ((b (make-bit-vector n 0)))
+                    (dotimes (i n b) (setf (bit b i) (elt sequence i)))))
+                 (t (let ((v (make-array n)))
+                      (dotimes (i n v) (setf (svref v i) (elt sequence i))))))))
         ((stringp sequence)
          (let ((s (make-string (length sequence))))
            (dotimes (i (length sequence) s)
@@ -4738,23 +4760,6 @@ SETQ/INCF/DECF is left in place (sequential)."
          (let ((v (make-array (length sequence))))
            (dotimes (i (length sequence) v)
              (setf (svref v i) (svref sequence i)))))
-        ;; A 1-D %md-array is an adjustable or displaced VECTOR (a string when its
-        ;; element type is CHARACTER, a bit-vector when BIT): copy it into a fresh
-        ;; SIMPLE sequence of the same type, reading through ELT (which follows
-        ;; displacement).  Kernel STRINGP/VECTORP don't see %md-arrays, so this
-        ;; must come before the error.
-        ((and (%md-array-p sequence)
-              (= (length (%md-array-dimensions sequence)) 1))
-         (let ((n  (length sequence))
-               (et (%md-array-element-type sequence)))
-           (cond ((eq et 'character)
-                  (let ((s (make-string n)))
-                    (dotimes (i n s) (char-set s i (elt sequence i)))))
-                 ((eq et 'bit)
-                  (let ((b (make-bit-vector n 0)))
-                    (dotimes (i n b) (setf (bit b i) (elt sequence i)))))
-                 (t (let ((v (make-array n)))
-                      (dotimes (i n v) (setf (svref v i) (elt sequence i))))))))
         (t (error "COPY-SEQ: not a sequence: ~S" sequence))))
 
 ;;; ---- String utilities -----------------------------------------------------
@@ -5429,8 +5434,14 @@ SETQ/INCF/DECF is left in place (sequential)."
   (and (%md-array-p array) (%md-array-adjustable array) t))
 
 (defun simple-vector-p (object)
-  "Return T if OBJECT is a simple (non-adjustable, no fill-pointer) vector."
-  (and (vectorp object) (not (%fill-pointer-of object))))
+  "Return T if OBJECT is a SIMPLE GENERAL vector — element-type T, not adjustable,
+no fill pointer, not displaced.  Strings and bit-vectors are vectors but NOT
+simple-vectors (CLHS)."
+  (and (vectorp object)
+       (not (stringp object))
+       (not (bit-vector-p object))
+       (not (%md-array-p object))
+       (not (%fill-pointer-of object))))
 
 (defun simple-bit-vector-p (object)
   "Return T if OBJECT is a simple bit-vector (a bit-vector with no fill pointer;
@@ -5467,12 +5478,22 @@ character (string-backed) and general vectors."
 array object in place (no spare indirection), so when VECTOR is full this
 signals an error rather than silently corrupting; while capacity remains it
 behaves exactly like VECTOR-PUSH and always succeeds."
-  extension                                      ; accepted, ignored
   (let ((fp (%fill-pointer-of vector)))
     (unless fp (error "VECTOR-PUSH-EXTEND: ~S has no fill pointer" vector))
-    (unless (< fp (array-total-size vector))
-      (error "VECTOR-PUSH-EXTEND: ~S is full; in-place growth of adjustable ~
-              arrays is not supported in bocl" vector))
+    (when (>= fp (array-total-size vector))
+      ;; Full: grow an adjustable array's storage in place (a %md-array keeps its
+      ;; elements in a separate vector we can replace); a non-adjustable vector
+      ;; cannot grow.
+      (if (and (%md-array-p vector) (%md-array-adjustable vector))
+          (let* ((cap    (array-total-size vector))
+                 (newcap (max (or extension (max 8 (* 2 cap))) (1+ fp)))
+                 (old    (%md-array-storage vector))
+                 (new    (%make-typed-storage (%md-array-element-type vector)
+                                              newcap nil nil 0)))
+            (dotimes (i cap) (%storage-set new i (%storage-ref old i)))
+            (setf (%md-array-storage vector)    new
+                  (%md-array-dimensions vector) (list newcap)))
+          (error "VECTOR-PUSH-EXTEND: ~S is full and not adjustable" vector)))
     (setf (aref vector fp) new-element)
     (%set-fill-pointer vector (1+ fp))
     fp))
@@ -5559,8 +5580,15 @@ behaves exactly like VECTOR-PUSH and always succeeds."
   (error "MAKE-LOAD-FORM-SAVING-SLOTS: not supported for ~S" object))
 
 (defun upgraded-array-element-type (type &optional env)
-  "Return T — bocl has a single uniform array element type."
-  type env t)
+  "The element type an array of element-type TYPE actually holds.  bocl stores
+BIT and CHARACTER arrays specially and everything else in a general (T) array, so
+report BIT / the character type / T accordingly (each is its own upgrade, so
+SUBTYPEP round-trips)."
+  (declare (ignore env))
+  (let ((head (if (consp type) (car type) type)))
+    (cond ((eq head 'bit) 'bit)
+          ((member head '(character base-char standard-char extended-char)) head)
+          (t t))))
 
 (defun row-major-aref (array index)
   "Access element at ROW-MAJOR linear INDEX in ARRAY."
@@ -8549,6 +8577,29 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
 
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
+
+;; BIT / SBIT accept any number of subscripts (a bit array may be multi-
+;; dimensional).  AREF / AREF-SET already route a 1-D bit-vector to the kernel
+;; and a multi-dimensional bit %md-array through row-major indexing, so delegate
+;; to them — keeping the kernel fast path for a plain 1-D bit-vector.
+(defparameter *%kernel-bit*  (symbol-function 'bit))
+(defparameter *%kernel-sbit* (symbol-function 'sbit))
+(defun bit (bit-array &rest subscripts)
+  (if (or (cdr subscripts) (%md-array-p bit-array))
+      (apply #'aref bit-array subscripts)
+      (funcall *%kernel-bit* bit-array (car subscripts))))
+(defun sbit (bit-array &rest subscripts)
+  (if (or (cdr subscripts) (%md-array-p bit-array))
+      (apply #'aref bit-array subscripts)
+      (funcall *%kernel-sbit* bit-array (car subscripts))))
+(sethash 'bit *setf-expanders*
+  (lambda (array &rest subs-and-val)
+    (let* ((rev (reverse subs-and-val)) (val (car rev)) (subs (reverse (cdr rev))))
+      `(aref-set ,val ,array ,@subs))))
+(sethash 'sbit *setf-expanders*
+  (lambda (array &rest subs-and-val)
+    (let* ((rev (reverse subs-and-val)) (val (car rev)) (subs (reverse (cdr rev))))
+      `(aref-set ,val ,array ,@subs))))
 
 ;;; ---- Displaced and adjustable arrays -------------------------------------
 
