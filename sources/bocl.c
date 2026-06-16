@@ -126,12 +126,20 @@ Ref bocl_load_cstring(const char* path){
        EVAL-WHEN :LOAD-TOPLEVEL checks these (in eval.c). */
     Ref pn_obj = stream_pathname(inp);
     add_to_live_pool(pn_obj);
+    /* *LOAD-TRUENAME* must be the absolute truename (CLHS) — code that loads
+       sibling files relative to its own directory (e.g. the ansi-test harness's
+       *aux-dir*) breaks if it is left relative. */
+    Ref tn_obj = pn_obj;
+    {   char abs[4096];
+        if(realpath(path, abs)){
+            tn_obj = physical_pathname_new_cstring(abs);
+            add_to_live_pool(tn_obj);}}
     Ref old_load_pn = variable_value(S(*LOAD-PATHNAME*));
     Ref old_load_tn = variable_value(S(*LOAD-TRUENAME*));
     add_to_live_pool(old_load_pn);
     add_to_live_pool(old_load_tn);
     set_symbol_value(S(*LOAD-PATHNAME*), pn_obj);
-    set_symbol_value(S(*LOAD-TRUENAME*), pn_obj);
+    set_symbol_value(S(*LOAD-TRUENAME*), tn_obj);
 
     if(do_verbose){
         princ(T(";; Loading "),out);
