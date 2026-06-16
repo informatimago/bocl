@@ -1969,6 +1969,9 @@ identity."
 (defvar *read-base*                 10)
 (defvar *read-default-float-format* 'single-float)
 (defvar *read-eval*                 t)
+;; *QUERY-IO* — the bidirectional stream for interactive queries (Y-OR-N-P etc.);
+;; default it to the terminal, like the other interaction streams.
+(defvar *query-io* *terminal-io*)
 (defvar *read-suppress*             nil)
 
 ;; ---- WRITE — full CL printer entry point (simplified) ------------------
@@ -4401,17 +4404,19 @@ SETQ/INCF/DECF is left in place (sequential)."
 
 ;;; ---- 19. Generic function installation ----------------------------------
 
+(defparameter *%gf-by-fn* (make-hash-table :test 'eq)) ; discriminating-fn -> %gf
+
 (defun %install-discriminating-function (name gf)
   "Install a discriminating function for GF as the global function binding of NAME."
-  (set-symbol-function
-   (lambda (&rest args)
-     (let* ((applicable (%applicable-methods gf args))
-            (sorted     (%sort-methods applicable args)))
-       (when (null sorted)
-         (error "No applicable method for generic function ~S with arguments ~S"
-                name args))
-       (%invoke-effective-method sorted args)))
-   name))
+  (let ((df (lambda (&rest args)
+              (let* ((applicable (%applicable-methods gf args))
+                     (sorted     (%sort-methods applicable args)))
+                (when (null sorted)
+                  (error "No applicable method for generic function ~S with arguments ~S"
+                         name args))
+                (%invoke-effective-method sorted args)))))
+    (sethash df *%gf-by-fn* gf)   ; so FIND-METHOD can map #'gf back to its %gf
+    (set-symbol-function df name)))
 
 ;;; ---- 20. ENSURE-GENERIC-FUNCTION and ENSURE-METHOD ---------------------
 
@@ -4505,6 +4510,40 @@ SETQ/INCF/DECF is left in place (sequential)."
           (%parse-spec-ll specialized-ll)
         `(ensure-method ',name ',qualifiers ',spec-names
                          (lambda ,plain-ll ,@body))))))
+
+;;; DEFINE-METHOD-COMBINATION — bocl supports only the standard method
+;;; combination, so this records nothing operational; it accepts the syntax and
+;;; returns the name so programs that define (but don't rely on) custom
+;;; combinations still load.
+(defmacro define-method-combination (name &rest args)
+  (declare (ignore args))
+  `',name)
+
+;;; FIND-METHOD — locate a method of GF with the given QUALIFIERS and
+;;; SPECIALIZERS (class objects, as from FIND-CLASS).  GF may be a generic
+;;; function object, its name, or the %gf.  Specializers are matched by name so a
+;;; class object and the symbol a method was specialised on compare equal.
+(defun %spec-as-class (s)
+  "Normalise a method specializer (a class object, a class-name symbol, or T) to
+the class object it denotes, so two specializers compare by class identity."
+  (cond ((eq s t)     t)
+        ((symbolp s)  (or (find-class s nil) s))
+        (t            s)))
+(defun find-method (gf qualifiers specializers &optional (errorp t))
+  (let ((g (cond ((%gf-p gf)    gf)
+                 ((symbolp gf)  (gethash gf *%gfs*))
+                 (t             (gethash gf *%gf-by-fn*)))))
+    (if (null g)
+        (if errorp (error "FIND-METHOD: ~S is not a generic function" gf) nil)
+        (let ((m (find-if
+                  (lambda (mth)
+                    (and (equal (%mth-qualifiers mth) qualifiers)
+                         (let ((ms (%mth-specializers mth)))
+                           (and (= (length ms) (length specializers))
+                                (every (lambda (a b) (eq (%spec-as-class a) (%spec-as-class b)))
+                                       ms specializers)))))
+                  (%gf-methods g))))
+          (or m (if errorp (error "FIND-METHOD: no such method for ~S" gf) nil))))))
 
 ;;; ---- 23. SHARED-INITIALIZE and MAKE-INSTANCE ---------------------------
 
