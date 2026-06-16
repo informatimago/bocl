@@ -3,6 +3,43 @@
 VERBOSE=@
 #VERBOSE=
 
+# ---- Installation layout (GNU-style; overridable) ----------------------------
+# Deliverables install under $(DESTDIR)$(PREFIX). DESTDIR is for staged installs
+# (packaging); PREFIX is the logical install root baked into the binary.
+PREFIX      ?= /usr/local
+DESTDIR     ?=
+exec_prefix ?= $(PREFIX)
+bindir      ?= $(exec_prefix)/bin
+libdir      ?= $(exec_prefix)/lib
+includedir  ?= $(PREFIX)/include
+datarootdir ?= $(PREFIX)/share
+datadir     ?= $(datarootdir)
+pkgconfdir  ?= $(libdir)/pkgconfig
+# bocl-private subdirs:
+boclincdir   = $(includedir)/bocl
+bocldatadir  = $(datadir)/bocl
+
+# ---- Toolchain (all overridable for cross/alt compilers) ---------------------
+AR          ?= ar
+ARFLAGS_BOCL = rcs
+RANLIB      ?= ranlib
+INSTALL     ?= install
+STRIP       ?= strip
+LN_S        ?= ln -sf
+
+# ---- Version (single source of truth: version.h) -----------------------------
+# Resolve version.h relative to THIS file (common.mk), so the extraction works
+# whether common.mk is included from sources/ or from tests/.
+COMMON_MK_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
+VERSION_H     := $(COMMON_MK_DIR)version.h
+VERSION_MAJOR := $(shell grep -E 'define[[:space:]]+BOCL_VERSION_MAJOR' $(VERSION_H) | grep -oE '[0-9]+')
+VERSION_MINOR := $(shell grep -E 'define[[:space:]]+BOCL_VERSION_MINOR' $(VERSION_H) | grep -oE '[0-9]+')
+VERSION_PATCH := $(shell grep -E 'define[[:space:]]+BOCL_VERSION_PATCH' $(VERSION_H) | grep -oE '[0-9]+')
+VERSION       := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
+
+# ---- Build profile: debug (default) | release --------------------------------
+BUILD ?= debug
+
 # SANITIZE controls AddressSanitizer + the wider -fsanitize=* set below.
 # Default: off, so the produced binary has no dependency on libclang_rt.asan_*.
 # Enable with: make SANITIZE=yes
@@ -100,8 +137,16 @@ WARN_FLAGS = \
 	-Wwrite-strings \
 
 
+ifeq ($(BUILD),release)
+DEBUG_FLAGS       = -O2 -DNDEBUG
+else
 DEBUG_FLAGS       = -g -g3 -ggdb -O0
+endif
 
+# Compiled-in default location of the installed prelude, so an installed binary
+# finds it even outside the exe-relative / hard-coded search paths. $BOCL_PRELUDE
+# still overrides at runtime (see find_prelude() in main.c).
+DEFINES          += -DBOCL_PRELUDE_PATH='"$(bocldatadir)/prelude.lisp"'
 
 UNAME=$(shell uname)
 
@@ -115,6 +160,12 @@ INCLUDES     +=
 LIBRARIES    += -L$(SDKPATH)/usr/lib -lSystem
 SO           = dylib
 SHARED       = -dylib
+# Versioned shared library naming + soname for Mach-O.
+SHLIB        = libbocl.$(VERSION).dylib
+SHLIB_MAJOR  = libbocl.$(VERSION_MAJOR).dylib
+SHLIB_LINK   = libbocl.dylib
+SONAME_FLAGS = -install_name $(libdir)/$(SHLIB_MAJOR) \
+               -compatibility_version $(VERSION_MAJOR).0.0 -current_version $(VERSION)
 
 ifeq ($(SANITIZE),yes)
 XCODE_DEV    = $(shell xcode-select --print-path)
@@ -129,13 +180,28 @@ endif
 
 else
 
+# Default to gcc on non-Darwin, but let env/command-line CC win (e.g. CC=clang).
+ifeq ($(origin CC),default)
 CC        = gcc
-CFLAGS    += $(WARN_FLAGS) $(WARN_GCC) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17 -D_POSIX_C_SOURCE=200809L
+endif
+# Pick the gcc- or clang-specific warning set from the actual compiler.
+CC_VERSION := $(shell $(CC) --version 2>/dev/null)
+ifneq (,$(findstring clang,$(CC_VERSION)))
+WARN_FAMILY = $(WARN_CLANG)
+else
+WARN_FAMILY = $(WARN_GCC)
+endif
+CFLAGS    += $(WARN_FLAGS) $(WARN_FAMILY) $(CC_SANITIZE_FLAGS) $(DEBUG_FLAGS) $(DEFINES) -x c -std=c17 -D_POSIX_C_SOURCE=200809L
 LDFLAGS   += $(LD_SANITIZE_FLAGS)
 INCLUDES  +=
 LIBRARIES +=
 SO        = so
 SHARED    = -shared
+# Versioned shared library naming + soname for ELF.
+SHLIB        = libbocl.so.$(VERSION)
+SHLIB_MAJOR  = libbocl.so.$(VERSION_MAJOR)
+SHLIB_LINK   = libbocl.so
+SONAME_FLAGS = -Wl,-soname,$(SHLIB_MAJOR)
 
 ifeq ($(SANITIZE),yes)
 LIBRARIES += -lasan -lubsan

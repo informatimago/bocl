@@ -41,11 +41,15 @@ include common.mk
 deps:   $(all_SRCS:%.c=%.d)
 include $(all_SRCS:%.c=%.d)
 
-build: deps libbocl.$(SO) $(PROGRAMS)
+build: deps libbocl.a libbocl.$(SO) $(PROGRAMS)
+
+# Deliverables (exe + shared + static), for install/dist.
+DELIVERABLES = bocl libbocl.a $(SHLIB)
 
 clean:
 	@ printf "# Removing object files and target\n"
-	-$(VERBOSE) rm -rf libbocl.* $(PROGRAMS) *.o *.d *.e *.dSYM
+	-$(VERBOSE) rm -rf libbocl.* $(PROGRAMS) *.o *.d *.e *.dSYM bocl.pc
+	-$(VERBOSE) rm -rf $(DISTSTAGE) check-stage driver_static driver_shared bocl-*.tar.* bocl-*.sha256
 	-$(VERBOSE)	rm -rf *.tem */*.tem *.[ld]x{32,64}fsl */*.[ld]x{32,64}fsl
 
 prepare-macos:
@@ -77,9 +81,22 @@ print_types: $(print_types_SRCS:%.c=%.d) $(print_types_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(print_types_SRCS:%.c=%.o)"
 	$(VERBOSE) $(LINKBIN) -o $@ $(print_types_SRCS:%.c=%.o)
 
-libbocl.$(SO): $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
-	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
-	$(VERBOSE) $(LINKLIB) -o $@ $(libbocl_SRCS:%.c=%.o)
+# Static archive.
+libbocl.a: $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
+	@ printf "# Archiving %-20s\n" "$@"
+	-$(VERBOSE) rm -f $@
+	$(VERBOSE) $(AR) $(ARFLAGS_BOCL) $@ $(libbocl_SRCS:%.c=%.o)
+	-$(VERBOSE) $(RANLIB) $@ >/dev/null 2>&1 || true
+
+# Versioned shared library (carries the soname / install_name).
+$(SHLIB): $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
+	@ printf "# Linking %-20s\n" "$@"
+	$(VERBOSE) $(LINKLIB) $(SONAME_FLAGS) -o $@ $(libbocl_SRCS:%.c=%.o)
+
+# Unversioned dev symlink (libbocl.$(SO)) + the major-soname runtime symlink.
+libbocl.$(SO): $(SHLIB)
+	$(VERBOSE) $(LN_S) $(SHLIB) $(SHLIB_MAJOR)
+	$(VERBOSE) $(LN_S) $(SHLIB) $(SHLIB_LINK)
 
 # for now, we link all the bocl objects into bocl:
 bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
@@ -90,6 +107,121 @@ bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 #	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
 #	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)  $(bocl_LIBS)
 
+
+# ======================================================================
+# Install / package the deliverables into $(DESTDIR)$(PREFIX).
+# ======================================================================
+
+# Public headers: install the whole header set under include/bocl so a driver
+# can #include <bocl/bocl.h> (internal "..." includes resolve in the same dir).
+INSTALL_HEADERS = $(wildcard *.h)
+
+# Prelude + bootstrap data the installed exe auto-loads (see find_prelude()).
+PRELUDE_SRC = ../bootstrap/prelude.lisp
+
+.PHONY: install install-strip uninstall dist pkgconfig
+
+bocl.pc:
+	@ printf "# Generating %-20s\n" "$@"
+	$(VERBOSE) { \
+	  printf 'prefix=%s\n'              '$(PREFIX)';        \
+	  printf 'exec_prefix=$${prefix}\n';                    \
+	  printf 'libdir=%s\n'              '$(libdir)';        \
+	  printf 'includedir=%s\n'          '$(includedir)';    \
+	  printf '\n';                                          \
+	  printf 'Name: bocl\n';                                \
+	  printf 'Description: BOCL Common Lisp runtime library\n'; \
+	  printf 'Version: %s\n'            '$(VERSION)';        \
+	  printf 'Libs: -L$${libdir} -lbocl -lm\n';             \
+	  printf 'Cflags: -I$${includedir}\n';                  \
+	} > $@
+
+install: build bocl.pc
+	@ printf "# Installing bocl %s into %s\n" "$(VERSION)" "$(DESTDIR)$(PREFIX)"
+	$(VERBOSE) $(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(libdir) \
+	    $(DESTDIR)$(boclincdir) $(DESTDIR)$(bocldatadir) $(DESTDIR)$(pkgconfdir)
+	$(VERBOSE) $(INSTALL) -m 755 bocl $(DESTDIR)$(bindir)/bocl
+	$(VERBOSE) $(INSTALL) -m 644 libbocl.a $(DESTDIR)$(libdir)/libbocl.a
+	-$(VERBOSE) $(RANLIB) $(DESTDIR)$(libdir)/libbocl.a >/dev/null 2>&1 || true
+	$(VERBOSE) $(INSTALL) -m 755 $(SHLIB) $(DESTDIR)$(libdir)/$(SHLIB)
+	$(VERBOSE) cd $(DESTDIR)$(libdir) && $(LN_S) $(SHLIB) $(SHLIB_MAJOR) && $(LN_S) $(SHLIB) $(SHLIB_LINK)
+	$(VERBOSE) for h in $(INSTALL_HEADERS) ; do \
+	    $(INSTALL) -m 644 $$h $(DESTDIR)$(boclincdir)/$$h ; done
+	$(VERBOSE) $(INSTALL) -m 644 $(PRELUDE_SRC) $(DESTDIR)$(bocldatadir)/prelude.lisp
+	$(VERBOSE) $(INSTALL) -m 644 bocl.pc $(DESTDIR)$(pkgconfdir)/bocl.pc
+
+# Same as install but strip the executable and shared library.
+install-strip: install
+	-$(VERBOSE) $(STRIP) $(DESTDIR)$(bindir)/bocl
+	-$(VERBOSE) $(STRIP) -x $(DESTDIR)$(libdir)/$(SHLIB)
+
+uninstall:
+	@ printf "# Uninstalling bocl from %s\n" "$(DESTDIR)$(PREFIX)"
+	-$(VERBOSE) rm -f $(DESTDIR)$(bindir)/bocl
+	-$(VERBOSE) rm -f $(DESTDIR)$(libdir)/libbocl.a
+	-$(VERBOSE) rm -f $(DESTDIR)$(libdir)/$(SHLIB) $(DESTDIR)$(libdir)/$(SHLIB_MAJOR) $(DESTDIR)$(libdir)/$(SHLIB_LINK)
+	-$(VERBOSE) rm -f $(DESTDIR)$(pkgconfdir)/bocl.pc
+	-$(VERBOSE) rm -rf $(DESTDIR)$(boclincdir)
+	-$(VERBOSE) rm -rf $(DESTDIR)$(bocldatadir)
+
+# ----------------------------------------------------------------------
+# Binary distribution tarball:  bocl-<ver>-<os>-<arch>-<libc>-<cc>.<ext>
+# Relocatable layout (bin/ lib/ include/ share/ at the tarball root).
+# COMPRESS = gzip (default, universal) | zstd | xz
+# ----------------------------------------------------------------------
+DIST_OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+DIST_ARCH := $(shell uname -m)
+DIST_LIBC := $(shell if ldd --version 2>&1 | grep -qi musl ; then echo musl ; \
+                     elif [ "$(UNAME)" = Darwin ] ; then echo darwin ; \
+                     else echo glibc ; fi)
+DIST_CC   := $(notdir $(CC))
+DIST_NAME := bocl-$(VERSION)-$(DIST_OS)-$(DIST_ARCH)-$(DIST_LIBC)-$(DIST_CC)
+DISTSTAGE := dist-stage
+COMPRESS  ?= gzip
+
+ifeq ($(COMPRESS),zstd)
+DIST_EXT  = tar.zst
+DIST_PIPE = zstd -19 -q -c >
+else ifeq ($(COMPRESS),xz)
+DIST_EXT  = tar.xz
+DIST_PIPE = xz -9 -c >
+else
+DIST_EXT  = tar.gz
+DIST_PIPE = gzip -9 -c >
+endif
+
+dist: build bocl.pc
+	@ printf "# Packaging %s.%s\n" "$(DIST_NAME)" "$(DIST_EXT)"
+	-$(VERBOSE) rm -rf $(DISTSTAGE)
+	$(VERBOSE) $(MAKE) $(MFLAGS) install-strip DESTDIR=$(CURDIR)/$(DISTSTAGE) PREFIX=/$(DIST_NAME)
+	$(VERBOSE) tar -C $(CURDIR)/$(DISTSTAGE)/$(DIST_NAME) -cf - . | $(DIST_PIPE) $(DIST_NAME).$(DIST_EXT)
+	$(VERBOSE) ( cd $(CURDIR) && { shasum -a 256 $(DIST_NAME).$(DIST_EXT) 2>/dev/null \
+	             || sha256sum $(DIST_NAME).$(DIST_EXT) ; } > $(DIST_NAME).$(DIST_EXT).sha256 )
+	-$(VERBOSE) rm -rf $(DISTSTAGE)
+	@ printf "# Produced %s.%s (+ .sha256)\n" "$(DIST_NAME)" "$(DIST_EXT)"
+
+# ----------------------------------------------------------------------
+# Linkage proof: stage an install, then compile ../tests/driver.c against
+# the installed headers and link it BOTH ways (static archive + shared lib),
+# running each. This is the per-environment portability gate in CI.
+# ----------------------------------------------------------------------
+CHECKSTAGE = check-stage
+.PHONY: check-lib
+check-lib: build bocl.pc
+	@ printf "# Linkage proof: building independent driver against installed libs\n"
+	-$(VERBOSE) rm -rf $(CHECKSTAGE)
+	$(VERBOSE) $(MAKE) $(MFLAGS) install DESTDIR=$(CURDIR)/$(CHECKSTAGE) PREFIX=/usr
+	@ printf "# -> static link (libbocl.a)\n"
+	$(VERBOSE) $(CC) -std=c17 -I$(CURDIR)/$(CHECKSTAGE)/usr/include ../tests/driver.c \
+	    $(CURDIR)/$(CHECKSTAGE)/usr/lib/libbocl.a -lm -o driver_static
+	$(VERBOSE) ./driver_static
+	@ printf "# -> shared link (-lbocl)\n"
+	$(VERBOSE) $(CC) -std=c17 -I$(CURDIR)/$(CHECKSTAGE)/usr/include ../tests/driver.c \
+	    -L$(CURDIR)/$(CHECKSTAGE)/usr/lib -lbocl -lm -o driver_shared
+	$(VERBOSE) LD_LIBRARY_PATH=$(CURDIR)/$(CHECKSTAGE)/usr/lib \
+	           DYLD_LIBRARY_PATH=$(CURDIR)/$(CHECKSTAGE)/usr/lib ./driver_shared
+	-$(VERBOSE) rm -rf $(CHECKSTAGE) driver_static driver_shared
+	@ printf "# Linkage proof OK\n"
 
 # Host CL used to (re)generate kernel_objects.* / built_in_functions.* /
 # structure_functions.* etc. The generated outputs are committed, so the host

@@ -115,8 +115,13 @@ static char* find_prelude(void){
             if(access(path,R_OK)==0){ return strdup(path); }}
     }
 
-    /* 3. Standard install paths. */
+    /* 3. Standard install paths. BOCL_PRELUDE_PATH is the location configured at
+          build time ($(bocldatadir)/prelude.lisp); it is tried first so a custom
+          $PREFIX install is found even when it is none of the hard-coded paths. */
     static const char* sys_paths[]={
+#ifdef BOCL_PRELUDE_PATH
+        BOCL_PRELUDE_PATH,
+#endif
         "/usr/local/share/bocl/prelude.lisp",
         "/usr/share/bocl/prelude.lisp",
         "/opt/bocl/share/bocl/prelude.lisp",

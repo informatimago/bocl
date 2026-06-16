@@ -7,7 +7,7 @@
 
 #define BOCL_VERSION_MAJOR 0
 #define BOCL_VERSION_MINOR 0
-#define BOCL_VERSION_PATCH 59
+#define BOCL_VERSION_PATCH 60
 
 /* Stringify the version triple, e.g. "0.0.10". */
 #define BOCL_VERSION_STRINGIZE(x) #x
