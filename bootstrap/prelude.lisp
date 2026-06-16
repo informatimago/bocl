@@ -4521,10 +4521,14 @@ SETQ/INCF/DECF is left in place (sequential)."
 ;;; ---- 22. DEFGENERIC and DEFMETHOD macros --------------------------------
 
 (defmacro defgeneric (name lambda-list &rest options)
-  "Define a generic function NAME with LAMBDA-LIST.
-  METHOD definitions in OPTIONS are currently ignored (add methods with DEFMETHOD)."
-  options  ; ignored
-  `(ensure-generic-function ',name :lambda-list ',lambda-list))
+  "Define a generic function NAME with LAMBDA-LIST.  (:method qualifiers*
+specialized-lambda-list body...) options define methods; other options (documen-
+tation, :method-combination, ...) are ignored."
+  (let ((forms (list `(ensure-generic-function ',name :lambda-list ',lambda-list))))
+    (dolist (opt options)
+      (when (and (consp opt) (eq (car opt) :method))
+        (push `(defmethod ,name ,@(cdr opt)) forms)))
+    `(progn ,@(nreverse forms) ',name)))
 
 (defmacro defmethod (name &rest args)
   "Define a method for generic function NAME.
