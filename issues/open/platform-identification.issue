@@ -12,47 +12,66 @@ Function MACHINE-VERSION
 
 Function SOFTWARE-TYPE, SOFTWARE-VERSION
 
-Here is their results on sbcl on macOS:
-
-    (pprint
-     (loop for fun in '(LISP-IMPLEMENTATION-TYPE LISP-IMPLEMENTATION-VERSION
-                        SHORT-SITE-NAME LONG-SITE-NAME
-                        MACHINE-INSTANCE
-                        MACHINE-TYPE
-                        MACHINE-VERSION
-                        SOFTWARE-TYPE SOFTWARE-VERSION)
-           collect (list fun (funcall fun))))
-    --> 
-    ((lisp-implementation-type "SBCL")
-     (lisp-implementation-version "2.6.3")
-     (short-site-name "thalassa")
-     (long-site-name "thalassa.informatimago.com")
-     (machine-instance "thalassa")
-     (machine-type "ARM64")
-     (machine-version "Apple M3 Pro")
-     (software-type "Darwin")
-     (software-version "25.5.0"))
+and the -LIMIT and MOST- and LEAST- variables.
 
 
- Note: most of these values are determined at run-time. (of course,
- lisp-implementation-type and version is static.  But a binary
- compiled on a given
- OS-name/OS-version/processor/processor-version/hostname could execute
- on a different but compatible combination. It's the run-time
- combination that must be returned by these functions.
- 
- 
- | Function                    | SBCL on macOS                | bocl on…          | bocl on... |
- |-----------------------------+------------------------------+-------------------+------------|
- | lisp-implementation-type    | "SBCL"                       | "bocl"            | "bocl"     |
- | lisp-implementation-version | "2.6.3"                      | "1.0.0"           | "1.0.0"    |
- | short-site-name             | "thalassa"                   | hostname          | …          |
- | long-site-name              | "thalassa.informatimago.com" | fqdn              | …          |
- | machine-instance            | "thalassa"                   | hostname          | …          |
- | machine-type                | "ARM64"                      | processor-name    | …          |
- | machine-version             | "Apple M3 Pro"               | processor-version | …          |
- | software-type               | "Darwin"                     | os-name           | …          |
- | software-version            | "25.5.0"                     | os-version        | …          |
+
+Note: most of these values are determined at run-time. (of course,
+lisp-implementation-type and version is static.  But a binary
+compiled on a given
+OS-name/OS-version/processor/processor-version/hostname could execute
+on a different but compatible combination. It's the run-time
+combination that must be returned by these functions.
+
+
+Platform table:
+
+| Function / variable                    |                SBCL on macOS | bocl on…          | bocl on... |
+|----------------------------------------+------------------------------+-------------------+------------|
+| (lisp-implementation-type)             |                       "SBCL" | "bocl"            | "bocl"     |
+| (lisp-implementation-version)          |                      "2.6.3" | "1.0.0"           | "1.0.0"    |
+| (short-site-name)                      |                   "thalassa" | hostname          | …          |
+| (long-site-name)                       | "thalassa.informatimago.com" | fqdn              | …          |
+| (machine-instance)                     |                   "thalassa" | hostname          | …          |
+| (machine-type)                         |                      "ARM64" | processor-name    | …          |
+| (machine-version)                      |               "Apple M3 Pro" | processor-version | …          |
+| (software-type)                        |                     "Darwin" | os-name           | …          |
+| (software-version)                     |                     "25.5.0" | os-version        | …          |
+|----------------------------------------+------------------------------+-------------------+------------|
+| array-dimension-limit                  |               35184372088832 |                   |            |
+| array-rank-limit                       |                          129 |                   |            |
+| array-total-size-limit                 |               35184372088832 |                   |            |
+| call-arguments-limit                   |               35184372088832 |                   |            |
+| char-code-limit                        |                      1114112 |                   |            |
+| lambda-parameters-limit                |               35184372088832 |                   |            |
+| multiple-values-limit                  |               35184372088832 |                   |            |
+|----------------------------------------+------------------------------+-------------------+------------|
+| least-negative-double-float            |     -4.9406564584124654d-324 |                   |            |
+| least-negative-long-float              |     -4.9406564584124654d-324 |                   |            |
+| least-negative-normalized-double-float |     -2.2250738585072014d-308 |                   |            |
+| least-negative-normalized-long-float   |     -2.2250738585072014d-308 |                   |            |
+| least-negative-normalized-short-float  |               -1.1754944e-38 |                   |            |
+| least-negative-normalized-single-float |               -1.1754944e-38 |                   |            |
+| least-negative-short-float             |               -1.4012985e-45 |                   |            |
+| least-negative-single-float            |               -1.4012985e-45 |                   |            |
+| least-positive-double-float            |      4.9406564584124654d-324 |                   |            |
+| least-positive-long-float              |      4.9406564584124654d-324 |                   |            |
+| least-positive-normalized-double-float |      2.2250738585072014d-308 |                   |            |
+| least-positive-normalized-long-float   |      2.2250738585072014d-308 |                   |            |
+| least-positive-normalized-short-float  |                1.1754944e-38 |                   |            |
+| least-positive-normalized-single-float |                1.1754944e-38 |                   |            |
+| least-positive-short-float             |                1.4012985e-45 |                   |            |
+| least-positive-single-float            |                1.4012985e-45 |                   |            |
+| most-negative-double-float             |      -1.7976931348623157d308 |                   |            |
+| most-negative-fixnum                   |         -4611686018427387904 |                   |            |
+| most-negative-long-float               |      -1.7976931348623157d308 |                   |            |
+| most-negative-short-float              |                -3.4028235e38 |                   |            |
+| most-negative-single-float             |                -3.4028235e38 |                   |            |
+| most-positive-double-float             |       1.7976931348623157d308 |                   |            |
+| most-positive-fixnum                   |          4611686018427387903 |                   |            |
+| most-positive-long-float               |       1.7976931348623157d308 |                   |            |
+| most-positive-short-float              |                 3.4028235e38 |                   |            |
+| most-positive-single-float             |                 3.4028235e38 |                   |            |
 
 
 
@@ -71,12 +90,12 @@ lisp-implementation-version returns a concatenation:
 
 The results of these functions:
 
-- short-site-name 
-- long-site-name  
+- short-site-name
+- long-site-name
 - machine-instance
 
 may be overriden by the user by setting these variables:
- 
+
 - bocl:*short-site-name*
 - bocl:*long-site-name*
 - bocl:*machine-instance*
@@ -84,3 +103,10 @@ may be overriden by the user by setting these variables:
 If they're nil or unbound, then the implementation will try to obtain them from the OS. (hostname)
 
 
+
+Concerning the -LIMIT and MOST- and LEAST- variable values, they may
+depend on the target platform (eg. 32-bit vs. 64-bit), so they cannot
+just be hardwired in the code, each compiled executable/library must
+return the correct values for its platform.
+
+All these results must be documented in a complete platform table.
