@@ -397,8 +397,14 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                && consp(cdr(fname))
                && symbolp(cadr(fname))
                && nullp(cddr(fname))){
-                /* (SETF NAME) — no SETF support yet. */
-                ERROR("FUNCTION: (SETF %s) not yet supported",
+                /* (FUNCTION (SETF foo)) — the function registered by
+                   (defun (setf foo) ...). */
+                MultipleValues mv;
+                kernel_apply(symbol_function(symbol_intern_cstring("%SETF-FUNCTION")),
+                             list(cadr(fname),(Ref)NULL),&mv);
+                if(mv.count>=1 && !nullp(mv.values[0])){
+                    VALUES1(mv.values[0]);}
+                ERROR("FUNCTION: (SETF %s) is not defined",
                       string_cstring(symbol_name(cadr(fname))));}
             if(consp(fname) && eql(LAMBDA_Symbol,car(fname))){
                 /* (lambda (params...) body...) — turn into a closure. */
@@ -418,11 +424,21 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref name=car(arguments);
             Ref params=cadr(arguments);
             Ref body=cddr(arguments);
-            if(!symbolp(name)){
-                ERROR("DEFUN: %s is not a symbol",string_cstring(prin1_to_string(name)));}
-            Ref fn=function_new(name,params,body);
-            set_symbol_function(name,fn);
-            VALUES1(name);}
+            if(symbolp(name)){
+                Ref fn=function_new(name,params,body);
+                set_symbol_function(name,fn);
+                VALUES1(name);}
+            /* (defun (setf foo) (val arg...) ...) — register a SETF function for
+               FOO, consulted by the SETF macro and (FUNCTION (SETF foo)). */
+            if(consp(name) && eql(SETF_Symbol,car(name))
+               && consp(cdr(name)) && symbolp(cadr(name)) && nullp(cddr(name))){
+                Ref sym=cadr(name);
+                Ref fn=function_new(sym,params,body);
+                MultipleValues mv;
+                kernel_apply(symbol_function(symbol_intern_cstring("%REGISTER-SETF-FUNCTION")),
+                             list(sym,fn,(Ref)NULL),&mv);
+                VALUES1(name);}
+            ERROR("DEFUN: %s is not a valid function name",string_cstring(prin1_to_string(name)));}
 
         if(operator==S(DEFPARAMETER)){
             check_arg_count(arguments,2,3);  /* name value [doc] */

@@ -59,6 +59,13 @@
 
 (defparameter *setf-expanders* (make-hash-table :test 'eq))
 
+;; SETF-functions: (defun (setf foo) (val arg...) ...) registers a function here
+;; under FOO; the kernel DEFUN / FUNCTION forms and the SETF macro consult it so
+;; `(setf (foo a) v)` becomes `(funcall #'(setf foo) v a)` (CLHS 5.1.2.3).
+(defparameter *%setf-functions* (make-hash-table :test 'eq))
+(defun %register-setf-function (sym fn) (sethash sym *%setf-functions* fn) sym)
+(defun %setf-function (sym) (gethash sym *%setf-functions*))
+
 (defmacro define-setf-expander (operator args value-args &body body)
   ;; (define-setf-expander op (a b ...) (val) body...)
   ;;   registers a lambda (a b ... val) → setter-form.
@@ -76,15 +83,23 @@
                   `(setq ,place ,value))
                  ((consp place)
                   (let ((expander (gethash (car place) *setf-expanders*)))
-                    (if expander
-                        ;; SETF must return the newly-stored value, but the kernel
-                        ;; setters (RPLACA/RPLACD/...) return the cons.  Bind the
-                        ;; value to a gensym, run the setter on it, then yield it.
-                        (let ((g (gensym "SETF-V")))
-                          `(let ((,g ,value))
-                             ,(apply expander (append (cdr place) (list g)))
-                             ,g))
-                        (error "SETF: no expander for place operator"))))
+                    (cond
+                      (expander
+                       ;; SETF must return the newly-stored value, but the kernel
+                       ;; setters (RPLACA/RPLACD/...) return the cons.  Bind the
+                       ;; value to a gensym, run the setter on it, then yield it.
+                       (let ((g (gensym "SETF-V")))
+                         `(let ((,g ,value))
+                            ,(apply expander (append (cdr place) (list g)))
+                            ,g)))
+                      ;; No expander, but FOO has a (SETF FOO) function:
+                      ;; (setf (foo a b) v) -> (funcall #'(setf foo) v a b).
+                      ((%setf-function (car place))
+                       (let ((g (gensym "SETF-V")))
+                         `(let ((,g ,value))
+                            (funcall (%setf-function ',(car place)) ,g ,@(cdr place))
+                            ,g)))
+                      (t (error "SETF: no expander for place operator ~S" (car place))))))
                  (t (error "SETF: invalid place")))))
         (t
          `(progn (setf ,(first pairs) ,(second pairs))
