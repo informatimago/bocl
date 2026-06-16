@@ -2553,7 +2553,7 @@ SETQ/INCF/DECF is left in place (sequential)."
              ;; in PARALLEL (CLHS 6.1.2.2) — each AND-clause's stepper sees the
              ;; others' values from the start of the iteration.  Process each
              ;; variable, then (if AND was used) fuse this group's steps.
-             (let ((%old-steps steps) (%nvars 0))
+             (let ((%old-steps steps) (%old-letb letb) (%nvars 0))
               (flet ((%one-for ()
                (setq %nvars (+ %nvars 1))
                (let* ((fvar  (pop!))
@@ -2588,8 +2588,13 @@ SETQ/INCF/DECF is left in place (sequential)."
                  ;; FOR v ON list [BY step-fn]
                  ((%lkw (pk) "ON")
                   (pop!)
-                  (let ((bv nil))
-                    (push (list v (pop!)) letb)
+                  ;; Evaluate the list into an aux temp (an uninterned gensym), then
+                  ;; bind V to it, so a parallel AND-group keeps every init's
+                  ;; evaluation in source order (the temp sorts with the other
+                  ;; auxiliaries, V with the loop variables).
+                  (let ((bv nil) (og (gensym "ON-")))
+                    (push (list og (pop!)) letb)
+                    (push (list v og)      letb)
                     (when (%lkw (pk) "BY")
                       (pop!) (setq bv (gensym "BY-"))
                       (push (list bv (pop!)) letb))
@@ -2782,7 +2787,23 @@ SETQ/INCF/DECF is left in place (sequential)."
              (when (> %nvars 1)
                (let ((%new nil))
                  (do () ((eq steps %old-steps)) (push (pop steps) %new))
-                 (push (%loop-parallel-steps (nreverse %new)) steps)))))
+                 (push (%loop-parallel-steps (nreverse %new)) steps))
+               ;; Parallel binding: an AND-group's iteration-variable INITs are
+               ;; evaluated in the surrounding scope, before any of the group's
+               ;; variables is bound (CLHS 6.1.2.2) — so `for a from 0 and b from
+               ;; a` sees the outer A.  Reorder this group's LETB so the init /
+               ;; auxiliary bindings (uninterned gensyms: the once-eval'd bounds,
+               ;; list/vector holders) precede the loop-variable bindings
+               ;; (interned), which reference them.
+               (let ((grp nil))
+                 (do () ((eq letb %old-letb)) (push (pop letb) grp))  ; grp: source order
+                 (let ((auxs nil) (vars nil))
+                   (dolist (b grp)
+                     (if (and (symbolp (car b)) (symbol-package (car b)))
+                         (push b vars)
+                         (push b auxs)))
+                   (dolist (b (nreverse auxs)) (push b letb))
+                   (dolist (b (nreverse vars)) (push b letb)))))))
             ;; REPEAT n
             ((%lkw kw "REPEAT")
              (let ((rv (gensym "R-")))
