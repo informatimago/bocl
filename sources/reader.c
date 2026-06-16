@@ -375,8 +375,11 @@ static Ref parse_list(parser_state* parser){
     bool is_dotted=false;
     advance_character(parser);
     skip_spaces(parser);
-    if(parser->eof){
-        return NIL_Symbol;}
+    /* EOF before the closing ')' means the object ended in the middle of a list
+       — signal END-OF-FILE rather than looping (PARSE_OBJECT defers EOF after a
+       token, so parser->eof alone is unreliable here; consult the stream). */
+    if(parser->eof || feof(stream_cstream(parser->input_stream))){
+        END_OF_FILE(parser->input_stream);}
     while(parser->ch!=')'){
         /* Detect dotted-pair separator: a lone '.' followed by a non-constituent
            character (whitespace, close-paren, string, etc.).  The token ".5" or
@@ -397,8 +400,8 @@ static Ref parse_list(parser_state* parser){
         if(element != reader_skip_marker){
             push(element,&result);}
         skip_spaces(parser);
-        if(parser->eof){
-            return NIL_Symbol;}}
+        if(parser->eof || feof(stream_cstream(parser->input_stream))){
+            END_OF_FILE(parser->input_stream);}}
     /* Consume the closing ')' so an outer parse_list doesn't see it as its own. */
     advance_character(parser);
     parser->eof=false;
