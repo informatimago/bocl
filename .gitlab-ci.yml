@@ -1,39 +1,190 @@
-image: gcc:11
+# ======================================================================
+# bocl CI — Phase 0-1: cached x86-64 toolchain images, build+test+package,
+# artifact collection and tag-gated binary releases.
+#
+# Pipeline shape:
+#   images   build the 3 toolchain images ONCE, push to the Container Registry,
+#            reuse across pipelines (rebuilt only when ci/images/** changes).
+#   build    per-environment: compile (exe + shared + static), run the CUnit
+#            tests, prove the lib links from an independent driver, package a
+#            relocatable tarball. Plus a separate ASan/UBSan sanitiser job.
+#   collect  gather every environment's tarball, write SHA256SUMS, and on a v*
+#            tag publish them to the generic Package Registry + a GitLab Release.
+#
+# Later phases (compiler matrix, QEMU cross-arch incl. big-endian/32-bit, BSD,
+# native macOS/Windows) extend the `build` stage by adding jobs — no structural
+# change to this file. The toolchain images carry CUnit + ccache; the deliverable
+# targets (build / test / check-lib / dist) live in sources/ + tests/ Makefiles.
+# ======================================================================
 
 stages:
-  - build-and-test
+  - images
+  - build
+  - collect
 
-# Default build — no sanitiser, matches the produced binary that ships.
-build-default:
-  stage: build-and-test
+variables:
+  GIT_DEPTH: "20"
+  REGISTRY_NS: "$CI_REGISTRY_IMAGE/ci"
+  CCACHE_DIR: "$CI_PROJECT_DIR/.ccache"
+  BUILD: "release"      # deliverable profile (overridable per job)
+  COMPRESS: "zstd"      # dist tarball compression
+
+# ----------------------------------------------------------------------
+# Image builds (kaniko — no privileged runner needed on GitLab SaaS).
+# Each toolchain image is tagged :latest and :<short-sha>. Rebuilt only when an
+# image Dockerfile (or this file) changes, on schedules, or manually — otherwise
+# the cached :latest is reused by every build job (the core of "cache the
+# environments as much as possible").
+# ----------------------------------------------------------------------
+.build-image:
+  stage: images
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  variables:
+    IMG: ""          # set per job
+    DOCKERFILE: ""   # set per job
   script:
-    - apt-get update
-    - apt-get install -y --no-install-recommends libcunit1 libcunit1-dev
-    - rm -rf /var/lib/apt/lists/*
-    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k build
-    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test
-  artifacts:
-    when: on_success
+    - mkdir -p /kaniko/.docker
+    - |
+      cat > /kaniko/.docker/config.json <<EOF
+      {"auths":{"$CI_REGISTRY":{"username":"$CI_REGISTRY_USER","password":"$CI_REGISTRY_PASSWORD"}}}
+      EOF
+    - >-
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/$DOCKERFILE"
+      --destination "$REGISTRY_NS/$IMG:latest"
+      --destination "$REGISTRY_NS/$IMG:$CI_COMMIT_SHORT_SHA"
+      --cache=true
+      --cache-repo "$REGISTRY_NS/$IMG/cache"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - changes:
+        - ci/images/**/*
+        - .gitlab-ci.yml
+    - when: manual
+      allow_failure: true
+
+image:debian-gcc:
+  extends: .build-image
+  variables: { IMG: "debian-gcc", DOCKERFILE: "ci/images/debian-gcc.Dockerfile" }
+
+image:debian-clang:
+  extends: .build-image
+  variables: { IMG: "debian-clang", DOCKERFILE: "ci/images/debian-clang.Dockerfile" }
+
+image:alpine-musl:
+  extends: .build-image
+  variables: { IMG: "alpine-musl", DOCKERFILE: "ci/images/alpine-musl.Dockerfile" }
+
+# ----------------------------------------------------------------------
+# Build + test + package, one job per environment. ccache is persisted per-job
+# across pipelines and engaged transparently by prepending its wrapper dir to
+# PATH (CC stays the plain compiler name, keeping dist artifact names clean).
+# ----------------------------------------------------------------------
+.unix-build:
+  stage: build
+  before_script:
+    - export PATH="/usr/lib/ccache:/usr/lib/ccache/bin:$PATH"
+    - mkdir -p "$CCACHE_DIR"
+    - ccache -z >/dev/null 2>&1 || true
+  script:
+    - sh ci/build.sh
+    - sh ci/package.sh
+  cache:
+    key: "ccache-$CI_JOB_NAME"
     paths:
-      - sources/bocl
-      - tests/test_reader
+      - .ccache
+  artifacts:
+    name: "$CI_JOB_NAME"
+    paths:
+      - dist/
     reports:
-      junit: tests/test_reader-Results.xml
-    expire_in: 3 days
+      junit: tests/*-Results.xml
+    expire_in: 7 days
+  rules:
+    - when: on_success
 
-# Sanitiser build — exercises ASan + the rest of the -fsanitize=* set.
-# Kept separate so a default failure is distinguishable from a sanitiser hit.
-build-sanitised:
-  stage: build-and-test
-  allow_failure: false
+build:debian-gcc:
+  extends: .unix-build
+  image: "$REGISTRY_NS/debian-gcc:latest"
+  needs:
+    - { job: "image:debian-gcc", optional: true }
+
+build:debian-clang:
+  extends: .unix-build
+  image: "$REGISTRY_NS/debian-clang:latest"
+  needs:
+    - { job: "image:debian-clang", optional: true }
+
+build:alpine-musl:
+  extends: .unix-build
+  image: "$REGISTRY_NS/alpine-musl:latest"
+  needs:
+    - { job: "image:alpine-musl", optional: true }
+
+# Sanitiser build — ASan + the wider -fsanitize=* set (common.mk SANITIZE=yes).
+# Kept separate (no packaging) so a default failure is distinguishable from a
+# sanitiser hit. Debug profile: -fsanitize=object-size needs >-O0 disabled.
+sanitise:debian-gcc:
+  stage: build
+  image: "$REGISTRY_NS/debian-gcc:latest"
+  needs:
+    - { job: "image:debian-gcc", optional: true }
   script:
-    - apt-get update
-    - apt-get install -y --no-install-recommends libcunit1 libcunit1-dev libasan6 libubsan1
-    - rm -rf /var/lib/apt/lists/*
-    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k build SANITIZE=yes
-    - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:/lib make -k test  SANITIZE=yes
+    - make -k build SANITIZE=yes BUILD=debug
+    - make -k -C tests test SANITIZE=yes BUILD=debug
   artifacts:
     when: always
     reports:
-      junit: tests/test_reader-Results.xml
+      junit: tests/*-Results.xml
     expire_in: 3 days
+  rules:
+    - when: on_success
+
+# ----------------------------------------------------------------------
+# Collect every environment's tarball, write a combined SHA256SUMS, and on a
+# v* tag upload the set to the generic Package Registry and cut a Release.
+# ----------------------------------------------------------------------
+collect:
+  stage: collect
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - { job: "build:debian-gcc", artifacts: true }
+    - { job: "build:debian-clang", artifacts: true }
+    - { job: "build:alpine-musl", artifacts: true }
+  script:
+    - apk add --no-cache curl >/dev/null 2>&1 || true
+    - mkdir -p release && cp dist/* release/ 2>/dev/null || true
+    - cd release
+    - 'sha256sum *.tar.* > SHA256SUMS 2>/dev/null || shasum -a 256 *.tar.* > SHA256SUMS'
+    - cat SHA256SUMS
+    - cd ..
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        ASSET_ARGS=""
+        for f in release/*.tar.zst release/*.tar.gz release/*.tar.xz; do
+          [ -e "$f" ] || continue
+          bn=$(basename "$f")
+          url="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/bocl/$CI_COMMIT_TAG/$bn"
+          echo "uploading $bn -> $url"
+          curl --fail --silent --show-error \
+               --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+               --upload-file "$f" "$url"
+          ASSET_ARGS="$ASSET_ARGS --assets-link {\"name\":\"$bn\",\"url\":\"$url\"}"
+        done
+        eval release-cli create \
+          --name "bocl $CI_COMMIT_TAG" \
+          --tag-name "$CI_COMMIT_TAG" \
+          --description "Automated binary release of bocl ${CI_COMMIT_TAG}. SHA256SUMS in the collect job artifacts." \
+          $ASSET_ARGS
+      fi
+  artifacts:
+    name: "bocl-release"
+    paths:
+      - release/
+    expire_in: 30 days
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+    - when: always
