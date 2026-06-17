@@ -88,7 +88,12 @@ INCLUDES    += -I/opt/local/include -I../sources
 LIBRARIES   += -L/opt/local/lib -lcunit
 else
 INCLUDES    += -I../sources
-LIBRARIES   += -lcunit
+# -lcunit comes from the shared LINKBIN *before* the test objects, so GNU ld's
+# default --as-needed would drop it (nothing references CU_* yet at that point)
+# and the test objects' CU_assertImplementation/CU_add_test would be undefined.
+# Force-keep libcunit across the link. (macOS ld64 has no --no-as-needed and
+# does not need this — it keeps the lib regardless.)
+LIBRARIES   += -Wl,--no-as-needed -lcunit -Wl,--as-needed
 endif
 CFLAGS  	+=
 LDFLAGS 	+=

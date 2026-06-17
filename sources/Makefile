@@ -91,7 +91,7 @@ libbocl.a: $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
 # Versioned shared library (carries the soname / install_name).
 $(SHLIB): $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s\n" "$@"
-	$(VERBOSE) $(LINKLIB) $(SONAME_FLAGS) -o $@ $(libbocl_SRCS:%.c=%.o)
+	$(VERBOSE) $(LINKLIB) $(SONAME_FLAGS) -o $@ $(libbocl_SRCS:%.c=%.o) $(LDLIBS)
 
 # Unversioned dev symlink (libbocl.$(SO)) + the major-soname runtime symlink.
 libbocl.$(SO): $(SHLIB)
@@ -101,7 +101,7 @@ libbocl.$(SO): $(SHLIB)
 # for now, we link all the bocl objects into bocl:
 bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
-	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)
+	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o) $(LDLIBS)
 
 #bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) libbocl.$(SO)
 #	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"

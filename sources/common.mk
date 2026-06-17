@@ -209,6 +209,14 @@ endif
 
 endif
 
+# Libraries that MUST come AFTER the object files on the link line. bocl calls
+# pow/sqrt/sin/... — on glibc/musl these live in libm (separate from libc), so
+# the executable needs -lm. It is placed after the objects because modern ld
+# defaults to --as-needed and would drop a -lm that preceded the objects that
+# reference it. (On Darwin libSystem already provides the math symbols; -lm is
+# an accepted no-op alias there, so keeping it unconditional is harmless.)
+LDLIBS    += -lm
+
 # /bin/sh:
 RUN       =  ldpath=$$(echo "$(RUNLIBS)" |tr ' ' ':') ; LD_LIBRARY_PATH=$${ldpath} DYLD_LIBRARY_PATH=$${ldpath}
 
