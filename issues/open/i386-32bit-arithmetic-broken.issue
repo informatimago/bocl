@@ -1,0 +1,77 @@
+i386 (32-bit x86) integer arithmetic is broken; armv7 (32-bit ARM) is clean
+===========================================================================
+
+Summary of the Phase-3 cross-arch validation (bare kernel, release build):
+
+    arch              ptr   build  check-lib  test_arithmetic  unit-suite
+    x86-64 / arm64    64    PASS   PASS       PASS             11 pass / 31 fail
+    s390x (BE)        64    PASS   PASS       PASS             11 pass / 31 fail
+    armv7 (ARM)       32    PASS   PASS       PASS             11 pass / 31 fail
+    i386  (x86)       32    PASS   PASS       FAIL             10 pass / 32 fail
+
+i386 is the ONLY arch that diverges. armv7 is ALSO 32-bit yet matches the
+64-bit arches exactly — so 32-bit is not the problem per se.
+
+Symptom on i386
+---------------
+
+    $ docker run --platform linux/386 <debian-gcc> ./test_arithmetic
+    In some function:
+    ARITHMETIC ERROR: Integer overflow in (* 100000000 10000)   # 1e12
+    EXIT=65
+
+Two independent layers of breakage
+----------------------------------
+
+1. Wrong word-width discriminator.
+   sources/kernel_types.h selects `word` on `_POSIX_V6_LP64_OFF64`:
+
+       #ifdef _POSIX_V6_LP64_OFF64       # 64-bit branch
+       typedef int64_t word;  WORD_MAX=INT64_MAX  TAG_MASK=0xFFFFFFFF  TAGBODY_SHIFT=32
+       #else                             # 32-bit branch
+       typedef int32_t word;  WORD_MAX=INT32_MAX  TAG_MASK=0x0000FFFF  TAGBODY_SHIFT=16
+       #endif
+
+   On Debian this macro is DEFINED on armv7 but NOT on i386 (verified with
+   `gcc -E`). So armv7 gets the int64 branch (64-bit fixnums; most-positive-
+   fixnum = 9223372036854775807) while i386 gets the int32 branch
+   (most-positive-fixnum ~2.1e9), and (* 100000000 10000)=1e12 overflows the
+   fixnum with no bare-kernel bignum fallback. `_POSIX_V6_LP64_OFF64` is a
+   POSIX programming-environment macro, NOT a reliable "is this LP64" test —
+   it is the wrong discriminator.
+
+2. i386 arithmetic is ALSO wrong with the int64 branch.
+   Forcing the int64 branch on i386 (build + tests with
+   CPPFLAGS=-D_POSIX_V6_LP64_OFF64) removes the overflow but test_arithmetic
+   still fails — now with 25 WRONG-VALUE assertions, e.g.
+
+       test_arithmetic.c:227  eql(integer_from_word(1000000000000L), (* 10000 10000 10000))
+       test_arithmetic.c:240  eql(integer_from_word(1), (min 3 1 4 1 5 9 2 6))
+
+   i.e. the multiplication/comparison produce wrong results. The SAME int64
+   source is correct on armv7 and on all 64-bit arches, so this is an
+   i386/x86-32-specific defect (likely undefined behaviour or a 64-bit-int /
+   pointer-cast assumption that x86-32 codegen exposes and arm-32 does not).
+
+Conclusion / recommendation
+---------------------------
+
+  - armv7 demonstrates the kernel is correct on a 32-bit target, so full
+    32-bit support is achievable.
+  - i386 needs two fixes, in order:
+      a. Replace the `_POSIX_V6_LP64_OFF64` discriminator with a reliable one
+         (e.g. based on UINTPTR_MAX / __SIZEOF_POINTER__, or just always use
+         int64 `word`), so i386 also gets 64-bit fixnums like armv7.
+      b. Then chase the residual i386-only wrong-arithmetic failures under a
+         sanitiser build (UBSan: -fsanitize=undefined) on i386 — they smell
+         like UB in the 64-bit integer / tagged-word handling.
+  - Until then, i386 is not a shippable target; armv7, s390x, x86-64, arm64
+    are clean. Treat i386 as a separate work item, not a CI deliverable.
+
+Notes
+-----
+
+  - Found via the QEMU/binfmt cross-arch validation (Workstream B Phase 3).
+    Reproduce on i386:  docker run --platform linux/386 <debian-gcc image>,
+    build with CC=gcc, run tests/test_arithmetic against sources/libbocl.so;
+    add CPPFLAGS=-D_POSIX_V6_LP64_OFF64 to see layer 2.
