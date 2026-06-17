@@ -81,6 +81,10 @@ image:alpine-musl:
   extends: .build-image
   variables: { IMG: "alpine-musl", DOCKERFILE: "ci/images/alpine-musl.Dockerfile" }
 
+image:debian-tcc:
+  extends: .build-image
+  variables: { IMG: "debian-tcc", DOCKERFILE: "ci/images/debian-tcc.Dockerfile" }
+
 # ----------------------------------------------------------------------
 # Build + test + package, one job per environment. ccache is persisted per-job
 # across pipelines and engaged transparently by prepending its wrapper dir to
@@ -126,6 +130,22 @@ build:debian-clang:
 build:alpine-musl:
   extends: .unix-build
   image: "$REGISTRY_NS/alpine-musl:latest"
+
+# tcc (TinyCC) — compiler-matrix stress: a non-GNU C17 compiler with none of the
+# GNU/Clang builtins, so it guards against bocl regressing onto gcc/clang-only
+# intrinsics. Build + CUnit tests + static/shared linkage proof (via ci/build.sh,
+# CC=tcc from the image); no packaging — tcc output is not a shipping deliverable.
+build:debian-tcc:
+  stage: build
+  image: "$REGISTRY_NS/debian-tcc:latest"
+  script:
+    - sh ci/build.sh
+  artifacts:
+    reports:
+      junit: tests/*-Results.xml
+    expire_in: 3 days
+  rules:
+    - when: on_success
 
 # Sanitiser build — ASan + the wider -fsanitize=* set (common.mk SANITIZE=yes).
 # Kept separate (no packaging) so a default failure is distinguishable from a
