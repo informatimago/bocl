@@ -60,6 +60,9 @@ variables:
       --cache-repo "$REGISTRY_NS/$IMG/cache"
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    # Bootstrap: on a brand-new branch's first pipeline the before-SHA is the
+    # null SHA, so there is no cached :latest in the registry yet — build it.
+    - if: '$CI_COMMIT_BEFORE_SHA == "0000000000000000000000000000000000000000"'
     - changes:
         - ci/images/**/*
         - .gitlab-ci.yml
