@@ -204,7 +204,11 @@ SHLIB_LINK   = libbocl.so
 SONAME_FLAGS = -Wl,-soname,$(SHLIB_MAJOR)
 
 ifeq ($(SANITIZE),yes)
-LIBRARIES += -lasan -lubsan
+# Link through the sanitizer driver flags so gcc pulls in the asan/ubsan
+# runtimes correctly. Linking -lasan/-lubsan by hand ahead of the objects fails
+# under GNU ld --as-needed with undefined __asan_*/__ubsan_* references (and
+# print_types, linked without them at all, failed outright).
+LDFLAGS += -fsanitize=address -fsanitize=undefined
 endif
 
 endif
