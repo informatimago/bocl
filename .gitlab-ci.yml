@@ -109,23 +109,23 @@ image:alpine-musl:
   rules:
     - when: on_success
 
+# NOTE: build jobs intentionally do NOT `needs:` the image jobs. When the
+# Dockerfiles are unchanged the image jobs are non-blocking manual actions, and
+# a `needs:` on a present-but-manual job would SKIP the build job. Relying on
+# stage ordering instead means: if an image job actually runs (bootstrap or
+# ci/images change) the build stage waits for it; otherwise the build stage
+# proceeds and pulls the cached :latest from the registry.
 build:debian-gcc:
   extends: .unix-build
   image: "$REGISTRY_NS/debian-gcc:latest"
-  needs:
-    - { job: "image:debian-gcc", optional: true }
 
 build:debian-clang:
   extends: .unix-build
   image: "$REGISTRY_NS/debian-clang:latest"
-  needs:
-    - { job: "image:debian-clang", optional: true }
 
 build:alpine-musl:
   extends: .unix-build
   image: "$REGISTRY_NS/alpine-musl:latest"
-  needs:
-    - { job: "image:alpine-musl", optional: true }
 
 # Sanitiser build — ASan + the wider -fsanitize=* set (common.mk SANITIZE=yes).
 # Kept separate (no packaging) so a default failure is distinguishable from a
@@ -133,8 +133,6 @@ build:alpine-musl:
 sanitise:debian-gcc:
   stage: build
   image: "$REGISTRY_NS/debian-gcc:latest"
-  needs:
-    - { job: "image:debian-gcc", optional: true }
   script:
     - make -k build SANITIZE=yes BUILD=debug
     - make -k -C tests test SANITIZE=yes BUILD=debug
