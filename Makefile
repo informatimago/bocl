@@ -22,11 +22,7 @@ clean:
 # Override the impl with `make LISP=sbcl regenerate` etc.
 regenerate:
 	@printf "# Regenerating generated C sources via host CL\n"
-	$(MAKE) -C sources $(MFLAGS) \
-		kernel_objects.h kernel_objects.c \
-		kernel_functions.h built_in_functions.h built_in_functions.c \
-		kernel_structure_functions.h kernel_structure_functions.c \
-		structure_functions.h structure_functions.c
+	$(MAKE) -C sources $(MFLAGS) regenerate
 
 # Remove the *.~N~ Emacs backup files cluttering the tree. They are gitignored
 # by the `*~` pattern in .gitignore, but having hundreds of them in the working

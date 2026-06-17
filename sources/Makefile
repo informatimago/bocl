@@ -257,16 +257,34 @@ LISP_EVAL =
 LISP_QUIT =
 endif
 
-kernel_objects.h kernel_objects.c : generate-kernel-objects.lisp
-	@printf "# Generating %s from %s\n" "$@" "$^"
+# The committed generated C sources. The generator .lisp files are ORDER-ONLY
+# prerequisites of the rules below, so an ordinary `make build` rebuilds them
+# only when one is MISSING — never on a checkout-mtime skew (git/tar set
+# arbitrary mtimes, which previously made `make build` try to regenerate and
+# demand a host CL that is not present in build-only environments like CI).
+# `make regenerate` forces a real regeneration by deleting them first.
+GENERATED_SOURCES = \
+	kernel_objects.h kernel_objects.c \
+	kernel_functions.h built_in_functions.h built_in_functions.c \
+	kernel_structure_functions.h kernel_structure_functions.c \
+	structure_functions.h structure_functions.c
+
+.PHONY: regenerate
+regenerate:
+	@printf "# Forcing regeneration of committed generated C sources via host CL\n"
+	$(VERBOSE) rm -f $(GENERATED_SOURCES)
+	$(VERBOSE) $(MAKE) $(GENERATED_SOURCES)
+
+kernel_objects.h kernel_objects.c : | generate-kernel-objects.lisp
+	@printf "# Generating %s from %s\n" "$@" "$|"
 	$(VERBOSE) $(LISP) $(LISP_NORC) \
 		$(LISP_LOAD) generate-kernel-objects.lisp \
 		$(LISP_EVAL) '(com.informatimago.bocl.kernel.generate:generate-c-code)' \
 		$(LISP_QUIT)
 
 kernel_functions.h built_in_functions.h built_in_functions.c \
-lisp/kernel-package.lisp : generate-built-in-functions.lisp
-	@printf "# Generating %s from %s\n" "$@" "$^"
+lisp/kernel-package.lisp : | generate-built-in-functions.lisp
+	@printf "# Generating %s from %s\n" "$@" "$|"
 	$(VERBOSE) $(LISP) $(LISP_NORC) \
 		$(LISP_LOAD) "$$HOME/quicklisp/setup.lisp" \
 		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/cesarum/"   asdf:*central-registry*)' \
@@ -281,8 +299,8 @@ lisp/kernel-package.lisp : generate-built-in-functions.lisp
 
 kernel_structure_functions.h kernel_structure_functions.c \
 structure_functions.h structure_functions.c \
-lisp/kernel-package+structure.lisp : generate-built-in-functions.lisp generate-structures.lisp
-	@printf "# Generating %s from %s\n" "$@" "$^"
+lisp/kernel-package+structure.lisp : | generate-built-in-functions.lisp generate-structures.lisp
+	@printf "# Generating %s from %s\n" "$@" "$|"
 	$(VERBOSE) $(LISP) $(LISP_NORC) \
 		$(LISP_LOAD) "$$HOME/quicklisp/setup.lisp" \
 		$(LISP_EVAL) '(push #P"~/src/public/com-informatimago/common-lisp/cesarum/"   asdf:*central-registry*)' \
