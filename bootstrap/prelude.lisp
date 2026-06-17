@@ -6219,6 +6219,21 @@ places share structure."
                                         from-end (start 0) end)
   "Return SEQUENCE with duplicate elements in [START,END) removed.  Without
 FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
+  ;; O(n) fast path for a whole list: walk the conses (not ELT) and track seen
+  ;; keys in a hash when TEST is standard (else MEMBER).  The general index-based
+  ;; path below is O(n^2)/O(n^3-on-lists), which made large dedups (the ANSI
+  ;; search-bitvector *pattern-subbitvectors*) crawl.
+  (when (and (listp sequence) (eql start 0) (null end) (null test-not))
+    (let* ((ht-test (%std-hash-test test))
+           (seen-ht (and ht-test (make-hash-table :test ht-test)))
+           (seen    nil)
+           (acc     nil))
+      (flet ((seen-p (k) (if seen-ht (gethash k seen-ht) (member k seen :test test)))
+             (mark   (k) (if seen-ht (setf (gethash k seen-ht) t) (push k seen))))
+        (dolist (e (if from-end sequence (reverse sequence)))
+          (let ((k (funcall key e)))
+            (unless (seen-p k) (mark k) (push e acc))))
+        (return-from remove-duplicates (if from-end (nreverse acc) acc)))))
   (let* ((test  (if test-not (lambda (a b) (not (funcall test-not a b))) test))
          (len   (length sequence))
          (stop  (min (or end len) len))
