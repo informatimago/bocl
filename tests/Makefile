@@ -86,6 +86,10 @@ all_SRCS = \
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
 LIBRARIES   += -L/opt/local/lib -lcunit
+else ifdef CC_IS_TCC
+# tcc has no --as-needed (and rejects -Wl,--no-as-needed); plain -lcunit is fine.
+INCLUDES    += -I../sources
+LIBRARIES   += -lcunit
 else
 INCLUDES    += -I../sources
 # -lcunit comes from the shared LINKBIN *before* the test objects, so GNU ld's

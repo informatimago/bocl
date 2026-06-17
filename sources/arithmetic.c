@@ -6,6 +6,68 @@
 #include "cons.h"
 
 /* -------------------------------------------------------------------- *
+ *  Portable overflow-checked arithmetic + popcount.                    *
+ *  bocl's fixnum overflow detection used the GNU/Clang __builtin_*     *
+ *  intrinsics directly, which excludes other C17 compilers (e.g. tcc). *
+ *  gcc/clang keep their intrinsics; everyone else gets a correct       *
+ *  hand-written fallback so bocl builds with any conforming compiler.  *
+ * -------------------------------------------------------------------- */
+#if defined(__TINYC__)
+#  define BOCL_HAVE_BUILTINS 0
+#elif defined(__has_builtin)
+#  if __has_builtin(__builtin_add_overflow) && __has_builtin(__builtin_sub_overflow) \
+   && __has_builtin(__builtin_mul_overflow) && __has_builtin(__builtin_popcountll)
+#    define BOCL_HAVE_BUILTINS 1
+#  else
+#    define BOCL_HAVE_BUILTINS 0
+#  endif
+#elif defined(__GNUC__) && (__GNUC__ >= 5)
+#  define BOCL_HAVE_BUILTINS 1
+#else
+#  define BOCL_HAVE_BUILTINS 0
+#endif
+
+static inline bool bocl_add_overflow(word a, word b, word* r){
+#if BOCL_HAVE_BUILTINS
+    return __builtin_add_overflow(a, b, r);
+#else
+    *r = (word)((uword)a + (uword)b);                 /* wrapped result, as the builtin stores */
+    return ((b > 0) && (a > WORD_MAX - b)) || ((b < 0) && (a < WORD_MIN - b));
+#endif
+}
+
+static inline bool bocl_sub_overflow(word a, word b, word* r){
+#if BOCL_HAVE_BUILTINS
+    return __builtin_sub_overflow(a, b, r);
+#else
+    *r = (word)((uword)a - (uword)b);
+    return ((b < 0) && (a > WORD_MAX + b)) || ((b > 0) && (a < WORD_MIN + b));
+#endif
+}
+
+static inline bool bocl_mul_overflow(word a, word b, word* r){
+#if BOCL_HAVE_BUILTINS
+    return __builtin_mul_overflow(a, b, r);
+#else
+    *r = (word)((uword)a * (uword)b);
+    if(a == 0 || b == 0){ return false; }
+    if(a == WORD_MIN || b == WORD_MIN){ return !(a == 1 || b == 1); }  /* |WORD_MIN| > WORD_MAX */
+    if(a > 0){ return (b > 0) ? (a > WORD_MAX / b) : (b < WORD_MIN / a); }
+    else     { return (b > 0) ? (a < WORD_MIN / b) : (a < WORD_MAX / b); }
+#endif
+}
+
+/* Population count over a full uword (popcountll, not popcountl, so the high
+   32 bits are counted when uword is 64-bit on a 32-bit-long target). */
+static inline int bocl_popcount_uword(uword x){
+#if BOCL_HAVE_BUILTINS
+    return __builtin_popcountll((unsigned long long)x);
+#else
+    int c = 0; while(x){ c += (int)(x & 1u); x >>= 1; } return c;
+#endif
+}
+
+/* -------------------------------------------------------------------- *
  *  Helpers                                                              *
  * -------------------------------------------------------------------- */
 
@@ -117,15 +179,15 @@ static Ref num_combine(char op, Ref a, Ref b){
     {   word av=integer_value(a), bv=integer_value(b), r=0;
         switch(op){
           case '+':
-              if(__builtin_add_overflow(av,bv,&r)){
+              if(bocl_add_overflow(av,bv,&r)){
                   ARITHMETIC_ERROR("Integer overflow in (+ %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
               break;
           case '-':
-              if(__builtin_sub_overflow(av,bv,&r)){
+              if(bocl_sub_overflow(av,bv,&r)){
                   ARITHMETIC_ERROR("Integer overflow in (- %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
               break;
           case '*':
-              if(__builtin_mul_overflow(av,bv,&r)){
+              if(bocl_mul_overflow(av,bv,&r)){
                   ARITHMETIC_ERROR("Integer overflow in (* %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
               break;
           case '/':
@@ -327,7 +389,7 @@ void kernel_ONE_PLUS(Ref function,Ref arguments,MultipleValues* results){
         results->values[0]=float_from_floating(float_value(x)+1.0);
     } else {
         word r;
-        if(__builtin_add_overflow(integer_value(x),(word)1,&r)){
+        if(bocl_add_overflow(integer_value(x),(word)1,&r)){
             ARITHMETIC_ERROR("Integer overflow in (1+ %"WORD_FORMAT")",integer_value(x));}
         results->values[0]=integer_from_word(r);}
     close_live_pool(pool);}
@@ -345,7 +407,7 @@ void kernel_ONE_MINUS(Ref function,Ref arguments,MultipleValues* results){
         results->values[0]=float_from_floating(float_value(x)-1.0);
     } else {
         word r;
-        if(__builtin_sub_overflow(integer_value(x),(word)1,&r)){
+        if(bocl_sub_overflow(integer_value(x),(word)1,&r)){
             ARITHMETIC_ERROR("Integer overflow in (1- %"WORD_FORMAT")",integer_value(x));}
         results->values[0]=integer_from_word(r);}
     close_live_pool(pool);}
@@ -717,12 +779,12 @@ void kernel_EXPT(Ref function,Ref arguments,MultipleValues* results){
         word r = 1;
         while(e > 0){
             if(e & 1){
-                if(__builtin_mul_overflow(r,b,&r)){
+                if(bocl_mul_overflow(r,b,&r)){
                     ARITHMETIC_ERROR("Integer overflow in (EXPT %"WORD_FORMAT" %"WORD_FORMAT")",
                                      integer_value(base), integer_value(expo));}}
             e >>= 1;
             if(e){
-                if(__builtin_mul_overflow(b,b,&b)){
+                if(bocl_mul_overflow(b,b,&b)){
                     ARITHMETIC_ERROR("Integer overflow in (EXPT %"WORD_FORMAT" %"WORD_FORMAT")",
                                      integer_value(base), integer_value(expo));}}}
         results->values[0] = integer_from_word(r);
@@ -800,7 +862,7 @@ void kernel_LCM(Ref function,Ref arguments,MultipleValues* results){
         word g = gcd2(acc, v);
         word q = v / g;
         word r = 0;
-        if(__builtin_mul_overflow(acc,q,&r)){
+        if(bocl_mul_overflow(acc,q,&r)){
             ARITHMETIC_ERROR("Integer overflow in LCM%s","");}
         acc = abs_word(r);
         tail = cons_cdr(tail);}
@@ -839,7 +901,7 @@ void kernel_LOGCOUNT(Ref function,Ref arguments,MultipleValues* results){
        count the zero bits of the equivalent twos-complement. We treat that
        as counting bits set in ~x for negatives. */
     uword bits = v < 0 ? ~(uword)v : (uword)v;
-    word n = (word)__builtin_popcountl(bits);
+    word n = (word)bocl_popcount_uword(bits);
     results->count=1;
     results->values[0] = integer_from_word(n);
     close_live_pool(pool);}

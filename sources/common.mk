@@ -184,6 +184,11 @@ else
 ifeq ($(origin CC),default)
 CC        = gcc
 endif
+# tcc (TinyCC) is a supported C17 compiler but lacks gcc-style dependency
+# generation (-MT/-MM/-MP) and -Wl,-soname; detect it to special-case those.
+ifneq (,$(findstring tcc,$(notdir $(CC))))
+CC_IS_TCC := 1
+endif
 # Pick the gcc- or clang-specific warning set from the actual compiler.
 CC_VERSION := $(shell $(CC) --version 2>/dev/null)
 ifneq (,$(findstring clang,$(CC_VERSION)))
@@ -202,6 +207,9 @@ SHLIB        = libbocl.so.$(VERSION)
 SHLIB_MAJOR  = libbocl.so.$(VERSION_MAJOR)
 SHLIB_LINK   = libbocl.so
 SONAME_FLAGS = -Wl,-soname,$(SHLIB_MAJOR)
+ifdef CC_IS_TCC
+SONAME_FLAGS =                      # tcc does not support -Wl,-soname
+endif
 
 ifeq ($(SANITIZE),yes)
 # Link through the sanitizer driver flags so gcc pulls in the asan/ubsan
@@ -228,6 +236,11 @@ RUN       =  ldpath=$$(echo "$(RUNLIBS)" |tr ' ' ':') ; LD_LIBRARY_PATH=$${ldpat
 
 DEPFLAGS   = -E -MT $@ -MM -MP -MF $*.d
 MAKEDEPEND = $(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $(TARGET_ARCH) $(DEPFLAGS)
+ifdef CC_IS_TCC
+# tcc lacks -MT/-MM/-MP; emit empty dep files (CI builds clean, so header-change
+# tracking via .d is not needed for a tcc validation build).
+MAKEDEPEND = printf '' >$@ ;:
+endif
 COMPILE    = $(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $(TARGET_ARCH) -fPIC -c
 ifeq ($(UNAME),Darwin)
 LINKLIB    = $(LD) $(LDFLAGS) $(LIBRARIES) $(TARGET_ARCH) $(SHARED)
