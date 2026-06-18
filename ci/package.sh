@@ -11,11 +11,12 @@ set -eu
 
 CC="${CC:-cc}"
 COMPRESS="${COMPRESS:-zstd}"
+MAKE="${MAKE:-make}"
 DIST_CC="$(basename "$CC")"
 
-echo "== bocl package: CC=$CC COMPRESS=$COMPRESS =="
+echo "== bocl package: CC=$CC COMPRESS=$COMPRESS MAKE=$MAKE =="
 
-make -C sources dist CC="$CC" BUILD=release COMPRESS="$COMPRESS" DIST_CC="$DIST_CC"
+"$MAKE" -C sources dist CC="$CC" BUILD=release COMPRESS="$COMPRESS" DIST_CC="$DIST_CC"
 
 mkdir -p dist
 # Matches both the tarball and its .sha256 sidecar.

@@ -164,6 +164,26 @@ sanitise:debian-gcc:
   rules:
     - when: on_success
 
+# Phase 4 — FreeBSD via QEMU. The BSDs cannot run in a container, so this boots
+# a FreeBSD cloud image under QEMU (TCG; shared runners have no KVM) and runs the
+# normal ci/build.sh over SSH with gmake. allow_failure while it is shaken out:
+# it reports BSD portability status without blocking the deliverable pipeline.
+# Serial console is saved as an artifact for diagnosis.
+build:freebsd:
+  stage: build
+  image: debian:bookworm-slim
+  timeout: 1h
+  script:
+    - sh ci/freebsd-build.sh
+  artifacts:
+    when: always
+    paths:
+      - console.log
+    expire_in: 3 days
+  rules:
+    - when: on_success
+      allow_failure: true
+
 # ----------------------------------------------------------------------
 # Collect every environment's tarball, write a combined SHA256SUMS, and on a
 # v* tag upload the set to the generic Package Registry and cut a Release.

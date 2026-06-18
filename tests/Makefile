@@ -86,6 +86,11 @@ all_SRCS = \
 ifeq ($(UNAME),Darwin)
 INCLUDES    += -I/opt/local/include -I../sources
 LIBRARIES   += -L/opt/local/lib -lcunit
+else ifeq ($(UNAME),FreeBSD)
+# FreeBSD installs ports (CUnit) under /usr/local, which is not on the default
+# compiler/linker search path. lld supports --no-as-needed like GNU ld.
+INCLUDES    += -I/usr/local/include -I../sources
+LIBRARIES   += -L/usr/local/lib -Wl,--no-as-needed -lcunit -Wl,--as-needed
 else ifdef CC_IS_TCC
 # tcc has no --as-needed (and rejects -Wl,--no-as-needed); plain -lcunit is fine.
 INCLUDES    += -I../sources
