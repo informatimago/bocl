@@ -75,3 +75,27 @@ Notes
     Reproduce on i386:  docker run --platform linux/386 <debian-gcc image>,
     build with CC=gcc, run tests/test_arithmetic against sources/libbocl.so;
     add CPPFLAGS=-D_POSIX_V6_LP64_OFF64 to see layer 2.
+
+
+======================================================================
+RESOLVED (v0.0.67)
+======================================================================
+
+There was only ONE real layer: the word-width discriminator. sources/kernel_types.h
+selected `word` on `_POSIX_V6_LP64_OFF64`, which is defined on Debian armv7 but
+NOT on i386, so armv7 got int64 `word` (correct) while i386 got int32 (fixnum
+range ~2.1e9 -> integer arithmetic overflowed/wrong).
+
+`word` is purely the fixnum integer type: there are no word<->pointer casts and
+the TAG_MASK/TAGBODY_SHIFT macros are unused, so its width is independent of
+pointer width. armv7 (32-bit pointers, int64 word) is the existence proof. Fix:
+make `word` unconditionally int64 on every target. i386 now matches the 64-bit
+baseline exactly (full unit suite 11 pass / 31 fail, test_arithmetic passes; no
+test that passes on 64-bit fails on i386). 64-bit targets are unchanged.
+
+The reported "layer 2" (wrong arithmetic even with int64 forced) was a
+measurement ARTIFACT of the diagnosis, not a real defect: forcing the int64
+branch via `CPPFLAGS=-D_POSIX_V6_LP64_OFF64` on only part of the build produced
+a `word`-size ABI mismatch between libbocl and the test binary (one int32, one
+int64), which is what corrupted the values. With the width changed consistently
+in the header, no such failures occur. i386 is now a clean target.

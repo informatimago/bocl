@@ -8,7 +8,15 @@
 #include <stdbool.h>
 #include "bolimits.h"
 
-#ifdef _POSIX_V6_LP64_OFF64
+/* `word` is the fixnum integer type. It is int64 on EVERY target, including
+   32-bit-pointer ones (armv7, i386): it is not tied to pointer width (there are
+   no word<->pointer casts, and TAG_MASK/TAGBODY_SHIFT below are unused), so a
+   64-bit word costs nothing in correctness and keeps the full fixnum range.
+   The previous gate on _POSIX_V6_LP64_OFF64 was wrong: that POSIX macro is
+   defined on Debian armv7 but NOT on i386, so armv7 got int64 (correct) while
+   i386 silently got int32 — shrinking its fixnum range and breaking integer
+   arithmetic. armv7 is the existence proof that int64 `word` is correct on a
+   32-bit target. (See issues/.../i386-32bit-arithmetic-broken.issue.) */
 typedef int64_t           word;
 typedef uint64_t          uword;
 typedef uint32_t          halfword;
@@ -25,26 +33,6 @@ typedef uint32_t          halfword;
 
 #define TAG_MASK          0x00000000FFFFFFFF
 #define TAGBODY_SHIFT     32
-
-#else
-typedef int32_t           word;
-typedef uint32_t          uword;
-typedef uint32_t          halfword;
-#define WORD_MIN          INT32_MIN
-#define WORD_MAX          INT32_MAX
-#define UWORD_MAX         UINT32_MAX
-#define HALFWORD_MAX      UINT32_MAX
-#define WORD_FORMAT       PRId32
-#define UWORD_FORMAT      PRIu32
-#define HALFWORD_FORMAT   PRIu32
-#define WORD_X_FORMAT     PRIx32
-#define UWORD_X_FORMAT    PRIx32
-#define HALFWORD_X_FORMAT PRIx32
-
-#define TAG_MASK          0x0000FFFF
-#define TAGBODY_SHIFT     16
-
-#endif
 
 typedef uint8_t  octet;
 typedef double   floating;
