@@ -46,28 +46,23 @@ PUBKEY="$(cat id_ci.pub)"
 # root-SSH policy vary; this avoids depending on either). cloud-init runs as
 # root, so `packages:` installs gmake/cunit system-wide; the build needs no
 # privileges. ci-ready is touched LAST so the wait loop also waits for deps.
+# NOTE: FreeBSD 14.x cloud images use nuageinit (a limited Lua reimplementation
+# of cloud-init), NOT Python cloud-init. nuageinit accepts only STRING runcmd
+# entries — a [sh,-c,...] list crashes it ("attempt to concatenate a table
+# value") and aborts all provisioning — and it ignores bootcmd/final_message.
+# So: a single string runcmd that (a) sets a PATH with /usr/local/bin (cloud
+# images run pkg without it, so pkg post-install scripts can't find the
+# just-installed indexinfo and fail), (b) disables the slow firstboot
+# freebsd-update for any subsequent boot, (c) installs gmake+cunit, (d) signals
+# readiness on the serial console.
 cat > user-data <<EOF
 #cloud-config
 users:
   - name: ci
-    shell: /bin/sh
-    lock_passwd: true
     ssh_authorized_keys:
       - ${PUBKEY}
-# Disable the firstboot freebsd-update task: on the cloud image it fetches +
-# inspects the whole system on first boot, which under TCG took >20 min and
-# delayed cloud-init's final stage past our wait.
-bootcmd:
-  - [ sh, -c, "sysrc firstboot_freebsd_update_enable=NO >/dev/null 2>&1 || true" ]
-# Install deps in a single runcmd with an explicit PATH that includes
-# /usr/local/bin. cloud-init's own pkg run uses a PATH without /usr/local/bin,
-# so pkg POST-INSTALL scripts (which call indexinfo, freshly installed there)
-# fail with "indexinfo: not found", aborting the package stage and never
-# reaching the readiness marker. Doing it ourselves with the right PATH (and
-# echoing pkg output + the marker to the serial console) fixes both.
 runcmd:
-  - [ sh, -c, "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; pkg update -f >/dev/console 2>&1; pkg install -y gmake cunit >/dev/console 2>&1; echo BOCL-CLOUDINIT-DONE > /dev/console" ]
-final_message: "BOCL-CLOUDINIT-DONE (final)"
+  - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; sysrc firstboot_freebsd_update_enable=NO >/dev/null 2>&1; pkg update -f >/dev/console 2>&1; pkg install -y gmake cunit >/dev/console 2>&1; echo BOCL-CLOUDINIT-DONE > /dev/console"
 EOF
 printf 'instance-id: bocl-ci\nlocal-hostname: bocl-ci\n' > meta-data
 cloud-localds seed.img user-data meta-data
@@ -89,7 +84,7 @@ SSH_OPTS="-i id_ci -p $SSH_PORT -o StrictHostKeyChecking=no \
 echo "== waiting for cloud-init to finish (console marker; TCG boot is slow) =="
 ready=""
 i=0
-while [ $i -lt 180 ]; do
+while [ $i -lt 270 ]; do
     if grep -q "BOCL-CLOUDINIT-DONE" console.log 2>/dev/null; then ready=1; break; fi
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then echo "!! qemu exited early"; break; fi
     i=$((i+1)); sleep 10
