@@ -101,3 +101,27 @@ Notes
     slow (~45 s), so iterate with a probe rather than many full runs.
   - Found incidentally while validating the build/packaging deliverables; not
     introduced by them (it reproduces on the unmodified startup path).
+
+
+======================================================================
+RESOLVED (v0.0.65)
+======================================================================
+
+Root cause: the package registry alist `all_packages` (sources/packages.c) is a
+plain C global and was NOT a GC root. kernel_initialize_rootset() rooted only
+UNBOUND_Object, KERNEL_obarray, KEYWORD_obarray, kernel_classes and
+characterset — so during prelude loading the collector reclaimed the registry,
+after which package_find() saw an empty list and (IN-PACKAGE "COMMON-LISP-USER")
+errored. Confirmed by running with BOCL_NOGC=1 (the error disappears) and by a
+probe showing all_packages empty after the prelude.
+
+Fix: root all_packages in kernel_initialize_rootset() (sources/kernel.c), where
+it is built (while GC is still disabled) and before set_rootset(). Verified:
+with GC on and the full prelude, (print (+ 40 2)) now prints 42, *PACKAGE* is
+COMMON-LISP-USER, and FIND-PACKAGE of CL/CL-USER/KEYWORD all succeed.
+
+Note (separate, pre-existing): a package created at RUNTIME via MAKE-PACKAGE
+prepends a new head to all_packages that the init-time root does not cover, so
+a subsequent GC could still reclaim it. The prelude does not create C packages
+this way (the registry survives prelude load), so the reported bug is fixed;
+hardening runtime MAKE-PACKAGE rooting is left as a follow-up.

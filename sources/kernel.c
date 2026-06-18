@@ -1758,6 +1758,10 @@ static Ref kernel_initialize_rootset(void){
     push(KEYWORD_obarray,&rootset);
     push(kernel_classes,&rootset);
     push(characterset,&rootset);
+    /* The package registry (name -> package alist) is a plain C global; without
+       rooting it here the GC reclaims it during prelude loading, after which
+       (IN-PACKAGE "COMMON-LISP-USER") and FIND-PACKAGE fail. */
+    push(all_packages,&rootset);
     return rootset;}
 
 Ref kernel_rootset(void){
