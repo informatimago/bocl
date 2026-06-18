@@ -54,12 +54,20 @@ users:
     lock_passwd: true
     ssh_authorized_keys:
       - ${PUBKEY}
+# Disable the firstboot freebsd-update task: on the cloud image it fetches +
+# inspects the whole system on first boot, which under TCG took >20 min and
+# delayed cloud-init's final stage past our wait.
+bootcmd:
+  - [ sh, -c, "sysrc firstboot_freebsd_update_enable=NO >/dev/null 2>&1 || true" ]
 package_update: true
 packages:
   - gmake
   - cunit
+# Signal readiness on the SERIAL CONSOLE (captured in console.log), so the host
+# can detect "cloud-init finished" independently of SSH working.
 runcmd:
-  - [ sh, -c, "touch /home/ci/ci-ready && chown ci /home/ci/ci-ready" ]
+  - [ sh, -c, "echo BOCL-CLOUDINIT-DONE > /dev/console" ]
+final_message: "BOCL-CLOUDINIT-DONE (final)"
 EOF
 printf 'instance-id: bocl-ci\nlocal-hostname: bocl-ci\n' > meta-data
 cloud-localds seed.img user-data meta-data
@@ -75,19 +83,36 @@ qemu-system-x86_64 \
 QEMU_PID=$!
 trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
 
-SSH="ssh -i id_ci -p $SSH_PORT -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 ci@127.0.0.1"
+SSH_OPTS="-i id_ci -p $SSH_PORT -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8"
 
-echo "== waiting for VM + cloud-init deps (TCG boot + pkg install is slow) =="
+echo "== waiting for cloud-init to finish (console marker; TCG boot is slow) =="
 ready=""
 i=0
-while [ $i -lt 150 ]; do
-    if $SSH 'test -f ~/ci-ready' 2>/dev/null; then ready=1; break; fi
+while [ $i -lt 180 ]; do
+    if grep -q "BOCL-CLOUDINIT-DONE" console.log 2>/dev/null; then ready=1; break; fi
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then echo "!! qemu exited early"; break; fi
     i=$((i+1)); sleep 10
 done
 if [ -z "$ready" ]; then
-    echo "!! FreeBSD VM did not become ready; serial console tail:" >&2
-    tail -60 console.log 2>/dev/null || true
+    echo "!! cloud-init did not finish in time; serial console tail:" >&2
+    tail -80 console.log 2>/dev/null || true
+    exit 1
+fi
+echo "== cloud-init done; finding a working SSH login =="
+SSH=""
+j=0
+while [ $j -lt 30 ] && [ -z "$SSH" ]; do
+    for u in ci freebsd root; do
+        if ssh $SSH_OPTS "$u@127.0.0.1" 'true' 2>/dev/null; then
+            SSH="ssh $SSH_OPTS $u@127.0.0.1"; echo "   login OK as $u"; break
+        fi
+    done
+    [ -z "$SSH" ] && { j=$((j+1)); sleep 5; }
+done
+if [ -z "$SSH" ]; then
+    echo "!! cloud-init finished but no SSH login worked; ssh -v as ci:" >&2
+    ssh -v $SSH_OPTS ci@127.0.0.1 'true' 2>&1 | tail -25 || true
     exit 1
 fi
 echo "== VM up: $($SSH 'uname -a') =="

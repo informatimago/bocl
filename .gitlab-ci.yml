@@ -172,7 +172,7 @@ sanitise:debian-gcc:
 build:freebsd:
   stage: build
   image: debian:bookworm-slim
-  timeout: 1h
+  timeout: 1h30m
   script:
     - sh ci/freebsd-build.sh
   artifacts:
