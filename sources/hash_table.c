@@ -5,6 +5,7 @@
 #include "cons.h"
 
 extern Ref Object_new(Ref class, Slots* slots);
+extern Array* Array_slots(Ref element_type, halfword rank, halfword* dimensions);
 
 /* ------------------------------------------------------------------ */
 /*  EQ + EQUALP                                                         */
@@ -103,10 +104,87 @@ static HashTable* check_ht(Ref ht){
     check_type(ht, HASH_TABLE_Class);
     return &ht->slots->hash_table;}
 
-/* Returns the matching (key . value) cons, or NIL_Symbol if absent. */
+/* ------------------------------------------------------------------ */
+/*  Bucketed storage.                                                    */
+/*                                                                       */
+/*  ENTRIES is NIL (empty table) or a simple-vector of N buckets, each   */
+/*  bucket an alist ((key . value) ...).  OBJECT_HASH chooses the bucket; */
+/*  it is consistent with EQUALP (case-insensitive chars/strings, cross- */
+/*  type numbers), so it is also valid for the finer EQ/EQL/EQUAL tests  */
+/*  — those just see extra collisions, resolved by the per-bucket TEST.   */
+/* ------------------------------------------------------------------ */
+
+#define HT_INITIAL_BUCKETS 16
+#define HT_LOAD_FACTOR     2          /* resize when count > buckets*this */
+
+static uword string_hash_ci(Ref s){
+    uword h = 2166136261u;
+    uword n = string_length(s);
+    octet* o = string_octets(s);
+    for(uword i = 0; i < n; i++){
+        h = (h ^ (uword)(unsigned char)tolower((int)o[i])) * 16777619u;}
+    return h;}
+
+static uword object_hash(Ref key, int depth){
+    if(depth <= 0){ return 7u; }
+    if(integerp(key) || floatp(key)){
+        floating v = integerp(key) ? (floating)integer_value(key) : float_value(key);
+        return (uword)(word)v; }
+    if(characterp(key)){
+        return (uword)tolower((int)integer_value(character_code(key))); }
+    if(symbolp(key)){ return string_hash_ci(symbol_name(key)) * 31u + 17u; }
+    if(stringp(key)){ return string_hash_ci(key); }
+    if(consp(key)){
+        return object_hash(cons_car(key), depth - 1) * 1000003u
+             + object_hash(cons_cdr(key), depth - 1) + 1u; }
+    return 13u;}
+
+/* A fresh simple-vector of N NIL buckets (Array_slots NIL-inits its elements). */
+static Ref make_bucket_vector(halfword n){
+    halfword dims[1]; dims[0] = n;
+    return Object_new(VECTOR_Class, (Slots*)Array_slots(T_Symbol, 1, dims));}
+
+/* Direct, allocation-free access to a bucket vector's Ref[] storage.  A bucket
+   vector is a VECTOR_Class object wrapping an Array whose ELEMENTS is the
+   VectorOfObject holding the buckets (cf. kernel.c svref / class_of(VECTOR)).
+   Using raw C indices avoids INTEGER_FROM_WORD, which allocates for indices
+   >= CHAR_CODE_LIMIT and would let a GC reclaim the (unrooted) new vector
+   mid-rehash.  bocl's GC is non-moving, so the returned pointer stays valid. */
+static Ref* ht_storage(Ref vec, halfword* n_out){
+    VectorOfObject* vo = vec->slots->array.elements;
+    *n_out = (halfword)vo->objcount;
+    return vo->elements;}
+
+static halfword ht_nbuckets(HashTable* slots){
+    halfword n; ht_storage(slots->entries, &n); return n;}
+
+/* Double the bucket count and redistribute — re-links the EXISTING spine conses
+   into the new vector, so the only allocation is the new vector itself (after
+   which there is no allocation, hence no GC, until it is installed). */
+static void ht_resize(HashTable* slots){
+    halfword oldn; Ref* old_st = ht_storage(slots->entries, &oldn);
+    halfword newn = (halfword)(oldn * 2);
+    Ref old_vec = slots->entries;                 /* reachable via slots (rooted) */
+    Ref new_vec = make_bucket_vector(newn);        /* the only allocation here */
+    halfword nn;  Ref* new_st = ht_storage(new_vec, &nn);
+    old_st = ht_storage(old_vec, &oldn);           /* re-fetch (GC may have run) */
+    for(halfword bi = 0; bi < oldn; bi++){
+        Ref node = old_st[bi];
+        while(consp(node)){
+            Ref next = cons_cdr(node);
+            Ref pair = cons_car(node);
+            uword idx = object_hash(cons_car(pair), 6) % (uword)newn;
+            cons_rplacd(node, new_st[idx]);
+            new_st[idx] = node;
+            node = next;}}
+    slots->entries = new_vec;}
+
+/* Returns the matching (key . value) cons in KEY's bucket, or NIL if absent. */
 static Ref find_entry(HashTable* slots, Ref key){
+    if(nullp(slots->entries)){ return NIL_Symbol; }
     test_fn cmp = resolve_test(slots->test);
-    Ref e = slots->entries;
+    halfword n; Ref* st = ht_storage(slots->entries, &n);
+    Ref e = st[object_hash(key, 6) % (uword)n];
     while(consp(e)){
         Ref pair = cons_car(e);
         if(cmp(cons_car(pair), key)){ return pair; }
@@ -230,8 +308,18 @@ static void kernel_SETHASH(Ref function, Ref arguments, MultipleValues* results)
     HashTable* slots = check_ht(ht);
     Ref pair = find_entry(slots, key);
     if(nullp(pair)){
-        slots->entries = cons(cons(key, value), slots->entries);
+        /* Lazily allocate the bucket vector on first insert — assigned with no
+           intervening allocation, so there is no rooting gap. */
+        if(nullp(slots->entries)){
+            slots->entries = make_bucket_vector(HT_INITIAL_BUCKETS);}
+        Ref newpair = cons(key, value);                       /* rooted in pool */
+        halfword n; Ref* st = ht_storage(slots->entries, &n);
+        uword bi = object_hash(key, 6) % (uword)n;
+        Ref node = cons(newpair, st[bi]);   /* newpair rooted; st stable (non-moving) */
+        st[bi] = node;                       /* st still valid — GC does not move it */
         slots->count = integer_from_word(integer_value(slots->count) + 1);
+        if((uword)integer_value(slots->count) > (uword)n * HT_LOAD_FACTOR){
+            ht_resize(slots);}
     } else {
         cons_rplacd(pair, value);}
     results->count = 1;
@@ -247,26 +335,28 @@ static void kernel_REMHASH(Ref function, Ref arguments, MultipleValues* results)
     Ref ht = pop_mandatory_argument(function, &current);
     check_no_more_arguments(function, current);
     HashTable* slots = check_ht(ht);
+    results->count = 1;
+    results->values[0] = NIL_Symbol;
+    if(nullp(slots->entries)){ close_live_pool(pool); return; }
     test_fn cmp = resolve_test(slots->test);
-    /* Walk the alist, splicing out the first matching entry. */
+    /* Walk KEY's bucket alist, splicing out the first matching entry. */
+    halfword n; Ref* st = ht_storage(slots->entries, &n);
+    uword bi = object_hash(key, 6) % (uword)n;
     Ref prev = NIL_Symbol;
-    Ref node = slots->entries;
+    Ref node = st[bi];
     while(consp(node)){
         Ref pair = cons_car(node);
         if(cmp(cons_car(pair), key)){
             if(nullp(prev)){
-                slots->entries = cons_cdr(node);
+                st[bi] = cons_cdr(node);
             } else {
                 cons_rplacd(prev, cons_cdr(node));}
             slots->count = integer_from_word(integer_value(slots->count) - 1);
-            results->count = 1;
             results->values[0] = T_Symbol;
             close_live_pool(pool);
             return;}
         prev = node;
         node = cons_cdr(node);}
-    results->count = 1;
-    results->values[0] = NIL_Symbol;
     close_live_pool(pool);}
 
 static void kernel_CLRHASH(Ref function, Ref arguments, MultipleValues* results){
@@ -292,13 +382,21 @@ static void kernel_MAPHASH(Ref function, Ref arguments, MultipleValues* results)
     Ref ht = pop_mandatory_argument(function, &current);
     check_no_more_arguments(function, current);
     HashTable* slots = check_ht(ht);
-    Ref e = slots->entries;
     MultipleValues inner = {0};
-    while(consp(e)){
-        Ref pair = cons_car(e);
-        Ref args = cons(cons_car(pair), cons(cons_cdr(pair), NIL_Symbol));
-        kernel_apply(fn, args, &inner);
-        e = cons_cdr(e);}
+    if(!nullp(slots->entries)){
+        /* nbuckets only ever grows (resize never shrinks), so a bucket index
+           captured up front stays in range even if FN mutates the table; the
+           storage pointer is re-fetched each bucket in case FN resized it. */
+        halfword n = ht_nbuckets(slots);
+        for(halfword bi = 0; bi < n; bi++){
+            halfword cur; Ref* st = ht_storage(slots->entries, &cur);
+            if(bi >= cur){ break; }
+            Ref e = st[bi];
+            while(consp(e)){
+                Ref pair = cons_car(e);
+                Ref args = cons(cons_car(pair), cons(cons_cdr(pair), NIL_Symbol));
+                kernel_apply(fn, args, &inner);
+                e = cons_cdr(e);}}}
     results->count = 1;
     results->values[0] = NIL_Symbol;
     close_live_pool(pool);}

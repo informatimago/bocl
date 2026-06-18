@@ -35,7 +35,7 @@
 
 Ref                              Object_new                         (Ref  class,        Slots*   slots);
 
-static Array*                    Array_slots                        (Ref  element_type, halfword rank, halfword* dimensions);
+Array*                           Array_slots                        (Ref  element_type, halfword rank, halfword* dimensions);
 static BuiltInClass*             BuiltInClass_slots                 (Ref  name,         Ref  superclasses);
 static Character*                Character_slots                    (Ref  name,         Ref  code);
 static Class*                    Class_slots                        (Ref  name,         Ref  superclasses);
