@@ -177,24 +177,33 @@ static FreeBlock* before_best_free_block(FreeBlock* free_list,halfword size){
         prev = prev->next;}
     return NULL;}
 
-static Block* allocate_in_best_zone(Zone* zone,halfword size){
-    /*
-    Assume zone is the best zone, and zone->before_best_candidate
-    points to the best candidate free block.
-    Allocates a block from it.
-    */
-    FreeBlock* free=zone->before_best_candidate;
-    halfword remaining=CHECK_SIZE_TO_HALFWORD(free->next->size-size);
+/* Allocate SIZE bytes out of the first adequate block on LIST (first-fit).
+   IS_LARGE says LIST is the zone's large_list, which must keep its invariant
+   "every entry is >= LARGE_THRESHOLD" so that any request < LARGE_THRESHOLD is
+   satisfied by the head block in O(1).  Splitting a block can shrink the
+   remainder below the threshold; when that happens on the large_list we MOVE
+   the remainder to the small_list, otherwise the sub-threshold remainders pile
+   up at the head and every later allocation first-fit-walks past them — an
+   O(n) drift that made ANSI-suite loading quadratic in the live heap size. */
+static Block* allocate_from_list(Zone* zone,FreeBlock* list,halfword size,bool is_large){
+    FreeBlock* prev=before_best_free_block(list,size);
+    if(!prev){ return NULL; }
+    FreeBlock* fb=prev->next;
+    halfword remaining=CHECK_SIZE_TO_HALFWORD(fb->size-size);
     if(MinimumBlockSize<=remaining){
-        /* split */
-        Block* block=(void*)((char*)(free->next)+remaining);
-        free->next->size=remaining;
+        /* split: carve the allocated block off the tail, remainder stays at fb */
+        Block* block=(void*)((char*)fb+remaining);
+        fb->size=remaining;
         block->size=size;
         block->objcount=0;
+        if(is_large && remaining<LARGE_THRESHOLD){
+            prev->next=fb->next;                 /* unlink from large_list      */
+            fb->next=zone->small_list.next;      /* re-file under small_list     */
+            zone->small_list.next=fb;}
         return block;
     }else{
-        Block* block=(Block*)free->next;
-        free->next=free->next->next;
+        Block* block=(Block*)fb;
+        prev->next=fb->next;
         block->objcount=0;
         return block;}}
 
@@ -202,11 +211,10 @@ static Block* allocate_in_zone(Zone* zone,halfword size){
     /* Try large_list first (every entry is >= LARGE_THRESHOLD, so any
        allocation request < LARGE_THRESHOLD finds an adequate block
        immediately in O(1)).  Fall back to small_list for small requests. */
-    FreeBlock* candidate=before_best_free_block(&(zone->large_list),size);
-    if(!candidate && size<LARGE_THRESHOLD)
-        candidate=before_best_free_block(&(zone->small_list),size);
-    zone->before_best_candidate=candidate;
-    return candidate?allocate_in_best_zone(zone,size):NULL;}
+    Block* block=allocate_from_list(zone,&(zone->large_list),size,true);
+    if(!block && size<LARGE_THRESHOLD){
+        block=allocate_from_list(zone,&(zone->small_list),size,false);}
+    return block;}
 
 static Block* allocate_in_zones(halfword size){
     /* First-fit across zones: allocate from the first zone that has space. */
