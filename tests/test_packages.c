@@ -28,6 +28,18 @@ static void test_standard_packages_exist(void){
     TEST_EQ(eql, T_Symbol, e("(packagep (find-package \"CL\"))"));
     TEST_EQ(eql, T_Symbol, e("(packagep (find-package \"CL-USER\"))"));}
 
+static void test_nicknames_resolve_to_same_package(void){
+    /* A nickname is usable anywhere a package name is, and designates the SAME
+       package object as its primary name (CLHS 11.1). FIND-PACKAGE of a nickname
+       and of the primary name must be EQ. */
+    TEST_EQ(eql, T_Symbol,
+            e("(eq (find-package \"CL-USER\") (find-package \"COMMON-LISP-USER\"))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(eq (find-package \"CL\") (find-package \"COMMON-LISP\"))"));
+    /* PACKAGE-NAME returns the primary name even when looked up by nickname. */
+    TEST_EQ(equal, T("COMMON-LISP-USER"),
+            e("(package-name (find-package \"CL-USER\"))"));}
+
 static void test_find_package_unknown(void){
     TEST_EQ(eql, NIL_Symbol, e("(find-package \"DOES-NOT-EXIST\")"));}
 
@@ -63,6 +75,7 @@ static void test_intern_creates_or_returns(void){
 TEST_INITIALIZE(test_packages);
 TEST_SUITE(test_packages, packages_init, packages_clean)
     TEST_CASE( "standard packages",       test_standard_packages_exist)
+    TEST_CASE( "nicknames eq primary",    test_nicknames_resolve_to_same_package)
     TEST_CASE( "find-package unknown",    test_find_package_unknown)
     TEST_CASE( "*package* initial",       test_star_package_initial_value)
     TEST_CASE( "in-package switches",     test_in_package_switches)
