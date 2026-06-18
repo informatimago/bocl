@@ -59,14 +59,14 @@ users:
 # delayed cloud-init's final stage past our wait.
 bootcmd:
   - [ sh, -c, "sysrc firstboot_freebsd_update_enable=NO >/dev/null 2>&1 || true" ]
-package_update: true
-packages:
-  - gmake
-  - cunit
-# Signal readiness on the SERIAL CONSOLE (captured in console.log), so the host
-# can detect "cloud-init finished" independently of SSH working.
+# Install deps in a single runcmd with an explicit PATH that includes
+# /usr/local/bin. cloud-init's own pkg run uses a PATH without /usr/local/bin,
+# so pkg POST-INSTALL scripts (which call indexinfo, freshly installed there)
+# fail with "indexinfo: not found", aborting the package stage and never
+# reaching the readiness marker. Doing it ourselves with the right PATH (and
+# echoing pkg output + the marker to the serial console) fixes both.
 runcmd:
-  - [ sh, -c, "echo BOCL-CLOUDINIT-DONE > /dev/console" ]
+  - [ sh, -c, "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; pkg update -f >/dev/console 2>&1; pkg install -y gmake cunit >/dev/console 2>&1; echo BOCL-CLOUDINIT-DONE > /dev/console" ]
 final_message: "BOCL-CLOUDINIT-DONE (final)"
 EOF
 printf 'instance-id: bocl-ci\nlocal-hostname: bocl-ci\n' > meta-data
@@ -116,7 +116,10 @@ if [ -z "$SSH" ]; then
     exit 1
 fi
 echo "== VM up: $($SSH 'uname -a') =="
-$SSH 'gmake --version | head -1; cc --version | head -1; pkg info cunit | head -1' || true
+# FreeBSD's sshd default PATH excludes /usr/local/bin, where gmake lives; export
+# it for every remote command.
+RPATH='export PATH=/usr/local/sbin:/usr/local/bin:$PATH;'
+$SSH "$RPATH gmake --version | head -1; cc --version | head -1; pkg info cunit | head -1" || true
 
 echo "== copying repo into VM =="
 $SSH 'mkdir -p ~/bocl'
@@ -124,5 +127,5 @@ tar --exclude=.git --exclude='*.qcow2' --exclude='*.xz' --exclude='seed.img' -cf
     | $SSH 'tar -xf - -C ~/bocl'
 
 echo "== building + testing on FreeBSD (gmake, clang) =="
-$SSH 'cd ~/bocl && MAKE=gmake CC=clang sh ci/build.sh'
+$SSH "$RPATH cd ~/bocl && MAKE=gmake CC=clang sh ci/build.sh"
 echo "== FreeBSD build OK =="
