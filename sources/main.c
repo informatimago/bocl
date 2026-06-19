@@ -210,7 +210,7 @@ static struct {
     {{"--print",NULL},                      &do_print,   none, {.name=NULL},                              "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
     {{"--dump",NULL},                       &do_dump,    none, {.name=NULL},                              "dumps the heap"},/* TODO: put that in expressions_and_loads */
     {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {.name=NULL},                              "obscure option for running under GDB"},
-    {{"-on-error",NULL},                    NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
+    {{"--on-error","-on-error",NULL},       NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
     {{"-i","--init",NULL},                  NULL,        elst, {"file",{.list=&initfiles}},               "load initfile (can be repeated)"},
     {{"-x","-e","--eval",NULL},             NULL,        elst, {"form",{.list=&expressions_and_loads}},   "evaluate form (may need to quote form in shell)"},
     {{"-l","--load",NULL},                  NULL,        load, {"file",{.list=&expressions_and_loads}},   "load file"},
