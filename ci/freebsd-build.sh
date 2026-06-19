@@ -55,14 +55,23 @@ PUBKEY="$(cat id_ci.pub)"
 # just-installed indexinfo and fail), (b) disables the slow firstboot
 # freebsd-update for any subsequent boot, (c) installs gmake+cunit, (d) signals
 # readiness on the serial console.
+# write_files is processed in nuageinit's pre-network stage; firstboot
+# freebsd-update / firstboot_pkgs REQUIRE NETWORKING, so writing the disable to
+# /etc/rc.conf.local (sourced after /etc/rc.conf for every service, regardless
+# of the service name) takes effect before they run. Otherwise firstboot
+# freebsd-update fetches ~1300 patches "BEFORE: LOGIN", blocking sshd and the
+# readiness marker for ~1h under TCG.
 cat > user-data <<EOF
 #cloud-config
 users:
   - name: ci
     ssh_authorized_keys:
       - ${PUBKEY}
+write_files:
+  - path: /etc/rc.conf.local
+    content: 'firstboot_freebsd_update_enable="NO" firstboot_pkgs_enable="NO"'
 runcmd:
-  - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; sysrc firstboot_freebsd_update_enable=NO >/dev/null 2>&1; pkg update -f >/dev/console 2>&1; pkg install -y gmake cunit >/dev/console 2>&1; echo BOCL-CLOUDINIT-DONE > /dev/console"
+  - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; pkg update -f >/dev/console 2>&1; pkg install -y gmake cunit >/dev/console 2>&1; echo BOCL-CLOUDINIT-DONE > /dev/console"
 EOF
 printf 'instance-id: bocl-ci\nlocal-hostname: bocl-ci\n' > meta-data
 cloud-localds seed.img user-data meta-data
@@ -84,7 +93,7 @@ SSH_OPTS="-i id_ci -p $SSH_PORT -o StrictHostKeyChecking=no \
 echo "== waiting for cloud-init to finish (console marker; TCG boot is slow) =="
 ready=""
 i=0
-while [ $i -lt 270 ]; do
+while [ $i -lt 200 ]; do
     if grep -q "BOCL-CLOUDINIT-DONE" console.log 2>/dev/null; then ready=1; break; fi
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then echo "!! qemu exited early"; break; fi
     i=$((i+1)); sleep 10
