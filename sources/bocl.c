@@ -1,3 +1,10 @@
+/* realpath() (used below for *LOAD-TRUENAME*) is gated behind _XOPEN_SOURCE on
+   musl — not _POSIX_C_SOURCE — so without this it is only implicitly declared
+   there, and an implicit int return truncates its char* on LP64. Must precede
+   every include. */
+#ifndef _XOPEN_SOURCE
+#  define _XOPEN_SOURCE 700
+#endif
 #include "bocl.h"
 #include "memory.h"
 #include "boerror.h"

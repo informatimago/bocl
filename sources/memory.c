@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <sysexits.h>
-#include <execinfo.h>
+#include "backtrace_compat.h"   /* execinfo backtrace() or no-op stubs (musl) */
 #include <stdint.h>
 #include "memory.h"
 #include "boerror.h"

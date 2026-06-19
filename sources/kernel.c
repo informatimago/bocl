@@ -6,10 +6,11 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <signal.h>
-#include <execinfo.h>
 #include <unistd.h>
+#include "backtrace_compat.h"   /* execinfo backtrace() or no-op stubs (musl) */
 #include "kernel.h"
 #include "kernel_types.h"
+#include "overflow.h"   /* portable bocl_u{add,mul}_overflow for the bignum magnitude code */
 #include "kernel_objects.h"
 #include "kernel_private.h"
 #include "macros.h"
@@ -579,8 +580,8 @@ static uword bignum_magnitude(Ref digits, bool* overflow){
     uword rest=bignum_magnitude(cons_cdr(digits),overflow);
     if(*overflow){ return 0; }
     uword r;
-    if(__builtin_mul_overflow(rest,BIGNUM_BASE,&r)){ *overflow=true; return 0; }
-    if(__builtin_add_overflow(r,(uword)integer_value(cons_car(digits)),&r)){
+    if(bocl_umul_overflow(rest,BIGNUM_BASE,&r)){ *overflow=true; return 0; }
+    if(bocl_uadd_overflow(r,(uword)integer_value(cons_car(digits)),&r)){
         *overflow=true; return 0; }
     return r;}
 
@@ -733,8 +734,8 @@ static Ref make_integer_from_limbs(bool neg, uword* mag, size_t n){
     if(n<=3){
         uword v=0; bool of=false;
         for(size_t i=n; i-->0;){
-            if(__builtin_mul_overflow(v,BIGNUM_BASE,&v)){ of=true; break; }
-            if(__builtin_add_overflow(v,mag[i],&v)){ of=true; break; } }
+            if(bocl_umul_overflow(v,BIGNUM_BASE,&v)){ of=true; break; }
+            if(bocl_uadd_overflow(v,mag[i],&v)){ of=true; break; } }
         if(!of){
             if(!neg){ if(v<=(uword)WORD_MAX){ return integer_from_word((word)v); } }
             else { if(v<=(uword)WORD_MAX){ return integer_from_word(-(word)v); }
