@@ -6,8 +6,8 @@
    by one. Initial post-Phase-2 release: 0.0.10. */
 
 #define BOCL_VERSION_MAJOR 1
-#define BOCL_VERSION_MINOR 0
-#define BOCL_VERSION_PATCH 2
+#define BOCL_VERSION_MINOR 1
+#define BOCL_VERSION_PATCH 0
 
 /* Stringify the version triple, e.g. "0.0.10". */
 #define BOCL_VERSION_STRINGIZE(x) #x
