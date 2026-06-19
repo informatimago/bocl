@@ -5384,6 +5384,25 @@ the class object it denotes, so two specializers compare by class identity."
 (defconstant least-negative-short-float   least-negative-double-float)
 (defconstant least-positive-normalized-single-float least-positive-double-float)
 (defconstant least-negative-normalized-single-float least-negative-double-float)
+;;; long-float — bocl has one float type, so long-float maps to double-float.
+(defconstant most-positive-long-float     most-positive-double-float)
+(defconstant most-negative-long-float     most-negative-double-float)
+(defconstant least-positive-long-float    least-positive-double-float)
+(defconstant least-negative-long-float    least-negative-double-float)
+(defconstant least-positive-normalized-long-float  least-positive-normalized-double-float)
+(defconstant least-negative-normalized-long-float  least-negative-normalized-double-float)
+;;; short-float normalized (non-normalized short-float limits are defined above).
+(defconstant least-positive-normalized-short-float least-positive-normalized-double-float)
+(defconstant least-negative-normalized-short-float least-negative-normalized-double-float)
+;;; Float epsilons — DBL_EPSILON; with one float type all four sizes coincide.
+(defconstant double-float-epsilon          2.220446049250313e-16)
+(defconstant double-float-negative-epsilon 1.1102230246251565e-16)
+(defconstant single-float-epsilon          double-float-epsilon)
+(defconstant single-float-negative-epsilon double-float-negative-epsilon)
+(defconstant short-float-epsilon           double-float-epsilon)
+(defconstant short-float-negative-epsilon  double-float-negative-epsilon)
+(defconstant long-float-epsilon            double-float-epsilon)
+(defconstant long-float-negative-epsilon   double-float-negative-epsilon)
 
 ;;; ---- Standard array/call limits ------------------------------------------
 
@@ -5885,14 +5904,10 @@ SUBTYPEP round-trips)."
   "Truename of the file currently being compiled, or NIL.")
 
 ;;; ---- Site name -----------------------------------------------------------
-
-(defun short-site-name ()
-  "Return a string identifying the site, or NIL."
-  nil)
-
-(defun long-site-name ()
-  "Return a string identifying the site, or NIL."
-  nil)
+;;; SHORT-SITE-NAME and LONG-SITE-NAME are kernel built-ins (sources/bocl.c):
+;;; bocl maps the site name to the host identity — SHORT-SITE-NAME is the short
+;;; host name, LONG-SITE-NAME the fully-qualified domain name. They are no longer
+;;; defined here so the kernel definitions are not shadowed by NIL stubs.
 
 ;;; ---- Stream predicates ---------------------------------------------------
 ;;; STREAMP, INPUT-STREAM-P, OUTPUT-STREAM-P already in kernel.

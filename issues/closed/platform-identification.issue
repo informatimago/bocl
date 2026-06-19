@@ -110,3 +110,26 @@ just be hardwired in the code, each compiled executable/library must
 return the correct values for its platform.
 
 All these results must be documented in a complete platform table.
+
+
+======================================================================
+RESOLVED (v1.1.1)
+======================================================================
+
+All the platform functions return live run-time values:
+  (lisp-implementation-type)    => "BOCL"
+  (lisp-implementation-version) => "1.1.1"
+  (machine-type)/(machine-version)/(machine-instance) => uname.machine / .version / gethostname
+  (software-type)/(software-version)                  => uname.sysname / .release
+  (short-site-name) => short host name ; (long-site-name) => FQDN (getaddrinfo
+    AI_CANONNAME, falling back to the host name when it cannot be resolved).
+
+SHORT-SITE-NAME and LONG-SITE-NAME are now kernel built-ins (sources/bocl.c,
+mapping the site name to the host identity per the table above); the prelude
+NIL stubs were removed so they are not shadowed.
+
+The -LIMIT / MOST- / LEAST- variables are all defined. The previously-missing
+ones were added in bootstrap/prelude.lisp: every long-float and the normalized
+short-float MOST-/LEAST- limits (bocl has one float type, so they map to
+double-float), and all eight {double,single,short,long}-float[-negative]-epsilon
+constants (DBL_EPSILON). Verified bound at run time.

@@ -1,4 +1,3 @@
-platform-identification.issue
 prompt.issue
 bocl-or-bash-debugger.issue
 lisp-file-types.issue

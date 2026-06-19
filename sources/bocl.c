@@ -23,6 +23,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>   /* AF_UNSPEC for LONG-SITE-NAME getaddrinfo */
+#include <netdb.h>        /* getaddrinfo / AI_CANONNAME (FQDN) */
 
 
 Ref bocl_eval(Ref sexp){
@@ -705,6 +707,33 @@ static void kernel_SOFTWARE_VERSION(unused Ref function, unused Ref arguments, M
     results->count=1; results->values[0]=s;
     close_live_pool(pool);}
 
+/* (SHORT-SITE-NAME) → short host name. bocl maps the site name to the host
+   identity (see issues/closed/platform-identification.issue); the short form
+   strips any trailing domain. */
+static void kernel_SHORT_SITE_NAME(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    char buf[256]=""; gethostname(buf,sizeof(buf)-1);
+    char* dot=strchr(buf,'.'); if(dot){ *dot='\0'; }
+    results->count=1; results->values[0]=string_new_cstring(buf);
+    close_live_pool(pool);}
+
+/* (LONG-SITE-NAME) → fully-qualified domain name (getaddrinfo canonical name),
+   falling back to the host name when it cannot be resolved. */
+static void kernel_LONG_SITE_NAME(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    char buf[256]=""; gethostname(buf,sizeof(buf)-1);
+    const char* name=buf;
+    struct addrinfo hints; memset(&hints,0,sizeof(hints));
+    hints.ai_family=AF_UNSPEC;
+    hints.ai_flags=AI_CANONNAME;
+    struct addrinfo* res=NULL;
+    if(getaddrinfo(buf,NULL,&hints,&res)==0 && res && res->ai_canonname && res->ai_canonname[0]){
+        name=res->ai_canonname;}
+    Ref s=string_new_cstring(name);
+    if(res){ freeaddrinfo(res); }
+    results->count=1; results->values[0]=s;
+    close_live_pool(pool);}
+
 /* (PARSE-FLOAT string &key start end junk-allowed) → float
    Simplified: ignores :start/:end/:junk-allowed, uses strtod on the whole string. */
 static void kernel_PARSE_FLOAT(unused Ref function, Ref arguments, MultipleValues* results){
@@ -996,6 +1025,10 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("SOFTWARE-TYPE"),ll_0,kernel_SOFTWARE_TYPE));
         set_symbol_function(symbol_intern_cstring("SOFTWARE-VERSION"),
             built_in_function_new(symbol_intern_cstring("SOFTWARE-VERSION"),ll_0,kernel_SOFTWARE_VERSION));
+        set_symbol_function(symbol_intern_cstring("SHORT-SITE-NAME"),
+            built_in_function_new(symbol_intern_cstring("SHORT-SITE-NAME"),ll_0,kernel_SHORT_SITE_NAME));
+        set_symbol_function(symbol_intern_cstring("LONG-SITE-NAME"),
+            built_in_function_new(symbol_intern_cstring("LONG-SITE-NAME"),ll_0,kernel_LONG_SITE_NAME));
         set_symbol_function(symbol_intern_cstring("PARSE-FLOAT"),
             built_in_function_new(symbol_intern_cstring("PARSE-FLOAT"),ll_s,kernel_PARSE_FLOAT));
         set_symbol_function(symbol_intern_cstring("COMPILE"),
