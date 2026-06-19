@@ -1,0 +1,147 @@
+When an error occurs, whether with the default -on-error or with -on-error debug,
+it looks like bocl exits and pushes back the input to the bash.
+
+    21:10[pjb@thalassa org.xquartz:0 bocl-master 31Gi]$ sources/bocl
+
+    Welcome to BOCL Version 1.0.1
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+
+
+    Welcome to BOCL
+
+
+    Have fun!
+
+    bocl> *debugger-hook*
+    bash: *debugger-hook*: command not found
+
+    ~/src/public/bocl-master
+    master
+
+    21:10[pjb@thalassa org.xquartz:0 bocl-master 31Gi]$ sources/bocl -on-error debug
+    WARNING: argument for -on-error has already bh teen given: exit ; changing it to debug.
+
+    Welcome to BOCL Version 1.0.1
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+
+
+    Welcome to BOCL
+
+
+    Have fun!
+
+    bocl> (error "Hi!")
+    bash: !": event not found
+
+    ~/src/public/bocl-master
+    master
+    21:11[pjb@thalassa org.xquartz:0 bocl-master 31Gi]$
+
+
+
+0- the option must be named --on-error, not -on-error.
+   short options start with a single dash: -f
+   long options start with two dashes: --foo
+
+1- --ON-ERROR DEBUG must call INVOKE-DEBUGGER upon error.
+
+2- there must not be any such interaction between bocl and the surrounding shell
+   (I guess this goes thru escape codes and the terminal? or some other way?
+   here the test is in emacs M-x shell)
+
+3- INVOKE-DEBUGGER must implement a "minimal" CL debugger with the following features:
+
+     - display the error message (princ the condition parameter),
+
+     - print the backtrace (obtained from the kernel, see below),
+
+     - print the list of currently available restarts (restart menu),
+
+     - debugging REPL:
+        - read a command:
+            - if it's a debugger command, execute it,
+            - if it's some lisp expression, evaluate it and print the results,
+        - and loop
+
+     - an easy way to distinguish debugger commands from lisp expressions is to
+       use keywords for debugger commands and restart numbers. eg:
+
+       :backtrace :type call :verbose 1  :count 10
+       :backtrace :type binding :verbose 2 :start 20 :count 10
+       :backtrace :type all :verbose 0
+
+       :restart 2
+       :restart try-again
+       :restart abort-connection
+
+       :continue
+       :abort
+       :quit
+
+       Non-debugger command keywords would evaluate as lisp expressions.
+
+     - debugger commands:
+         - select a restart and invoke-restart it.
+           (note if the restart is interactive this may lead to some interactive I/O
+           to fill the parameters for the restart),
+           The restart can be selected by "name" or by number in the restart menu.
+         - print the backtrace again (with options, such as range of frames, verbose or not).
+         - continue, ie. return NIL from invoke-debugger.
+         - abort, ie. non-local exit back to the toplevel REPL.
+         - quit, ie. non-local exit from the toplevel REPL, aka QUIT.
+
+     There is no provision to perform stepping or tracing execution
+     from the debugger (the user can use CL:TRACE and CL:BREAK).
+
+     And there is no provision yet to inspect or modify the stack
+     frames in the backtrace.
+
+     The debugger REPL evaluates the expressions in the dynamic
+     context of the function that calls INVOKE-DEBUGGER (or ERROR,
+     CERROR, or SIGNAL), but not the lexical context.
+
+     The expressions given at the debugger REPL can modify the state
+     of the dynamic variables and of the lisp objects that are bound
+     in the lexical context of the function (but not the lexical
+     variables).
+
+   So INVOKE-DEBUGGER implements a minimal debugger that can be
+   implemented entirely and conformingly in Common Lisp.
+
+   The kernel provide a list of frame from the top-of-the-stack down
+   to the bottom (the call ot bocl from the main).
+   For now, each frame is an opaque object.
+
+   (bocl:backtrace) --> list-of-frames (first is top-of-the-stack)
+   (bocl:frame-kind frame) -> keyword denoting the kind of frame
+   (bocl:frame-name frame) -> function name (lambda expression) or special operator or nil
+   (bocl:print-frame frame stream :verbosity vlevel)
+   verbosity-level = 0 just print the frame kind and name
+   verbosity-level = 1 print the parameter names (function) or the variable names (let), without values.
+   verbosity-level = 2 print also the values bound to the parameters or the variables, subject to
+   the printer variables as bound by INVOKE-DEBUGGER from the bocl:*debugger-print-…* variables.
+
+
+   | debugger variable                  | default value | Printer variable bound by INVOKE-DEBUGGER |
+   |------------------------------------+---------------+-------------------------------------------|
+   | BOCL:*DEBUGGER-PRINT-ARRAY*        | T             | COMMON-LISP:*PRINT-ARRAY*                 |
+   | BOCL:*DEBUGGER-PRINT-BASE*         | 10            | COMMON-LISP:*PRINT-BASE*                  |
+   | BOCL:*DEBUGGER-PRINT-CASE*         | :UPCASE       | COMMON-LISP:*PRINT-CASE*                  |
+   | BOCL:*DEBUGGER-PRINT-CIRCLE*       | T             | COMMON-LISP:*PRINT-CIRCLE*                |
+   | BOCL:*DEBUGGER-PRINT-ESCAPE*       | T             | COMMON-LISP:*PRINT-ESCAPE*                |
+   | BOCL:*DEBUGGER-PRINT-GENSYM*       | T             | COMMON-LISP:*PRINT-GENSYM*                |
+   | BOCL:*DEBUGGER-PRINT-LENGTH*       | 8             | COMMON-LISP:*PRINT-LENGTH*                |
+   | BOCL:*DEBUGGER-PRINT-LEVEL*        | 3             | COMMON-LISP:*PRINT-LEVEL*                 |
+   | BOCL:*DEBUGGER-PRINT-LINES*        | 2             | COMMON-LISP:*PRINT-LINES*                 |
+   | BOCL:*DEBUGGER-PRINT-PRETTY*       | NIL           | COMMON-LISP:*PRINT-PRETTY*                |
+   | BOCL:*DEBUGGER-PRINT-RADIX*        | NIL           | COMMON-LISP:*PRINT-RADIX*                 |
+   | BOCL:*DEBUGGER-PRINT-READABLY*     | NIL           | COMMON-LISP:*PRINT-READABLY*              |
+   | BOCL:*DEBUGGER-PRINT-RIGHT-MARGIN* | 72            | COMMON-LISP:*PRINT-RIGHT-MARGIN*          |
+   |------------------------------------+---------------+-------------------------------------------|
+
