@@ -8973,6 +8973,10 @@ the rest take :INITIAL-ELEMENT."
 (defvar *quit-hook* '()
   "List of (lambda (status)) function designators, each called inside
    IGNORE-ERRORS by BOCL:QUIT before the process exits.")
+(defvar *prompt-function* nil
+  "NIL, or a function designator of one argument (a stream).  When non-NIL the
+   REPL calls (funcall *prompt-function* stream) to write each prompt instead of
+   the default implementation-defined prompt.")
 
 (defun quit (&optional (status 0))
   "Quit bocl.  Performs a non-local exit so pending UNWIND-PROTECT clean-ups run
@@ -8988,7 +8992,7 @@ the rest take :INITIAL-ELEMENT."
 (defun %run-abort-hooks (signum)
   (dolist (f *abort-hook*) (ignore-errors (funcall f signum))))
 
-(export '(*init-hook* *abort-hook* *quit-hook* quit))
+(export '(*init-hook* *abort-hook* *quit-hook* *prompt-function* quit))
 
 (in-package "COMMON-LISP")
 

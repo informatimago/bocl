@@ -37,3 +37,21 @@ COMMON-LISP-USER #1 > " "
 COMMON-LISP-USER #2 > " "
 COMMON-LISP-USER #3 > ")
 #+end_src
+
+
+======================================================================
+RESOLVED (v1.1.2)
+======================================================================
+
+BOCL:*PROMPT-FUNCTION* implemented:
+  - defvar BOCL:*PROMPT-FUNCTION* (default NIL), exported from BOCL
+    (bootstrap/prelude.lisp).
+  - The REPL (bocl_emit_prompt in sources/bocl.c) calls
+    (funcall *prompt-function* stream) when it is a non-NIL function designator
+    (symbol or function/closure), else writes the default "bocl> " prompt.
+
+Verified:
+  bocl> (setf bocl:*prompt-function*
+          (lambda (s) (format s "~%PROMPT[~A]> " (package-name *package*))))
+  PROMPT[COMMON-LISP-USER]> 123
+  PROMPT[COMMON-LISP-USER]>

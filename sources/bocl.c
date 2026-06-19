@@ -45,6 +45,25 @@ Ref bocl_read_eval_cstring(const char* text){
     stream_finish_output(out);
     return result;}
 
+/* Emit the REPL prompt.  If BOCL:*PROMPT-FUNCTION* is a non-NIL function
+   designator, call (funcall *prompt-function* out) to produce the prompt; else
+   write the default implementation-defined prompt. */
+static void bocl_emit_prompt(Ref out){
+    extern Ref BOCL_Package;
+    if(BOCL_Package!=NULL && typep(BOCL_Package,PACKAGE_Class)){
+        Ref present=BOCL_Package->slots->package.present;
+        Ref sym=find_symbol(string_new_cstring("*PROMPT-FUNCTION*"),present);
+        if(sym){
+            Ref pf=symbol_value(sym);
+            Ref fn=NIL_Symbol;
+            if(symbolp(pf)){ if(symbol_fboundp(pf)){ fn=symbol_function(pf); } }
+            else if(!nullp(pf)){ fn=pf; }   /* a function / closure object */
+            if(!nullp(fn)){
+                MultipleValues mv;
+                kernel_apply(fn,cons(out,NIL_Symbol),&mv);
+                return;}}}
+    princ(T("bocl> "),out);}
+
 Ref bocl_repl(Ref inp,Ref out){
     terpri(out);
     /* REPL history variables (CLHS 25.1.1).  (Interned here with explicit names
@@ -62,7 +81,7 @@ Ref bocl_repl(Ref inp,Ref out){
     set_symbol_value(vs1,NIL_Symbol); set_symbol_value(vs2,NIL_Symbol); set_symbol_value(vs3,NIL_Symbol);
     set_symbol_value(vl1,NIL_Symbol); set_symbol_value(vl2,NIL_Symbol); set_symbol_value(vl3,NIL_Symbol);
     while(true){
-        princ(T("bocl> "),out);
+        bocl_emit_prompt(out);
         stream_finish_output(out);
         Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
         if((sexp==inp)||equal(sexp,list(S(QUIT),NULL))){
