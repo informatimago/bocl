@@ -4,24 +4,37 @@
 #include "integer.h"
 
 bool eql(Ref a,Ref b){
+    if(a==b){
+        /* identical object: covers symbols, conses, interned chars, and any
+           number that happens to be the same object. */
+        return true;}
     if(integerp(a)){
-        if(a==b){
-            return true;}
         if(integerp(b)){
             return integer_value(a)==integer_value(b);}
         return false;}
     if(floatp(a)){
-        if(a==b){
-            return true;}
         if(floatp(b)){
             return float_value(a)==float_value(b);}
+        return false;}
+    if(ratiop(a)){
+        /* EQL of two ratios: same numerator and denominator (CLHS).  Ratios are
+           built fresh by arithmetic, so identity is not enough. */
+        if(ratiop(b)){
+            return eql(ratio_numerator(a),ratio_numerator(b))
+                && eql(ratio_denominator(a),ratio_denominator(b));}
+        return false;}
+    if(complexp(a)){
+        /* EQL of two complexes: EQL real parts and EQL imaginary parts. */
+        if(complexp(b)){
+            return eql(complex_realpart(a),complex_realpart(b))
+                && eql(complex_imagpart(a),complex_imagpart(b));}
         return false;}
     if(characterp(a)){
         if(characterp(b)){
             /* characters are interned */
             return a==b;}
         return false;}
-    return a==b;}
+    return false;}
 
 bool equal(Ref a,Ref b){
 

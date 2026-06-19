@@ -59,6 +59,13 @@
 
 (defparameter *setf-expanders* (make-hash-table :test 'eq))
 
+;; SETF-functions: (defun (setf foo) (val arg...) ...) registers a function here
+;; under FOO; the kernel DEFUN / FUNCTION forms and the SETF macro consult it so
+;; `(setf (foo a) v)` becomes `(funcall #'(setf foo) v a)` (CLHS 5.1.2.3).
+(defparameter *%setf-functions* (make-hash-table :test 'eq))
+(defun %register-setf-function (sym fn) (sethash sym *%setf-functions* fn) sym)
+(defun %setf-function (sym) (gethash sym *%setf-functions*))
+
 (defmacro define-setf-expander (operator args value-args &body body)
   ;; (define-setf-expander op (a b ...) (val) body...)
   ;;   registers a lambda (a b ... val) → setter-form.
@@ -76,9 +83,23 @@
                   `(setq ,place ,value))
                  ((consp place)
                   (let ((expander (gethash (car place) *setf-expanders*)))
-                    (if expander
-                        (apply expander (append (cdr place) (list value)))
-                        (error "SETF: no expander for place operator"))))
+                    (cond
+                      (expander
+                       ;; SETF must return the newly-stored value, but the kernel
+                       ;; setters (RPLACA/RPLACD/...) return the cons.  Bind the
+                       ;; value to a gensym, run the setter on it, then yield it.
+                       (let ((g (gensym "SETF-V")))
+                         `(let ((,g ,value))
+                            ,(apply expander (append (cdr place) (list g)))
+                            ,g)))
+                      ;; No expander, but FOO has a (SETF FOO) function:
+                      ;; (setf (foo a b) v) -> (funcall #'(setf foo) v a b).
+                      ((%setf-function (car place))
+                       (let ((g (gensym "SETF-V")))
+                         `(let ((,g ,value))
+                            (funcall (%setf-function ',(car place)) ,g ,@(cdr place))
+                            ,g)))
+                      (t (error "SETF: no expander for place operator ~S" (car place))))))
                  (t (error "SETF: invalid place")))))
         (t
          `(progn (setf ,(first pairs) ,(second pairs))
@@ -93,6 +114,12 @@
 (define-setf-expander second         (cell)         (val) `(rplaca (cdr ,cell) ,val))
 (define-setf-expander third          (cell)         (val) `(rplaca (cddr ,cell) ,val))
 (define-setf-expander fourth         (cell)         (val) `(rplaca (cdddr ,cell) ,val))
+(define-setf-expander fifth          (cell)         (val) `(rplaca (nthcdr 4 ,cell) ,val))
+(define-setf-expander sixth          (cell)         (val) `(rplaca (nthcdr 5 ,cell) ,val))
+(define-setf-expander seventh        (cell)         (val) `(rplaca (nthcdr 6 ,cell) ,val))
+(define-setf-expander eighth         (cell)         (val) `(rplaca (nthcdr 7 ,cell) ,val))
+(define-setf-expander ninth          (cell)         (val) `(rplaca (nthcdr 8 ,cell) ,val))
+(define-setf-expander tenth          (cell)         (val) `(rplaca (nthcdr 9 ,cell) ,val))
 (define-setf-expander rest           (cell)         (val) `(rplacd ,cell ,val))
 (define-setf-expander caar           (cell)         (val) `(rplaca (car ,cell) ,val))
 (define-setf-expander cadr           (cell)         (val) `(rplaca (cdr ,cell) ,val))
@@ -109,6 +136,7 @@
 (define-setf-expander aref           (array idx)    (val) `(aref-set ,val ,array ,idx))
 (define-setf-expander char           (str idx)      (val) `(char-set ,str ,idx ,val))
 (define-setf-expander schar          (str idx)      (val) `(char-set ,str ,idx ,val))
+(define-setf-expander readtable-case (rt)           (val) `(%set-readtable-case ,rt ,val))
 (define-setf-expander nth            (n lst)        (val) `(rplaca (nthcdr ,n ,lst) ,val))
 ;; ELT setter — dispatches on sequence type; uses gensyms to avoid
 ;; multiple evaluation of sub-forms.
@@ -173,14 +201,25 @@
 (defun rest    (l) (cdr l))
 
 (defun nth (n list)
-  (if (= n 0)
-      (car list)
-      (nth (- n 1) (cdr list))))
+  ;; Iterative: a recursive walk has no TCO here, so (nth i list) for a large
+  ;; index would recurse i frames deep and overflow the C stack — and since ELT
+  ;; on a list calls NTH, that took out FIND/POSITION over long lists.
+  (let ((k n) (l list))
+    (tagbody
+     top
+       (when (= k 0) (return-from nth (car l)))
+       (setq k (- k 1))
+       (setq l (cdr l))
+       (go top))))
 
 (defun nthcdr (n list)
-  (if (= n 0)
-      list
-      (nthcdr (- n 1) (cdr list))))
+  (let ((k n) (l list))
+    (tagbody
+     top
+       (when (= k 0) (return-from nthcdr l))
+       (setq k (- k 1))
+       (setq l (cdr l))
+       (go top))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Predicates and small helpers.                                        ;;
@@ -200,13 +239,34 @@
 (defun realp     (x) (typep x 'real))
 (defun complexp  (x) (typep x 'complex))
 (defun characterp (x) (typep x 'character))
-(defun vectorp   (x) (typep x 'vector))
+(defun vectorp   (x)
+  ;; A 1-D array is a vector — including a displaced/adjustable one, which bocl
+  ;; represents as a %md-array.  (Sequence functions that follow VECTORP with
+  ;; SVREF guard %md-array-p first, so they stay correct.)
+  (or (typep x 'vector)
+      (and (%md-array-p x) (= (length (%md-array-dimensions x)) 1))))
 (defun arrayp    (x) (typep x 'array))
 (defun packagep  (x) (typep x 'package))
 (defun pathnamep (x) (typep x 'pathname))
 (defun streamp   (x) (typep x 'stream))
 (defun hash-table-p (x) (typep x 'hash-table))
 (defun random-state-p (x) (typep x 'random-state))
+
+;; The kernel RANDOM handles only fixnum and float limits.  Extend it to BIGNUM
+;; integer limits (the ANSI tests use e.g. (random (* big big))) by assembling a
+;; random integer from 30-bit words and reducing modulo LIMIT.  Built with only
+;; * / + / FLOOR / MOD, since the kernel's bignum INTEGER-LENGTH/ASH/LOGIOR are
+;; incomplete.
+(defparameter *%kernel-random* (symbol-function 'random))
+(defun random (limit &optional state)
+  (declare (ignore state))
+  (if (and (integerp limit) (> limit most-positive-fixnum))
+      (let ((base (ash 1 30)) (words 0) (m limit) (r 0))
+        (do () ((zerop m)) (setq m (floor m base)) (setq words (+ words 1)))
+        (dotimes (i (+ words 1))
+          (setq r (+ (* r base) (funcall *%kernel-random* base))))
+        (mod r limit))
+      (funcall *%kernel-random* limit)))
 
 (defun zerop  (n) (= n 0))
 (defun plusp  (n) (> n 0))
@@ -218,8 +278,17 @@
 ;;  Iteration macros.                                                    ;;
 ;; -------------------------------------------------------------------- ;;
 
+(defun %strip-declares (body)
+  "Drop leading (declare ...) forms from an implicit-progn BODY (bocl ignores
+   declaration content but must not evaluate `declare` as a function)."
+  (if (and (consp body) (consp (car body)) (eq (caar body) 'declare))
+      (%strip-declares (cdr body))
+      body))
+
 (defmacro dolist (head &body body)
-  ;; (dolist (var list-form [result-form]) body...) — minimal form.
+  ;; (dolist (var list-form [result-form]) declaration* body...)
+  ;; The result-form is evaluated INSIDE the var's binding (var bound to NIL,
+  ;; per CLHS), not outside it.
   (let ((var       (first head))
         (list-form (second head))
         (result    (third head)))
@@ -232,13 +301,15 @@
                   (go dolist-done))
               (setq ,var (car dolist-list))
               (setq dolist-list (cdr dolist-list))
-              ,@body
+              ,@(%strip-declares body)
               (go dolist-loop)
-              dolist-done))
-         ,result))))
+              dolist-done)
+           (setq ,var nil)
+           ,result)))))
 
 (defmacro dotimes (head &body body)
-  ;; (dotimes (var count-form [result-form]) body...)
+  ;; (dotimes (var count-form [result-form]) declaration* body...)
+  ;; The result-form is evaluated INSIDE the var's binding, with var = count.
   (let ((var         (first head))
         (count-form  (second head))
         (result      (third head)))
@@ -249,11 +320,11 @@
               dotimes-loop
               (if (>= ,var dotimes-count)
                   (go dotimes-done))
-              ,@body
+              ,@(%strip-declares body)
               (setq ,var (+ ,var 1))
               (go dotimes-loop)
-              dotimes-done))
-         ,result))))
+              dotimes-done)
+           ,result)))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Control macros (slice 3): CASE / ECASE / TYPECASE / ETYPECASE,       ;;
@@ -353,25 +424,35 @@
 
 (defmacro do (varlist endlist &body body)
   ;; (DO ((var init [step]) ...) (test result...) body...)
+  ;; DO steps in PARALLEL (unlike DO*): every step-form is evaluated using the
+  ;; OLD variable values, then all variables are assigned at once.  Emitting a
+  ;; sequence of (setq var step) would be DO* semantics and breaks idioms like
+  ;; (do ((i .. (1+ i)) (j .. i)) ...) and in-place NREVERSE.  We instead bind a
+  ;; fresh temp to each step-form, then assign.
   (let ((loop (gensym "DO-LOOP-"))
         (done (gensym "DO-DONE-")))
-    `(block nil
-       (let ,(mapcar (lambda (v)
-                       (if (consp v) (list (car v) (cadr v)) (list v nil)))
-                     varlist)
-         (tagbody
-            ,loop
-            (if ,(car endlist) (go ,done))
-            ,@body
-            ,@(mapcar
-               (lambda (v)
-                 (if (and (consp v) (consp (cddr v)))
-                     `(setq ,(car v) ,(caddr v))
-                     '(progn)))
-               varlist)
-            (go ,loop)
-            ,done)
-         ,@(cdr endlist)))))
+    (labels ((triples (vl)            ; -> ((TEMP VAR STEP) ...) for stepped vars
+               (if (null vl)
+                   nil
+                   (let ((v (car vl)))
+                     (if (and (consp v) (consp (cddr v)))
+                         (cons (list (gensym "DO-STEP-") (car v) (caddr v))
+                               (triples (cdr vl)))
+                         (triples (cdr vl)))))))
+      (let ((trs (triples varlist)))
+        `(block nil
+           (let ,(mapcar (lambda (v)
+                           (if (consp v) (list (car v) (cadr v)) (list v nil)))
+                         varlist)
+             (tagbody
+                ,loop
+                (if ,(car endlist) (go ,done))
+                ,@(%strip-declares body)
+                (let ,(mapcar (lambda (tr) (list (car tr) (caddr tr))) trs)
+                  ,@(mapcar (lambda (tr) (list 'setq (cadr tr) (car tr))) trs))
+                (go ,loop)
+                ,done)
+             ,@(cdr endlist)))))))
 
 (defmacro do* (varlist endlist &body body)
   ;; Same shape as DO but bindings are sequential and steps fire
@@ -385,7 +466,7 @@
          (tagbody
             ,loop
             (if ,(car endlist) (go ,done))
-            ,@body
+            ,@(%strip-declares body)
             ,@(mapcar
                (lambda (v)
                  (if (and (consp v) (consp (cddr v)))
@@ -454,9 +535,46 @@
 ;;  support those via &KEY and the new kernel default-evaluation path.  ;;
 ;; -------------------------------------------------------------------- ;;
 
+;; -------------------------------------------------------------------- ;;
+;;  Fill-pointer arrays.  The fill pointer is stored INLINE in the        ;;
+;;  vector's kernel slots block (an untraced word on Array for VECTOR and ;;
+;;  OctetArray for STRING / BIT-VECTOR), reached via the kernel           ;;
+;;  primitives %ARRAY-FILL-POINTER / %SET-ARRAY-FILL-POINTER.  Storing it ;;
+;;  on the object — rather than an external table — means a fill-pointer  ;;
+;;  vector is collected normally once dead, with no pinning.  The array   ;;
+;;  itself stays a real bocl string/vector, so AREF/CHAR/SVREF/STRINGP/   ;;
+;;  VECTORP keep working natively and correctly *ignore* the fill pointer ;;
+;;  (per CLHS aref/char); only the length-sensitive operators — LENGTH,   ;;
+;;  the STRING coercion, and the VECTOR-PUSH/POP family — consult it.     ;;
+;;  %ARRAY-FILL-POINTER returns NIL for any non-fill-pointer object, so   ;;
+;;  %FILL-POINTER-OF is safe to call on arbitrary values (e.g. in LENGTH).;;
+;; -------------------------------------------------------------------- ;;
+
+;; Forward placeholder: the real predicate comes from the %md-array DEFSTRUCT
+;; (much later in this file).  Several early functions — %FILL-POINTER-OF,
+;; STRING, LENGTH — must consult it, but no %md-array exists until MAKE-ARRAY
+;; runs (well after the defstruct), so NIL is the correct answer during load.
+(defun %md-array-p (x) x nil)
+
+;; A complex array (adjustable / displaced / multi-dimensional) is represented
+;; by a %md-array struct and keeps its fill pointer in a struct slot; a simple
+;; vector/string/bit-vector keeps it in the kernel object field.
+(defun %fill-pointer-of (array)
+  "The current fill pointer of ARRAY (an integer), or NIL if it has none."
+  (if (%md-array-p array) (%md-array-fill-pointer array) (%array-fill-pointer array)))
+
+(defun %set-fill-pointer (array fp)
+  "Set ARRAY's fill pointer to FP (registers ARRAY as fill-pointered)."
+  (if (%md-array-p array) (setf (%md-array-fill-pointer array) fp) (%set-array-fill-pointer array fp)))
+
 (defun length (seq)
   (cond ((null seq)        0)
         ((consp seq)       (list-length seq))
+        ((%fill-pointer-of seq))            ; fill-pointer array: active length
+        ((%md-array-p seq)                  ; adjustable/displaced 1-D vector
+         (let ((d (%md-array-dimensions seq)))
+           (if (and d (null (cdr d))) (car d)
+               (error "LENGTH: ~S is not a sequence" seq))))
         ((stringp seq)     (string-length seq))
         ((vectorp seq)     (vector-length seq))
         ((bit-vector-p seq)(bit-vector-length seq))
@@ -466,6 +584,7 @@
   ;; NOTE: bit-vector-p and stringp must come BEFORE vectorp because
   ;; bit-vectors and strings are subtypes of vector in bocl.
   (cond ((consp seq)        (nth i seq))
+        ((%md-array-p seq)  (row-major-aref seq i)) ; 1-D adjustable/displaced vector
         ((stringp seq)      (char seq i))
         ((bit-vector-p seq) (bit seq i))
         ((vectorp seq)      (svref seq i))
@@ -507,8 +626,16 @@
                                                       (funcall function acc x))))
          acc)))))
 
-(defun member (item list &key (test #'eql) (key #'identity))
+(defun %xtest (test test-not)
+  "Collapse :TEST / :TEST-NOT into one 2-arg predicate (TEST-NOT wins)."
+  (cond (test-not (lambda (a b) (not (funcall test-not a b))))
+        (test test)
+        (t #'eql)))
+
+(defun member (item list &key (test #'eql) test-not (key #'identity))
   "Return the first cons in LIST whose CAR satisfies TEST with ITEM, or NIL."
+  (unless key (setq key #'identity))     ; :KEY NIL means identity
+  (setq test (%xtest test test-not))
   (do ((l list (cdr l)))
       ((null l) nil)
     (when (funcall test item (funcall key (car l)))
@@ -651,9 +778,15 @@
 ;;  Sub-sequences.                                                       ;;
 ;; -------------------------------------------------------------------- ;;
 
+(defun %cons-length (list)
+  "Number of cons cells in LIST (works on proper AND dotted lists)."
+  (let ((n 0))
+    (do ((x list (cdr x))) ((atom x) n) (setq n (1+ n)))))
+
 (defun butlast (list &optional (n 1))
-  ;; List minus the last n elements. Naive but correct.
-  (let* ((len (length list))
+  ;; LIST minus its last N cons cells (works on dotted lists too — count conses,
+  ;; not elements, since LENGTH rejects an improper list).
+  (let* ((len (%cons-length list))
          (keep (- len n)))
     (if (<= keep 0)
         nil
@@ -671,6 +804,14 @@
   (cond
     ((stringp sequence)
      (subseq-string sequence start (or end (string-length sequence))))
+    ;; BIT-VECTOR before VECTORP: a bit-vector is also a VECTORP, but SVREF on it
+    ;; reads garbage — copy bits with BIT/BIT-SET into a fresh bit-vector.
+    ((bit-vector-p sequence)
+     (let* ((len (or end (bit-vector-length sequence)))
+            (count (- len start))
+            (out (make-bit-vector count 0)))
+       (dotimes (i count out)
+         (bit-set out i (bit sequence (+ start i))))))
     ((vectorp sequence)
      (let* ((len (or end (vector-length sequence)))
             (count (- len start))
@@ -687,6 +828,21 @@
          (push (car rem) acc)
          (setq rem (cdr rem)))))))
 
+;; (SETF (SUBSEQ seq start [end]) new): replace seq[start:end] with elements of
+;; NEW, copying the shorter of the subsequence length and (length NEW) (CLHS).
+(defun %set-subseq (sequence start end new)
+  (let* ((slen (length sequence))
+         (stop (min (or end slen) slen))
+         (n    (min (- stop start) (length new))))
+    (dotimes (i n new)
+      (setf (elt sequence (+ start i)) (elt new i)))))
+
+(sethash 'subseq *setf-expanders*
+  (lambda (sequence start &rest end-and-val)
+    (let ((val (car (last end-and-val)))
+          (end (if (cdr end-and-val) (car end-and-val) nil)))
+      `(%set-subseq ,sequence ,start ,end ,val))))
+
 ;; -------------------------------------------------------------------- ;;
 ;;  Concatenation — list result-type only for now.                       ;;
 ;; -------------------------------------------------------------------- ;;
@@ -701,7 +857,7 @@
          (cond ((null seq))
                ((consp seq)
                 (dolist (x seq) (push x acc)))
-               ((or (stringp seq) (vectorp seq) (bit-vector-p seq))
+               ((or (stringp seq) (vectorp seq) (bit-vector-p seq) (%md-array-p seq))
                 (dotimes (i (length seq))
                   (push (elt seq i) acc)))
                (t (error "CONCATENATE: not a sequence"))))
@@ -768,24 +924,82 @@
 ;;  Set operations (on lists).                                           ;;
 ;; -------------------------------------------------------------------- ;;
 
-(defun adjoin (item list &key (test #'eql) (key #'identity))
-  (if (find item list :test test :key key) list (cons item list)))
+(defun adjoin (item list &key (test #'eql) test-not (key #'identity))
+  ;; Per CLHS, the KEY is applied to ITEM as well as to each list element when
+  ;; testing membership.  Self-contained so it needs neither FIND's :TEST-NOT
+  ;; support nor a non-NIL KEY.
+  (let* ((kfn (or key #'identity))
+         (ki  (funcall kfn item)))
+    (if (do ((l list (cdr l)))
+            ((null l) nil)
+          (let ((ke (funcall kfn (car l))))
+            (when (if test-not
+                      (not (funcall test-not ki ke))
+                      (funcall test ki ke))
+              (return t))))
+        list
+        (cons item list))))
+
+(defun %std-hash-test (test)
+  "The HASH-TABLE test name (EQ/EQL/EQUAL/EQUALP) equivalent to the standard test
+function TEST, or NIL if TEST is not one of those — so a set operation can use an
+O(n+m) hash table instead of an O(n*m) MEMBER scan."
+  (cond ((eq test #'eq)     'eq)
+        ((eq test #'eql)    'eql)
+        ((eq test #'equal)  'equal)
+        ((eq test #'equalp) 'equalp)
+        (t nil)))
+
+(defun %set-op-hash (list test key)
+  "A hash table (under TEST's hashable equivalent) of (KEY x) for x in LIST, or
+NIL when TEST has no hashable equivalent."
+  (let ((ht-test (%std-hash-test test)))
+    (when ht-test
+      (let ((h (make-hash-table :test ht-test)))
+        (dolist (x list h) (setf (gethash (funcall key x) h) t))))))
 
 (defun union (list1 list2 &key (test #'eql) (key #'identity))
-  ;; Result contains every element of list2, plus every element of list1
-  ;; not already in list2 (by key + test).
-  (let ((acc (copy-list list2)))
-    (dolist (x list1 acc)
-      (unless (find (funcall key x) acc :test test :key key)
-        (setq acc (cons x acc))))))
+  ;; Result contains every element of list2, plus every element of list1 not
+  ;; already present (by key + test).
+  (let ((h (%set-op-hash list2 test key)))
+    (if h
+        (let ((acc (reverse list2)))
+          (dolist (x list1 (nreverse acc))
+            (let ((k (funcall key x)))
+              (unless (gethash k h) (setf (gethash k h) t) (push x acc)))))
+        (let ((acc (copy-list list2)))
+          (dolist (x list1 acc)
+            (unless (find (funcall key x) acc :test test :key key)
+              (setq acc (cons x acc))))))))
 
 (defun intersection (list1 list2 &key (test #'eql) (key #'identity))
-  (remove-if (lambda (x) (not (find (funcall key x) list2 :test test :key key)))
-             list1))
+  (let ((h (%set-op-hash list2 test key)))
+    (if h
+        (let ((acc nil))
+          (dolist (x list1 (nreverse acc))
+            (when (gethash (funcall key x) h) (push x acc))))
+        (remove-if (lambda (x) (not (find (funcall key x) list2 :test test :key key)))
+                   list1))))
 
-(defun set-difference (list1 list2 &key (test #'eql) (key #'identity))
-  (remove-if (lambda (x) (find (funcall key x) list2 :test test :key key))
-             list1))
+(defun set-difference (list1 list2 &key (test #'eql) test-not (key #'identity))
+  (let ((h (and (null test-not) (%set-op-hash list2 test key))))
+    (if h
+        (let ((acc nil))
+          (dolist (x list1 (nreverse acc))
+            (unless (gethash (funcall key x) h) (push x acc))))
+        (let ((tf (%xtest test test-not)) (acc nil))
+          (dolist (x list1 (nreverse acc))
+            (unless (member (funcall key x) list2 :test tf :key key) (push x acc)))))))
+
+(defun subsetp (list1 list2 &key (test #'eql) (key #'identity))
+  "True if every element of LIST1 appears (under TEST/KEY) in LIST2."
+  (let ((h (%set-op-hash list2 test key)))
+    (if h
+        (dolist (x list1 t)
+          (unless (gethash (funcall key x) h) (return nil)))
+        (dolist (x list1 t)
+          (unless (find (funcall key x) list2 :test test :key key)
+            (return nil))))))
 
 (defun pairlis (keys values &optional (alist nil))
   ;; (PAIRLIS '(a b c) '(1 2 3)) -> ((C . 3) (B . 2) (A . 1))
@@ -913,8 +1127,9 @@
 ;;  Tree operations (slice 12).                                          ;;
 ;; -------------------------------------------------------------------- ;;
 
-(defun subst (new old tree &key (test #'eql) (key #'identity))
+(defun subst (new old tree &key (test #'eql) test-not (key #'identity))
   "Copy TREE substituting NEW for every subtree EQL to OLD."
+  (setq test (%xtest test test-not))
   (cond ((funcall test old (funcall key tree)) new)
         ((atom tree) tree)
         (t (let ((new-car (subst new old (car tree) :test test :key key))
@@ -937,8 +1152,90 @@
   "Copy TREE substituting NEW for every subtree NOT satisfying PREDICATE."
   (subst-if new (lambda (x) (not (funcall predicate x))) tree :key key))
 
-(defun tree-equal (tree1 tree2 &key (test #'eql))
+;; Destructive substitution: like SUBST/SUBST-IF/... but modify TREE in place
+;; (RPLACA/RPLACD) and return the same object when the top isn't replaced.
+(defun nsubst (new old tree &key (test #'eql) test-not (key #'identity))
+  "Like SUBST but destructive."
+  (setq test (%xtest test test-not))
+  (cond ((funcall test old (funcall key tree)) new)
+        ((atom tree) tree)
+        (t (rplaca tree (nsubst new old (car tree) :test test :key key))
+           (rplacd tree (nsubst new old (cdr tree) :test test :key key))
+           tree)))
+
+(defun nsubst-if (new predicate tree &key (key #'identity))
+  "Like SUBST-IF but destructive."
+  (cond ((funcall predicate (funcall key tree)) new)
+        ((atom tree) tree)
+        (t (rplaca tree (nsubst-if new predicate (car tree) :key key))
+           (rplacd tree (nsubst-if new predicate (cdr tree) :key key))
+           tree)))
+
+(defun nsubst-if-not (new predicate tree &key (key #'identity))
+  "Like SUBST-IF-NOT but destructive."
+  (nsubst-if new (lambda (x) (not (funcall predicate x))) tree :key key))
+
+(defun sublis (alist tree &key (test #'eql) test-not (key #'identity))
+  "Copy TREE substituting, for every subtree found as a key (under TEST/KEY) in
+ALIST, the corresponding value.  Subtrees with no substitution keep their
+identity."
+  (setq test (%xtest test test-not))
+  (let ((pair (assoc (funcall key tree) alist :test test)))
+    (cond (pair (cdr pair))
+          ((atom tree) tree)
+          (t (let ((new-car (sublis alist (car tree) :test test :key key))
+                   (new-cdr (sublis alist (cdr tree) :test test :key key)))
+               (if (and (eq new-car (car tree)) (eq new-cdr (cdr tree)))
+                   tree
+                   (cons new-car new-cdr)))))))
+
+(defun nsublis (alist tree &key (test #'eql) test-not (key #'identity))
+  "Like SUBLIS but destructive."
+  (setq test (%xtest test test-not))
+  (let ((pair (assoc (funcall key tree) alist :test test)))
+    (cond (pair (cdr pair))
+          ((atom tree) tree)
+          (t (rplaca tree (nsublis alist (car tree) :test test :key key))
+             (rplacd tree (nsublis alist (cdr tree) :test test :key key))
+             tree))))
+
+(defun revappend (list tail)
+  "(append (reverse LIST) TAIL); LIST is not modified, TAIL is shared."
+  (nconc (reverse list) tail))
+
+(defun nreconc (list tail)
+  "(nconc (nreverse LIST) TAIL) — destructive REVAPPEND."
+  (nconc (nreverse list) tail))
+
+;; (SETF (GETF place indicator) value): update the indicator's value in the plist
+;; held by PLACE, extending it (and updating PLACE) if the indicator is absent.
+(defun %put-getf (plist indicator value)
+  (labels ((scan (tail)
+             (cond ((null tail) (list* indicator value plist))
+                   ((eq (car tail) indicator) (setf (cadr tail) value) plist)
+                   (t (scan (cddr tail))))))
+    (scan plist)))
+
+;; (SETF (GETF place indicator [default]) value) — DEFAULT is accepted (CL allows
+;; it in the place) and ignored.  Registered directly because the value is the
+;; LAST argument and an optional default sits between indicator and value.
+(sethash 'getf *setf-expanders*
+  (lambda (place indicator &rest default-and-val)
+    (let ((val (car (last default-and-val))))
+      `(setf ,place (%put-getf ,place ,indicator ,val)))))
+
+(defun last (list &optional (n 1))
+  "Return the last N cons cells of LIST (default 1).  Works on dotted lists."
+  (let ((lead list))
+    (dotimes (i n) (when (consp lead) (setq lead (cdr lead))))
+    (let ((trail list))
+      (loop (if (consp lead)
+                (setq lead (cdr lead) trail (cdr trail))
+                (return trail))))))
+
+(defun tree-equal (tree1 tree2 &key (test #'eql) test-not)
   "T if TREE1 and TREE2 have the same shape and leaves (by TEST)."
+  (setq test (%xtest test test-not))
   (cond ((and (atom tree1) (atom tree2))
          (funcall test tree1 tree2))
         ((or  (atom tree1) (atom tree2)) nil)
@@ -952,6 +1249,25 @@
 (defun get (symbol indicator &optional default)
   "Return the value for INDICATOR on SYMBOL's property list, or DEFAULT."
   (getf (symbol-plist symbol) indicator default))
+
+;; REMF must be a place-modifying macro: removing the first pair (or the sole
+;; pair, leaving NIL) requires updating PLACE — which the kernel REMF function
+;; cannot do.  %REMF returns (new-plist . removed-p); the macro stores the new
+;; plist back into PLACE and yields the boolean.
+(defun %remf (plist indicator)
+  (cond ((null plist) (cons nil nil))
+        ((eql (car plist) indicator) (cons (cddr plist) t))
+        (t (do ((prev plist (cddr prev)))
+               ((null (cddr prev)) (cons plist nil))
+             (when (eql (caddr prev) indicator)
+               (rplacd (cdr prev) (cddddr prev))
+               (return (cons plist t)))))))
+
+(defmacro remf (place indicator)
+  (let ((g (gensym "REMF-")))
+    `(let ((,g (%remf ,place ,indicator)))
+       (setf ,place (car ,g))
+       (cdr ,g))))
 
 (defun remprop (symbol indicator)
   "Remove INDICATOR and its value from SYMBOL's property list.
@@ -977,8 +1293,17 @@
 
 ;; (SETF (GET sym ind) val) — bocl simple-expander style.
 ;; Note: kernel SET-SYMBOL-PLIST arg order is (new-plist symbol).
-(define-setf-expander get (symbol indicator) (val)
-  `(set-symbol-plist (putf (symbol-plist ,symbol) ,indicator ,val) ,symbol))
+(define-setf-expander get (symbol indicator &rest more) ()
+  ;; (setf (get sym ind [default]) val).  MORE is (val) or (default val): CLHS
+  ;; says the optional DEFAULT place argument is still evaluated (for effect) but
+  ;; otherwise ignored by the store.  Value is always the last subform.
+  (let* ((has-default (cdr more))
+         (value       (if has-default (cadr more) (car more)))
+         (default     (if has-default (car more))))
+    (if has-default
+        `(progn ,default
+                (set-symbol-plist (putf (symbol-plist ,symbol) ,indicator ,value) ,symbol))
+        `(set-symbol-plist (putf (symbol-plist ,symbol) ,indicator ,value) ,symbol))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  String / character library (slice 5).                                ;;
@@ -1019,7 +1344,9 @@
     (if (and v (< v radix)) v nil)))
 
 (defun alphanumericp (char)
-  (or (alpha-char-p char) (digit-char-p char)))
+  ;; Canonical boolean: DIGIT-CHAR-P returns the digit's weight, which must not
+  ;; leak out (e.g. as a REMOVE-DUPLICATES :key value).
+  (if (or (alpha-char-p char) (digit-char-p char)) t nil))
 
 (defun digit-char (weight &optional (radix 10))
   ;; Return the character representing WEIGHT in RADIX, or NIL if impossible.
@@ -1064,7 +1391,18 @@
 (defun string (designator)
   ;; CL: (string x) returns a string. If x is already a string, it's
   ;; returned as-is; symbol -> its name; character -> a 1-char string.
-  (cond ((stringp designator) designator)
+  (cond ((and (stringp designator) (%fill-pointer-of designator))
+         ;; Char array with a fill pointer: its string value is the active
+         ;; prefix only, so string functions see the correct length.
+         (subseq designator 0 (%fill-pointer-of designator)))
+        ((stringp designator) designator)
+        ;; A character %md-array (an adjustable or displaced string): build a
+        ;; fresh simple string from its active elements in row-major order.
+        ((and (%md-array-p designator)
+              (eq (%md-array-element-type designator) 'character))
+         (let* ((n (or (%fill-pointer-of designator) (array-total-size designator)))
+                (s (make-string n)))
+           (dotimes (i n s) (char-set s i (row-major-aref designator i)))))
         ((symbolp designator) (symbol-name designator))
         ((characterp designator)
          (let ((s (make-string 1)))
@@ -1266,6 +1604,24 @@
 ;;
 ;; CL packages (size, position) into a single byte-specifier object.
 ;; We represent it as a cons (size . position) — opaque to user code.
+
+;; The kernel LOGAND/LOGIOR/LOGXOR take exactly two arguments; CL makes them
+;; variadic (with identities -1 / 0 / 0).  Wrap them to fold pairwise.
+(defvar *%logand2* (symbol-function 'logand))
+(defvar *%logior2* (symbol-function 'logior))
+(defvar *%logxor2* (symbol-function 'logxor))
+(defun logand (&rest integers)
+  (if (null integers) -1
+      (let ((acc (car integers)))
+        (dolist (x (cdr integers) acc) (setq acc (funcall *%logand2* acc x))))))
+(defun logior (&rest integers)
+  (if (null integers) 0
+      (let ((acc (car integers)))
+        (dolist (x (cdr integers) acc) (setq acc (funcall *%logior2* acc x))))))
+(defun logxor (&rest integers)
+  (if (null integers) 0
+      (let ((acc (car integers)))
+        (dolist (x (cdr integers) acc) (setq acc (funcall *%logxor2* acc x))))))
 
 (defun byte (size position) (cons size position))
 (defun byte-size     (b) (car b))
@@ -1644,6 +2000,9 @@
 (defvar *read-base*                 10)
 (defvar *read-default-float-format* 'single-float)
 (defvar *read-eval*                 t)
+;; *QUERY-IO* — the bidirectional stream for interactive queries (Y-OR-N-P etc.);
+;; default it to the terminal, like the other interaction streams.
+(defvar *query-io* *terminal-io*)
 (defvar *read-suppress*             nil)
 
 ;; ---- WRITE — full CL printer entry point (simplified) ------------------
@@ -1654,7 +2013,6 @@
 (defun write (object &key (stream    *standard-output*)
                           (escape    *print-escape*)
                           (readably  *print-readably*)
-                          ;; honoured in future; accepted now so callers compile
                           (radix     *print-radix*)
                           (base      *print-base*)
                           (circle    *print-circle*)
@@ -1664,10 +2022,18 @@
                           (case      *print-case*)
                           (gensym    *print-gensym*)
                           (array     *print-array*))
-  ;; radix/base/circle/pretty/level/length/case/gensym/array not yet wired up
-  (if (or readably escape)
-      (prin1 object stream)
-      (princ object stream))
+  ;; Bind the *PRINT-…* variables to the keyword arguments for the dynamic extent
+  ;; of the output, so the (C) printer honours them — :CIRCLE / :LENGTH / :LEVEL
+  ;; etc. now take effect (the printer reads the specials).
+  (let ((*print-escape*   escape)   (*print-readably* readably)
+        (*print-radix*    radix)    (*print-base*     base)
+        (*print-circle*   circle)   (*print-pretty*   pretty)
+        (*print-level*    level)    (*print-length*   length)
+        (*print-case*     case)     (*print-gensym*   gensym)
+        (*print-array*    array))
+    (if (or readably escape)
+        (prin1 object stream)
+        (princ object stream)))
   object)
 
 ;; ---- PPRINT — pretty-print (simplified: prin1 + terpri) ----------------
@@ -1693,6 +2059,42 @@
 (defun write-to-string (object &rest keys)
   (with-output-to-string (s)
     (apply #'write object :stream s keys)))
+
+;; SETF expanders for every cXr accessor (cAR/cDR access paths of length 2-4):
+;; (setf (c<L><rest>r cell) v) == (rpla<L> (c<rest>r cell) v).  All 28 written as
+;; explicit top-level SETHASH forms (the proven pattern, cf. the GETF expander
+;; above) — string-capable CONCATENATE is defined later in the prelude, so a
+;; name-generating loop cannot run here.  Each closure rewrites the place into a
+;; destructive RPLACA/RPLACD on the appropriate inner accessor.
+(sethash 'caar   *setf-expanders* (lambda (c v) (list 'rplaca (list 'car   c) v)))
+(sethash 'cadr   *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdr   c) v)))
+(sethash 'cdar   *setf-expanders* (lambda (c v) (list 'rplacd (list 'car   c) v)))
+(sethash 'cddr   *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdr   c) v)))
+(sethash 'caaar  *setf-expanders* (lambda (c v) (list 'rplaca (list 'caar  c) v)))
+(sethash 'caadr  *setf-expanders* (lambda (c v) (list 'rplaca (list 'cadr  c) v)))
+(sethash 'cadar  *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdar  c) v)))
+(sethash 'caddr  *setf-expanders* (lambda (c v) (list 'rplaca (list 'cddr  c) v)))
+(sethash 'cdaar  *setf-expanders* (lambda (c v) (list 'rplacd (list 'caar  c) v)))
+(sethash 'cdadr  *setf-expanders* (lambda (c v) (list 'rplacd (list 'cadr  c) v)))
+(sethash 'cddar  *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdar  c) v)))
+(sethash 'cdddr  *setf-expanders* (lambda (c v) (list 'rplacd (list 'cddr  c) v)))
+(sethash 'caaaar *setf-expanders* (lambda (c v) (list 'rplaca (list 'caaar c) v)))
+(sethash 'caaadr *setf-expanders* (lambda (c v) (list 'rplaca (list 'caadr c) v)))
+(sethash 'caadar *setf-expanders* (lambda (c v) (list 'rplaca (list 'cadar c) v)))
+(sethash 'caaddr *setf-expanders* (lambda (c v) (list 'rplaca (list 'caddr c) v)))
+(sethash 'cadaar *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdaar c) v)))
+(sethash 'cadadr *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdadr c) v)))
+(sethash 'caddar *setf-expanders* (lambda (c v) (list 'rplaca (list 'cddar c) v)))
+(sethash 'cadddr *setf-expanders* (lambda (c v) (list 'rplaca (list 'cdddr c) v)))
+(sethash 'cdaaar *setf-expanders* (lambda (c v) (list 'rplacd (list 'caaar c) v)))
+(sethash 'cdaadr *setf-expanders* (lambda (c v) (list 'rplacd (list 'caadr c) v)))
+(sethash 'cdadar *setf-expanders* (lambda (c v) (list 'rplacd (list 'cadar c) v)))
+(sethash 'cdaddr *setf-expanders* (lambda (c v) (list 'rplacd (list 'caddr c) v)))
+(sethash 'cddaar *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdaar c) v)))
+(sethash 'cddadr *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdadr c) v)))
+(sethash 'cdddar *setf-expanders* (lambda (c v) (list 'rplacd (list 'cddar c) v)))
+(sethash 'cddddr *setf-expanders* (lambda (c v) (list 'rplacd (list 'cdddr c) v)))
+
 
 ;;;; -----------------------------------------------------------------------
 ;;;; Slice 14 — MAKE-ARRAY, RANDOM, file-system ops, timing, FILL/REPLACE
@@ -1737,16 +2139,32 @@
 ;; ---- REPLACE ------------------------------------------------------------
 ;; (replace seq1 seq2 &key start1 end1 start2 end2) → seq1
 
+;; The kernel NREVERSE is list-only (returns NIL on a vector/string).  Make it
+;; generic: lists go to the kernel; vectors/strings/bit-vectors are reversed in
+;; place by swapping ends.
+(defvar *%kernel-nreverse* (symbol-function 'nreverse))
+(defun nreverse (sequence)
+  (if (listp sequence)
+      (funcall *%kernel-nreverse* sequence)
+      (let ((len (length sequence)))
+        (dotimes (i (truncate len 2) sequence)
+          (let ((tmp (elt sequence i)) (j (- len 1 i)))
+            (setf (elt sequence i) (elt sequence j))
+            (setf (elt sequence j) tmp))))))
+
 (defun replace (sequence1 sequence2
                 &key (start1 0) end1 (start2 0) end2)
+  "Destructively replace SEQUENCE1[START1,END1) with SEQUENCE2[START2,END2),
+copying min of the two lengths.  Snapshot the source first so an overlapping
+self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
   (let* ((len1  (length sequence1))
          (len2  (length sequence2))
          (stop1 (min (or end1 len1) len1))
          (stop2 (min (or end2 len2) len2))
-         (n     (min (- stop1 start1) (- stop2 start2))))
-    (dotimes (i n sequence1)
-      (setf (elt sequence1 (+ start1 i))
-            (elt sequence2 (+ start2 i))))))
+         (n     (max 0 (min (- stop1 start1) (- stop2 start2))))
+         (tmp   (make-array n)))
+    (dotimes (i n) (setf (aref tmp i) (elt sequence2 (+ start2 i))))
+    (dotimes (i n sequence1) (setf (elt sequence1 (+ start1 i)) (aref tmp i)))))
 
 ;; ---- MISMATCH -----------------------------------------------------------
 ;; (mismatch seq1 seq2 &key test start1 end1 start2 end2) → index or nil
@@ -1776,21 +2194,41 @@
 ;; result-types.  Store the old binding in a global to work around bocl's
 ;; lack of closure capture over LET bindings.
 (defvar *%old-concatenate* (symbol-function 'concatenate))
+;; Map a sequence type-specifier (atom OR compound like (VECTOR T 3),
+;; (STRING 5), (ARRAY CHARACTER (3))) to a base kind.  MAKE-SEQUENCE, MAP,
+;; CONCATENATE and COERCE all dispatch on this so they accept the full range of
+;; sequence type specifiers, not just the bare symbols.
+(defun %seq-type-kind (type)
+  "Base kind of a sequence type-spec, or NIL if TYPE is not a sequence type."
+  (let ((head (if (consp type) (car type) type))
+        (elt  (and (consp type) (cdr type) (cadr type))))
+    (cond ((member head '(list cons null)) :list)
+          ((member head '(string simple-string base-string simple-base-string)) :string)
+          ((member head '(bit-vector simple-bit-vector)) :bit-vector)
+          ((member head '(vector simple-vector array simple-array sequence))
+           (cond ((member elt '(character base-char standard-char)) :string)
+                 ((eq elt 'bit) :bit-vector)
+                 (t :vector)))
+          (t nil))))   ; not a sequence type (e.g. SYMBOL, HASH-TABLE) -> caller errors
+
 (defun concatenate (result-type &rest sequences)
-  (cond
-    ((member result-type '(vector simple-vector))
-     (let* ((all (apply *%old-concatenate* 'list sequences))
-            (v   (make-array (length all))))
-       (dotimes (i (length all) v)
-         (setf (aref v i) (elt all i)))))
-    ((member result-type '(string cl:string simple-string))
-     ;; Flatten all sequences to a list of characters, then build a string.
-     (let* ((all (apply *%old-concatenate* 'list sequences))
-            (len (length all))
-            (s   (make-string len)))
-       (dotimes (i len s)
-         (char-set s i (nth i all)))))
-    (t (apply *%old-concatenate* result-type sequences))))
+  (let ((kind (%seq-type-kind result-type)))
+    (cond
+      ((eq kind :string)
+       (let* ((all (apply *%old-concatenate* 'list sequences))
+              (len (length all)) (s (make-string len)))
+         (dotimes (i len s) (char-set s i (nth i all)))))
+      ((eq kind :bit-vector)
+       (let* ((all (apply *%old-concatenate* 'list sequences))
+              (len (length all)) (v (make-bit-vector len 0)))
+         (dotimes (i len v) (bit-set v i (nth i all)))))
+      ((eq kind :list)
+       (apply *%old-concatenate* 'list sequences))
+      ((eq kind :vector)
+       (let* ((all (apply *%old-concatenate* 'list sequences))
+              (v   (make-array (length all))))
+         (dotimes (i (length all) v) (setf (aref v i) (elt all i)))))
+      (t (error 'type-error :datum result-type :expected-type 'sequence)))))
 
 ;; ---- POSITION-IF / FIND-IF with :from-end (additional keyword) ---------
 ;; The prelude versions above don't support :from-end; don't need to yet.
@@ -1836,6 +2274,10 @@
 (defun read (&optional (stream *standard-input*)
                        (eof-error-p t) eof-value recursive-p)
   (kernel-read stream eof-error-p eof-value recursive-p))
+
+(defun read-preserving-whitespace (&optional (stream *standard-input*)
+                                             (eof-error-p t) eof-value recursive-p)
+  (kernel-read-preserving-whitespace stream eof-error-p eof-value recursive-p))
 
 (defun read-char (&optional (stream *standard-input*)
                              (eof-error-p t) eof-value recursive-p)
@@ -1982,9 +2424,12 @@
   ;; Kinds ending in -body are handled inline in the loop body (via WHEN/UNLESS);
   ;; returning nil here suppresses double-generation.
   (case kind
+    ;; List accumulation builds REVERSED (cons / revappend / nreconc) so that
+    ;; collect/append/nconc can share one variable; collect-reverses flips it
+    ;; once at loop end.
     (:collect  `(setq ,var (cons ,expr ,var)))
-    (:append   `(setq ,var (append ,var ,expr)))
-    (:nconc    `(setq ,var (nconc ,var ,expr)))
+    (:append   `(setq ,var (revappend ,expr ,var)))
+    (:nconc    `(setq ,var (nreconc ,expr ,var)))
     (:sum      `(incf ,var ,expr))
     (:count    `(when ,expr (incf ,var)))
     (:maximize `(let ((%v ,expr)) (when (or (null ,var) (> %v ,var)) (setq ,var %v))))
@@ -1993,6 +2438,76 @@
     ((:collect-body :append-body :nconc-body :sum-body :count-body
       :maximize-body :minimize-body)
      nil)))
+
+(defun %loop-accum-body-kind (kind)
+  "Map an accumulation KIND to its -body marker (whose per-iteration update lives
+inline in the loop body, so accum-forms skips it but binding/result still apply)."
+  (case kind
+    (:collect  :collect-body)  (:append :append-body)  (:nconc :nconc-body)
+    (:sum      :sum-body)      (:count  :count-body)
+    (:maximize :maximize-body) (:minimize :minimize-body)
+    (t kind)))
+
+(defun %loop-pattern-vars (pattern)
+  "Symbol leaves of a LOOP destructuring pattern, in order (NIL = ignore)."
+  (cond ((null pattern)    nil)
+        ((symbolp pattern) (list pattern))
+        ((consp pattern)   (append (%loop-pattern-vars (car pattern))
+                                   (%loop-pattern-vars (cdr pattern))))
+        (t                 nil)))
+
+(defun %loop-numeric-type-p (type)
+  "True if TYPE (a LOOP OF-TYPE spec) names a numeric type — so an uninitialised
+variable of that type defaults to 0 rather than NIL (CLHS 6.1.1.7)."
+  (let ((head (if (consp type) (car type) type)))
+    (and (symbolp head)
+         (member head '(number real rational integer fixnum bignum bit
+                        float single-float double-float short-float long-float
+                        ratio signed-byte unsigned-byte mod)))))
+
+(defun %loop-typed-default (type)
+  "Initial value for an uninitialised LOOP variable declared OF-TYPE TYPE:
+0.0 for a float type, 0 for another numeric type, NIL otherwise (CLHS 6.1.1.7)."
+  (let ((head (if (consp type) (car type) type)))
+    (cond ((member head '(float single-float double-float short-float long-float)) 0.0)
+          ((%loop-numeric-type-p type) 0)
+          (t nil))))
+
+(defun %loop-destr-form (pattern access)
+  "List of (SETQ var <car/cdr access>) forms binding PATTERN's leaves from the
+value reached by ACCESS (a form).  NIL leaves are skipped; a dotted/atom tail
+binds the remaining CDR."
+  (cond ((null pattern)    nil)
+        ((symbolp pattern) (list (list 'setq pattern access)))
+        ((consp pattern)   (append (%loop-destr-form (car pattern) (list 'car access))
+                                   (%loop-destr-form (cdr pattern) (list 'cdr access))))
+        (t                 nil)))
+
+(defun %loop-parallel-steps (forms)
+  "Fuse a FOR/AND group's step forms (each (SETQ v e) / (INCF v d) / (DECF v d))
+into one form that evaluates every new value with the iteration's CURRENT
+bindings, then assigns — so AND-joined steppers see each other's old values
+(CLHS 6.1.2.2).  0 or 1 form needs no temporaries; anything not a simple
+SETQ/INCF/DECF is left in place (sequential)."
+  (cond ((null forms) nil)
+        ((null (cdr forms)) (car forms))
+        (t (let ((tmps nil) (assigns nil))
+             (dolist (f forms)
+               (let ((op (and (consp f) (car f))))
+                 (cond ((eq op 'setq)
+                        (let ((g (gensym "PS-")))
+                          (push (list g (third f)) tmps)
+                          (push (list 'setq (second f) g) assigns)))
+                       ((eq op 'incf)
+                        (let ((g (gensym "PS-")))
+                          (push (list g (list '+ (second f) (or (third f) 1))) tmps)
+                          (push (list 'setq (second f) g) assigns)))
+                       ((eq op 'decf)
+                        (let ((g (gensym "PS-")))
+                          (push (list g (list '- (second f) (or (third f) 1))) tmps)
+                          (push (list 'setq (second f) g) assigns)))
+                       (t (push f assigns)))))
+             (cons 'let (cons (nreverse tmps) (nreverse assigns)))))))
 
 (defun %loop-expand (all-clauses)
   (let ((rest     all-clauses)
@@ -2005,13 +2520,19 @@
         (initially nil)
         (finally   nil)
         (accums    nil)   ; (kind result-var expr) — first in = last pushed; nreverse
+        (into-vars nil)   ; accumulation vars named by INTO — never the loop result
+        (anon-list nil)   ; shared var for anonymous collect/append/nconc
+        (anon-sum  nil)   ; shared var for anonymous sum/count
+        (anon-max  nil)   ; shared var for anonymous maximize
+        (anon-min  nil)   ; shared var for anonymous minimize
         (always-f  nil)
         (always-set nil) ; T if an ALWAYS clause was seen (always-f may be NIL)
         (never-f   nil)
         (never-set  nil) ; T if a NEVER clause was seen (never-f may be NIL)
         (thereis-f nil)
         (return-f  nil)
-        (return-set nil))
+        (return-set nil)
+        (end-tag   (gensym "END-")))  ; created here so WHILE/UNTIL can target it
     (flet ((pk  ()     (car rest))
            (pop! ()    (prog1 (car rest) (setq rest (cdr rest))))
            (try! (nm)  (when (%lkw (car rest) nm) (pop!) t))
@@ -2019,45 +2540,151 @@
              (let ((acc nil))
                (do () ((or (null rest) (%loop-kw-p (pk))))
                  (push (pop!) acc))
-               (nreverse acc))))
+               (nreverse acc)))
+           (skip-type-spec ()
+             ;; Consume an optional LOOP type specifier after a variable: either
+             ;; "OF-TYPE <type>" or a bare type spec (FIXNUM, FLOAT, T, a cons
+             ;; like (INTEGER 0 9)).  bocl ignores the declaration.  Stop before
+             ;; the keywords that legitimately follow the variable.
+             (when (%lkw (pk) "OF-TYPE") (pop!) (pop!))
+             (when (and rest
+                        (not (%lkw (pk) "IN" "ON" "ACROSS" "FROM" "UPFROM"
+                                     "DOWNFROM" "BEING" "=" "TO" "UPTO" "BELOW"
+                                     "DOWNTO" "ABOVE" "BY" "THEN" "AND"))
+                        (not (%loop-kw-p (pk))))
+               (pop!)))
+           (add-accum (kind var e)
+             ;; Emit the per-iteration accumulation update in the loop BODY at
+             ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
+             ;; CLHS 6.1.1.4), and register the result variable (as its -body
+             ;; kind) for binding + the final result form — but only ONCE per var,
+             ;; so several clauses sharing a var (anonymous or same INTO) bind and
+             ;; reverse it a single time.
+             (setq body (append body (list (%loop-accum-step kind var e))))
+             (unless (dolist (a accums nil) (when (eq (second a) var) (return t)))
+               (push (list (%loop-accum-body-kind kind) var e) accums)))
+           (anon-var (kind)
+             ;; The shared accumulation variable for an anonymous clause of KIND's
+             ;; category, created on first use: like-typed anonymous accumulations
+             ;; all merge into one place (CLHS 6.1.3).
+             (cond ((member kind '(:collect :append :nconc))
+                    (or anon-list (setq anon-list (gensym "ACC-L-"))))
+                   ((member kind '(:sum :count))
+                    (or anon-sum (setq anon-sum (gensym "ACC-N-"))))
+                   ((eq kind :maximize)
+                    (or anon-max (setq anon-max (gensym "ACC-MX-"))))
+                   ((eq kind :minimize)
+                    (or anon-min (setq anon-min (gensym "ACC-MN-")))))))
       (do () ((null rest))
         (let ((kw (pop!)))
           (cond
             ;; NAMED
             ((%lkw kw "NAMED")
              (setq name (pop!)))
-            ;; WITH var [= init] [AND ...]
+            ;; WITH var [OF-TYPE type] [= init] [AND var ...]
+            ;; VAR may be a destructuring pattern.  Variables joined by AND are
+            ;; bound in PARALLEL (CLHS 6.1.2.2): every init is evaluated in the
+            ;; outer scope (into a temp) BEFORE any of the group's variables is
+            ;; bound, so `with a = 1 and b = (+ a 2)` sees the outer A, not 1.
             ((%lkw kw "WITH")
-             (let ((v (pop!)))
-               (try! "=")
-               (push (list v (if (and rest (not (%loop-kw-p (pk))))
-                                 (pop!) nil))
-                     letb))
-             (do () ((not (try! "AND")))
-               (let ((v (pop!)))
-                 (try! "=")
-                 (push (list v (if (and rest (not (%loop-kw-p (pk))))
-                                   (pop!) nil))
-                       letb))))
+             (let ((pairs nil))
+               (flet ((grab-type ()
+                        ;; OF-TYPE <type>, or a bare type spec; NIL if neither.
+                        (cond ((%lkw (pk) "OF-TYPE") (pop!) (pop!))
+                              ((and rest (not (%lkw (pk) "=")) (not (%loop-kw-p (pk))))
+                               (pop!))
+                              (t nil)))
+                      (one ()
+                        (let* ((v    (pop!))
+                               (type (grab-type))
+                               (eq?  (try! "="))
+                               (init (if (and eq? rest (not (%loop-kw-p (pk))))
+                                         (pop!) nil)))
+                          (push (list v init eq? type) pairs))))   ; (var init had-init type)
+                 (one)
+                 (do () ((not (try! "AND"))) (one)))
+               (let ((temps (mapcar (lambda (p) (cons (gensym "WITH-") p))
+                                    (nreverse pairs))))
+                 ;; All inits first (evaluated in the outer scope -> parallel) ...
+                 (dolist (tp temps)
+                   (when (fourth tp) (push (list (first tp) (third tp)) letb)))
+                 ;; ... then bind each variable / pattern.
+                 (dolist (tp temps)
+                   (let ((g (first tp)) (v (second tp))
+                         (eq? (fourth tp)) (type (fifth tp)))
+                     (cond
+                       ;; initialised: bind from the temp (destructure if a pattern)
+                       (eq?
+                        (if (consp v)
+                            (dolist (b (%loop-destr-form v g))
+                              (push (list (second b) (third b)) letb))
+                            (push (list v g) letb)))
+                       ;; uninitialised pattern: each leaf takes its type's default
+                       ;; (a per-leaf type list mirrors the pattern; a lone type
+                       ;; applies to every leaf).
+                       ((consp v)
+                        (let ((i 0))
+                          (dolist (leaf (%loop-pattern-vars v))
+                            (push (list leaf (%loop-typed-default
+                                              (if (consp type) (nth i type) type)))
+                                  letb)
+                            (setq i (+ i 1)))))
+                       ;; uninitialised single variable
+                       (t (push (list v (%loop-typed-default type)) letb))))))))
             ;; FOR / AS
             ((%lkw kw "FOR" "AS")
-             (let ((v (pop!)))
+             ;; A FOR clause may bind several variables joined by AND; they step
+             ;; in PARALLEL (CLHS 6.1.2.2) — each AND-clause's stepper sees the
+             ;; others' values from the start of the iteration.  Process each
+             ;; variable, then (if AND was used) fuse this group's steps.
+             (let ((%old-steps steps) (%old-letb letb) (%nvars 0))
+              (flet ((%one-for ()
+               (setq %nvars (+ %nvars 1))
+               (let* ((fvar  (pop!))
+                    ;; A cons FOR variable is a destructuring pattern: iterate a
+                    ;; hidden gensym and destructure it into the pattern's leaves
+                    ;; each iteration (after the sub-clause sets the gensym).
+                    (destr (consp fvar))
+                    (v     (if destr (gensym "DSTR-") fvar)))
+               (when destr
+                 ;; Bind the pattern's leaves, and make destructuring the first
+                 ;; body step each iteration — it runs after the sub-clause has
+                 ;; set the hidden gensym V (in setups) or stepped it, and before
+                 ;; the later DO/COLLECT clauses, which append after this point.
+                 (dolist (pv (%loop-pattern-vars fvar)) (push (list pv nil) letb))
+                 (setq body (append body
+                                    (list (cons 'progn (%loop-destr-form fvar v))))))
+               (skip-type-spec)   ; optional OF-TYPE / bare type spec (ignored)
                (cond
-                 ;; FOR v IN list
+                 ;; FOR v IN list [BY step-fn]
                  ((%lkw (pk) "IN")
                   (pop!)
-                  (let ((lv (gensym "LV-")))
+                  (let ((lv (gensym "LV-")) (bv nil))
                     (push (list lv (pop!)) letb)   ; lv bound first (LET* order)
+                    (when (%lkw (pk) "BY")         ; step-fn (e.g. #'cddr), eval'd once
+                      (pop!) (setq bv (gensym "BY-"))
+                      (push (list bv (pop!)) letb))
                     (push (list v  nil)    letb)
                     (push `(null ,lv)            tests)
                     (push `(setq ,v (car ,lv))   setups)
-                    (push `(setq ,lv (cdr ,lv))  steps)))
-                 ;; FOR v ON list
+                    (push (if bv `(setq ,lv (funcall ,bv ,lv))
+                                 `(setq ,lv (cdr ,lv))) steps)))
+                 ;; FOR v ON list [BY step-fn]
                  ((%lkw (pk) "ON")
                   (pop!)
-                  (push (list v (pop!)) letb)
-                  (push `(null ,v)      tests)
-                  (push `(setq ,v (cdr ,v)) steps))
+                  ;; Evaluate the list into an aux temp (an uninterned gensym), then
+                  ;; bind V to it, so a parallel AND-group keeps every init's
+                  ;; evaluation in source order (the temp sorts with the other
+                  ;; auxiliaries, V with the loop variables).
+                  (let ((bv nil) (og (gensym "ON-")))
+                    (push (list og (pop!)) letb)
+                    (push (list v og)      letb)
+                    (when (%lkw (pk) "BY")
+                      (pop!) (setq bv (gensym "BY-"))
+                      (push (list bv (pop!)) letb))
+                    (push `(atom ,v)      tests)   ; ON ends by ENDP/ATOM, not NULL
+                    (push (if bv `(setq ,v (funcall ,bv ,v))
+                                 `(setq ,v (cdr ,v))) steps)))
                  ;; FOR v ACROSS vector/string
                  ((%lkw (pk) "ACROSS")
                   (pop!)
@@ -2073,28 +2700,39 @@
                     (push `(setq ,v (elt ,sv ,iv))   setups)
                     (push `(incf ,iv)                steps)))
                  ;; FOR v FROM start [TO/BELOW/DOWNTO/ABOVE end] [BY step]
-                 ((%lkw (pk) "FROM" "UPFROM" "DOWNFROM")
-                  (let* ((dir   (pop!))
-                         (start (pop!))
-                         (downp (%lkw dir "DOWNFROM"))
-                         (end-f nil)
-                         (incl  t)
-                         (by-supplied nil)
-                         (step  (if downp -1 1)))
+                 ((%lkw (pk) "FROM" "UPFROM" "DOWNFROM"
+                              "TO" "UPTO" "BELOW" "DOWNTO" "ABOVE" "BY")
+                  ;; Arithmetic stepping.  The prepositions FROM/UPFROM/DOWNFROM,
+                  ;; TO/UPTO/BELOW/DOWNTO/ABOVE and BY may appear in ANY order, and
+                  ;; FROM may be omitted (START defaults to 0).
+                  (let ((start 0) (downp nil) (end-f nil) (incl t)
+                        (by-supplied nil) (step nil) (once nil))
+                    ;; Each of FROM/TO/BY is evaluated exactly ONCE, in the order
+                    ;; written (CLHS 6.1.2.1.1): bind each to a gensym in source
+                    ;; order, so a side-effecting or sibling-referencing bound is
+                    ;; not re-run in the per-iteration test/step.
+                    (flet ((bind1 (form)
+                             (let ((g (gensym "AR-"))) (push (cons g form) once) g)))
+                      (do () ((or (null rest)
+                                  (not (%lkw (pk) "FROM" "UPFROM" "DOWNFROM" "TO"
+                                                  "UPTO" "BELOW" "DOWNTO" "ABOVE" "BY"))))
+                        (let ((sub (pop!)))
+                          (cond
+                            ((%lkw sub "FROM" "UPFROM") (setq start (bind1 (pop!))))
+                            ((%lkw sub "DOWNFROM")      (setq start (bind1 (pop!)) downp t))
+                            ((%lkw sub "TO" "UPTO")     (setq end-f (bind1 (pop!)) incl  t))
+                            ((%lkw sub "BELOW")         (setq end-f (bind1 (pop!)) incl  nil))
+                            ((%lkw sub "DOWNTO")        (setq end-f (bind1 (pop!)) incl  t  downp t))
+                            ((%lkw sub "ABOVE")         (setq end-f (bind1 (pop!)) incl  nil downp t))
+                            ((%lkw sub "BY")            (setq step  (bind1 (pop!)) by-supplied t))))))
+                    ;; Bind the once-evaluated bounds (in source order) before V.
+                    (dolist (pr (reverse once)) (push (list (car pr) (cdr pr)) letb))
+                    ;; BY supplies a POSITIVE step magnitude; DOWNTO/ABOVE/DOWNFROM
+                    ;; count downward, so the effective step is negated.  Without
+                    ;; BY, default to -1 (down) or 1 (up).
+                    (cond ((not by-supplied) (setq step (if downp -1 1)))
+                          (downp             (setq step (list '- step))))
                     (push (list v start) letb)
-                    (do () ((or (null rest)
-                                (not (%lkw (pk) "TO" "UPTO" "BELOW"
-                                                "DOWNTO" "ABOVE" "BY"))))
-                      (let ((sub (pop!)))
-                        (cond
-                          ((%lkw sub "TO" "UPTO")  (setq end-f (pop!) incl  t))
-                          ((%lkw sub "BELOW")       (setq end-f (pop!) incl  nil))
-                          ((%lkw sub "DOWNTO")      (setq end-f (pop!) incl  t  downp t))
-                          ((%lkw sub "ABOVE")       (setq end-f (pop!) incl  nil downp t))
-                          ((%lkw sub "BY")          (setq step  (pop!) by-supplied t)))))
-                    ;; If DOWNTO/ABOVE was found but no BY was given, default step = -1
-                    (unless by-supplied
-                      (setq step (if downp -1 1)))
                     (when end-f
                       (push (if downp
                                 (if incl `(< ,v ,end-f)  `(<= ,v ,end-f))
@@ -2102,6 +2740,10 @@
                             tests))
                     (push `(incf ,v ,step) steps)))
                  ;; FOR v = init [THEN update]
+                 ;; Without THEN, INIT is re-evaluated at the TOP of every
+                 ;; iteration (CLHS 6.1.2.1.2) — including the first — so it must
+                 ;; run in SETUPS (before the body), not STEPS (after).  Otherwise
+                 ;; `for a in l for x = a` sees a stale x on the first pass.
                  ((%lkw (pk) "=")
                   (pop!)
                   (let ((init (pop!)))
@@ -2109,9 +2751,53 @@
                         (progn (pop!)
                                (push (list v init) letb)
                                (push `(setq ,v ,(pop!)) steps))
-                        (push (list v init) letb))))
+                        (progn
+                          (push (list v nil) letb)
+                          (push `(setq ,v ,init) setups)))))
                  ;; FOR v BEING [EACH|THE] HASH-KEY[S] OF ht [USING (HASH-VALUE vv)]
                  ;; FOR v BEING [EACH|THE] HASH-VALUE[S] OF ht [USING (HASH-KEY kk)]
+                 ;; FOR v BEING [EACH|THE] symbol[s]/present-symbol[s]/
+                 ;; external-symbol[s] [OF|IN] package  — iterate a package's symbols.
+                 ((and (%lkw (pk) "BEING")
+                       (let ((r2 (cdr rest)))
+                         (when (or (%lkw (car r2) "EACH") (%lkw (car r2) "THE"))
+                           (setq r2 (cdr r2)))
+                         (%lkw (car r2) "SYMBOL" "SYMBOLS" "PRESENT-SYMBOL"
+                                        "PRESENT-SYMBOLS" "EXTERNAL-SYMBOL"
+                                        "EXTERNAL-SYMBOLS")))
+                  (pop!)  ; BEING
+                  (when (or (%lkw (pk) "EACH") (%lkw (pk) "THE")) (pop!))
+                  (let* ((variant  (pop!))
+                         (extp     (%lkw variant "EXTERNAL-SYMBOL" "EXTERNAL-SYMBOLS"))
+                         ;; PRESENT-SYMBOLS iterates only the package's OWN symbols
+                         ;; (internal + external), excluding those inherited from
+                         ;; used packages; plain SYMBOLS includes inherited.
+                         (presentp (%lkw variant "PRESENT-SYMBOL" "PRESENT-SYMBOLS"))
+                         (lv       (gensym "SYMS-")))
+                    (when (or (%lkw (pk) "OF") (%lkw (pk) "IN")) (pop!))
+                    (let ((pkg-form (pop!)))
+                      (push (list lv
+                                  (cond
+                                    (extp
+                                     `(let ((%a nil))
+                                        (do-external-symbols (%s ,pkg-form) (push %s %a)) %a))
+                                    (presentp
+                                     `(let ((%a nil) (%pk ,pkg-form))
+                                        (do-symbols (%s %pk)
+                                          (unless (eq (second (multiple-value-list
+                                                               (find-symbol (symbol-name %s) %pk)))
+                                                      :inherited)
+                                            (push %s %a)))
+                                        %a))
+                                    (t
+                                     `(let ((%a nil))
+                                        (do-symbols (%s ,pkg-form) (push %s %a)) %a))))
+                            letb)
+                      (push (list v nil)        letb)
+                      (push `(null ,lv)             tests)
+                      (push `(setq ,v (car ,lv))    setups)
+                      (push `(setq ,lv (cdr ,lv))   steps)
+                      (push `(setq ,v (car ,lv))    steps))))
                  ((%lkw (pk) "BEING")
                   (pop!)  ; consume BEING
                   (when (or (%lkw (pk) "EACH") (%lkw (pk) "THE")) (pop!))
@@ -2122,7 +2808,7 @@
                          (keys-var (gensym "HKEYS-"))
                          (vals-var (gensym "HVALS-"))
                          (other-v  nil))
-                    (when (%lkw (pk) "OF") (pop!))
+                    (when (%lkw (pk) "OF" "IN") (pop!))   ; OF or IN (CLHS 6.1.2.1.4)
                     (let ((ht-form (pop!)))
                       (when (%lkw (pk) "USING")
                         (pop!)
@@ -2141,85 +2827,138 @@
                       (push (list keys-var `(car ,both-var)) letb)
                       (push (list vals-var `(cdr ,both-var)) letb)
                       (push (list v nil)                     letb)
-                      (when other-v (push (list other-v nil) letb))
-                      ;; Terminate when keys list is exhausted.
-                      (push `(null ,keys-var) tests)
-                      ;; Per-iteration setup: bind v (and co-var) from head of lists.
-                      (if key-p
-                          (progn
-                            (push `(setq ,v (car ,keys-var)) setups)
-                            (when other-v
-                              (push `(setq ,other-v (car ,vals-var)) setups)))
-                          (progn
-                            (push `(setq ,v (car ,vals-var)) setups)
-                            (when other-v
-                              (push `(setq ,other-v (car ,keys-var)) setups))))
-                      ;; Per-iteration step: advance both lists, then rebind v.
-                      (push `(progn (setq ,keys-var (cdr ,keys-var))
-                                    (setq ,vals-var (cdr ,vals-var)))
-                             steps)
-                      (if key-p
-                          (progn
-                            (push `(setq ,v (car ,keys-var)) steps)
-                            (when other-v
-                              (push `(setq ,other-v (car ,vals-var)) steps)))
-                          (progn
-                            (push `(setq ,v (car ,vals-var)) steps)
-                            (when other-v
-                              (push `(setq ,other-v (car ,keys-var)) steps)))))))
+                      ;; The USING co-variable may itself be a destructuring
+                      ;; pattern (e.g. USING (HASH-VALUE (v vv))): step a gensym
+                      ;; OV and destructure it into the leaves each iteration.
+                      (let ((ov (if (consp other-v) (gensym "USING-") other-v)))
+                       (when other-v (push (list ov nil) letb))
+                       (when (consp other-v)
+                         (dolist (pv (%loop-pattern-vars other-v)) (push (list pv nil) letb))
+                         (setq body (append body
+                                            (list (cons 'progn (%loop-destr-form other-v ov))))))
+                       ;; Terminate when keys list is exhausted.
+                       (push `(null ,keys-var) tests)
+                       ;; Per-iteration setup: bind v (and co-var) from head of lists.
+                       (if key-p
+                           (progn
+                             (push `(setq ,v (car ,keys-var)) setups)
+                             (when other-v
+                               (push `(setq ,ov (car ,vals-var)) setups)))
+                           (progn
+                             (push `(setq ,v (car ,vals-var)) setups)
+                             (when other-v
+                               (push `(setq ,ov (car ,keys-var)) setups))))
+                       ;; Per-iteration step: advance both lists, then rebind v.
+                       (push `(progn (setq ,keys-var (cdr ,keys-var))
+                                     (setq ,vals-var (cdr ,vals-var)))
+                              steps)
+                       (if key-p
+                           (progn
+                             (push `(setq ,v (car ,keys-var)) steps)
+                             (when other-v
+                               (push `(setq ,ov (car ,vals-var)) steps)))
+                           (progn
+                             (push `(setq ,v (car ,vals-var)) steps)
+                             (when other-v
+                               (push `(setq ,ov (car ,keys-var)) steps))))))))
                  (t
-                  (error "LOOP FOR: unknown sub-clause ~S" (pk))))))
+                  (error "LOOP FOR: unknown sub-clause ~S" (pk)))))))
+              (%one-for)
+              (do () ((not (%lkw (pk) "AND"))) (pop!) (%one-for)))
+             ;; AND joined >1 variable: fuse this group's steps into one parallel
+             ;; assignment (the new steps are at the front of STEPS, before
+             ;; %OLD-STEPS) so each stepper sees the others' old values.
+             (when (> %nvars 1)
+               (let ((%new nil))
+                 (do () ((eq steps %old-steps)) (push (pop steps) %new))
+                 (push (%loop-parallel-steps (nreverse %new)) steps))
+               ;; Parallel binding: an AND-group's iteration-variable INITs are
+               ;; evaluated in the surrounding scope, before any of the group's
+               ;; variables is bound (CLHS 6.1.2.2) — so `for a from 0 and b from
+               ;; a` sees the outer A.  Reorder this group's LETB so the init /
+               ;; auxiliary bindings (uninterned gensyms: the once-eval'd bounds,
+               ;; list/vector holders) precede the loop-variable bindings
+               ;; (interned), which reference them.
+               (let ((grp nil))
+                 (do () ((eq letb %old-letb)) (push (pop letb) grp))  ; grp: source order
+                 (let ((auxs nil) (vars nil))
+                   (dolist (b grp)
+                     (if (and (symbolp (car b)) (symbol-package (car b)))
+                         (push b vars)
+                         (push b auxs)))
+                   (dolist (b (nreverse auxs)) (push b letb))
+                   (dolist (b (nreverse vars)) (push b letb)))))))
             ;; REPEAT n
             ((%lkw kw "REPEAT")
              (let ((rv (gensym "R-")))
                (push (list rv (pop!)) letb)
                (push `(<= ,rv 0)  tests)
                (push `(decf ,rv)  steps)))
-            ;; WHILE cond
+            ;; WHILE / UNTIL are body clauses tested at their TEXTUAL position
+            ;; (CLHS 6.1.9), not hoisted to the loop top with the FOR/REPEAT
+            ;; termination tests — so `do X while Y` tests Y after X, and
+            ;; `collect X while Y` collects before testing.
             ((%lkw kw "WHILE")
-             (push `(not ,(pop!)) tests))
-            ;; UNTIL cond
+             (setq body (append body (list `(when (not ,(pop!)) (go ,end-tag))))))
             ((%lkw kw "UNTIL")
-             (push (pop!) tests))
+             (setq body (append body (list `(when ,(pop!) (go ,end-tag))))))
             ;; DO / DOING
             ((%lkw kw "DO" "DOING")
              (setq body (append body (take-body))))
             ;; Accumulation clauses
             ((%lkw kw "COLLECT" "COLLECTING")
              (let ((e (pop!)) (iv nil))
-               (when (try! "INTO") (setq iv (pop!)))
-               (push (list :collect (or iv (gensym "C-")) e) accums)))
+               (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
+               (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
+               (add-accum :collect (or iv (anon-var :collect)) e)))
             ((%lkw kw "APPEND" "APPENDING")
              (let ((e (pop!)) (iv nil))
-               (when (try! "INTO") (setq iv (pop!)))
-               (push (list :append (or iv (gensym "A-")) e) accums)))
+               (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
+               (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
+               (add-accum :append (or iv (anon-var :append)) e)))
             ((%lkw kw "NCONC" "NCONCING")
              (let ((e (pop!)) (iv nil))
-               (when (try! "INTO") (setq iv (pop!)))
-               (push (list :nconc (or iv (gensym "NC-")) e) accums)))
+               (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
+               (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
+               (add-accum :nconc (or iv (anon-var :nconc)) e)))
             ((%lkw kw "SUM" "SUMMING")
              (let ((e (pop!)) (iv nil))
-               (when (try! "INTO") (setq iv (pop!)))
-               (push (list :sum (or iv (gensym "S-")) e) accums)))
+               (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
+               (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
+               (add-accum :sum (or iv (anon-var :sum)) e)))
             ((%lkw kw "COUNT" "COUNTING")
              (let ((e (pop!)) (iv nil))
-               (when (try! "INTO") (setq iv (pop!)))
-               (push (list :count (or iv (gensym "K-")) e) accums)))
+               (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
+               (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
+               (add-accum :count (or iv (anon-var :count)) e)))
             ((%lkw kw "MAXIMIZE" "MAXIMIZING")
              (let ((e (pop!)) (iv nil))
-               (when (try! "INTO") (setq iv (pop!)))
-               (push (list :maximize (or iv (gensym "MX-")) e) accums)))
+               (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
+               (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
+               (add-accum :maximize (or iv (anon-var :maximize)) e)))
             ((%lkw kw "MINIMIZE" "MINIMIZING")
              (let ((e (pop!)) (iv nil))
-               (when (try! "INTO") (setq iv (pop!)))
-               (push (list :minimize (or iv (gensym "MN-")) e) accums)))
+               (when (try! "INTO") (setq iv (pop!)) (push iv into-vars))
+               (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
+               (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
+               (add-accum :minimize (or iv (anon-var :minimize)) e)))
             ;; ALWAYS / NEVER / THEREIS
             ((%lkw kw "ALWAYS")   (setq always-f  (pop!) always-set  t))
             ((%lkw kw "NEVER")    (setq never-f   (pop!) never-set   t))
             ((%lkw kw "THEREIS")  (setq thereis-f (pop!)))
             ;; RETURN
             ((%lkw kw "RETURN")
-             (setq return-f (pop!) return-set t))
+             ;; RETURN form terminates the loop IMMEDIATELY (CLHS 6.1.5), so emit
+             ;; (return-from nil form) into the body — NOT a deferred post-loop
+             ;; result-expr, which a loop with no iteration clause never reaches.
+             (setq body (append body
+                                 (list `(return-from ,(or name nil) ,(pop!))))))
             ;; INITIALLY / FINALLY
             ((%lkw kw "INITIALLY")
              (setq initially (append initially (take-body))))
@@ -2230,23 +2969,32 @@
             ;; COUNT, MAXIMIZE, MINIMIZE.  AND chains more sub-clauses
             ;; under the same condition.  ELSE introduces an alternative.
             ((%lkw kw "WHEN" "UNLESS" "IF")
-             (let* ((cond-expr (pop!))
-                    (negate (%lkw kw "UNLESS")))
-               (when (%lkw (pk) "THEN") (pop!)) ; optional THEN after IF
-               ;; Inner helper: parse one sub-clause guarded by cond-expr.
-               ;; Returns a list of body forms.
-               ;; shared-var: when parsing IF ... collect ... ELSE collect ...,
-               ;; both sides share the same accumulation variable so the loop
-               ;; builds one unified result list.
-               (let ((shared-var nil))
-                 (labels
-                   ((parse-guarded-sub (neg cond reuse-var)
-                      ;; REUSE-VAR: if non-nil, the ELSE collect shares this var.
+             ;; IT is anaphoric only in the FIRST clause after the test/THEN (and
+             ;; after ELSE); in an AND-chained clause IT is an ordinary variable
+             ;; (CLHS 6.1.2.1.4).  IT-LIVE gates the substitution per sub-clause.
+             (let ((it-live t))
+               (labels
+                   ((pop-it (c)
+                      ;; Pop an accumulation expression, resolving the anaphoric
+                      ;; IT to the guard's test form C only while IT-LIVE.
+                      (let ((x (pop!))) (if (and it-live (%lkw x "IT")) c x)))
+                    (parse-guarded-sub (neg cond reuse-var shared-box)
+                      ;; REUSE-VAR: if non-nil, the ELSE branch shares this var.
+                      ;; SHARED-BOX: a 1-cons cell recording the accumulation var
+                      ;; created here, so a following ELSE at this level reuses it.
                       (let ((sub (pop!)))
                         (cond
+                          ;; Nested conditional as the sub-clause (CLHS 6.1.2.1.4):
+                          ;; parse it (its own ELSE/END), then guard its forms by
+                          ;; COND and propagate its accumulator up to SHARED-BOX so
+                          ;; an enclosing ELSE collects into the same list.
+                          ((%lkw sub "WHEN" "UNLESS" "IF")
+                           (let ((forms (parse-cond sub shared-box)))
+                             (list (if neg `(unless ,cond ,@forms)
+                                           `(when ,cond ,@forms)))))
                           ;; RETURN
                           ((%lkw sub "RETURN")
-                           (let ((val (pop!)))
+                           (let ((val (pop-it cond)))   ; IT -> the guard's value
                              (list (if neg
                                        `(unless ,cond (return-from ,(or name nil) ,val))
                                        `(when ,cond (return-from ,(or name nil) ,val))))))
@@ -2258,57 +3006,80 @@
                                        `(when ,cond ,@forms)))))
                           ;; COLLECT / COLLECTING
                           ((%lkw sub "COLLECT" "COLLECTING")
-                           (let* ((e  (pop!))
+                           (let* ((e  (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
+                                  (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
                                   ;; Reuse shared var for ELSE branch so both
                                   ;; halves accumulate into the same list.
-                                  (v  (or reuse-var iv (gensym "C-"))))
-                             (setq shared-var v) ; remember for possible ELSE
-                             (unless reuse-var
+                                  (v  (or iv reuse-var (anon-var :collect))))
+                             (setf (car shared-box) v) (when iv (push iv into-vars)) ; remember for possible ELSE
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :collect-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (setq ,v (cons ,e ,v)))
                                        `(when ,cond (setq ,v (cons ,e ,v)))))))
                           ;; APPEND / APPENDING
                           ((%lkw sub "APPEND" "APPENDING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
-                                  (v  (or reuse-var iv (gensym "A-"))))
-                             (setq shared-var v)
-                             (unless reuse-var
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
+                                  (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
+                                  (v  (or iv reuse-var (anon-var :append))))
+                             (setf (car shared-box) v) (when iv (push iv into-vars))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :append-body v e) accums))
                              (list (if neg
-                                       `(unless ,cond (setq ,v (append ,v ,e)))
-                                       `(when ,cond (setq ,v (append ,v ,e)))))))
+                                       `(unless ,cond (setq ,v (revappend ,e ,v)))
+                                       `(when ,cond (setq ,v (revappend ,e ,v)))))))
+                          ;; NCONC / NCONCING
+                          ((%lkw sub "NCONC" "NCONCING")
+                           (let* ((e (pop-it cond))
+                                  (iv (when (try! "INTO") (pop!)))
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
+                                  (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
+                                  (v  (or iv reuse-var (anon-var :nconc))))
+                             (setf (car shared-box) v) (when iv (push iv into-vars))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
+                               (push (list :nconc-body v e) accums))
+                             (list (if neg
+                                       `(unless ,cond (setq ,v (nreconc ,e ,v)))
+                                       `(when ,cond (setq ,v (nreconc ,e ,v)))))))
                           ;; SUM / SUMMING
                           ((%lkw sub "SUM" "SUMMING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
-                                  (v  (or reuse-var iv (gensym "S-"))))
-                             (setq shared-var v)
-                             (unless reuse-var
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
+                                  (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
+                                  (v  (or iv reuse-var (anon-var :sum))))
+                             (setf (car shared-box) v) (when iv (push iv into-vars))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :sum-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (incf ,v ,e))
                                        `(when ,cond (incf ,v ,e))))))
                           ;; COUNT / COUNTING
                           ((%lkw sub "COUNT" "COUNTING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
-                                  (v  (or reuse-var iv (gensym "K-"))))
-                             (setq shared-var v)
-                             (unless reuse-var
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
+                                  (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
+                                  (v  (or iv reuse-var (anon-var :count))))
+                             (setf (car shared-box) v) (when iv (push iv into-vars))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :count-body v e) accums))
                              (list (if neg
                                        `(unless ,cond (when ,e (incf ,v)))
                                        `(when ,cond (when ,e (incf ,v)))))))
                           ;; MAXIMIZE / MAXIMIZING
                           ((%lkw sub "MAXIMIZE" "MAXIMIZING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
-                                  (v  (or reuse-var iv (gensym "MX-"))))
-                             (setq shared-var v)
-                             (unless reuse-var
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
+                                  (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
+                                  (v  (or iv reuse-var (anon-var :maximize))))
+                             (setf (car shared-box) v) (when iv (push iv into-vars))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :maximize-body v e) accums))
                              (list (if neg
                                        `(unless ,cond
@@ -2319,11 +3090,13 @@
                                             (when (or (null ,v) (> %mv ,v)) (setq ,v %mv))))))))
                           ;; MINIMIZE / MINIMIZING
                           ((%lkw sub "MINIMIZE" "MINIMIZING")
-                           (let* ((e (pop!))
+                           (let* ((e (pop-it cond))
                                   (iv (when (try! "INTO") (pop!)))
-                                  (v  (or reuse-var iv (gensym "MN-"))))
-                             (setq shared-var v)
-                             (unless reuse-var
+                                  (%ot (when (try! "OF-TYPE") (pop!)))
+                                  (%bt (when (and rest (not (%loop-kw-p (pk)))) (pop!)))
+                                  (v  (or iv reuse-var (anon-var :minimize))))
+                             (setf (car shared-box) v) (when iv (push iv into-vars))
+                             (unless (dolist (%a accums nil) (when (eq (second %a) v) (return t)))
                                (push (list :minimize-body v e) accums))
                              (list (if neg
                                        `(unless ,cond
@@ -2333,34 +3106,74 @@
                                           (let ((%nv ,e))
                                             (when (or (null ,v) (< %nv ,v)) (setq ,v %nv))))))))
                           (t
-                           (error "LOOP WHEN/UNLESS: unhandled sub-clause ~S" sub))))))
-                   ;; Parse first sub-clause (no reuse-var for the IF/WHEN branch)
-                   (setq body (append body (parse-guarded-sub negate cond-expr nil)))
-                   ;; AND chains more sub-clauses under the same condition.
-                   (do () ((not (%lkw (pk) "AND")))
-                     (pop!) ; consume AND
-                     (setq body (append body (parse-guarded-sub negate cond-expr nil))))
-                   ;; ELSE introduces a negated branch. For COLLECT/SUM etc.,
-                   ;; reuse the shared-var so both halves fill one accumulator.
-                   (when (%lkw (pk) "ELSE")
-                     (pop!) ; consume ELSE
-                     (setq body (append body (parse-guarded-sub (not negate) cond-expr shared-var)))
-                     (do () ((not (%lkw (pk) "AND")))
-                       (pop!)
-                       (setq body (append body (parse-guarded-sub (not negate) cond-expr shared-var)))))
-                   ;; END terminates a WHEN/UNLESS/IF block.
-                   (when (%lkw (pk) "END") (pop!))))))
+                           (error "LOOP WHEN/UNLESS: unhandled sub-clause ~S" sub)))))
+                    (parse-cond (ckw out-box)
+                      ;; CKW (WHEN/UNLESS/IF) already consumed.  Parse the test,
+                      ;; the guarded sub-clause(s), an optional ELSE branch and a
+                      ;; closing END; return the list of body forms.  OUT-BOX, when
+                      ;; given, receives this conditional's accumulation var so an
+                      ;; enclosing ELSE collects into the same list.
+                      (let* ((cond-expr (pop!))
+                             (negate (%lkw ckw "UNLESS"))
+                             (sbox   (list nil))
+                             (forms  nil))
+                        (when (%lkw (pk) "THEN") (pop!)) ; optional THEN after IF
+                        (setq it-live t)
+                        (setq forms (parse-guarded-sub negate cond-expr nil sbox))
+                        (setq it-live nil)
+                        ;; AND chains more sub-clauses under the same condition.
+                        (do () ((not (%lkw (pk) "AND")))
+                          (pop!)
+                          (setq forms (append forms
+                                              (parse-guarded-sub negate cond-expr nil sbox))))
+                        ;; ELSE: negated branch; reuse the THEN accumulator so both
+                        ;; halves fill one list.
+                        (when (%lkw (pk) "ELSE")
+                          (pop!)
+                          (setq it-live t)
+                          (setq forms (append forms
+                                              (parse-guarded-sub (not negate) cond-expr (car sbox) sbox)))
+                          (setq it-live nil)
+                          (do () ((not (%lkw (pk) "AND")))
+                            (pop!)
+                            (setq forms (append forms
+                                                (parse-guarded-sub (not negate) cond-expr (car sbox) sbox)))))
+                        ;; END terminates a WHEN/UNLESS/IF block.
+                        (when (%lkw (pk) "END") (pop!))
+                        (when out-box (setf (car out-box) (car sbox)))
+                        forms)))
+                 (setq body (append body (parse-cond kw nil))))))
             ;; AND at top level (outside WHEN) — absorb so it doesn't error
             ((%lkw kw "AND") nil) ; parallel FOR clauses already handle AND
             ;; END at top level — ignore (close of a WHEN block)
             ((%lkw kw "END") nil)
             (t
              (error "LOOP: unknown clause keyword: ~S" kw))))))
+    ;; A value-accumulation clause and a boolean ALWAYS/NEVER/THEREIS clause have
+    ;; conflicting result semantics and may not be combined (CLHS 6.1.2.3) — a
+    ;; PROGRAM-ERROR, signalled here so it surfaces at macro-expansion time.
+    (when (and accums (or always-set never-set thereis-f))
+      (error 'program-error))
+    ;; A variable bound by WITH/FOR twice, or an iteration variable also named by
+    ;; INTO, is a PROGRAM-ERROR (CLHS 6.1.1.7).  An INTO name MAY be shared by
+    ;; several accumulation clauses, so duplicates among INTO names alone are
+    ;; fine — only collisions with a binding variable count.  Gensyms are
+    ;; uninterned, so SYMBOL-PACKAGE filters out the macro's own temporaries.
+    (let ((seen nil) (dup nil))
+      (dolist (b letb)
+        (let ((v (car b)))
+          (when (and v (symbolp v) (symbol-package v))
+            (if (member v seen) (setq dup t) (push v seen)))))
+      (dolist (v (remove-duplicates into-vars))
+        (when (and v (symbolp v) (symbol-package v) (member v seen))
+          (setq dup t)))
+      (when dup (error 'program-error)))
     ;; --- code generation ---
     ;; accums: last pushed = first defined; nreverse so primary = first defined
     (setq accums (nreverse accums))
     (let* ((top-tag      (gensym "TOP-"))
-           (end-tag      (gensym "END-"))
+           ;; end-tag is created at the top of %loop-expand so WHILE/UNTIL can
+           ;; target it while parsing.
            (let*-binds   (nreverse letb))
            (accum-binds  (mapcar (lambda (a)
                                    (list (second a) (%loop-accum-init (first a))))
@@ -2383,34 +3196,48 @@
                            (let ((tv (gensym "TV-")))
                              `((let ((,tv ,thereis-f))
                                  (when ,tv (return-from ,(or name nil) ,tv)))))))
-           (primary      (first accums))
+           ;; COLLECT builds its list reversed (cons); reverse each collect var
+           ;; ONCE at loop end so the value is forward-order for FINALLY, for an
+           ;; INTO variable, and for the loop result alike.  (APPEND/NCONC/SUM/
+           ;; COUNT/MAX/MIN already hold their final value.)
+           (collect-reverses
+                         (let ((rs nil))
+                           (dolist (a accums (nreverse rs))
+                             (when (member (first a) '(:collect :collect-body
+                                                       :append :append-body
+                                                       :nconc :nconc-body))
+                               (push `(setq ,(second a) (nreverse ,(second a))) rs)))))
+           ;; The loop's default result is the first ANONYMOUS accumulation; an
+           ;; INTO-named accumulation goes only to its variable (CLHS 6.1.3), so
+           ;; `loop ... append a into x` returns NIL unless FINALLY/RETURN says so.
+           (primary      (dolist (a accums nil)
+                           (unless (member (second a) into-vars) (return a))))
            (result-expr  (cond (return-set return-f)
-                               (primary
-                                (let ((k (first primary)) (rv (second primary)))
-                                  ;; both :collect and :collect-body use nreverse
-                                  (if (member k '(:collect :collect-body))
-                                      `(nreverse ,rv)
-                                      rv)))
+                               (primary     (second primary))  ; already forward-order
                                (always-set  t) ; vacuously T when loop never runs
                                (never-set   t) ; vacuously T when loop never runs
                                (t           nil))))
+      ;; LOOP-FINISH jumps to the loop epilogue (END-TAG) so the collect-reversal
+      ;; and FINALLY still run — shadow the global LOOP-FINISH within this loop.
       `(block ,(or name nil)
-         (let* (,@let*-binds ,@accum-binds)
-           (tagbody
-             ,@initially
-             ,top-tag
-             ,@test-forms
-             ,@setup-forms
-             ,@always-chk
-             ,@never-chk
-             ,@thereis-chk
-             ,@body
-             ,@accum-forms
-             ,@step-forms
-             (go ,top-tag)
-             ,end-tag
-             ,@finally
-             (return-from ,(or name nil) ,result-expr)))))))
+         (macrolet ((loop-finish () (list 'go ',end-tag)))
+           (let* (,@let*-binds ,@accum-binds)
+             (tagbody
+               ,@initially
+               ,top-tag
+               ,@test-forms
+               ,@setup-forms
+               ,@always-chk
+               ,@never-chk
+               ,@thereis-chk
+               ,@body
+               ,@accum-forms
+               ,@step-forms
+               (go ,top-tag)
+               ,end-tag
+               ,@collect-reverses
+               ,@finally
+               (return-from ,(or name nil) ,result-expr))))))))
 
 (defmacro loop (&rest clauses)
   (if (%loop-simple-p clauses)
@@ -2495,8 +3322,8 @@
       (apply function tails))))
 
 (defun nbutlast (list &optional (n 1))
-  ;; Destructive BUTLAST: trim the last N elements from LIST in place.
-  (let* ((len  (length list))
+  ;; Destructive BUTLAST: trim the last N cons cells from LIST in place.
+  (let* ((len  (%cons-length list))
          (keep (- len n)))
     (if (<= keep 0)
         nil
@@ -2533,9 +3360,10 @@
   ;; Extend the C kernel's numeric COERCE with sequence conversions.
   ;; NOTE: in bocl, (vectorp string) is T, so string branches MUST precede
   ;; vector branches.
+  (when (member result-type '(cons null)) (setq result-type 'list))  ; CONS/NULL == LIST
   (cond
     ;; String identity
-    ((and (stringp object) (member result-type '(string cl:string simple-string)))
+    ((and (stringp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
      object)
     ;; String → list
     ((and (stringp object) (member result-type '(list cl:list)))
@@ -2555,7 +3383,7 @@
        (dotimes (i len v)
          (setf (aref v i) (nth i object)))))
     ;; List → string
-    ((and (listp object) (member result-type '(string cl:string simple-string)))
+    ((and (listp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
      (let* ((len (length object))
             (s   (make-string len)))
        (dotimes (i len s)
@@ -2563,6 +3391,23 @@
     ;; List identity
     ((and (listp object) (member result-type '(list cl:list)))
      object)
+    ;; ---- BIT-VECTOR branches MUST precede the VECTOR branches: a bit-vector
+    ;; is a vector subtype, but its storage is octets, so SVREF would misread it
+    ;; (reading octet bytes as object references).  Use the BIT accessor instead.
+    ((and (bit-vector-p object) (member result-type '(bit-vector simple-bit-vector)))
+     object)
+    ((and (bit-vector-p object) (member result-type '(list cl:list)))
+     (let ((acc nil))
+       (dotimes (i (length object) (nreverse acc))
+         (push (bit object i) acc))))
+    ((and (bit-vector-p object) (member result-type '(vector simple-vector)))
+     (let* ((len (length object)) (v (make-array len)))
+       (dotimes (i len v) (setf (svref v i) (bit object i)))))
+    ;; LIST / VECTOR / STRING → BIT-VECTOR
+    ((and (or (listp object) (vectorp object))
+          (member result-type '(bit-vector simple-bit-vector)))
+     (let* ((len (length object)) (b (make-bit-vector len 0)))
+       (dotimes (i len b) (setf (bit b i) (elt object i)))))
     ;; Vector identity
     ((and (vectorp object) (member result-type '(vector simple-vector)))
      object)
@@ -2572,7 +3417,7 @@
        (dotimes (i (vector-length object) (nreverse acc))
          (push (svref object i) acc))))
     ;; Vector → string
-    ((and (vectorp object) (member result-type '(string cl:string simple-string)))
+    ((and (vectorp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
      (let* ((len (vector-length object))
             (s   (make-string len)))
        (dotimes (i len s)
@@ -2641,6 +3486,13 @@
 (defun pathname-device  (p) (setq p nil) nil)
 (defun pathname-version (p) (setq p nil) nil)
 
+(defun user-homedir-pathname (&optional host)
+  "Return the pathname of the user's home directory ($HOME).  A leading ~/ in a
+   namestring abbreviates this (e.g. (PATHNAME \"~/x\") = (MERGE-PATHNAMES \"x\"
+   (USER-HOMEDIR-PATHNAME)))."
+  (declare (ignore host))
+  (pathname "~/"))
+
 (defun directory-namestring (pathname)
   (pathname-directory pathname))
 
@@ -2685,11 +3537,19 @@
 ;; -------------------------------------------------------------------- ;;
 
 (defun map-into (result-sequence function &rest sequences)
-  ;; Write (apply function (nth-element-of-each-sequence i)) into
-  ;; result-sequence[i].  Returns result-sequence.  Stops at the
-  ;; shortest sequence (including result-sequence itself).
-  (let ((n (reduce #'min (cons (length result-sequence)
-                               (mapcar #'length sequences)))))
+  ;; Write (apply function (i-th of each SEQUENCE)) into result-sequence[i].
+  ;; For a fill-pointered result the limit is ARRAY-TOTAL-SIZE (not the current
+  ;; fill pointer) and the fill pointer is then set to the number stored (CLHS).
+  (let* ((fp?  (and (vectorp result-sequence)
+                    (array-has-fill-pointer-p result-sequence)))
+         (cap  (if fp? (array-total-size result-sequence) (length result-sequence)))
+         ;; The count is the minimum of the result capacity and the source
+         ;; lengths; with NO source sequences there is nothing to map, so the
+         ;; result is left untouched (SACLA must-sequence form-272/274).
+         (n    (if sequences
+                   (reduce #'min (cons cap (mapcar #'length sequences)))
+                   0)))
+    (when fp? (setf (fill-pointer result-sequence) n))
     (dotimes (i n result-sequence)
       (setf (elt result-sequence i)
             (apply function (mapcar (lambda (s) (elt s i)) sequences))))))
@@ -2754,14 +3614,25 @@
 
 ;; ---- DO-SYMBOLS, DO-ALL-SYMBOLS, DO-EXTERNAL-SYMBOLS ---------------------
 
+(defun %pkg-accessible-symbols (package)
+  "All symbols accessible in PACKAGE: its present symbols plus the external
+   symbols inherited (and not shadowed) from the packages it uses."
+  (let* ((pkg (find-package package))
+         (result (copy-list (package-symbols pkg))))
+    (dolist (used (package-use-list pkg) result)
+      (dolist (s (package-exported-symbols used))
+        (when (and (eq s (find-symbol (symbol-name s) pkg))
+                   (not (member s result)))
+          (push s result))))))
+
 (defmacro do-symbols (varspec &body body)
   ;; (DO-SYMBOLS (var [package [result]]) body...)
-  ;; Bind VAR to each symbol accessible in PACKAGE (default *package*).
-  ;; Returns RESULT (default NIL).
+  ;; Bind VAR to each symbol accessible in PACKAGE (default *package*) — its own
+  ;; present symbols and those inherited from used packages.  Returns RESULT.
   (let ((var     (first  varspec))
         (package (or (second varspec) '*package*))
         (result  (third  varspec)))
-    `(dolist (,var (package-symbols ,package) ,result)
+    `(dolist (,var (%pkg-accessible-symbols ,package) ,result)
        ,@body)))
 
 (defmacro do-external-symbols (varspec &body body)
@@ -2775,12 +3646,50 @@
 
 (defmacro do-all-symbols (varspec &body body)
   ;; (DO-ALL-SYMBOLS (var [result]) body...)
-  ;; Bind VAR to every symbol accessible in every package.
+  ;; Bind VAR to every symbol present in every package.
   (let ((var    (first  varspec))
         (result (second varspec))
         (pkg%   (gensym "PKG-")))
     `(dolist (,pkg% (list-all-packages) ,result)
-       (do-symbols (,var ,pkg%)
+       (dolist (,var (package-symbols ,pkg%))
+         ,@body))))
+
+(defun %make-package-iterator (packages symbol-types)
+  "Return a thunk that yields (values found-p symbol accessibility package) for
+   each requested symbol across PACKAGES, then (values nil nil nil nil)."
+  (let ((items '()))
+    (dolist (pd packages)
+      (let ((p (find-package pd)))
+        (when p
+          (when (member :external symbol-types)
+            (dolist (s (package-exported-symbols p)) (push (list s :external p) items)))
+          (when (member :internal symbol-types)
+            (dolist (s (package-symbols p))
+              (multiple-value-bind (sym st) (find-symbol (symbol-name s) p)
+                (declare (ignore sym))
+                (when (eq st :internal) (push (list s :internal p) items)))))
+          (when (member :inherited symbol-types)
+            (dolist (u (package-use-list p))
+              (dolist (e (package-exported-symbols u))
+                (when (eq e (find-symbol (symbol-name e) p))
+                  (push (list e :inherited p) items))))))))
+    (lambda ()
+      (if items
+          (let ((triple (pop items)))
+            (values t (first triple) (second triple) (third triple)))
+          (values nil nil nil nil)))))
+
+(defmacro with-package-iterator (spec &body body)
+  ;; (WITH-PACKAGE-ITERATOR (name package-list . symbol-types) body...)
+  ;; Within BODY, (name) returns (values found-p symbol accessibility package).
+  (let ((name         (first spec))
+        (packages     (second spec))
+        (symbol-types (cddr spec))
+        (stepper      (gensym "STEP-")))
+    `(let ((,stepper (%make-package-iterator
+                       (if (listp ,packages) ,packages (list ,packages))
+                       ',symbol-types)))
+       (macrolet ((,name () (list 'funcall ',stepper)))
          ,@body))))
 
 ;;;; ========================================================================
@@ -2800,12 +3709,9 @@
            nil))))
 
 (defmacro pushnew (item place &rest keys)
-  ;; Push ITEM onto PLACE unless already a MEMBER.  Keys (:test :key) passed to MEMBER.
-  (let ((g (gensym "PN-")))
-    `(let ((,g ,item))
-       (unless (member ,g ,place ,@keys)
-         (push ,g ,place))
-       ,place)))
+  ;; (pushnew item place keys...) == (setf place (adjoin item place keys...)).
+  ;; ADJOIN applies :KEY to ITEM and honours :TEST/:TEST-NOT, as CL requires.
+  `(setf ,place (adjoin ,item ,place ,@keys)))
 
 (defun get-properties (plist indicator-list)
   ;; Search PLIST for any key in INDICATOR-LIST.
@@ -2820,6 +3726,123 @@
 (defun mapappend (fn list)
   ;; (mapappend fn list) = (apply #'append (mapcar fn list))
   (apply #'append (mapcar fn list)))
+
+;; -------------------------------------------------------------------- ;;
+;;  PROG / PROG* and the parallel/shifting assignment macros.           ;;
+;; -------------------------------------------------------------------- ;;
+
+(defmacro prog (varlist &body body)
+  ;; (prog (vars) decl* {tag|statement}*) — parallel (LET) binding inside an
+  ;; implicit BLOCK NIL and TAGBODY.  Returns NIL unless RETURN is used.
+  ;; (bocl ignores declaration content, so leading declares are just dropped.)
+  `(block nil
+     (let ,varlist
+       (tagbody ,@(%strip-declares body)))))
+
+(defmacro prog* (varlist &body body)
+  ;; Like PROG but sequential (LET*) binding.
+  `(block nil
+     (let* ,varlist
+       (tagbody ,@(%strip-declares body)))))
+
+(defmacro psetq (&rest pairs)
+  ;; (psetq var1 val1 var2 val2 ...) — evaluate every value, THEN assign in
+  ;; parallel.  Returns NIL.
+  (let ((vars nil) (vals nil) (p pairs))
+    (loop (when (null p) (return))
+          (push (car p) vars) (push (cadr p) vals) (setq p (cddr p)))
+    (setq vars (nreverse vars) vals (nreverse vals))
+    (let ((temps (mapcar (lambda (v) v (gensym "PSET-")) vars)))
+      `(let ,(mapcar #'list temps vals)
+         ,@(mapcar (lambda (var tmp) `(setq ,var ,tmp)) vars temps)
+         nil))))
+
+(defmacro psetf (&rest pairs)
+  ;; (psetf place1 val1 place2 val2 ...) — like PSETQ but for places (SETF).
+  ;; Evaluates every value first, then stores in parallel.  Returns NIL.
+  (let ((places nil) (vals nil) (p pairs))
+    (loop (when (null p) (return))
+          (push (car p) places) (push (cadr p) vals) (setq p (cddr p)))
+    (setq places (nreverse places) vals (nreverse vals))
+    (let ((temps (mapcar (lambda (v) v (gensym "PSETF-")) places)))
+      `(let ,(mapcar #'list temps vals)
+         ,@(mapcar (lambda (place tmp) `(setf ,place ,tmp)) places temps)
+         nil))))
+
+(defmacro shiftf (&rest args)
+  ;; (shiftf place1 place2 ... placeN newvalue) — store place2's old value into
+  ;; place1, place3's into place2, ..., NEWVALUE into placeN; return the OLD
+  ;; value of place1.  Uses GET-SETF-EXPANSION so each place's subforms are
+  ;; evaluated exactly once (correct even when places share structure, e.g.
+  ;; (shiftf y x (cdr x) ...)).
+  (let ((places (butlast args))
+        (newval (car (last args)))
+        (sub-binds nil)    ; (temp val) subform bindings, in place order
+        (olds nil)         ; gensyms holding each place's old value
+        (old-binds nil)    ; (old-gensym access-form)
+        (svars nil)        ; per-place list of store variables
+        (sforms nil))      ; per-place store-form
+    (dolist (p places)
+      (multiple-value-bind (vars vals stores store-form access-form)
+          (get-setf-expansion p)
+        (setq sub-binds (append sub-binds (mapcar #'list vars vals)))
+        (let ((og (gensym "SHIFTF-OLD-")))
+          (setq olds      (append olds (list og)))
+          (setq old-binds (append old-binds (list (list og access-form)))))
+        (setq svars  (append svars  (list stores)))
+        (setq sforms (append sforms (list store-form)))))
+    (let ((nv (gensym "SHIFTF-NEW-")))
+      ;; place_i receives old_{i+1}; the last place receives NEWVALUE.
+      (let ((newvals (append (cdr olds) (list nv))))
+        `(let* (,@sub-binds            ; capture every place subform once
+                ,@old-binds            ; read every old value before any store
+                (,nv ,newval))
+           ,@(mapcar (lambda (sv val sf) `(multiple-value-bind ,sv ,val ,sf))
+                     svars newvals sforms)
+           ,(car olds))))))            ; return old value of place 1
+
+(defun %case-key-tests (tmp clause)
+  ;; The COND test for a (CASE/CCASE) clause: (k ...) keys -> (or (eql tmp 'k) ...).
+  (let ((keys (car clause)))
+    (if (listp keys)
+        `(or ,@(mapcar (lambda (k) `(eql ,tmp ',k)) keys))
+        `(eql ,tmp ',keys))))
+
+(defun %case-all-keys (clauses)
+  ;; Flatten every key across CCASE clauses (for the TYPE-ERROR expected-type).
+  (mapappend (lambda (c) (let ((k (car c))) (if (listp k) k (list k)))) clauses))
+
+(defmacro ccase (keyplace &rest clauses)
+  ;; Like CASE but: KEYPLACE is a place, it is exhaustive (no OTHERWISE), and a
+  ;; non-match signals a correctable TYPE-ERROR with a STORE-VALUE restart that
+  ;; sets KEYPLACE and retries.
+  (let ((blk (gensym "CCASE-")) (tag (gensym "CCASE-TAG-")) (tmp (gensym "CCASE-VAL-")))
+    `(block ,blk
+       (tagbody
+          ,tag
+          (return-from ,blk
+            (let ((,tmp ,keyplace))
+              (cond
+                ,@(mapcar (lambda (c) `(,(%case-key-tests tmp c) ,@(cdr c))) clauses)
+                (t (restart-case
+                       (error 'type-error :datum ,tmp
+                              :expected-type '(member ,@(%case-all-keys clauses)))
+                     (store-value (,tmp) (setf ,keyplace ,tmp) (go ,tag)))))))))))
+
+(defmacro ctypecase (keyplace &rest clauses)
+  ;; Like TYPECASE but exhaustive and correctable (TYPE-ERROR + STORE-VALUE).
+  (let ((blk (gensym "CTYPECASE-")) (tag (gensym "CTC-TAG-")) (tmp (gensym "CTC-VAL-")))
+    `(block ,blk
+       (tagbody
+          ,tag
+          (return-from ,blk
+            (let ((,tmp ,keyplace))
+              (cond
+                ,@(mapcar (lambda (c) `((typep ,tmp ',(car c)) ,@(cdr c))) clauses)
+                (t (restart-case
+                       (error 'type-error :datum ,tmp
+                              :expected-type '(or ,@(mapcar #'car clauses)))
+                     (store-value (,tmp) (setf ,keyplace ,tmp) (go ,tag)))))))))))
 
 (defparameter lambda-list-keywords
   '(&optional &rest &key &allow-other-keys &aux &body &whole &environment))
@@ -3327,15 +4350,33 @@
      (if (funcall *%kernel-typep* arg spec) 1 9999))
     (t 9999)))
 
+(defun %spec-more-specific-p (s1 s2 arg)
+  "Return T if specializer S1 is strictly more specific than S2 for ARG."
+  (cond
+    ((eq s1 s2) nil)
+    ((eq s1 t)  nil)                 ; T is least specific
+    ((eq s2 t)  t)
+    ((and (%is-cls s1) (%is-cls s2))
+     (< (%specializer-position s1 arg) (%specializer-position s2 arg)))
+    ((and (symbolp s1) (symbolp s2))
+     ;; Built-in / condition type names: rank by the kernel class hierarchy, so
+     ;; e.g. a method on SIMPLE-ERROR overrides one on CONDITION.
+     (let ((c1 (funcall *%kernel-find-class* s1))
+           (c2 (funcall *%kernel-find-class* s2)))
+       (and (not (%clos-null-p c1)) (not (%clos-null-p c2))
+            (not (eq c1 c2))
+            (subclassp c1 c2))))
+    ((%is-cls s1) t)                 ; a CLOS class beats a bare built-in symbol
+    ((%is-cls s2) nil)
+    (t nil)))
+
 (defun %method-more-specific-p (m1 m2 args)
   "Return T if M1 is more specific than M2 for ARGS."
   (loop for s1 in (%mth-specializers m1)
         for s2 in (%mth-specializers m2)
         for arg in args
         unless (eq s1 s2)
-        do (return
-             (< (%specializer-position s1 arg)
-                (%specializer-position s2 arg)))
+        do (return (%spec-more-specific-p s1 s2 arg))
         finally (return nil)))
 
 (defun %sort-methods (methods args)
@@ -3401,17 +4442,19 @@
 
 ;;; ---- 19. Generic function installation ----------------------------------
 
+(defparameter *%gf-by-fn* (make-hash-table :test 'eq)) ; discriminating-fn -> %gf
+
 (defun %install-discriminating-function (name gf)
   "Install a discriminating function for GF as the global function binding of NAME."
-  (set-symbol-function
-   (lambda (&rest args)
-     (let* ((applicable (%applicable-methods gf args))
-            (sorted     (%sort-methods applicable args)))
-       (when (null sorted)
-         (error "No applicable method for generic function ~S with arguments ~S"
-                name args))
-       (%invoke-effective-method sorted args)))
-   name))
+  (let ((df (lambda (&rest args)
+              (let* ((applicable (%applicable-methods gf args))
+                     (sorted     (%sort-methods applicable args)))
+                (when (null sorted)
+                  (error "No applicable method for generic function ~S with arguments ~S"
+                         name args))
+                (%invoke-effective-method sorted args)))))
+    (sethash df *%gf-by-fn* gf)   ; so FIND-METHOD can map #'gf back to its %gf
+    (set-symbol-function df name)))
 
 ;;; ---- 20. ENSURE-GENERIC-FUNCTION and ENSURE-METHOD ---------------------
 
@@ -3439,8 +4482,9 @@
                            ((%is-cls s) s)
                            ((symbolp s)
                             (or (gethash s *%classes*)
-                                (funcall *%kernel-find-class* s nil)
-                                s))          ; keep symbol for kernel typep dispatch
+                                s))          ; keep the symbol so %applicable-p
+                                             ; dispatches via the kernel TYPEP
+                                             ; (handles built-in & condition classes)
                            (t s)))
                    specializer-names))
          (method (make-%mth :qualifiers qualifiers
@@ -3484,10 +4528,14 @@
 ;;; ---- 22. DEFGENERIC and DEFMETHOD macros --------------------------------
 
 (defmacro defgeneric (name lambda-list &rest options)
-  "Define a generic function NAME with LAMBDA-LIST.
-  METHOD definitions in OPTIONS are currently ignored (add methods with DEFMETHOD)."
-  options  ; ignored
-  `(ensure-generic-function ',name :lambda-list ',lambda-list))
+  "Define a generic function NAME with LAMBDA-LIST.  (:method qualifiers*
+specialized-lambda-list body...) options define methods; other options (documen-
+tation, :method-combination, ...) are ignored."
+  (let ((forms (list `(ensure-generic-function ',name :lambda-list ',lambda-list))))
+    (dolist (opt options)
+      (when (and (consp opt) (eq (car opt) :method))
+        (push `(defmethod ,name ,@(cdr opt)) forms)))
+    `(progn ,@(nreverse forms) ',name)))
 
 (defmacro defmethod (name &rest args)
   "Define a method for generic function NAME.
@@ -3504,6 +4552,40 @@
           (%parse-spec-ll specialized-ll)
         `(ensure-method ',name ',qualifiers ',spec-names
                          (lambda ,plain-ll ,@body))))))
+
+;;; DEFINE-METHOD-COMBINATION — bocl supports only the standard method
+;;; combination, so this records nothing operational; it accepts the syntax and
+;;; returns the name so programs that define (but don't rely on) custom
+;;; combinations still load.
+(defmacro define-method-combination (name &rest args)
+  (declare (ignore args))
+  `',name)
+
+;;; FIND-METHOD — locate a method of GF with the given QUALIFIERS and
+;;; SPECIALIZERS (class objects, as from FIND-CLASS).  GF may be a generic
+;;; function object, its name, or the %gf.  Specializers are matched by name so a
+;;; class object and the symbol a method was specialised on compare equal.
+(defun %spec-as-class (s)
+  "Normalise a method specializer (a class object, a class-name symbol, or T) to
+the class object it denotes, so two specializers compare by class identity."
+  (cond ((eq s t)     t)
+        ((symbolp s)  (or (find-class s nil) s))
+        (t            s)))
+(defun find-method (gf qualifiers specializers &optional (errorp t))
+  (let ((g (cond ((%gf-p gf)    gf)
+                 ((symbolp gf)  (gethash gf *%gfs*))
+                 (t             (gethash gf *%gf-by-fn*)))))
+    (if (null g)
+        (if errorp (error "FIND-METHOD: ~S is not a generic function" gf) nil)
+        (let ((m (find-if
+                  (lambda (mth)
+                    (and (equal (%mth-qualifiers mth) qualifiers)
+                         (let ((ms (%mth-specializers mth)))
+                           (and (= (length ms) (length specializers))
+                                (every (lambda (a b) (eq (%spec-as-class a) (%spec-as-class b)))
+                                       ms specializers)))))
+                  (%gf-methods g))))
+          (or m (if errorp (error "FIND-METHOD: no such method for ~S" gf) nil))))))
 
 ;;; ---- 23. SHARED-INITIALIZE and MAKE-INSTANCE ---------------------------
 
@@ -3525,7 +4607,7 @@
                 (when (and (eq (svref (%obj-slots instance) (getf eslot :location)) *%unbound*)
                            (getf eslot :initfunction))
                   (setf (svref (%obj-slots instance) (getf eslot :location))
-                        (funcall (getf eslot :initfunction))))))))))
+                        (funcall (getf eslot :initfunction)))))))))
     instance))
 
 (defun make-instance (class-designator &rest initargs)
@@ -3610,6 +4692,62 @@
 (ensure-method 'print-object nil '(standard-object t)
                (lambda (object stream)
                  (format stream "#<~A>" (%cls-name (%obj-class object)))))
+
+;;; PRINT-OBJECT for conditions.  Conditions are kernel objects (not %obj
+;;; instances), so the C printer dispatches them here explicitly.  With
+;;; *print-escape* nil (PRINC, ~A) a simple condition prints its formatted
+;;; report; with *print-escape* true (PRIN1, ~S) it is wrapped #<CLASS report>.
+(ensure-method 'print-object nil '(condition t)
+               (lambda (c stream)
+                 (if (typep c 'simple-condition)
+                     (if *print-escape*
+                         (format stream "#<~A ~?>" (type-of c)
+                                 (simple-condition-format-control c)
+                                 (simple-condition-format-arguments c))
+                         (format stream "~?"
+                                 (simple-condition-format-control c)
+                                 (simple-condition-format-arguments c)))
+                     (format stream "#<~A>" (type-of c)))
+                 c))
+
+;;; Register the standard CONDITION class hierarchy as CLOS classes, so that
+;;; (DEFCLASS foo (ERROR) ...) and DEFINE-CONDITION can inherit them (FIND-CLASS
+;;; and ENSURE-CLOS-CLASS resolve superclasses from *%classes*).  These are SEPARATE
+;;; from the kernel condition classes that HANDLER-CASE and TYPEP use via the C
+;;; find_class / *%kernel-typep* (kernel lookup takes priority), so kernel-condition
+;;; signalling, catching and printing are unaffected.  Registered AFTER the kernel
+;;; print-object method above so that method keeps its kernel-symbol specializer.
+(dolist (%cspec '((condition standard-object)
+                  (serious-condition condition)
+                  (warning condition)
+                  (simple-condition condition)
+                  (style-warning warning)
+                  (storage-condition serious-condition)
+                  (error serious-condition)
+                  (simple-error error simple-condition)
+                  (simple-warning warning simple-condition)
+                  (type-error error)
+                  (simple-type-error type-error simple-condition)
+                  (program-error error)
+                  (control-error error)
+                  (stream-error error)
+                  (end-of-file stream-error)
+                  (file-error error)
+                  (cell-error error)
+                  (unbound-variable cell-error)
+                  (undefined-function cell-error)
+                  (unbound-slot cell-error)
+                  (arithmetic-error error)
+                  (division-by-zero arithmetic-error)
+                  (floating-point-overflow arithmetic-error)
+                  (floating-point-underflow arithmetic-error)
+                  (floating-point-inexact arithmetic-error)
+                  (floating-point-invalid-operation arithmetic-error)
+                  (parse-error error)
+                  (reader-error parse-error stream-error)
+                  (print-not-readable error)
+                  (package-error error)))
+  (ensure-clos-class (car %cspec) (cdr %cspec) nil))
 
 ;;; DESCRIBE-OBJECT — stub; used by some code
 (defgeneric describe-object (object stream))
@@ -3710,10 +4848,33 @@
 (defun copy-seq (sequence)
   "Return a fresh copy of SEQUENCE."
   (cond ((listp sequence) (copy-list sequence))
+        ;; A 1-D %md-array is an adjustable or displaced VECTOR (a string when its
+        ;; element type is CHARACTER, a bit-vector when BIT): copy it into a fresh
+        ;; SIMPLE sequence of the same type, reading through ELT (which follows
+        ;; displacement).  Must precede the VECTORP branch — VECTORP is true for a
+        ;; %md-array, but SVREF would misread its storage.
+        ((and (%md-array-p sequence)
+              (= (length (%md-array-dimensions sequence)) 1))
+         (let ((n  (length sequence))
+               (et (%md-array-element-type sequence)))
+           (cond ((eq et 'character)
+                  (let ((s (make-string n)))
+                    (dotimes (i n s) (char-set s i (elt sequence i)))))
+                 ((eq et 'bit)
+                  (let ((b (make-bit-vector n 0)))
+                    (dotimes (i n b) (setf (bit b i) (elt sequence i)))))
+                 (t (let ((v (make-array n)))
+                      (dotimes (i n v) (setf (svref v i) (elt sequence i))))))))
         ((stringp sequence)
          (let ((s (make-string (length sequence))))
            (dotimes (i (length sequence) s)
              (char-set s i (char sequence i)))))
+        ;; bit-vector before vectorp (a bit-vector is a vector subtype); copy
+        ;; keeps the BIT_VECTOR type and the active (fill-pointer) length.
+        ((bit-vector-p sequence)
+         (let ((b (make-bit-vector (length sequence) 0)))
+           (dotimes (i (length sequence) b)
+             (setf (bit b i) (bit sequence i)))))
         ((vectorp sequence)
          (let ((v (make-array (length sequence))))
            (dotimes (i (length sequence) v)
@@ -3800,27 +4961,47 @@
 ;;; ---- Restart invocation functions ----------------------------------------
 
 (defun muffle-warning (&optional condition)
-  "Invoke the MUFFLE-WARNING restart established by WARN."
-  condition
-  (let ((r (find-restart 'muffle-warning)))
+  "Invoke the MUFFLE-WARNING restart; signal CONTROL-ERROR if none is active."
+  (let ((r (find-restart 'muffle-warning condition)))
     (if r (invoke-restart r)
-        (error "No MUFFLE-WARNING restart available"))))
+        (error 'control-error))))
 
 (defun continue (&optional condition)
-  "Invoke the CONTINUE restart if one is available."
-  condition
-  (let ((r (find-restart 'continue)))
+  "Invoke the CONTINUE restart if one is available, else return NIL."
+  (let ((r (find-restart 'continue condition)))
     (when r (invoke-restart r))))
 
+(defun warn (datum &rest arguments)
+  "Signal a warning with a MUFFLE-WARNING restart active (CLHS WARN).  A handler
+   may (muffle-warning) to suppress it; otherwise it is printed to *error-output*.
+   Overrides the kernel WARN, which did not establish the restart."
+  (let ((condition (cond ((typep datum 'condition) datum)
+                         ((symbolp datum) (apply #'make-condition datum arguments))
+                         (t (make-condition 'simple-warning
+                                            :format-control datum
+                                            :format-arguments arguments)))))
+    (restart-case
+        (progn
+          (signal condition)
+          (format *error-output* ";; WARNING: ~A~%" condition))
+      (muffle-warning () nil))
+    nil))
+
 (defun store-value (value &optional condition)
-  "Invoke the STORE-VALUE restart with VALUE."
-  condition
-  (invoke-restart (find-restart 'store-value) value))
+  "Invoke the STORE-VALUE restart with VALUE, or return NIL if none is active."
+  (let ((r (find-restart 'store-value condition)))
+    (when r (invoke-restart r value))))
 
 (defun use-value (value &optional condition)
-  "Invoke the USE-VALUE restart with VALUE."
-  condition
-  (invoke-restart (find-restart 'use-value) value))
+  "Invoke the USE-VALUE restart with VALUE, or return NIL if none is active."
+  (let ((r (find-restart 'use-value condition)))
+    (when r (invoke-restart r value))))
+
+(defmacro with-condition-restarts (condition-form restarts-form &body body)
+  "Run BODY with the restarts associated with the condition.  bocl restarts are
+   not condition-associated, so CONDITION-FORM and RESTARTS-FORM are evaluated
+   (for effect) and BODY's values are returned."
+  `(progn ,condition-form ,restarts-form ,@body))
 
 ;;; NOTE: ABORT is already a kernel built-in (conditions.c).
 
@@ -4234,26 +5415,27 @@
             (if (consp pair) (cons (car pair) (cdr pair)) pair))
           alist))
 
-(defun set-exclusive-or (list1 list2 &key (test #'eql) (key #'identity))
+(defun set-exclusive-or (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Return the symmetric set difference of LIST1 and LIST2."
+  (setq test (%xtest test test-not))
   (append (set-difference list1 list2 :test test :key key)
           (set-difference list2 list1 :test test :key key)))
 
-(defun nset-exclusive-or (list1 list2 &key (test #'eql) (key #'identity))
+(defun nset-exclusive-or (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive version of SET-EXCLUSIVE-OR."
-  (set-exclusive-or list1 list2 :test test :key key))
+  (set-exclusive-or list1 list2 :test (%xtest test test-not) :key key))
 
-(defun nintersection (list1 list2 &key (test #'eql) (key #'identity))
+(defun nintersection (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive INTERSECTION — modifies LIST1."
-  (intersection list1 list2 :test test :key key))
+  (intersection list1 list2 :test (%xtest test test-not) :key key))
 
-(defun nset-difference (list1 list2 &key (test #'eql) (key #'identity))
+(defun nset-difference (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive SET-DIFFERENCE — modifies LIST1."
-  (set-difference list1 list2 :test test :key key))
+  (set-difference list1 list2 :test (%xtest test test-not) :key key))
 
-(defun nunion (list1 list2 &key (test #'eql) (key #'identity))
+(defun nunion (list1 list2 &key (test #'eql) test-not (key #'identity))
   "Destructive UNION — may modify LIST1 or LIST2."
-  (union list1 list2 :test test :key key))
+  (union list1 list2 :test (%xtest test test-not) :key key))
 
 ;;; ---- Hash-table utilities -----------------------------------------------
 
@@ -4349,55 +5531,93 @@
     result))
 
 (defun array-has-fill-pointer-p (array)
-  "Return T if ARRAY has a fill pointer.  Bocl arrays don't; always NIL."
-  array nil)
+  "Return T if ARRAY has a fill pointer."
+  (if (%fill-pointer-of array) t nil))
+
+(defun fill-pointer (vector)
+  "Return the fill pointer of VECTOR (an error if it has none)."
+  (or (%fill-pointer-of vector)
+      (error "FILL-POINTER: ~S has no fill pointer" vector)))
+
+(defun %set-fill-pointer-checked (vector new)
+  "Backing for (SETF FILL-POINTER): set VECTOR's fill pointer to NEW."
+  (unless (%fill-pointer-of vector)
+    (error "(SETF FILL-POINTER): ~S has no fill pointer" vector))
+  (unless (and (integerp new) (<= 0 new) (<= new (array-total-size vector)))
+    (error "(SETF FILL-POINTER): ~S out of range for ~S" new vector))
+  (%set-fill-pointer vector new)
+  new)
 
 (defun adjustable-array-p (array)
-  "Return T if ARRAY is adjustable.  Bocl arrays aren't; always NIL."
-  array nil)
+  "Return T if ARRAY is adjustable."
+  (and (%md-array-p array) (%md-array-adjustable array) t))
 
 (defun simple-vector-p (object)
-  "Return T if OBJECT is a simple (non-adjustable, no fill-pointer) vector."
-  (vectorp object))
+  "Return T if OBJECT is a SIMPLE GENERAL vector — element-type T, not adjustable,
+no fill pointer, not displaced.  Strings and bit-vectors are vectors but NOT
+simple-vectors (CLHS)."
+  (and (vectorp object)
+       (not (stringp object))
+       (not (bit-vector-p object))
+       (not (%md-array-p object))
+       (not (%fill-pointer-of object))))
+
+(defun simple-bit-vector-p (object)
+  "Return T if OBJECT is a simple bit-vector (a bit-vector with no fill pointer;
+bocl has no adjustable/displaced bit-vectors)."
+  (and (bit-vector-p object) (not (%fill-pointer-of object))))
 
 (defun vector-fill (vector item &key (start 0) end)
   "Fill elements of VECTOR with ITEM."
   (fill vector item :start start :end end))
 
 (defun vector-push (new-element vector)
-  "Push NEW-ELEMENT onto VECTOR (fill-pointer based).  Stub: unsupported."
-  new-element vector
-  (error "VECTOR-PUSH: adjustable arrays not supported in bocl"))
+  "Store NEW-ELEMENT at VECTOR's fill pointer and increment it.  Returns the
+index where NEW-ELEMENT was stored, or NIL if VECTOR is already full.  AREF
+and (SETF AREF) operate on the underlying storage, so this works for both
+character (string-backed) and general vectors."
+  (let ((fp (%fill-pointer-of vector)))
+    (unless fp (error "VECTOR-PUSH: ~S has no fill pointer" vector))
+    (when (< fp (array-total-size vector))
+      (setf (aref vector fp) new-element)
+      (%set-fill-pointer vector (1+ fp))
+      fp)))
 
 (defun vector-pop (vector)
-  "Pop last element from VECTOR (fill-pointer based).  Stub: unsupported."
-  vector
-  (error "VECTOR-POP: adjustable arrays not supported in bocl"))
+  "Decrement VECTOR's fill pointer and return the element now just past it."
+  (let ((fp (%fill-pointer-of vector)))
+    (unless fp (error "VECTOR-POP: ~S has no fill pointer" vector))
+    (when (zerop fp) (error "VECTOR-POP: ~S is empty" vector))
+    (let ((new (1- fp)))
+      (%set-fill-pointer vector new)
+      (aref vector new))))
 
 (defun vector-push-extend (new-element vector &optional extension)
-  "Extend VECTOR and push.  Stub: unsupported."
-  new-element vector extension
-  (error "VECTOR-PUSH-EXTEND: adjustable arrays not supported in bocl"))
+  "Like VECTOR-PUSH but grows the storage when full.  bocl cannot grow an
+array object in place (no spare indirection), so when VECTOR is full this
+signals an error rather than silently corrupting; while capacity remains it
+behaves exactly like VECTOR-PUSH and always succeeds."
+  (let ((fp (%fill-pointer-of vector)))
+    (unless fp (error "VECTOR-PUSH-EXTEND: ~S has no fill pointer" vector))
+    (when (>= fp (array-total-size vector))
+      ;; Full: grow an adjustable array's storage in place (a %md-array keeps its
+      ;; elements in a separate vector we can replace); a non-adjustable vector
+      ;; cannot grow.
+      (if (and (%md-array-p vector) (%md-array-adjustable vector))
+          (let* ((cap    (array-total-size vector))
+                 (newcap (max (or extension (max 8 (* 2 cap))) (1+ fp)))
+                 (old    (%md-array-storage vector))
+                 (new    (%make-typed-storage (%md-array-element-type vector)
+                                              newcap nil nil 0)))
+            (dotimes (i cap) (%storage-set new i (%storage-ref old i)))
+            (setf (%md-array-storage vector)    new
+                  (%md-array-dimensions vector) (list newcap)))
+          (error "VECTOR-PUSH-EXTEND: ~S is full and not adjustable" vector)))
+    (setf (aref vector fp) new-element)
+    (%set-fill-pointer vector (1+ fp))
+    fp))
 
-;;; ---- Bit-vector operations ----------------------------------------------
-
-;; Bit-vector operations — the kernel's BIT accessor has a struct-layout
-;; mismatch (Array vs OctetArray) that causes it to return wrong values.
-;; These stubs accept the args and raise a clear error for now.
-(defun %bv-unimplemented (name &rest args)
-  args  ; ignored
-  (error "Bit-vector operation ~S not yet supported in bocl (kernel bug)" name))
-(defun bit-and   (v1 v2 &optional r) r (%bv-unimplemented 'bit-and   v1 v2))
-(defun bit-or    (v1 v2 &optional r) r (%bv-unimplemented 'bit-or    v1 v2))
-(defun bit-xor   (v1 v2 &optional r) r (%bv-unimplemented 'bit-xor   v1 v2))
-(defun bit-eqv   (v1 v2 &optional r) r (%bv-unimplemented 'bit-eqv   v1 v2))
-(defun bit-nand  (v1 v2 &optional r) r (%bv-unimplemented 'bit-nand  v1 v2))
-(defun bit-nor   (v1 v2 &optional r) r (%bv-unimplemented 'bit-nor   v1 v2))
-(defun bit-andc1 (v1 v2 &optional r) r (%bv-unimplemented 'bit-andc1 v1 v2))
-(defun bit-andc2 (v1 v2 &optional r) r (%bv-unimplemented 'bit-andc2 v1 v2))
-(defun bit-orc1  (v1 v2 &optional r) r (%bv-unimplemented 'bit-orc1  v1 v2))
-(defun bit-orc2  (v1 v2 &optional r) r (%bv-unimplemented 'bit-orc2  v1 v2))
-(defun bit-not   (v   &optional r)   r (%bv-unimplemented 'bit-not   v))
+;;; ---- Bit-vector operations: implemented below (search "BIT-VECTOR ops"). ----
 
 ;;; ---- LOOP-FINISH --------------------------------------------------------
 
@@ -4440,11 +5660,14 @@
 
 (defun char-name (char)
   "Return the name of CHARACTER as a string, or NIL."
+  ;; bocl's newline is NEL (code 133, the internal line separator); ASCII LF
+  ;; (code 10) is #\Linefeed.  Keep this consistent with NAME-CHAR and the reader
+  ;; so (name-char (char-name #\Newline)) round-trips.
   (case (char-code char)
     (0   "Null")     (7  "Bell")    (8  "Backspace")
-    (9   "Tab")      (10 "Newline") (11 "Page")
+    (9   "Tab")      (10 "Linefeed")(11 "Page")
     (12  "Page")     (13 "Return")  (27 "Escape")
-    (32  "Space")    (127 "Rubout") (t nil)))
+    (32  "Space")    (127 "Rubout") (133 "Newline") (t nil)))
 
 (defun name-char (name)
   "Return the character with the given NAME, or NIL."
@@ -4453,7 +5676,9 @@
           ((string= n "BELL")      (code-char 7))
           ((string= n "BACKSPACE") (code-char 8))
           ((string= n "TAB")       (code-char 9))
-          ((string= n "NEWLINE")   (code-char 10))
+          ((string= n "LINEFEED")  (code-char 10))
+          ((string= n "NEWLINE")   (code-char 133)) ; NEL — bocl's newline
+          ((string= n "LINE_SEPARATOR") (code-char 133))
           ((string= n "RETURN")    (code-char 13))
           ((string= n "ESCAPE")    (code-char 27))
           ((string= n "SPACE")     (code-char 32))
@@ -4474,8 +5699,15 @@
   (error "MAKE-LOAD-FORM-SAVING-SLOTS: not supported for ~S" object))
 
 (defun upgraded-array-element-type (type &optional env)
-  "Return T — bocl has a single uniform array element type."
-  type env t)
+  "The element type an array of element-type TYPE actually holds.  bocl stores
+BIT and CHARACTER arrays specially and everything else in a general (T) array, so
+report BIT / the character type / T accordingly (each is its own upgrade, so
+SUBTYPEP round-trips)."
+  (declare (ignore env))
+  (let ((head (if (consp type) (car type) type)))
+    (cond ((eq head 'bit) 'bit)
+          ((member head '(character base-char standard-char extended-char)) head)
+          (t t))))
 
 (defun row-major-aref (array index)
   "Access element at ROW-MAJOR linear INDEX in ARRAY."
@@ -4787,21 +6019,30 @@
 ;;; ---- GET-SETF-EXPANSION ---------------------------------------------------
 
 (defun get-setf-expansion (place &optional environment)
-  "Return the five-value setf expansion for PLACE."
+  "Return the five-value setf expansion for PLACE: (temps values stores
+store-form access-form).  Derived from the very *SETF-EXPANDERS* table the SETF
+macro uses, so it covers every place SETF does.  Each place subform is bound to
+a fresh temp (evaluated once), and both the store-form and access-form refer to
+those temps — the property SHIFTF/ROTATEF/INCF rely on for correctness when
+places share structure."
   (declare (ignore environment))
-  ;; Delegate to the existing SETF macro infrastructure.
-  ;; We re-use the setf-expander lookup from the SETF macro.
-  (if (symbolp place)
-      ;; Simple variable
-      (let ((store (gensym "STORE-")))
-        (values nil nil (list store) `(setq ,place ,store) place))
-      ;; Compound place — look up the expander
-      (let* ((op (car place))
-             (args (cdr place))
-             (expander (get op '%setf-expander)))
-        (if expander
-            (apply expander args)
-            (error "GET-SETF-EXPANSION: no setf expander for ~S" op)))))
+  (cond
+    ((symbolp place)
+     (let ((store (gensym "STORE-")))
+       (values nil nil (list store) `(setq ,place ,store) place)))
+    ((consp place)
+     (let ((expander (gethash (car place) *setf-expanders*)))
+       (if expander
+           (let* ((args  (cdr place))
+                  (temps (mapcar (lambda (a) a (gensym "G-")) args))
+                  (store (gensym "STORE-")))
+             (values temps
+                     args
+                     (list store)
+                     (apply expander (append temps (list store)))
+                     (cons (car place) temps)))
+           (error "GET-SETF-EXPANSION: no setf expander for ~S" (car place)))))
+    (t (error "GET-SETF-EXPANSION: invalid place ~S" place))))
 
 ;;; ---- DEFINE-SYMBOL-MACRO --------------------------------------------------
 ;;; Installs a global symbol macro so every reference to SYMBOL
@@ -4832,10 +6073,26 @@
 
 ;;; ---- COMPILE-FILE-PATHNAME -----------------------------------------------
 
-(defun compile-file-pathname (input-file &key (output-file nil) &allow-other-keys)
-  "Return the pathname that COMPILE-FILE would write to.  In bocl: stub."
-  (declare (ignore output-file))
-  input-file)
+(defun compile-file-pathname (input-file &key output-file &allow-other-keys)
+  "Return the pathname COMPILE-FILE would write to: the source pathname with
+   its type changed to \"fasl\".  (bocl has no real compiler — see COMPILE-FILE.)
+   A distinct type is required: programs such as the ANSI test suite assert that
+   the compiled-file type differs from the source type."
+  (or output-file
+      (let* ((in  (pathname input-file))
+             (dir (directory-namestring in))
+             (nm  (or (pathname-name in) "")))
+        (pathname (concatenate 'string dir nm ".fasl")))))
+
+(defun compile-file (input-file &key output-file &allow-other-keys)
+  "bocl is an interpreter with no real compiler.  COMPILE-FILE does not produce
+   a fasl; it just reports the conventional output pathname.  LOAD of that
+   (absent) pathname falls back to the source, so the COMPILE-AND-LOAD idiom in
+   the ANSI suite still loads everything — without writing any files.
+   Returns (values output-truename warnings-p failure-p)."
+  (let* ((in  (merge-pathnames input-file *default-pathname-defaults*))
+         (out (compile-file-pathname in :output-file output-file)))
+    (values (pathname out) nil nil)))
 
 ;;; ---- *PRINT-PPRINT-DISPATCH* ---------------------------------------------
 
@@ -4854,10 +6111,22 @@
 ;;; Broadcast, concatenated, synonym, echo, two-way streams are already
 ;;; stubbed in the stream-constructors section above; no additional stubs needed.
 
-;;; ---- *GENSYM-COUNTER* extension ------------------------------------------
-;;; GENSYM is already a kernel function.  *GENSYM-COUNTER* is the standard
-;;; variable that controls its counter; bocl maintains it internally.
-;;; Expose it as a Lisp variable synced with the kernel if needed.
+;;; ---- SET / FDEFINITION ---------------------------------------------------
+;;; GENSYM and *GENSYM-COUNTER* are kernel-side (sources/sequences.c): GENSYM now
+;;; accepts a string prefix or an integer suffix designator and uses the standard
+;;; *GENSYM-COUNTER* special variable (defined via define_variable).
+
+(defun set (symbol value)
+  "Assign VALUE to the dynamic (special-variable) value cell of SYMBOL; return VALUE."
+  (setf (symbol-value symbol) value))
+
+(defun fdefinition (name)
+  "Return the function definition named by the function-name NAME.  For a symbol
+   this is its SYMBOL-FUNCTION.  bocl has no (SETF f) functions, so only symbol
+   function-names are accepted."
+  (if (symbolp name)
+      (symbol-function name)
+      (error "FDEFINITION: ~S is not a function name." name)))
 
 ;;;; =========================================================================
 ;;;; Slice 26 — string operations with :START/:END, char predicates,
@@ -4946,41 +6215,48 @@
 
 ;;; ---- REMOVE-DUPLICATES for all sequence types ----------------------------
 
-(defun remove-duplicates (sequence &key (test #'eql) (key #'identity)
+(defun remove-duplicates (sequence &key (test #'eql) test-not (key #'identity)
                                         from-end (start 0) end)
-  "Return a new sequence with duplicate elements removed."
-  (declare (ignore from-end))   ; simplified: keep last occurrence
-  (let* ((len   (length sequence))
+  "Return SEQUENCE with duplicate elements in [START,END) removed.  Without
+FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
+  ;; O(n) fast path for a whole list: walk the conses (not ELT) and track seen
+  ;; keys in a hash when TEST is standard (else MEMBER).  The general index-based
+  ;; path below is O(n^2)/O(n^3-on-lists), which made large dedups (the ANSI
+  ;; search-bitvector *pattern-subbitvectors*) crawl.
+  (when (and (listp sequence) (eql start 0) (null end) (null test-not))
+    (let* ((ht-test (%std-hash-test test))
+           (seen-ht (and ht-test (make-hash-table :test ht-test)))
+           (seen    nil)
+           (acc     nil))
+      (flet ((seen-p (k) (if seen-ht (gethash k seen-ht) (member k seen :test test)))
+             (mark   (k) (if seen-ht (setf (gethash k seen-ht) t) (push k seen))))
+        (dolist (e (if from-end sequence (reverse sequence)))
+          (let ((k (funcall key e)))
+            (unless (seen-p k) (mark k) (push e acc))))
+        (return-from remove-duplicates (if from-end (nreverse acc) acc)))))
+  (let* ((test  (if test-not (lambda (a b) (not (funcall test-not a b))) test))
+         (len   (length sequence))
          (stop  (min (or end len) len))
          (seen  nil)
          (acc   nil))
-    (if (listp sequence)
-        ;; List path — traverse in reverse so push gives correct order
-        (progn
-          (do ((i (1- stop) (1- i)))
-              ((< i start))
-            (let* ((elt (elt sequence i))
-                   (k   (funcall key elt)))
-              (unless (find k seen :test test)
-                (push k seen)
-                (push elt acc))))
-          ;; Prepend elements before START unchanged
-          (nconc (subseq sequence 0 start) acc
-                 (subseq sequence stop len)))
-        ;; Vector/string path — build result list, then coerce
-        (progn
-          (do ((i (1- stop) (1- i)))
-              ((< i start))
-            (let* ((elt (elt sequence i))
-                   (k   (funcall key elt)))
-              (unless (find k seen :test test)
-                (push k seen)
-                (push elt acc))))
-          (let* ((prefix (subseq sequence 0 start))
-                 (suffix (subseq sequence stop len))
-                 (middle (coerce acc (if (stringp sequence) 'string 'vector))))
-            (concatenate (if (stringp sequence) 'string 'vector)
-                         prefix middle suffix))))))
+    (if from-end
+        ;; keep FIRST occurrence: scan forward, keep the first-seen of each key
+        (do ((i start (1+ i))) ((>= i stop))
+          (let* ((e (elt sequence i)) (k (funcall key e)))
+            (unless (member k seen :test test) (push k seen) (push e acc))))
+        ;; keep LAST occurrence: scan backward, keep the first-seen from the right
+        (do ((i (1- stop) (1- i))) ((< i start))
+          (let* ((e (elt sequence i)) (k (funcall key e)))
+            (unless (member k seen :test test) (push k seen) (push e acc)))))
+    (let ((middle (if from-end (nreverse acc) acc))
+          (prefix (subseq sequence 0 start))
+          (suffix (subseq sequence stop len)))
+      (if (listp sequence)
+          (append (coerce prefix 'list) middle (coerce suffix 'list))
+          (concatenate (cond ((stringp sequence) 'string)
+                             ((bit-vector-p sequence) 'bit-vector)
+                             (t 'vector))
+                       prefix middle suffix)))))
 
 (defun delete-duplicates (sequence &rest keys)
   "Destructive version of REMOVE-DUPLICATES (non-destructive in bocl)."
@@ -5022,6 +6298,27 @@
       (and (>= (char-code (car chars)) (char-code (cadr chars)))
            (apply #'char>= (cdr chars)))))
 
+;;; Case-insensitive character comparisons, N-ary (the earlier 2-ary defs are
+;;; superseded here): downcase every argument, then defer to the case-sensitive
+;;; comparison of the same shape.
+(defun char-equal        (&rest chars) (apply #'char=  (mapcar #'char-downcase chars)))
+(defun char-not-equal    (&rest chars) (apply #'char/= (mapcar #'char-downcase chars)))
+(defun char-lessp        (&rest chars) (apply #'char<  (mapcar #'char-downcase chars)))
+(defun char-greaterp     (&rest chars) (apply #'char>  (mapcar #'char-downcase chars)))
+(defun char-not-greaterp (&rest chars) (apply #'char<= (mapcar #'char-downcase chars)))
+(defun char-not-lessp    (&rest chars) (apply #'char>= (mapcar #'char-downcase chars)))
+
+;;; (CHARACTER designator) — the character a character-designator denotes:
+;;; a character itself, a 1-char string, or a symbol with a 1-char name.
+(defun character (designator)
+  (cond ((characterp designator) designator)
+        ((and (stringp designator) (= (length designator) 1)) (char designator 0))
+        ((and (symbolp designator) (not (null designator))
+              (= (length (symbol-name designator)) 1))
+         (char (symbol-name designator) 0))
+        (t (error 'type-error :datum designator
+                  :expected-type '(or character (string 1) (symbol 1))))))
+
 ;;; ---- STANDARD-CHAR-P / GRAPHIC-CHAR-P ------------------------------------
 
 (defun standard-char-p (char)
@@ -5051,6 +6348,15 @@
 (defun find-if (predicate sequence
                 &key (start 0) end from-end (key #'identity))
   "Return first element in SEQUENCE[START,END) satisfying PREDICATE."
+  ;; Forward list scan walks the conses directly — ELT on a list is O(n), so
+  ;; the index loop below would be O(n^2) (and made e.g. SET-DIFFERENCE hang).
+  (when (and (listp sequence) (not from-end))
+    (return-from find-if
+      (do ((tail (nthcdr start sequence) (cdr tail))
+           (i start (1+ i)))
+          ((or (null tail) (and end (>= i end))) nil)
+        (when (funcall predicate (funcall key (car tail)))
+          (return-from find-if (car tail))))))
   (let* ((len  (length sequence))
          (stop (min (or end len) len)))
     (if from-end
@@ -5066,9 +6372,12 @@
               (return-from find-if x)))))))
 
 (defun find (item sequence
-             &key (test #'eql) (start 0) end from-end (key #'identity))
+             &key (test #'eql) test-not (start 0) end from-end (key #'identity))
   "Return first occurrence of ITEM in SEQUENCE[START,END)."
-  (find-if (lambda (x) (funcall test item x)) sequence
+  (find-if (if test-not
+               (lambda (x) (not (funcall test-not item x)))
+               (lambda (x) (funcall test item x)))
+           sequence
            :start start :end end :from-end from-end :key key))
 
 (defun find-if-not (predicate sequence
@@ -5079,6 +6388,13 @@
 (defun position-if (predicate sequence
                     &key (start 0) end from-end (key #'identity))
   "Return index of first element in SEQUENCE[START,END) satisfying PREDICATE."
+  (when (and (listp sequence) (not from-end))   ; O(n) cdr-walk (see FIND-IF)
+    (return-from position-if
+      (do ((tail (nthcdr start sequence) (cdr tail))
+           (i start (1+ i)))
+          ((or (null tail) (and end (>= i end))) nil)
+        (when (funcall predicate (funcall key (car tail)))
+          (return-from position-if i)))))
   (let* ((len  (length sequence))
          (stop (min (or end len) len)))
     (if from-end
@@ -5092,9 +6408,12 @@
             (return-from position-if i))))))
 
 (defun position (item sequence
-                 &key (test #'eql) (start 0) end from-end (key #'identity))
+                 &key (test #'eql) test-not (start 0) end from-end (key #'identity))
   "Return index of first occurrence of ITEM in SEQUENCE[START,END)."
-  (position-if (lambda (x) (funcall test item x)) sequence
+  (position-if (if test-not
+                   (lambda (x) (not (funcall test-not item x)))
+                   (lambda (x) (funcall test item x)))
+               sequence
                :start start :end end :from-end from-end :key key))
 
 (defun position-if-not (predicate sequence
@@ -5106,58 +6425,91 @@
 
 (defun remove-if (predicate sequence
                   &key (start 0) end from-end (count nil) (key #'identity))
-  "Return sequence with elements matching PREDICATE removed."
+  "Return SEQUENCE with elements (in [START,END)) satisfying PREDICATE removed.
+:COUNT limits how many; :FROM-END chooses which when COUNT is given."
   (let* ((len  (length sequence))
          (stop (min (or end len) len))
-         (n    0)
-         (acc  nil))
-    (if from-end
-        ;; from-end: collect right to left, reverse prefix/suffix
-        (let ((keep (make-array (max 0 (- stop start)) :initial-element nil))
-              (i    0))
-          (do ((j (1- stop) (1- j)))
-              ((< j start))
-            (let ((x (elt sequence j)))
-              (if (and (or (null count) (< n count))
-                       (funcall predicate (funcall key x)))
-                  (setq n (1+ n))
-                  (setf (aref keep i) (list x)))
-              (setq i (1+ i))))
-          (let ((middle nil))
-            (dotimes (k i)
-              (when (aref keep k) (push (car (aref keep k)) middle)))
-            (setq acc middle)))
-        ;; forward direction
-        (do ((i start (1+ i)))
-            ((>= i stop))
-          (let ((x (elt sequence i)))
-            (unless (and (or (null count) (< n count))
-                         (funcall predicate (funcall key x)))
-              (push x acc))
-            (when (and (or (null count) (< n count))
-                       (funcall predicate (funcall key x)))
-              (setq n (1+ n)))))
-        )
-    ;; build result preserving elements outside [start,stop)
-    (let ((prefix (subseq sequence 0 start))
-          (middle (nreverse acc))
-          (suffix (subseq sequence stop len)))
-      (if (listp sequence)
-          (nconc (coerce prefix 'list) middle (coerce suffix 'list))
-          (concatenate (if (stringp sequence) 'string 'vector)
-                       (coerce prefix (if (stringp sequence) 'string 'vector))
-                       (coerce middle (if (stringp sequence) 'string 'vector))
-                       (coerce suffix (if (stringp sequence) 'string 'vector)))))))
+         (mark (make-array len :initial-element nil))
+         (n    0))
+    ;; Mark the positions to delete, scanning in the :FROM-END direction so
+    ;; :COUNT removes the rightmost (resp. leftmost) matches.
+    (flet ((maybe (i)
+             (when (and (or (null count) (< n count))
+                        (funcall predicate (funcall key (elt sequence i))))
+               (setf (aref mark i) t)
+               (setq n (1+ n)))))
+      (if from-end
+          (do ((i (1- stop) (1- i))) ((< i start)) (maybe i))
+          (do ((i start (1+ i)))     ((>= i stop)) (maybe i))))
+    ;; Build the result (same sequence kind) from the unmarked elements.
+    (let ((kept nil))
+      (dotimes (i len) (unless (aref mark i) (push (elt sequence i) kept)))
+      (setq kept (nreverse kept))
+      (let ((klen (length kept)))
+        (cond ((listp sequence) kept)
+              ((stringp sequence)
+               (let ((s (make-string klen)))
+                 (dotimes (i klen s) (char-set s i (nth i kept)))))
+              ((bit-vector-p sequence)
+               (let ((v (make-bit-vector klen 0)))
+                 (dotimes (i klen v) (bit-set v i (nth i kept)))))
+              (t
+               (let ((v (make-array klen)))
+                 (dotimes (i klen v) (setf (aref v i) (nth i kept))))))))))
 
 (defun remove (item sequence
-               &key (test #'eql) (start 0) end from-end count (key #'identity))
-  (remove-if (lambda (x) (funcall test item x)) sequence
+               &key (test #'eql) test-not (start 0) end from-end count (key #'identity))
+  (remove-if (if test-not
+                 (lambda (x) (not (funcall test-not item x)))
+                 (lambda (x) (funcall test item x)))
+             sequence
              :start start :end end :from-end from-end :count count :key key))
 
 (defun remove-if-not (predicate sequence
                       &key (start 0) end from-end count (key #'identity))
   (remove-if (lambda (x) (not (funcall predicate x))) sequence
              :start start :end end :from-end from-end :count count :key key))
+
+;; DELETE family: CL permits DELETE/DELETE-IF/DELETE-IF-NOT to be non-destructive,
+;; so reuse the generic REMOVE family (handles lists, strings, vectors, and — as
+;; general vectors — bit-vectors).  This also gives them the full keyword set the
+;; kernel DELETE (object+list only) and the early list-only DELETE-IF lacked.
+(defun %delete-into-list (orig kept)
+  "Destructively reshape ORIG's conses to hold KEPT's elements (KEPT is the
+REMOVE result, so it is ORIG minus the deleted items, in order), and return it.
+This makes DELETE mutate its list argument, as the destructive variant should."
+  (cond ((null kept) nil)            ; everything deleted -> empty result
+        ((null orig) kept)
+        (t (do ((o orig (cdr o)) (k kept (cdr k)) (prev nil o))
+               ((null k) (setf (cdr prev) nil) orig)
+             (setf (car o) (car k))))))
+
+(defun delete (item sequence &rest keys)
+  (if (listp sequence)
+      (%delete-into-list sequence (apply #'remove item sequence keys))
+      (apply #'remove item sequence keys)))
+(defun delete-if (predicate sequence &rest keys)
+  (if (listp sequence)
+      (%delete-into-list sequence (apply #'remove-if predicate sequence keys))
+      (apply #'remove-if predicate sequence keys)))
+(defun delete-if-not (predicate sequence &rest keys)
+  (if (listp sequence)
+      (%delete-into-list sequence (apply #'remove-if-not predicate sequence keys))
+      (apply #'remove-if-not predicate sequence keys)))
+
+(defun merge (result-type sequence1 sequence2 predicate &key (key #'identity))
+  "Merge two sorted sequences into one sorted sequence of RESULT-TYPE (stable:
+ties take from SEQUENCE1 first)."
+  (let ((l1 (length sequence1)) (l2 (length sequence2))
+        (acc nil) (i 0) (j 0))
+    (do () ((and (>= i l1) (>= j l2)))
+      (cond ((>= i l1) (push (elt sequence2 j) acc) (setq j (1+ j)))
+            ((>= j l2) (push (elt sequence1 i) acc) (setq i (1+ i)))
+            ((funcall predicate (funcall key (elt sequence2 j))
+                                (funcall key (elt sequence1 i)))
+             (push (elt sequence2 j) acc) (setq j (1+ j)))
+            (t (push (elt sequence1 i) acc) (setq i (1+ i)))))
+    (coerce (nreverse acc) result-type)))
 
 ;;; ---- STRING= / STRING< etc. with bounds ----------------------------------
 
@@ -5179,58 +6531,87 @@
         (when (/= xa xb)
           (return-from %string-compare-bounded (- xa xb)))))))
 
+;;; Compare the substrings A[start1,end1) and B[start2,end2) (A and B are string
+;;; designators; CI = case-insensitive).  Returns two values: the absolute index
+;;; in A of the first mismatch (or the end of A's compared region when A is a
+;;; prefix of B), and a relation -1 / 0 / 1.  CLHS string</string<=/... return
+;;; that index (not just a boolean) when the relation holds, else NIL.
+(defun %string-cmp (a b ci start1 end1 start2 end2)
+  (let* ((sa (string a)) (sb (string b))
+         (e1 (or end1 (length sa)))
+         (e2 (or end2 (length sb))))
+    (do ((i start1 (1+ i)) (j start2 (1+ j)))
+        (nil)
+      (cond ((and (>= i e1) (>= j e2)) (return (values i 0)))
+            ((>= i e1)                 (return (values i -1)))
+            ((>= j e2)                 (return (values i 1)))
+            (t (let ((ca (char sa i)) (cb (char sb j)))
+                 (when ci (setq ca (char-downcase ca) cb (char-downcase cb)))
+                 (cond ((char< ca cb) (return (values i -1)))
+                       ((char> ca cb) (return (values i 1))))))))))
+
 (defun string= (a b &key (start1 0) end1 (start2 0) end2)
   (zerop (%string-compare-bounded a b nil start1 end1 start2 end2)))
 
 (defun string/= (a b &key (start1 0) end1 (start2 0) end2)
-  (not (zerop (%string-compare-bounded a b nil start1 end1 start2 end2))))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (zerop rel) nil i)))
 
 (defun string< (a b &key (start1 0) end1 (start2 0) end2)
-  (< (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (< rel 0) i nil)))
 
 (defun string> (a b &key (start1 0) end1 (start2 0) end2)
-  (> (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (> rel 0) i nil)))
 
 (defun string<= (a b &key (start1 0) end1 (start2 0) end2)
-  (<= (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (<= rel 0) i nil)))
 
 (defun string>= (a b &key (start1 0) end1 (start2 0) end2)
-  (>= (%string-compare-bounded a b nil start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b nil start1 end1 start2 end2)
+    (if (>= rel 0) i nil)))
 
 (defun string-equal (a b &key (start1 0) end1 (start2 0) end2)
   (zerop (%string-compare-bounded a b t start1 end1 start2 end2)))
 
 (defun string-not-equal (a b &key (start1 0) end1 (start2 0) end2)
-  (not (zerop (%string-compare-bounded a b t start1 end1 start2 end2))))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (zerop rel) nil i)))
 
 (defun string-lessp (a b &key (start1 0) end1 (start2 0) end2)
-  (< (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (< rel 0) i nil)))
 
 (defun string-greaterp (a b &key (start1 0) end1 (start2 0) end2)
-  (> (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (> rel 0) i nil)))
 
 (defun string-not-lessp (a b &key (start1 0) end1 (start2 0) end2)
-  (>= (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (>= rel 0) i nil)))
 
 (defun string-not-greaterp (a b &key (start1 0) end1 (start2 0) end2)
-  (<= (%string-compare-bounded a b t start1 end1 start2 end2) 0))
+  (multiple-value-bind (i rel) (%string-cmp a b t start1 end1 start2 end2)
+    (if (<= rel 0) i nil)))
+
+(defun simple-string-p (object)
+  "A simple string: a string with no fill pointer (bocl has no adjustable
+or displaced strings, so absence of a fill pointer is the only distinction)."
+  (and (stringp object) (not (%fill-pointer-of object))))
 
 ;;; ---- WRITE-TO-STRING with :base ------------------------------------------
 
-(defun write-to-string (object &rest keys
-                        &key (base *print-base*)
-                             (radix *print-radix*)
-                             (readably *print-readably*)
-                             (escape *print-escape*)
-                             &allow-other-keys)
-  "Produce a string representation of OBJECT."
-  (declare (ignore readably escape radix keys))
+(defun write-to-string (object &rest keys &key (base *print-base*) &allow-other-keys)
+  "Produce a string representation of OBJECT, honouring the print keywords
+(:CIRCLE/:LENGTH/:LEVEL/:ESCAPE/… via WRITE) — needed so e.g. circular structure
+prints with #n= labels instead of looping forever."
   (if (and (integerp object) base (/= base 10))
-      ;; Non-decimal integer: use number-to-string
+      ;; Non-decimal integer shortcut.
       (number-to-string object base)
-      ;; Default: prin1
       (with-output-to-string (s)
-        (prin1 object s))))
+        (apply #'write object :stream s keys))))
 
 (defun princ-to-string (obj)
   "Produce a PRINC string representation of OBJ."
@@ -5239,9 +6620,13 @@
 ;;; ---- SUBSTITUTE with bounds/count ----------------------------------------
 
 (defun substitute (new old sequence
-                   &key (test #'eql) (start 0) end count from-end (key #'identity))
+                   &key (test #'eql) test-not (start 0) end count from-end (key #'identity))
   "Return copy of SEQUENCE with occurrences of OLD replaced by NEW."
-  (substitute-if new (lambda (x) (funcall test old x)) sequence
+  (substitute-if new
+                 (if test-not
+                     (lambda (x) (not (funcall test-not old x)))
+                     (lambda (x) (funcall test old x)))
+                 sequence
                  :start start :end end :count count :from-end from-end :key key))
 
 (defun substitute-if (new predicate sequence
@@ -5282,15 +6667,35 @@
 (defun substitute-if-not (new predicate sequence &rest keys)
   (apply #'substitute-if new (lambda (x) (not (funcall predicate x))) sequence keys))
 
-(defun nsubstitute (new old sequence &rest keys)
-  "Destructive SUBSTITUTE — non-destructive in bocl."
-  (apply #'substitute new old sequence keys))
+(defun nsubstitute-if (new predicate sequence
+                       &key (start 0) end count from-end (key #'identity))
+  "Destructive SUBSTITUTE-IF: replace matching elements of SEQUENCE in place."
+  (let* ((len  (length sequence))
+         (stop (min (or end len) len))
+         (n    0))
+    (if from-end
+        (do ((i (1- stop) (1- i)))
+            ((or (< i start) (and count (>= n count))))
+          (when (funcall predicate (funcall key (elt sequence i)))
+            (setf (elt sequence i) new) (setq n (1+ n))))
+        (do ((i start (1+ i)))
+            ((or (>= i stop) (and count (>= n count))))
+          (when (funcall predicate (funcall key (elt sequence i)))
+            (setf (elt sequence i) new) (setq n (1+ n)))))
+    sequence))
 
-(defun nsubstitute-if (new predicate sequence &rest keys)
-  (apply #'substitute-if new predicate sequence keys))
+(defun nsubstitute (new old sequence
+                    &key (test #'eql) test-not (start 0) end count from-end (key #'identity))
+  "Destructive SUBSTITUTE."
+  (nsubstitute-if new
+                  (if test-not
+                      (lambda (x) (not (funcall test-not old x)))
+                      (lambda (x) (funcall test old x)))
+                  sequence
+                  :start start :end end :count count :from-end from-end :key key))
 
 (defun nsubstitute-if-not (new predicate sequence &rest keys)
-  (apply #'substitute-if-not new predicate sequence keys))
+  (apply #'nsubstitute-if new (lambda (x) (not (funcall predicate x))) sequence keys))
 
 ;;; ---- MEMBER with :key ----------------------------------------------------
 
@@ -5307,30 +6712,37 @@
 ;;; ---- MISMATCH with full kwargs -------------------------------------------
 
 (defun mismatch (sequence1 sequence2
-                 &key (test #'eql) (key #'identity)
+                 &key (test #'eql) test-not (key #'identity)
                       (start1 0) end1
                       (start2 0) end2
                       from-end)
-  "Return index of first mismatch between two sequence subranges, or NIL."
-  (let* ((len1  (length sequence1))
+  "Return the index in SEQUENCE1 of the first (or, FROM-END, one past the last)
+position at which the two subranges differ, or NIL if they match."
+  (let* ((test  (if test-not (lambda (a b) (not (funcall test-not a b))) test))
+         (len1  (length sequence1))
          (len2  (length sequence2))
          (stop1 (min (or end1 len1) len1))
          (stop2 (min (or end2 len2) len2))
-         (n     (min (- stop1 start1) (- stop2 start2))))
+         ;; Clamp subrange lengths to >= 0: an empty/over-bounded range (start
+         ;; >= stop) must not yield a negative N and out-of-bounds ELT access.
+         (sub1  (max 0 (- stop1 start1)))
+         (sub2  (max 0 (- stop2 start2)))
+         (n     (min sub1 sub2)))
     (if from-end
         (do ((i 1 (1+ i)))
             ((> i n)
-             (if (= (- stop1 start1) (- stop2 start2)) nil
-                 (if (> (- stop1 start1) (- stop2 start2))
-                     (- stop1 i)
-                     start2)))
+             ;; matched the common tail; if lengths differ the mismatch is at
+             ;; the boundary — one past SEQUENCE1's extra prefix.
+             (cond ((= sub1 sub2) nil)
+                   ((> sub1 sub2) (+ start1 (- sub1 sub2)))
+                   (t             start1)))
           (unless (funcall test
                            (funcall key (elt sequence1 (- stop1 i)))
                            (funcall key (elt sequence2 (- stop2 i))))
-            (return (- stop1 i))))
+            (return (1+ (- stop1 i)))))
         (do ((i 0 (1+ i)))
             ((= i n)
-             (if (= (- stop1 start1) (- stop2 start2)) nil
+             (if (= sub1 sub2) nil
                  (+ start1 i)))
           (unless (funcall test
                            (funcall key (elt sequence1 (+ start1 i)))
@@ -5340,11 +6752,12 @@
 ;;; ---- SEARCH with full kwargs (update for CL compliance) -----------------
 
 (defun search (pattern target
-               &key (test #'eql) (key #'identity)
+               &key (test #'eql) test-not (key #'identity)
                     (start1 0) end1
                     (start2 0) end2
                     from-end)
-  "Return start index of PATTERN in TARGET, or NIL."
+  "Return the start index in TARGET of a subsequence matching PATTERN, or NIL.
+FROM-END returns the rightmost such index."
   (let* ((plen  (length pattern))
          (tlen  (length target))
          (pe    (min (or end1 plen) plen))
@@ -5353,22 +6766,18 @@
          (tn    (- te start2))
          (limit (- tn pn)))
     (when (< limit 0) (return-from search nil))
-    (if from-end
-        (do ((i (+ start2 limit) (1- i)))
-            ((< i start2) nil)
-          (when (= 0 (or (mismatch pattern target
-                                   :start1 start1 :end1 pe
-                                   :start2 i :end2 (+ i pn)
-                                   :test test :key key)
-                         0))
-            (return i)))
-        (do ((i start2 (1+ i)))
-            ((> i (+ start2 limit)) nil)
-          (when (null (mismatch pattern target
-                                :start1 start1 :end1 pe
-                                :start2 i :end2 (+ i pn)
-                                :test test :key key))
-            (return i))))))
+    (flet ((match-at (i)
+             (null (mismatch pattern target
+                             :start1 start1 :end1 pe
+                             :start2 i :end2 (+ i pn)
+                             :test test :test-not test-not :key key))))
+      (if from-end
+          (do ((i (+ start2 limit) (1- i)))
+              ((< i start2) nil)
+            (when (match-at i) (return i)))
+          (do ((i start2 (1+ i)))
+              ((> i (+ start2 limit)) nil)
+            (when (match-at i) (return i)))))))
 
 ;;;; =========================================================================
 ;;;; Slice 28 — multi-sequence predicates, hash iteration, string utilities,
@@ -5596,26 +7005,31 @@
 ;;; ---- COUNT-IF / COUNT / COUNT-IF-NOT with :start/:end -------------------
 
 (defun count-if (predicate sequence
-                 &key (start 0) end (key #'identity))
-  "Count elements in SEQUENCE[START,END) satisfying PREDICATE."
+                 &key (start 0) end from-end (key #'identity))
+  "Count elements in SEQUENCE[START,END) satisfying PREDICATE.  FROM-END does not
+change the count, but PREDICATE is called in that order (it may have effects)."
   (let* ((len  (length sequence))
          (stop (min (or end len) len))
          (n    0))
-    (do ((i start (1+ i)))
-        ((>= i stop) n)
-      (when (funcall predicate (funcall key (elt sequence i)))
-        (setq n (1+ n))))))
+    (if from-end
+        (do ((i (1- stop) (1- i))) ((< i start) n)
+          (when (funcall predicate (funcall key (elt sequence i))) (setq n (1+ n))))
+        (do ((i start (1+ i))) ((>= i stop) n)
+          (when (funcall predicate (funcall key (elt sequence i))) (setq n (1+ n)))))))
 
 (defun count (item sequence
-              &key (test #'eql) (start 0) end (key #'identity))
+              &key (test #'eql) test-not (start 0) end from-end (key #'identity))
   "Count occurrences of ITEM in SEQUENCE[START,END)."
-  (count-if (lambda (x) (funcall test item x)) sequence
-            :start start :end end :key key))
+  (count-if (if test-not
+                (lambda (x) (not (funcall test-not item x)))
+                (lambda (x) (funcall test item x)))
+            sequence
+            :start start :end end :from-end from-end :key key))
 
 (defun count-if-not (predicate sequence
-                     &key (start 0) end (key #'identity))
+                     &key (start 0) end from-end (key #'identity))
   (count-if (lambda (x) (not (funcall predicate x))) sequence
-            :start start :end end :key key))
+            :start start :end end :from-end from-end :key key))
 
 ;;; ---- REDUCE with :start/:end --------------------------------------------
 
@@ -5712,6 +7126,11 @@
     ((and (eql type1 'float)     (eql type2 'real))      (values t t))
     ((and (eql type1 'float)     (eql type2 'number))    (values t t))
     ((and (eql type1 'integer)   (eql type2 'number))    (values t t))
+    ;; FIXNUM / BIGNUM are subtypes of INTEGER (and so of the whole tower).
+    ((and (member type1 '(fixnum bignum)) (eql type2 'integer))  (values t t))
+    ((and (member type1 '(fixnum bignum)) (eql type2 'rational)) (values t t))
+    ((and (member type1 '(fixnum bignum)) (eql type2 'real))     (values t t))
+    ((and (member type1 '(fixnum bignum)) (eql type2 'number))   (values t t))
     ;; Sequence hierarchy
     ((and (eql type1 'string)    (eql type2 'vector))    (values t t))
     ((and (eql type1 'string)    (eql type2 'sequence))  (values t t))
@@ -5720,6 +7139,14 @@
     ((and (eql type1 'cons)      (eql type2 'list))      (values t t))
     ((and (eql type1 'null)      (eql type2 'list))      (values t t))
     ((and (eql type1 'null)      (eql type2 'symbol))    (values t t))
+    ;; CLOS class subtyping: TYPE2 is a superclass of TYPE1 when its %cls is in
+    ;; TYPE1's class precedence list (covers conditions defined via DEFCLASS /
+    ;; DEFINE-CONDITION inheriting the standard condition classes).
+    ((and (symbolp type1)
+          (let ((c1 (gethash type1 *%classes*)) (c2 (gethash type2 *%classes*)))
+            (and (%is-cls c1) (%is-cls c2)
+                 (not (null (member c2 (%cls-cpl c1)))))))
+     (values t t))
     (t (values nil nil))))
 
 ;;;; =========================================================================
@@ -5735,6 +7162,12 @@
   (cond
     ((eq type t) t)
     ((eq type nil) nil)
+    ;; FIXNUM / BIGNUM — both are kernel INTEGERs; a bignum is the boxed kind.
+    ;; Guarded on %bignump so this is correct even when bignum support is absent
+    ;; (then every integer is a fixnum and there are no bignums).
+    ((eq type 'fixnum) (and (typep object 'integer)
+                            (not (and (fboundp '%bignump) (%bignump object)))))
+    ((eq type 'bignum) (and (fboundp '%bignump) (%bignump object)))
     ;; Compound type specifiers
     ((consp type)
      (let ((head (car type))
@@ -5795,12 +7228,15 @@
     ((%is-cls type)
      (and (%is-obj object)
           (not (null (member type (%cls-cpl (%obj-class object)))))))
-    ;; Symbol — check user CLOS classes first, then kernel
+    ;; Symbol — a CLOS class (for %obj instances) and/or a kernel class (for
+    ;; kernel objects); some names (the CONDITION hierarchy) are BOTH, so check
+    ;; the %cls CPL for CLOS instances and fall back to the kernel hierarchy.
     ((symbolp type)
      (let ((cls (gethash type *%classes*)))
        (if (%is-cls cls)
-           (and (%is-obj object)
-                (not (null (member cls (%cls-cpl (%obj-class object))))))
+           (or (and (%is-obj object)
+                    (not (null (member cls (%cls-cpl (%obj-class object))))))
+               (funcall *%kernel-typep* object type))
            (funcall *%kernel-typep* object type))))
     ;; Non-symbol non-CLOS type (e.g. a structure-class or kernel class object)
     ;; — delegate directly to the kernel typep which handles the class hierarchy.
@@ -5813,32 +7249,57 @@
   (or (eq type 'integer) (eq type 'fixnum) (eq type 'bignum)
       (and (consp type) (eq (car type) 'integer))))
 
-;;; ---- BIT-VECTOR operations -----------------------------------------------
-;;; Use bit-set/bit directly to avoid the map→plain-vector pitfall.
+;;; ---- BIT-VECTOR ops ------------------------------------------------------
+;;; The 11 CL bit-array logical operations.  Implemented over BIT / BIT-SET
+;;; (which work on real BIT_VECTOR objects), element by element.
+;;;
+;;; Each op takes an optional RESULT-BIT-ARRAY: NIL (the default) makes a fresh
+;;; bit-vector; T means update the first argument in place; an explicit
+;;; bit-vector stores the result there.  Reads are always taken before the
+;;; same-index write, so destructive use (result EQ an input) is safe.
 
-(defun %bit-binop (fn v1 v2)
-  "Apply binary function FN element-wise to two bit-vectors."
-  (let* ((len (min (length v1) (length v2)))
-         (out (make-bit-vector len 0)))
-    (dotimes (i len out)
-      (bit-set out i (logand 1 (funcall fn (bit v1 i) (bit v2 i)))))))
+;; The bit-* ops accept bit-vectors AND multi-dimensional bit arrays.  Both are
+;; addressed through their flat row-major storage via ROW-MAJOR-AREF (which knows
+;; how to reach the bits of either), %BIT-SIZE gives the element count, and a NIL
+;; result-arg makes a fresh bit array of the SAME shape as the first operand.
+(defun %bit-size (a)
+  (if (%md-array-p a) (array-total-size a) (length a)))
 
-(defun bit-and   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logand  v1 v2))
-(defun bit-or    (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logior  v1 v2))
-(defun bit-xor   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop #'logxor  v1 v2))
-(defun bit-eqv   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logxor a b) 1)) v1 v2))
-(defun bit-nand  (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logand a b) 1)) v1 v2))
-(defun bit-nor   (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logxor (logior a b) 1)) v1 v2))
-(defun bit-andc1 (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logand (logxor a 1) b)) v1 v2))
-(defun bit-andc2 (v1 v2 &optional r) (declare (ignore r)) (%bit-binop (lambda (a b) (logand a (logxor b 1))) v1 v2))
+(defun %bit-result-vector (v1 result-bit-array)
+  (cond ((null result-bit-array)
+         (if (%md-array-p v1)
+             (make-array (array-dimensions v1) :element-type 'bit)
+             (make-bit-vector (length v1) 0)))
+        ((eq result-bit-array t) v1)
+        (t result-bit-array)))
 
-(defun bit-not (v1 &optional result)
-  "Return a bit-vector with all bits flipped."
-  (declare (ignore result))
-  (let* ((len (length v1))
-         (out (make-bit-vector len 0)))
-    (dotimes (i len out)
-      (bit-set out i (logxor (bit v1 i) 1)))))
+(defun %bit-binop (fn v1 v2 result-bit-array)
+  "Apply binary bit function FN element-wise to V1 and V2 into the resolved
+result array; return that array."
+  (let ((out (%bit-result-vector v1 result-bit-array))
+        (n   (%bit-size v1)))
+    (dotimes (i n out)
+      (setf (row-major-aref out i)
+            (logand 1 (funcall fn (row-major-aref v1 i) (row-major-aref v2 i)))))))
+
+(defun bit-and   (v1 v2 &optional r) (%bit-binop #'logand v1 v2 r))
+(defun bit-ior   (v1 v2 &optional r) (%bit-binop #'logior v1 v2 r))
+(defun bit-or    (v1 v2 &optional r) (bit-ior v1 v2 r))   ; non-standard alias for BIT-IOR
+(defun bit-xor   (v1 v2 &optional r) (%bit-binop #'logxor v1 v2 r))
+(defun bit-eqv   (v1 v2 &optional r) (%bit-binop (lambda (a b) (logxor (logxor a b) 1)) v1 v2 r))
+(defun bit-nand  (v1 v2 &optional r) (%bit-binop (lambda (a b) (logxor (logand a b) 1)) v1 v2 r))
+(defun bit-nor   (v1 v2 &optional r) (%bit-binop (lambda (a b) (logxor (logior a b) 1)) v1 v2 r))
+(defun bit-andc1 (v1 v2 &optional r) (%bit-binop (lambda (a b) (logand (logxor a 1) b)) v1 v2 r))
+(defun bit-andc2 (v1 v2 &optional r) (%bit-binop (lambda (a b) (logand a (logxor b 1))) v1 v2 r))
+(defun bit-orc1  (v1 v2 &optional r) (%bit-binop (lambda (a b) (logior (logxor a 1) b)) v1 v2 r))
+(defun bit-orc2  (v1 v2 &optional r) (%bit-binop (lambda (a b) (logior a (logxor b 1))) v1 v2 r))
+
+(defun bit-not (v1 &optional result-bit-array)
+  "Return a bit array with all bits of V1 flipped (see RESULT-BIT-ARRAY above)."
+  (let ((out (%bit-result-vector v1 result-bit-array))
+        (n   (%bit-size v1)))
+    (dotimes (i n out)
+      (setf (row-major-aref out i) (logxor (row-major-aref v1 i) 1)))))
 
 ;;; ---- REVERSE for strings and vectors (kernel handles lists) ---------------
 
@@ -5873,16 +7334,12 @@
 (defun make-sequence (result-type length &key (initial-element nil))
   "Return a sequence of type RESULT-TYPE and LENGTH.
   :INITIAL-ELEMENT fills every position."
-  (cond
-    ((member result-type '(list cl:list))
-     (make-list length :initial-element initial-element))
-    ((member result-type '(string cl:string simple-string))
-     (make-string length :initial-element (or initial-element #\Space)))
-    ((member result-type '(vector simple-vector))
-     (make-array length :initial-element initial-element))
-    ((member result-type '(bit-vector simple-bit-vector))
-     (make-bit-vector length (if (integerp initial-element) initial-element 0)))
-    (t (error "MAKE-SEQUENCE: unsupported result-type ~S" result-type))))
+  (case (%seq-type-kind result-type)
+    (:list       (make-list length :initial-element initial-element))
+    (:string     (make-string length :initial-element (or initial-element #\Space)))
+    (:bit-vector (make-bit-vector length (if (integerp initial-element) initial-element 0)))
+    (:vector     (make-array length :initial-element initial-element))
+    (t           (error 'type-error :datum result-type :expected-type 'sequence))))
 
 ;;; ---- COERCE to sequence types --------------------------------------------
 ;;; Kernel handles 'character, 'float, 'integer; prelude handles sequences.
@@ -5942,21 +7399,20 @@
                    (push (apply function
                                 (mapcar (lambda (s) (elt s i)) sequences))
                          acc)))))
-    (cond
-      ((null result-type) nil)
-      ((member result-type '(list cl:list)) vals)
-      ((member result-type '(string cl:string simple-string))
-       (let ((s (make-string len)))
-         (dotimes (i len s)
-           (setf (char s i) (nth i vals)))))
-      ((member result-type '(bit-vector simple-bit-vector))
-       (let ((v (make-bit-vector len 0)))
-         (dotimes (i len v)
-           (bit-set v i (logand 1 (nth i vals))))))
-      (t   ;; VECTOR, SIMPLE-VECTOR, etc.
-       (let ((v (make-array len)))
-         (dotimes (i len v)
-           (setf (aref v i) (nth i vals))))))))
+    (if (null result-type)
+        nil
+        (case (%seq-type-kind result-type)
+          (:list vals)
+          (:string
+           (let ((s (make-string len)))
+             (dotimes (i len s) (setf (char s i) (nth i vals)))))
+          (:bit-vector
+           (let ((v (make-bit-vector len 0)))
+             (dotimes (i len v) (bit-set v i (logand 1 (nth i vals))))))
+          (:vector
+           (let ((v (make-array len)))
+             (dotimes (i len v) (setf (aref v i) (nth i vals)))))
+          (t (error 'type-error :datum result-type :expected-type 'sequence))))))
 
 ;;;; =========================================================================
 ;;;; Slice 32 additions (bundled with TODO-driven fixes)
@@ -6240,6 +7696,23 @@
 
 ;;; ---- MAKE-PATHNAME (logical-aware) ---------------------------------------
 
+(defun %pn-comp-string (c)
+  "Coerce a pathname component (name / type / directory part) to the string
+   that represents it in a namestring.
+     NIL              -> \"\"   (component absent)
+     :WILD            -> \"*\"
+     :WILD-INFERIORS  -> \"**\"
+     :UNSPECIFIC      -> \"\"
+     string           -> itself
+     other symbol     -> its (downcased) name."
+  (cond ((null c)               "")
+        ((eq c :wild)           "*")
+        ((eq c :wild-inferiors) "**")
+        ((eq c :unspecific)     "")
+        ((stringp c)            c)
+        ((symbolp c)            (string-downcase (symbol-name c)))
+        (t                      (princ-to-string c))))
+
 (defun make-pathname (&key host device directory name type version
                            (defaults nil defaults-p) case)
   "Construct a pathname from components."
@@ -6278,10 +7751,11 @@
                           (parts (cdr directory)))
                      (apply #'concatenate 'string
                             (cons (if abs "/" "")
-                                  (mapcar (lambda (d) (concatenate 'string d "/")) parts)))))
+                                  (mapcar (lambda (d) (concatenate 'string (%pn-comp-string d) "/")) parts)))))
                   (t "")))
-               (name-s (or name ""))
-               (type-s (if type (concatenate 'string "." type) "")))
+               (name-s (%pn-comp-string name))
+               (type-s (let ((ts (%pn-comp-string type)))
+                         (if (string= ts "") "" (concatenate 'string "." ts)))))
           (funcall *%kernel-pathname-fn*
                    (concatenate 'string dev-pref dir-s name-s type-s))))))
 
@@ -6646,3 +8120,875 @@
    'typep))
 
 ;;;; THE END OF SLICE 34
+
+;;;; ========================================================================
+;;;; Slice 35 — LOAD merges its filespec against *DEFAULT-PATHNAME-DEFAULTS*
+;;;; ========================================================================
+;;;
+;;; The bare kernel LOAD opens the namestring it is given verbatim, relative
+;;; to the process working directory.  Conforming LOAD must instead merge a
+;;; relative FILESPEC against *DEFAULT-PATHNAME-DEFAULTS* (CLHS 20 / LOAD).
+;;; Programs such as the ANSI test suite rely on this: doit.lsp rebinds
+;;; *DEFAULT-PATHNAME-DEFAULTS* to its own directory and then does
+;;; (load "init.lsp"), expecting the file to be found there rather than in
+;;; the caller's working directory.
+
+(defvar *%kernel-load* (symbol-function 'load)
+  "The bare kernel LOAD: opens an explicit namestring and binds
+   *LOAD-PATHNAME* / *LOAD-TRUENAME* for the duration of the load.")
+
+(defun load (filespec &key (verbose *load-verbose*) (print *load-print*)
+                           (if-does-not-exist t) (external-format :default))
+  "Load FILESPEC.  A relative pathname is merged against
+   *DEFAULT-PATHNAME-DEFAULTS* before opening (conforming behaviour).  Because
+   bocl's COMPILE-FILE produces no real fasl, a request to LOAD a missing
+   compiled file (e.g. \"foo.fasl\") transparently falls back to its source
+   \"foo.lsp\" — this is what makes the COMPILE-AND-LOAD idiom work without
+   writing any compiled files."
+  (declare (ignore verbose print external-format))
+  (let* ((merged (merge-pathnames filespec *default-pathname-defaults*))
+         (ns     (namestring merged)))
+    (cond
+      ((probe-file ns) (funcall *%kernel-load* ns))
+      (t
+       (let* ((dir  (directory-namestring merged))
+              (name (pathname-name merged))
+              (src  (and name (concatenate 'string dir name ".lsp"))))
+         (cond
+           ((and src (not (string= src ns)) (probe-file src))
+            (funcall *%kernel-load* src))
+           (if-does-not-exist
+            (error "LOAD: file ~S does not exist" ns))
+           (t nil)))))))
+
+;;; ---- PROCLAIM / DECLAIM --------------------------------------------------
+;;; Global declarations are advisory in bocl (an interpreter that does no
+;;; optimisation and treats every binding uniformly).  We accept and ignore
+;;; them so that conforming programs — notably the ANSI test suite — load.
+;;; The one declaration with run-time meaning, (SPECIAL var...), is honoured
+;;; by marking the named variables special via DEFVAR.
+
+(defun proclaim (declaration-specifier)
+  (when (and (consp declaration-specifier)
+             (eq (car declaration-specifier) 'special))
+    (dolist (v (cdr declaration-specifier))
+      (when (symbolp v)
+        (eval (list 'defvar v)))))      ; DEFVAR marks the variable special
+  nil)
+
+(defmacro declaim (&rest declaration-specifiers)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     ,@(mapcar (lambda (spec) `(proclaim ',spec)) declaration-specifiers)
+     nil))
+
+;;; ---- DEFPACKAGE / IMPORT / SHADOW / UNINTERN / ... -----------------------
+;;; True per-package operators, built on the kernel table primitives
+;;; (%pkg-import, %pkg-unintern, %pkg-unexport, %pkg-shadow-add, %pkg-unuse,
+;;; %pkg-rename, %pkg-delete) and the package accessors.
+
+(defun %designated-package (package)
+  (or (find-package package)
+      (error "There is no package named ~S" package)))
+
+(defun %as-symbol-list (symbols)
+  "Accept a single symbol or a list of symbols; always return a list."
+  (if (listp symbols) symbols (list symbols)))
+
+(defun import (symbols &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (sym (%as-symbol-list symbols) t)
+      (%pkg-import sym pkg))))
+
+(defun shadow (symbols &optional (package *package*))
+  ;; SYMBOLS are symbols or strings; make a present (home) symbol of each name in
+  ;; PKG — shadowing any inherited one — and mark it shadowing.
+  (let ((pkg (%designated-package package)))
+    (dolist (name (%as-symbol-list symbols) t)
+      (%pkg-shadow-add (%pkg-make-present (string name) pkg) pkg))))
+
+(defun shadowing-import (symbols &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (sym (%as-symbol-list symbols) t)
+      (%pkg-import sym pkg)
+      (%pkg-shadow-add sym pkg))))
+
+(defun unintern (symbol &optional (package *package*))
+  (%pkg-unintern symbol (%designated-package package)))
+
+(defun unexport (symbols &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (sym (%as-symbol-list symbols) t)
+      (%pkg-unexport sym pkg))))
+
+(defun unuse-package (packages-to-unuse &optional (package *package*))
+  (let ((pkg (%designated-package package)))
+    (dolist (u (%as-symbol-list packages-to-unuse) t)
+      (%pkg-unuse (%designated-package u) pkg))))
+
+(defun rename-package (package new-name &optional new-nicknames)
+  (%pkg-rename (%designated-package package)
+               (string new-name)
+               (mapcar #'string new-nicknames)))
+
+(defun delete-package (package)
+  (let ((pkg (find-package package)))
+    (when pkg (%pkg-delete pkg) t)))
+
+(defun find-all-symbols (name)
+  (let ((sname (string name)) (result '()))
+    (dolist (pkg (list-all-packages) result)
+      (multiple-value-bind (sym status) (find-symbol sname pkg)
+        (when (and status (not (member sym result)))
+          (push sym result))))))
+
+(defmacro defpackage (name &rest options)
+  (let ((sname     (string name))
+        (nicknames '()) (use '()) (exports '()) (interns '()) (shadows '())
+        (import-froms '()) (shadow-import-froms '()) (use-given nil)
+        (body '()))
+    (dolist (opt options)
+      (when (consp opt)
+        (let ((k (car opt)) (a (cdr opt)))
+          (cond
+            ((eq k :nicknames) (setq nicknames (append nicknames (mapcar #'string a))))
+            ((eq k :use)       (setq use (append use (mapcar #'string a)) use-given t))
+            ((eq k :export)    (setq exports (append exports (mapcar #'string a))))
+            ((eq k :intern)    (setq interns (append interns (mapcar #'string a))))
+            ((eq k :shadow)    (setq shadows (append shadows (mapcar #'string a))))
+            ((eq k :import-from)
+             (push (cons (string (car a)) (mapcar #'string (cdr a))) import-froms))
+            ((eq k :shadowing-import-from)
+             (push (cons (string (car a)) (mapcar #'string (cdr a))) shadow-import-froms))
+            (t nil)))))     ; :documentation, :size, etc. — ignored
+    ;; Build the body forms in the order DEFPACKAGE specifies:
+    ;; shadows, shadowing-import-from, import-from, use, intern, export.
+    (dolist (n shadows) (push `(shadow ,n pkg) body))
+    (dolist (spec shadow-import-froms)
+      (let ((from (car spec)))
+        (dolist (n (cdr spec)) (push `(shadowing-import (intern ,n ,from) pkg) body))))
+    (dolist (spec import-froms)
+      (let ((from (car spec)))
+        (dolist (n (cdr spec)) (push `(import (intern ,n ,from) pkg) body))))
+    (dolist (u use) (push `(use-package ,u pkg) body))
+    (dolist (n interns) (push `(intern ,n pkg) body))
+    (dolist (n exports) (push `(export (intern ,n pkg) pkg) body))
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       (let ((pkg (or (find-package ,sname)
+                      (make-package ,sname :nicknames ',nicknames
+                                          :use ',(if use-given use '("COMMON-LISP"))))))
+         ,@(nreverse body)
+         pkg))))
+
+;;; ---- DOLIST / DOTIMES: tolerate leading (DECLARE ...) --------------------
+;;; The earlier DOLIST / DOTIMES splice their body straight into a TAGBODY, so
+;;; a conforming body that begins with (declare ...) would try to *call* DECLARE.
+;;; Redefine them to strip leading declarations first.  (Placed late so the
+;;; redefinitions are what user code — e.g. the ANSI suite — expands with.)
+
+(defun %strip-leading-declares (body)
+  "BODY with any leading (DECLARE ...) forms removed."
+  (if (and (consp body) (consp (car body)) (eq (car (car body)) 'declare))
+      (%strip-leading-declares (cdr body))
+      body))
+
+(defmacro dolist (head &body body)
+  (let ((var       (first head))
+        (list-form (second head))
+        (result    (third head))
+        (real-body (%strip-leading-declares body)))
+    `(let ((dolist-list ,list-form))
+       (block nil
+         (let ((,var nil))
+           (tagbody
+              dolist-loop
+              (if (null dolist-list) (go dolist-done))
+              (setq ,var (car dolist-list))
+              (setq dolist-list (cdr dolist-list))
+              ,@real-body
+              (go dolist-loop)
+              dolist-done)
+           ;; CLHS: result-form is evaluated INSIDE var's scope, with var = NIL.
+           (setq ,var nil)
+           ,result)))))
+
+(defmacro dotimes (head &body body)
+  (let ((var        (first head))
+        (count-form (second head))
+        (result     (third head))
+        (real-body  (%strip-leading-declares body)))
+    `(let ((dotimes-count ,count-form))
+       (block nil
+         (let ((,var 0))
+           (tagbody
+              dotimes-loop
+              (if (>= ,var dotimes-count) (go dotimes-done))
+              ,@real-body
+              (setq ,var (+ ,var 1))
+              (go dotimes-loop)
+              dotimes-done)
+           ;; CLHS: result-form evaluated INSIDE var's scope, with var = count.
+           ,result)))))
+
+;;; ---- Per-form LOAD recovery (used under -on-error appease) ----------------
+;;; LOAD normally aborts the whole file on the first error.  When the kernel
+;;; enables recovery (only for user files, never the bootstrap, and only under
+;;; -on-error appease), each top-level form is evaluated through this wrapper so
+;;; that one bad form is reported and skipped instead of killing the load.  This
+;;; lets large suites — e.g. the ANSI tests — load every file they can and still
+;;; reach their final report, rather than dying on the first unsupported form.
+
+(defvar *load-error-count* 0
+  "Number of top-level forms skipped due to errors during recovering LOADs.")
+
+(defun %load-eval-toplevel-form (form)
+  (handler-case
+      (eval form)
+    (error (c)
+      (setq *load-error-count* (+ *load-error-count* 1))
+      (ignore-errors
+        (format *error-output* "~&;; [load] skipped a form: ~A~%" c))
+      nil)))
+
+;;;; THE END OF SLICE 35
+
+;;;; ====================================================================
+;;;; Slice 44: file-type resolution variables + MACROEXPAND family
+;;;; (issues: lisp-file-types, minimal-compilation)
+;;;; ====================================================================
+
+;;; --- Accepted file types for source / compiled files -----------------
+;;; A file type is either a string (matched case-sensitively, but a
+;;; case-insensitive file system will of course match case-insensitively),
+;;; or (:case-insensitive "type") to force a case-insensitive search even on
+;;; a case-sensitive file system, with "type" tried first.
+(defparameter *accepted-source-file-types*
+  '("lisp" "LISP" (:case-insensitive "lisp")
+    (:case-insensitive "lsp") (:case-insensitive "cl") (:case-insensitive "l"))
+  "File types tried (in order) to find a source file given a typeless pathname.")
+
+(defparameter *accepted-compiled-file-types*
+  '("fasl" "FASL" (:case-insensitive "fasl")
+    (:case-insensitive "fas") (:case-insensitive "obj") (:case-insensitive "o"))
+  "File types tried (in order) to find a compiled file given a typeless pathname.")
+
+(defparameter *default-compiled-file-type* "fasl"
+  "The file type COMPILE-FILE gives its output file when none is specified.")
+
+(defun %ftype-string (ft) (if (consp ft) (second ft) ft))
+
+(defun %find-typed-file (pathname types)
+  "Return the namestring of the first existing file obtained by giving PATHNAME
+   each of TYPES, or NIL.  (:case-insensitive t) entries fall back to upper- and
+   lower-case variants — adequate on the common case-insensitive file systems
+   and a best effort on case-sensitive ones.)"
+  (let ((dir  (directory-namestring pathname))
+        (name (or (pathname-name pathname) "")))
+    (dolist (ft types nil)
+      (let* ((ts (%ftype-string ft))
+             (candidates (if (consp ft)
+                             (list ts (string-downcase ts) (string-upcase ts))
+                             (list ts))))
+        (dolist (c candidates)
+          (let ((ns (concatenate 'string dir name "." c)))
+            (when (probe-file ns) (return-from %find-typed-file ns))))))))
+
+;;; --- MACROEXPAND-1 / MACROEXPAND / MACROEXPAND-ALL -------------------
+;;; bocl stores a global macro's expander on the symbol plist ($MACRO); the
+;;; expander takes the macro call's arguments (the cdr of the form).
+(defun macroexpand-1 (form &optional environment)
+  "Expand FORM once if it is a macro call; returns (values expansion expanded-p)."
+  (declare (ignore environment))
+  (if (and (consp form) (symbolp (car form)) (macro-function (car form)))
+      (values (apply (macro-function (car form)) (rest form)) t)
+      (values form nil)))
+
+(defun macroexpand (form &optional environment)
+  "Repeatedly MACROEXPAND-1 FORM until it is no longer a macro call."
+  (multiple-value-bind (exp expanded) (macroexpand-1 form environment)
+    (if expanded (values (macroexpand exp environment) t) (values form nil))))
+
+(defun macroexpand-all (form &optional environment)
+  "Recursively expand every macro call in FORM, returning a macro-free form.
+   This is the core of bocl's minimal compilation (CLHS 3.2.2.2): the result
+   contains only special operators and function calls, no macros.  Quoted data,
+   binding-form variable lists and (THE type ...) type specifiers are left
+   untouched; all evaluated subforms are walked."
+  (declare (ignore environment))
+  (cond
+    ((atom form) form)
+    ((eq (car form) 'quote) form)
+    ((and (symbolp (car form)) (macro-function (car form)))
+     (macroexpand-all (macroexpand-1 form)))
+    ((eq (car form) 'function)
+     (if (and (consp (cdr form)) (consp (cadr form)) (eq (car (cadr form)) 'lambda))
+         (list 'function (cons 'lambda (cons (cadr (cadr form))
+                                             (mapcar #'macroexpand-all (cddr (cadr form))))))
+         form))
+    ((eq (car form) 'lambda)
+     (cons 'lambda (cons (cadr form) (mapcar #'macroexpand-all (cddr form)))))
+    ((member (car form) '(let let*))
+     (list* (car form)
+            (mapcar (lambda (b)
+                      (if (consp b) (list (car b) (macroexpand-all (cadr b))) b))
+                    (cadr form))
+            (mapcar #'macroexpand-all (cddr form))))
+    ((eq (car form) 'setq)
+     (cons 'setq
+           (let ((r '()) (l (cdr form)))
+             (loop (when (null l) (return (nreverse r)))
+                   (push (car l) r)                       ; variable, untouched
+                   (push (macroexpand-all (cadr l)) r)    ; value form, walked
+                   (setq l (cddr l))))))
+    ((eq (car form) 'the)
+     (list 'the (cadr form) (macroexpand-all (caddr form))))
+    (t                                                    ; special op or call
+     (cons (car form) (mapcar #'macroexpand-all (cdr form))))))
+
+;;; --- compile-file-pathname now honours *default-compiled-file-type* --
+(defun compile-file-pathname (input-file &key output-file &allow-other-keys)
+  "Pathname COMPILE-FILE writes to: the source pathname with its type changed to
+   *DEFAULT-COMPILED-FILE-TYPE* (default \"fasl\"), unless OUTPUT-FILE is given."
+  (or output-file
+      (let* ((in  (pathname input-file))
+             (dir (directory-namestring in))
+             (nm  (or (pathname-name in) "")))
+        (pathname (concatenate 'string dir nm "." *default-compiled-file-type*)))))
+
+;;;; THE END OF SLICE 44
+
+;;; --- COMPILE-FILE -----------------------------------------------------
+;;; (issues: compile-file-output, minimal-compilation)
+;;; bocl is an interpreter and writes no real fast-load file.  COMPILE-FILE just
+;;; returns the conventional output pathname WITHOUT writing it; LOAD of that
+;;; (missing) .fasl transparently falls back to the .lsp source (see LOAD), which
+;;; is exactly the COMPILE-AND-LOAD idiom.  This is correct (LOAD of the source
+;;; handles IN-PACKAGE / macros / EVAL-WHEN in order), instantaneous, and avoids
+;;; both the slow per-char copy and the MACROEXPAND-ALL + package-qualified PRIN1
+;;; path (which also exposes a GC-rooting bug — see issues/open/deferred-compile-
+;;; file-rt-gc-corruption).
+(defun compile-file (input-file &key output-file &allow-other-keys)
+  "Return the conventional fast-load pathname for INPUT-FILE without writing any
+   file.  bocl interprets, so LOAD of the (absent) result falls back to the
+   source.  Any pre-existing (stale) fast-load file is deleted so it cannot
+   shadow the source.  Returns (values output-truename warnings-p failure-p);
+   failure-p is always NIL."
+  (let* ((in  (merge-pathnames input-file *default-pathname-defaults*))
+         (out (compile-file-pathname in :output-file output-file)))
+    ;; LOAD only falls back to the .lsp source when the .fasl is ABSENT; remove a
+    ;; stale .fasl (e.g. left by an older COMPILE-FILE) so the fresh source wins.
+    (when (probe-file out) (ignore-errors (delete-file out)))
+    (values (pathname out) nil nil)))
+
+;;; ---- Multi-dimensional arrays (ranks 0..array-rank-limit-1 = 0..7) -------
+;;; Rank-1 arrays stay kernel vectors (so VECTORP / SVREF and the existing code
+;;; keep working).  Ranks 0 and >=2 are an %MD-ARRAY: a flat row-major storage
+;;; vector plus the dimension list.  AREF / MAKE-ARRAY / ARRAY-DIMENSIONS etc.
+;;; dispatch on the representation; the rank-1 path delegates to the kernel.
+
+(defvar *%kernel-aref*             (symbol-function 'aref))
+(defvar *%kernel-aref-set*         (symbol-function 'aref-set))
+(defvar *%kernel-array-dimensions* (symbol-function 'array-dimensions))
+(defvar *%kernel-arrayp*           (symbol-function 'arrayp))
+
+;; %md-array is the representation for every "complex" array — multi-dimensional,
+;; adjustable, or displaced — of any element type.  Simple 1-D vectors/strings/
+;; bit-vectors stay kernel objects.
+(defstruct (%md-array (:predicate %md-array-p) (:copier nil))
+  dimensions            ; list of dimension sizes
+  storage               ; flat row-major storage (simple-vector / string / bit-vector); NIL if displaced
+  (element-type t)      ; canonical element type: T / CHARACTER / BIT
+  (fill-pointer nil)    ; integer fill pointer, or NIL
+  (displaced-to nil)    ; the array this one is displaced onto, or NIL
+  (displaced-offset 0)  ; index offset into the target's row-major storage
+  (adjustable nil))     ; T if adjustable
+
+(defun %make-vector-filled (n initial-element)
+  (let ((lst nil)) (dotimes (i n) (push initial-element lst)) (apply #'vector lst)))
+
+;; Flat storage access dispatches on the storage kind: strings hold octets read
+;; with CHAR, bit-vectors with BIT, everything else with SVREF.  (SVREF would
+;; misread octet storage as object references.)
+(defun %storage-ref (storage index)
+  (cond ((stringp storage) (char storage index))
+        ((bit-vector-p storage) (bit storage index))
+        (t (svref storage index))))
+(defun %storage-set (storage index value)
+  (cond ((stringp storage) (char-set storage index value))
+        ((bit-vector-p storage) (bit-set storage index value))
+        (t (setf (svref storage index) value)))
+  value)
+
+;; Row-major element access on a %md-array, FOLLOWING displacement: a displaced
+;; array reads/writes its target's storage at (displaced-offset + index).
+(defun %md-rmref (array index)
+  (let ((target (%md-array-displaced-to array)))
+    (if target
+        (row-major-aref target (+ (%md-array-displaced-offset array) index))
+        (%storage-ref (%md-array-storage array) index))))
+(defun %md-rmset (array index value)
+  (let ((target (%md-array-displaced-to array)))
+    (if target
+        (setf (row-major-aref target (+ (%md-array-displaced-offset array) index)) value)
+        (%storage-set (%md-array-storage array) index value)))
+  value)
+
+;; Canonical element type (T / CHARACTER / BIT) for storage selection.
+(defun %canon-element-type (element-type)
+  (cond ((member element-type '(character base-char standard-char extended-char)) 'character)
+        ((eq element-type 'bit) 'bit)
+        (t t)))
+
+;; Make + fill flat storage of TOTAL elements of (canonical) ELEMENT-TYPE.
+(defun %make-typed-storage (element-type total initial-element initial-contents rank)
+  (let ((storage (cond ((eq element-type 'character)
+                        (make-string total :initial-element
+                                     (if (characterp initial-element) initial-element #\Space)))
+                       ((eq element-type 'bit)
+                        (make-bit-vector total (if (integerp initial-element) initial-element 0)))
+                       (t (%make-vector-filled total initial-element)))))
+    (when initial-contents
+      (let ((flat (if (<= rank 1) (coerce initial-contents 'list) (%md-flatten initial-contents rank)))
+            (i 0))
+        (dolist (e flat) (when (< i total) (%storage-set storage i e) (incf i)))))
+    storage))
+
+;; Decode a row-major index back to its subscript list for an array of DIMS.
+(defun %decode-subscripts (rm dims)
+  (let ((subs nil) (r rm))
+    (dolist (d (reverse dims) subs)
+      (push (mod r d) subs)
+      (setq r (floor r d)))))
+
+;; Copy elements at coinciding SUBSCRIPTS (not row-major positions) from OLD
+;; (its current storage) into NEW-STORAGE — the element-preserving rule of
+;; ADJUST-ARRAY when dimensions change.
+(defun %array-copy-overlap (old old-dims new-storage new-dims)
+  (let* ((overlap (mapcar #'min old-dims new-dims))
+         (otot    (reduce #'* overlap :initial-value 1)))
+    (dotimes (k otot)
+      (let ((subs (%decode-subscripts k overlap)))
+        (%storage-set new-storage (%md-row-major-index new-dims subs)
+                      (row-major-aref old (%md-row-major-index old-dims subs)))))))
+
+(defun %md-row-major-index (dimensions subscripts)
+  (let ((index 0) (ss subscripts))
+    (dolist (d dimensions)
+      (when (null ss) (error "AREF: too few subscripts"))
+      (unless (and (integerp (car ss)) (<= 0 (car ss)) (< (car ss) d))
+        (error "AREF: subscript ~S out of range for dimension ~S" (car ss) d))
+      (setq index (+ (* index d) (car ss)) ss (cdr ss)))
+    (when ss (error "AREF: too many subscripts"))
+    index))
+
+(defun %md-dims-from-contents (contents rank)
+  (let ((dims nil) (c contents))
+    (dotimes (i rank)
+      (let ((l (coerce c 'list))) (push (length l) dims) (setq c (if l (car l) nil))))
+    (nreverse dims)))
+
+(defun %md-flatten (contents rank)
+  (if (<= rank 1)
+      (coerce contents 'list)
+      (let ((acc nil))
+        (dolist (sub (coerce contents 'list)) (setq acc (append acc (%md-flatten sub (1- rank)))))
+        acc)))
+
+(defun %fill-pointer-value (fill-pointer size)
+  "Resolve the :FILL-POINTER make-array argument to an integer fill pointer
+for a vector of SIZE elements, or NIL when no fill pointer was requested.
+T means \"the whole vector is active\"; an integer is taken verbatim."
+  (cond ((null fill-pointer) nil)
+        ((eq fill-pointer t)  size)
+        ((integerp fill-pointer)
+         (unless (<= 0 fill-pointer size)
+           (error "MAKE-ARRAY: fill pointer ~S out of range for size ~S"
+                  fill-pointer size))
+         fill-pointer)
+        (t size)))
+
+(defun make-array (dimensions &key initial-element initial-contents
+                                   element-type adjustable fill-pointer
+                                   displaced-to displaced-index-offset)
+  (let* ((dims (if (listp dimensions) dimensions (list dimensions)))
+         (rank (length dims))
+         (total (reduce #'* dims :initial-value 1))
+         (et   (%canon-element-type element-type))
+         (fp   (and (= rank 1) (%fill-pointer-value fill-pointer (car dims)))))
+    (cond
+      ;; Displaced array: shares the target's storage; element access redirects
+      ;; to the target at the given offset.  Any rank, any element type.
+      (displaced-to
+       (make-%md-array :dimensions dims :storage nil :element-type et :fill-pointer fp
+                       :displaced-to displaced-to
+                       :displaced-offset (or displaced-index-offset 0)
+                       :adjustable (and adjustable t)))
+      ;; Adjustable array: a %md-array wrapper (any rank) with its own typed
+      ;; storage, so ADJUST-ARRAY can resize it in place, preserving identity.
+      (adjustable
+       (make-%md-array :dimensions dims
+                       :storage (%make-typed-storage et total initial-element initial-contents rank)
+                       :element-type et :fill-pointer fp :adjustable t))
+      ;; A 1-D array of characters is a STRING.  With a fill pointer it is a
+      ;; non-simple string: the storage holds CAR DIMS chars and the fill
+      ;; pointer (registered below) bounds the active portion.
+      ((and (= rank 1)
+            (member element-type '(character base-char standard-char extended-char)))
+       (let ((s (make-string (car dims)
+                             :initial-element (if (characterp initial-element)
+                                                  initial-element #\Space))))
+         (when initial-contents
+           (let ((i 0))
+             (dolist (e (coerce initial-contents 'list))
+               (when (< i (car dims)) (char-set s i e) (incf i)))))
+         (when fp (%set-fill-pointer s fp))
+         s))
+      ;; A 1-D array of bits is a BIT-VECTOR (a real BIT_VECTOR object, so
+      ;; BIT-VECTOR-P / TYPE-OF / the #* printer all see it correctly).
+      ((and (= rank 1) (eq element-type 'bit))
+       (let ((b (make-bit-vector (car dims)
+                                 (if (integerp initial-element) initial-element 0))))
+         (when initial-contents
+           (let ((i 0))
+             (dolist (e (coerce initial-contents 'list))
+               (when (< i (car dims)) (setf (bit b i) e) (incf i)))))
+         (when fp (%set-fill-pointer b fp))
+         b))
+      ((= rank 1)
+       (let ((v (%make-vector-filled (car dims) initial-element)))
+         (when initial-contents
+           (let ((i 0)) (dolist (e (coerce initial-contents 'list)) (setf (svref v i) e) (incf i))))
+         (when fp (%set-fill-pointer v fp))
+         v))
+      (t
+       ;; A multi-dimensional :ELEMENT-TYPE BIT array stores its bits in a
+       ;; bit-vector (so AREF/ROW-MAJOR-AREF read/write real bits, and the bit-*
+       ;; ops can operate on the flat storage); other element types use a
+       ;; simple-vector.
+       (let ((storage (if (eq element-type 'bit)
+                          (make-bit-vector total (if (integerp initial-element) initial-element 0))
+                          (%make-vector-filled total initial-element))))
+         (when initial-contents
+           (let ((flat (if (= rank 0) (list initial-contents) (%md-flatten initial-contents rank)))
+                 (i 0))
+             (dolist (e flat) (%storage-set storage i e) (incf i))))
+         (make-%md-array :dimensions dims :storage storage :element-type et))))))
+
+(defun arrayp (x) (or (%md-array-p x) (funcall *%kernel-arrayp* x)))
+
+(defun array-dimensions (array)
+  (if (%md-array-p array) (copy-list (%md-array-dimensions array))
+      (funcall *%kernel-array-dimensions* array)))
+
+(defun array-dimension (array axis-number)
+  "The length of dimension AXIS-NUMBER of ARRAY."
+  (nth axis-number (array-dimensions array)))
+
+(defun aref (array &rest subscripts)
+  (if (%md-array-p array)
+      (%md-rmref array (%md-row-major-index (%md-array-dimensions array) subscripts))
+      (apply *%kernel-aref* array subscripts)))
+
+(defun aref-set (value array &rest subscripts)
+  (if (%md-array-p array)
+      (%md-rmset array (%md-row-major-index (%md-array-dimensions array) subscripts) value)
+      (apply *%kernel-aref-set* value array subscripts)))
+
+;; (SETF (AREF array sub...) value) — variadic; the value is the last arg the
+;; setf machinery appends after the place subscripts.
+(sethash 'aref *setf-expanders*
+  (lambda (array &rest subs-and-val)
+    (let* ((rev (reverse subs-and-val)) (val (car rev)) (subs (reverse (cdr rev))))
+      `(aref-set ,val ,array ,@subs))))
+
+;; (SETF (FILL-POINTER vector) value) — moves the active boundary of VECTOR.
+(sethash 'fill-pointer *setf-expanders*
+  (lambda (vector val) `(%set-fill-pointer-checked ,vector ,val)))
+
+(defun row-major-aref (array index)
+  ;; Strings and bit-vectors are vector subtypes whose storage is octets, so
+  ;; SVREF would misread them — use CHAR / BIT.  %md-arrays follow displacement.
+  (cond ((%md-array-p array)   (%md-rmref array index))
+        ((stringp array)       (char array index))
+        ((bit-vector-p array)  (bit array index))
+        (t                     (svref array index))))
+
+(define-setf-expander row-major-aref (array index) (val)
+  `(row-major-aref-set ,val ,array ,index))
+(defun row-major-aref-set (value array index)
+  (cond ((%md-array-p array)   (%md-rmset array index value))
+        ((stringp array)       (char-set array index value) value)
+        ((bit-vector-p array)  (bit-set array index value) value)
+        (t                     (setf (svref array index) value) value)))
+
+(defun array-row-major-index (array &rest subscripts)
+  (%md-row-major-index (array-dimensions array) subscripts))
+
+;; BIT / SBIT accept any number of subscripts (a bit array may be multi-
+;; dimensional).  AREF / AREF-SET already route a 1-D bit-vector to the kernel
+;; and a multi-dimensional bit %md-array through row-major indexing, so delegate
+;; to them — keeping the kernel fast path for a plain 1-D bit-vector.
+(defparameter *%kernel-bit*  (symbol-function 'bit))
+(defparameter *%kernel-sbit* (symbol-function 'sbit))
+(defun bit (bit-array &rest subscripts)
+  (if (or (cdr subscripts) (%md-array-p bit-array))
+      (apply #'aref bit-array subscripts)
+      (funcall *%kernel-bit* bit-array (car subscripts))))
+(defun sbit (bit-array &rest subscripts)
+  (if (or (cdr subscripts) (%md-array-p bit-array))
+      (apply #'aref bit-array subscripts)
+      (funcall *%kernel-sbit* bit-array (car subscripts))))
+(sethash 'bit *setf-expanders*
+  (lambda (array &rest subs-and-val)
+    (let* ((rev (reverse subs-and-val)) (val (car rev)) (subs (reverse (cdr rev))))
+      `(aref-set ,val ,array ,@subs))))
+(sethash 'sbit *setf-expanders*
+  (lambda (array &rest subs-and-val)
+    (let* ((rev (reverse subs-and-val)) (val (car rev)) (subs (reverse (cdr rev))))
+      `(aref-set ,val ,array ,@subs))))
+
+;;; ---- Displaced and adjustable arrays -------------------------------------
+
+(defun array-displacement (array)
+  "Two values: the array ARRAY is displaced to (or NIL), and the displacement
+offset (0 when not displaced)."
+  (if (%md-array-p array)
+      (values (%md-array-displaced-to array) (%md-array-displaced-offset array))
+      (values nil 0)))
+
+(defun adjust-array (array new-dimensions &key (initial-element nil)
+                                               initial-contents fill-pointer
+                                               element-type
+                                               displaced-to displaced-index-offset)
+  "Change the dimensions of ARRAY.  When ARRAY is a %md-array (i.e. adjustable),
+it is modified in place and the SAME object is returned; otherwise a fresh
+adjustable %md-array is returned.  Without :DISPLACED-TO or :INITIAL-CONTENTS,
+elements at subscripts present in both the old and new array are preserved and
+the rest take :INITIAL-ELEMENT."
+  (let* ((new-dims (if (listp new-dimensions) new-dimensions (list new-dimensions)))
+         (rank     (length new-dims))
+         (new-total (reduce #'* new-dims :initial-value 1))
+         (et       (if element-type
+                       (%canon-element-type element-type)
+                       (if (%md-array-p array) (%md-array-element-type array) t)))
+         (old-dims (array-dimensions array))
+         (new-fp   (and fill-pointer (= rank 1) (%fill-pointer-value fill-pointer (car new-dims))))
+         ;; Storage / displacement for the result.
+         (target   displaced-to)
+         (offset   (or displaced-index-offset 0))
+         (storage  (cond (displaced-to nil)
+                         (initial-contents
+                          (%make-typed-storage et new-total initial-element initial-contents rank))
+                         (t
+                          (let ((s (%make-typed-storage et new-total initial-element nil 0)))
+                            (%array-copy-overlap array old-dims s new-dims)
+                            s)))))
+    (cond
+      ((%md-array-p array)
+       (setf (%md-array-dimensions array)       new-dims
+             (%md-array-storage array)          storage
+             (%md-array-element-type array)     et
+             (%md-array-displaced-to array)     target
+             (%md-array-displaced-offset array) offset)
+       (when fill-pointer (setf (%md-array-fill-pointer array) new-fp))
+       array)
+      (t
+       (make-%md-array :dimensions new-dims :storage storage :element-type et
+                       :fill-pointer new-fp :adjustable t
+                       :displaced-to target :displaced-offset offset)))))
+
+;;; ---- EQUALP on vectors and arrays ----------------------------------------
+;;; The kernel EQUALP handles numbers/characters/strings/conses but falls back
+;;; to EQUAL (identity) for vectors and arrays.  CLHS requires EQUALP to compare
+;;; arrays of the same rank/dimensions element-wise (each pair EQUALP).  Wrap it.
+(defvar *%old-equalp* (symbol-function 'equalp))
+
+(defun %equalp-seq (a b n)
+  "True if ROW-MAJOR elements [0,N) of arrays A and B are pairwise EQUALP."
+  (dotimes (i n t)
+    (unless (equalp (row-major-aref a i) (row-major-aref b i))
+      (return nil))))
+
+(defun equalp (a b)
+  (cond
+    ((eq a b) t)
+    ;; Conses: recurse with THIS equalp so nested arrays compare by content too.
+    ((consp a) (and (consp b) (equalp (car a) (car b)) (equalp (cdr a) (cdr b))))
+    ;; Multi-dimensional arrays: same dimensions + element-wise EQUALP.
+    ((%md-array-p a)
+     (and (%md-array-p b)
+          (equal (array-dimensions a) (array-dimensions b))
+          (%equalp-seq a b (array-total-size a))))
+    ;; Vectors (incl. bit-vectors), but NOT strings — the kernel does those,
+    ;; case-insensitively.  A vector is EQUALP only to another non-string vector
+    ;; of the same length with element-wise-EQUALP contents.
+    ((and (vectorp a) (not (stringp a)))
+     (and (vectorp b) (not (stringp b))
+          (= (length a) (length b))
+          (%equalp-seq a b (length a))))
+    ;; Numbers, characters, strings, structures, hash-tables: the kernel EQUALP.
+    (t (funcall *%old-equalp* a b))))
+
+;;; ---- #n= / #n# label fixup (shared and circular structure) --------------
+;;; A #n# read before its #n= finishes yields a placeholder %READ-REF; once the
+;;; #n= object is fully read, %PATCH-READ-LABEL walks it and replaces every
+;;; occurrence of that placeholder with the object itself — across conses,
+;;; vectors, multi-dimensional arrays, and structures — which is what makes
+;;; circular structure work.
+
+(defstruct (%read-ref (:predicate %read-ref-p) (:copier nil)) label)
+
+(defun %patch-read-label (object placeholder replacement)
+  "Destructively replace PLACEHOLDER by REPLACEMENT throughout OBJECT, following
+   conses, vectors, md-arrays and structure slots; a visited set bounds the walk
+   over the (now possibly circular) result."
+  (let ((visited (make-hash-table :test 'eq)))
+    (labels ((sub (x) (if (eq x placeholder) replacement (progn (walk x) x)))
+             (walk (x)
+               (unless (or (%read-ref-p x) (gethash x visited))
+                 (cond
+                   ((consp x)
+                    (setf (gethash x visited) t)
+                    (setf (car x) (sub (car x)))
+                    (setf (cdr x) (sub (cdr x))))
+                   ((%md-array-p x)
+                    (setf (gethash x visited) t)
+                    (let ((s (%md-array-storage x)))
+                      (dotimes (i (length s)) (setf (svref s i) (sub (svref s i))))))
+                   ((and (vectorp x) (not (stringp x)))
+                    (setf (gethash x visited) t)
+                    (dotimes (i (length x)) (setf (svref x i) (sub (svref x i)))))
+                   ((typep x 'structure-object)
+                    (setf (gethash x visited) t)
+                    (let ((n (length (gethash (type-of x) *defstruct-slot-specs*))))
+                      (dotimes (i n) (structure-set (sub (structure-get x i)) x i))))))))
+      (walk object))
+    object))
+
+;;; ---- Standard # dispatch reader macros -----------------------------------
+;;; Radix (#B #O #X #R), array (#A), structure (#S), labels (#= ##), and the
+;;; unreadable marker (#<).  Registered on the standard readtable so they apply
+;;; to every subsequent read.  (The character macros and #' #( #\ #* #+ #- #. #:
+;;; #P #C #| are handled by the kernel reader.)
+
+(defvar *read-labels* nil
+  "Alist of (label . object) for #n= / #n# shared-structure references.")
+
+;; #B / #O / #X — fixed-radix rationals; #R — radix given by the infix argument.
+(set-dispatch-macro-character #\# #\B
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let ((*read-base* 2)) (read stream t nil t))))
+(set-dispatch-macro-character #\# #\O
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let ((*read-base* 8)) (read stream t nil t))))
+(set-dispatch-macro-character #\# #\X
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let ((*read-base* 16)) (read stream t nil t))))
+(set-dispatch-macro-character #\# #\R
+  (lambda (stream sub arg) (declare (ignore sub))
+    (unless (and (integerp arg) (<= 2 arg 36))
+      (error "#R requires a radix between 2 and 36, got ~S" arg))
+    (let ((*read-base* arg)) (read stream t nil t))))
+
+;; #nA — array of rank N from nested sequences (ranks 0..array-rank-limit-1).
+(set-dispatch-macro-character #\# #\A
+  (lambda (stream sub arg) (declare (ignore sub))
+    (let ((contents (read stream t nil t))
+          (rank (or arg 1)))
+      (unless (< rank array-rank-limit)
+        (error "#~DA: rank exceeds ARRAY-RANK-LIMIT (~D)" rank array-rank-limit))
+      (cond ((= rank 0) (make-array nil :initial-contents contents))
+            ((= rank 1) (make-array (length contents) :initial-contents contents))
+            (t (make-array (%md-dims-from-contents contents rank)
+                           :initial-contents contents))))))
+
+;; #S(type slot value ...) — make a structure instance via its constructor
+;; MAKE-<type> with keyword initargs from the slot names.
+(set-dispatch-macro-character #\# #\S
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (let* ((spec (read stream t nil t))
+           (type (car spec))
+           (ctor (find-symbol (concatenate 'string "MAKE-" (string type))
+                              (or (symbol-package type) *package*)))
+           (initargs '()))
+      (do ((p (cdr spec) (cddr p)))
+          ((null p))
+        (push (intern (string (car p)) "KEYWORD") initargs)
+        (push (cadr p) initargs))
+      (unless (and ctor (fboundp ctor))
+        (error "#S: ~S is not a structure type" type))
+      (apply (symbol-function ctor) (nreverse initargs)))))
+
+;; #n= label / #n# reference — supports shared AND circular structure.
+;; #n= registers a placeholder, reads its object (during which a nested #n#
+;; yields that placeholder), then patches the placeholder to the object.
+(set-dispatch-macro-character #\# #\=
+  (lambda (stream sub arg) (declare (ignore sub))
+    (unless arg (error "#= requires a label"))
+    (let* ((ref  (make-%read-ref :label arg))
+           (cell (cons arg ref)))
+      (push cell *read-labels*)               ; placeholder visible to nested #n#
+      (let ((object (read stream t nil t)))
+        (setf (cdr cell) object)              ; label now resolves to the object
+        (%patch-read-label object ref object) ; close any circular references
+        object))))
+(set-dispatch-macro-character #\# #\#
+  (lambda (stream sub arg) (declare (ignore sub stream))
+    (let ((cell (assoc arg *read-labels*)))
+      (if cell (cdr cell) (error "Reference to undefined label #~D#" arg)))))
+
+;; #< — objects printed this way cannot be read back.
+(set-dispatch-macro-character #\# #\<
+  (lambda (stream sub arg) (declare (ignore stream sub arg))
+    (error "#<...> is not readable")))
+
+;;; ---- BOCL extension hooks (init / abort / quit) + QUIT -------------------
+;;; bocl extension (see issues/closed/extension-hooks): three lists of function
+;;; designators run as best-effort hooks, and BOCL:QUIT, a non-local exit that
+;;; runs pending UNWIND-PROTECT cleanups, then *QUIT-HOOK*, then exits.
+(in-package "BOCL")
+
+(defvar *init-hook* '()
+  "List of (lambda ()) function designators, each called inside IGNORE-ERRORS
+   after the init/rc file has been loaded (or --no-init processed), before the
+   main task (-l/-x/-i and the REPL).")
+(defvar *abort-hook* '()
+  "List of (lambda (signum)) function designators, each called inside
+   IGNORE-ERRORS when the process is crashing on a signal.  The GC is disabled
+   and the system may be corrupt: minimal work, best effort, no guarantees.")
+(defvar *quit-hook* '()
+  "List of (lambda (status)) function designators, each called inside
+   IGNORE-ERRORS by BOCL:QUIT before the process exits.")
+
+(defun quit (&optional (status 0))
+  "Quit bocl.  Performs a non-local exit so pending UNWIND-PROTECT clean-ups run
+   (WITH-OPEN-FILE etc. close their resources); then *QUIT-HOOK* is run and the
+   process exits with STATUS.  Does not return."
+  (throw '%quit-catch-tag status))
+
+;; Internal hook runners, called from the C launcher / crash handler.
+(defun %run-init-hooks ()
+  (dolist (f *init-hook*) (ignore-errors (funcall f))))
+(defun %run-quit-hooks (status)
+  (dolist (f *quit-hook*) (ignore-errors (funcall f status))))
+(defun %run-abort-hooks (signum)
+  (dolist (f *abort-hook*) (ignore-errors (funcall f signum))))
+
+(export '(*init-hook* *abort-hook* *quit-hook* quit))
+
+(in-package "COMMON-LISP")
+
+;;; ---- BIGNUM support -------------------------------------------------------
+;;; When the kernel was built with bignum support (the %BIGNUMP primitive is
+;;; bound), load the arbitrary-precision integer engine (bootstrap/bignum.lisp)
+;;; and the kernel-integration glue (bootstrap/bignum-integration.lisp), siblings
+;;; of this prelude.  Loaded last, under *PACKAGE* = COMMON-LISP, so the engine
+;;; and glue symbols (u%/i%/%bignum-*) live in the package the kernel's S(...)
+;;; macro interns into.  *LOAD-TRUENAME* is bound to this file by the loader.
+(when (fboundp '%bignump)
+  (let ((here (or *load-truename* *load-pathname*)))
+    (when here
+      (let* ((ns  (if (stringp here) here (namestring here)))
+             (pos (search "prelude.lisp" ns :from-end t))
+             (dir (if pos (subseq ns 0 pos) "")))
+        (load (concatenate 'string dir "bignum.lisp"))
+        (load (concatenate 'string dir "bignum-integration.lisp"))))))

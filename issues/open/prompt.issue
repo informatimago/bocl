@@ -1,0 +1,39 @@
+Extension prompt-function:
+
+
+| variable               | default value | description                                                  |
+|------------------------+---------------+--------------------------------------------------------------|
+|                        |               |                                                              |
+| BOCL:*PROMPT-FUNCTION* | nil           | NIL, or a function designator.                               |
+|                        |               | Signature; (lambda (stream) (format stream prompt-string))   |
+|                        |               | The function is called to produce a new prompt for the REPL. |
+|                        |               |                                                              |
+
+When BOCL:*PROMPT-FUNCTION* is NIL, an implementation defined prompt
+is used (eg. "~%bocl> ").
+
+When BOCL:*PROMPT-FUNCTION* is set to a function designator, this
+function is called to produce the prompt string used by the REPL for
+each expression to read.
+
+Example:
+#+begin_src lisp
+  (defun make-prompt-function ()
+    (let ((histo-count 0))
+      (lambda (stream)
+        (format stream "~%~A #~A > "
+                (package-name *package*)
+                (incf histo-count)))))
+
+  (setf bocl:*prompt-function* (make-prompt-function))
+#+end_src
+
+#+begin_src lisp
+cl-user> (setf *prompt-function* (make-prompt-function))
+#<ccl:compiled-lexical-closure (:internal make-prompt-function) #x30200247F21F>
+cl-user> (loop repeat 3 collect (funcall *prompt-function* nil))
+("
+COMMON-LISP-USER #1 > " "
+COMMON-LISP-USER #2 > " "
+COMMON-LISP-USER #3 > ")
+#+end_src

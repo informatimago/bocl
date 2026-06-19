@@ -192,21 +192,37 @@ cf. chapter 23. Reader.
 ** 3. Evaluation and Compilation
 
 
-Do we need a compiler?
+The C kernel provides an =EVAL= interpreter (no virtual machine or
+byte-code compiler).  "Compilation" in bocl means *minimal
+compilation* (CLHS 3.2.2.2): macro and symbol-macro calls are expanded
+so the resulting code contains only special operators and function
+calls.
 
-The C kernel provides only an =EVAL= interpreter.
+- =MACROEXPAND-1=, =MACROEXPAND= and =MACROEXPAND-ALL= are provided.
+  =MACROEXPAND-ALL= is the minimal-compilation code walker: it returns
+  a macro-free form, leaving quoted data, binding-form variable lists
+  and =(THE type ...)= type specifiers untouched while walking every
+  evaluated subform.
 
-The =COMPILE= function performs the minimal compilation (macroexpansion).
+- =COMPILE-FILE= reads each top-level form, runs =MACROEXPAND-ALL= on
+  it, and writes the macro-free forms to a *fast-load* file (default
+  file type from =*DEFAULT-COMPILED-FILE-TYPE*=, "fasl").  =LOAD= of a
+  fast-load file is faster because no macro expansion is needed.
 
-We could provid a =COMPILE-FILE= function that would generate a
-pre-macroexpanded "fasl" file, which would imply :compile-toplevel and
-:load-toplevel situations.
+- At run time the interpreter performs *macro displacement*: the first
+  time a global-macro call form is evaluated it is replaced in place by
+  its expansion, so the expansion (and any =GENSYM= / backquote consing
+  it entails) happens once, not on every evaluation.  This gives
+  interpreted code most of the benefit of minimal compilation without a
+  separate compile step.
 
-Let's run with just the interpreter, and see if the performances are
-enough for the stated goal: compile a CL implementation.  Only if it's
-really too slow, would we seek to implement eg. a virtual machine and
-a byte-code compiler.  But we'd basically reproduce the clisp
-implementation.
+Interpreter performance notes (implementation specific):
+- =S(symbol)=-style kernel symbol references are cached per call site
+  (they were re-interned on every use, which dominated eval time).
+- The package obarray is indexed by a hash table, so the reader interns
+  symbols in O(1) rather than O(n) per symbol.
+- A cons cell is a single 32-byte object (class, car, cdr inline)
+  rather than an object plus a separate slots block.
 
 ** 3.4 Lambda List
 
@@ -319,6 +335,10 @@ the kernel.
 #+END_EXAMPLE
 
 ** 5. Data and Control Flow
+
+=UNWIND-PROTECT= runs its cleanup forms on both normal completion and
+non-local exit (the cleanup always runs, as required by the standard).
+
 ** 6. Iteration
 
 - =DO= =DO*=
@@ -512,12 +532,33 @@ com.informatimago/future/vfs/filenames.lisp
 
 The kernel implements a physical-pathnames wrapper (posix paths).
 
-Remains to implement the generic pathname functions, and pathname
-translations.
+Pathnames print readably: =PRIN1=/=PRINT= write =#P"namestring"=, and
+=PRINC= writes the bare namestring (for both physical and logical
+pathnames).
+
+Configurable file types (implementation specific) drive file lookup:
+- =*ACCEPTED-SOURCE-FILE-TYPES*= — types tried to find a source file
+  given a typeless pathname (default: "lisp" / "LISP" and
+  case-insensitive "lisp", "lsp", "cl", "l").
+- =*ACCEPTED-COMPILED-FILE-TYPES*= — types tried to find a compiled
+  file (default: "fasl" / "FASL" and case-insensitive "fasl", "fas",
+  "obj", "o").
+- =*DEFAULT-COMPILED-FILE-TYPE*= — the type =COMPILE-FILE= gives its
+  output when none is specified (default "fasl").
+An element may be a string (case-sensitive) or =(:case-insensitive
+"type")= to force a case-insensitive search with "type" tried first.
+
+Remains to implement the generic pathname functions, pathname
+translations, and to wire the full type-based file-selection logic
+into =LOAD=.
 
 ** 20. Files
 
-✓ File operators are mostly implemented in the kernel.
+✓ File operators are mostly implemented in the kernel, including
+=FILE-LENGTH= (byte length of an open file stream via =fstat=) and
+=FILE-WRITE-DATE=.
+
+=COMPILE-FILE= writes a fast-load file of macro-free forms (see §3).
 
 We need to implement wrappers to process the pathname arguments
 (=TRANSLATE-PATHNAME=).
@@ -571,6 +612,11 @@ No =DISASSEMBLE= output, minimal =INSPECT=.
 
 We may implement =DRIBBLE= along with the REPL, but =bocl= would be
 used in batch in general.
+
+The REPL maintains the standard history variables: =-= (the form being
+evaluated); =+=, =++=, =+++= (the last three forms evaluated); =*=,
+=**=, =***= (the last three primary values); and =/=, =//=, =///= (the
+last three value lists).  They are bound to =NIL= at REPL start.
 
 - =decode-universal-time=
 - =encode-universal-time=
@@ -871,19 +917,96 @@ Unicode and UTF-8 is out of scope for version 1.
 
 The REPL is a standard REPL.
 
-*** Function QUIT
+*** Init (rc) files
+
+Unless =-n= / =-norc= / =--no-init= is given, bocl loads at most one init
+file at start-up, the first that exists from this list (a leading =~/= is
+the user's home directory, =(USER-HOMEDIR-PATHNAME)=):
+
+| order | file                              |
+|-------+-----------------------------------|
+|     1 | ~~/.bocl~                         |
+|     2 | ~~/.bocl.fasl~                    |
+|     3 | ~~/.bocl.lisp~                    |
+|     4 | ~~/.boclrc~                       |
+|     5 | ~~/.boclrc.fasl~                  |
+|     6 | ~~/.boclrc.lisp~                  |
+|     7 | ~~/.config/bocl/init~             |
+|     8 | ~~/.config/bocl/init.fasl~        |
+|     9 | ~~/.config/bocl/init.lisp~        |
+|    10 | ~~/.common-lisp~                  |
+|    11 | ~~/.common-lisp.fasl~             |
+|    12 | ~~/.common-lisp.lisp~             |
+|    13 | ~~/.config/common-lisp/init~      |
+|    14 | ~~/.config/common-lisp/init.fasl~ |
+|    15 | ~~/.config/common-lisp/init.lisp~ |
+
+This is the union of bocl's historical init-file locations (the =~/.bocl=,
+=~/.config/bocl/init=, =~/.common-lisp= and =~/.config/common-lisp/init= stems)
+and the per-stem =bare= / =.fasl= / =.lisp= variants.  The first match wins,
+except that when the match is a =.fasl= whose =.lisp= sibling exists and is more
+recent, the =.lisp= is loaded instead (the fasl is stale).  After the init file,
+every =-i= / =--init= file given on the command line is loaded in turn.  Then the
+functions on BOCL:*INIT-HOOK* are called.  Then the main task runs (=-x= / =-l=
+forms and the REPL).
+
+*** Function BOCL:QUIT
 
 Syntax:
 
-    QUIT (&optional (status 0)) => non-local-exit
+    BOCL:QUIT (&optional (status 0)) => non-local-exit
 
 Arguments and Values:
 
-    status -- an integer
+    status -- an integer (default 0)
 
 Description:
 
-    Exits the =bocl= process, with the given STATUS.
+    Exits the =bocl= process with the given STATUS.  QUIT performs a
+    /non-local exit/, so any UNWIND-PROTECT clean-up clauses pending in
+    the current dynamic environment are run on the way out.  Being the
+    primitive used by WITH-OPEN-FILE and similar resource macros, this
+    lets them close and free their resources (flush buffers, close
+    files and sockets) before the process exits.
+
+    Once the dynamic environment has been unwound, the functions on
+    BOCL:*QUIT-HOOK* are each called (inside IGNORE-ERRORS), and then
+    the process exits.  QUIT does not return.
+
+*** Extension hooks
+
+Three lists of function designators let user code (typically from the
+init/rc file, a -i file, the command line, or normal Lisp code) run
+code at well-defined points in the process life-cycle.  They live in
+the BOCL package and are never cleared (a function on a list serves
+until removed by the user).  No locking is provided.
+
+| variable          | signature        | when called                                            |
+|-------------------+------------------+--------------------------------------------------------|
+| BOCL:*INIT-HOOK*  | (lambda ())      | after the rc/init file has been loaded (or --no-init   |
+|                   |                  | processed), before the main task (-l/-x/-i + the REPL) |
+| BOCL:*QUIT-HOOK*  | (lambda (status))| by BOCL:QUIT, after the non-local exit unwinds the     |
+|                   |                  | dynamic environment, just before the process exits     |
+| BOCL:*ABORT-HOOK* | (lambda (signum))| when the process is crashing on a fatal signal; the    |
+|                   |                  | GC is disabled and the heap may be corrupt             |
+
+Each function on a hook list is called in turn, each wrapped in an
+IGNORE-ERRORS.  If a hook calls BOCL:QUIT, or a crash occurs, the
+corresponding processing happens and the remaining functions on the
+list are not called.
+
+*INIT-HOOK* and the main task run under a single top-level CATCH for
+QUIT, so a QUIT from an init hook, a loaded form, or the REPL is a
+proper non-local exit.
+
+*ABORT-HOOK* is best effort, with no guarantees: the signal may
+indicate system corruption, so the garbage collector is disabled and
+hooks should perform minimal allocation (flush a buffer, write a
+dirty/clean flag) and return quickly — the user may otherwise kill an
+unresponsive process, preventing the remaining hooks from running.
+QUIT-HOOK and ABORT-HOOK functions may be called from a thread other
+than the main thread; the main thread starts the main task only once
+the INIT-HOOK functions have completed.
 
 ** The debugger
 

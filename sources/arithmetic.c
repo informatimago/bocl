@@ -7,10 +7,11 @@
 
 /* -------------------------------------------------------------------- *
  *  Portable overflow-checked arithmetic + popcount.                    *
- *  bocl's fixnum overflow detection used the GNU/Clang __builtin_*     *
- *  intrinsics directly, which excludes other C17 compilers (e.g. tcc). *
- *  gcc/clang keep their intrinsics; everyone else gets a correct       *
- *  hand-written fallback so bocl builds with any conforming compiler.  *
+ *  The fixnum overflow-detection (which promotes to bignum below) used *
+ *  the GNU/Clang __builtin_* intrinsics directly, excluding other C17  *
+ *  compilers (e.g. tcc). gcc/clang keep their intrinsics; everyone     *
+ *  else gets a correct hand-written fallback so bocl builds with any   *
+ *  conforming compiler.                                                *
  * -------------------------------------------------------------------- */
 #if defined(__TINYC__)
 #  define BOCL_HAVE_BUILTINS 0
@@ -68,19 +69,55 @@ static inline int bocl_popcount_uword(uword x){
 }
 
 /* -------------------------------------------------------------------- *
+ *  Bignum bridge                                                        *
+ *                                                                       *
+ *  All bignum arithmetic lives in the Lisp engine                       *
+ *  (bootstrap/bignum.lisp + bignum-integration.lisp).  num_combine()    *
+ *  dispatches here when an operand is a BIGNUM or a fixnum op overflows. *
+ *  Every dispatch is guarded by symbol_fboundp so the bootstrap — which  *
+ *  runs before the glue is loaded — keeps the original overflow error.   *
+ * -------------------------------------------------------------------- */
+
+/* Lossy BIGNUM -> double for float contagion.  Recurses to depth = #digits. */
+static floating bignum_horner_float(Ref digits){
+    if(!consp(digits)){ return 0.0; }
+    return (floating)integer_value(cons_car(digits))
+         + 1000000000.0 * bignum_horner_float(cons_cdr(digits));}
+
+static floating bignum_to_floating(Ref b){
+    Ref sb=bignum_value(b);
+    floating mag=bignum_horner_float(cons_cdr(sb));
+    return (cons_car(sb)==S(-)) ? -mag : mag;}
+
+static Ref bignum_combine(char op, Ref a, Ref b){
+    /* Arithmetic now runs in the C engine (kernel.c) — no Lisp dependency.
+       The Lisp glue (%BIGNUM-PLUS …) is retained only for I/O paths. */
+    switch(op){
+      case '+': return c_bignum_add(a,b);
+      case '-': return c_bignum_sub(a,b);
+      case '*': return c_bignum_mul(a,b);
+      case '/': return c_bignum_divide(a,b);
+      default:  FATAL("bignum_combine: unknown op %c",op); return NIL_Symbol;}}
+
+/* Three-way compare of two integers (either may be a BIGNUM): -1, 0, or 1. */
+static int bignum_compare(Ref a, Ref b){
+    return c_bignum_cmp(a,b);}
+
+/* -------------------------------------------------------------------- *
  *  Helpers                                                              *
  * -------------------------------------------------------------------- */
 
 /* Coerce a Ref to floating, accepting INTEGER, RATIO, or FLOAT. */
 static floating as_floating(Ref x){
     if(integerp(x)){ word iv = integer_value(x); return (floating)iv; }
+    if(bignump(x)) { return bignum_to_floating(x); }
     if(floatp(x))  { return float_value(x); }
     if(ratiop(x))  { return ratio_to_float(x); }
     TYPE_ERROR(x,NUMBER_Class);}
 
 /* Check that x is a NUMBER (INTEGER or FLOAT). */
 static void check_number(Ref x){
-    if(!(integerp(x)||floatp(x)||ratiop(x)||complexp(x))){
+    if(!(integerp(x)||bignump(x)||floatp(x)||ratiop(x)||complexp(x))){
         TYPE_ERROR(x,NUMBER_Class);}}
 
 /* Promote two numbers: return true iff at least one is a float; the integer
@@ -117,6 +154,13 @@ static Ref num_combine(char op, Ref a, Ref b){
               r = av / bv; break;
           default: FATAL("num_combine: unknown op %c",op);}
         return float_from_floating(r);
+    }
+    /* Bignum: either operand is a BIGNUM (and neither is float — handled above).
+       Ratio/complex with a bignum part are not yet supported (fall through to
+       those branches, which will signal a TYPE_ERROR on integer_value). */
+    if((bignump(a)||bignump(b)) && !ratiop(a) && !ratiop(b)
+       && !complexp(a) && !complexp(b)){
+        return bignum_combine(op,a,b);
     }
     /* Ratio arithmetic: (a/b op c/d) */
     if(either_ratio(a,b)){
@@ -179,16 +223,13 @@ static Ref num_combine(char op, Ref a, Ref b){
     {   word av=integer_value(a), bv=integer_value(b), r=0;
         switch(op){
           case '+':
-              if(bocl_add_overflow(av,bv,&r)){
-                  ARITHMETIC_ERROR("Integer overflow in (+ %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
+              if(bocl_add_overflow(av,bv,&r)){ return bignum_combine('+',a,b); }
               break;
           case '-':
-              if(bocl_sub_overflow(av,bv,&r)){
-                  ARITHMETIC_ERROR("Integer overflow in (- %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
+              if(bocl_sub_overflow(av,bv,&r)){ return bignum_combine('-',a,b); }
               break;
           case '*':
-              if(bocl_mul_overflow(av,bv,&r)){
-                  ARITHMETIC_ERROR("Integer overflow in (* %"WORD_FORMAT" %"WORD_FORMAT")",av,bv);}
+              if(bocl_mul_overflow(av,bv,&r)){ return bignum_combine('*',a,b); }
               break;
           case '/':
               if(bv==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
@@ -196,7 +237,7 @@ static Ref num_combine(char op, Ref a, Ref b){
                   /* Exact integer division → ratio */
                   return ratio_new(integer_from_word(av), integer_from_word(bv));}
               if(av==WORD_MIN && bv==-1){
-                  ARITHMETIC_ERROR("Integer overflow in (/ %"WORD_FORMAT" -1)",av);}
+                  return bignum_combine('/',a,b);}   /* -WORD_MIN = WORD_MAX+1 */
               r = av / bv;
               break;
           default: FATAL("num_combine: unknown op %c",op);}
@@ -258,14 +299,23 @@ void kernel_DIVIDE(Ref function,Ref arguments,MultipleValues* results){
 
 static bool num_eq(Ref a, Ref b){
     check_number(a); check_number(b);
+    /* Complex: equal iff real and imaginary parts are each =.  complex_realpart/
+       imagpart of a real return the number / 0, so (= 1 #C(1 1)) is correctly
+       false and (= #C(0 1) #C(0 1)) true.  (Reading #C(x 0) already collapses to
+       the real x, so a complex here has a non-zero imaginary part.) */
+    if(complexp(a) || complexp(b)){
+        return num_eq(complex_realpart(a), complex_realpart(b))
+            && num_eq(complex_imagpart(a), complex_imagpart(b));}
     if(either_float(a,b) || either_ratio(a,b))
         return as_floating(a)==as_floating(b);
+    if(bignump(a)||bignump(b)) return bignum_compare(a,b)==0;
     return integer_value(a)==integer_value(b);}
 
 static bool num_lt(Ref a, Ref b){
     check_number(a); check_number(b);
     if(either_float(a,b) || either_ratio(a,b))
         return as_floating(a)<as_floating(b);
+    if(bignump(a)||bignump(b)) return bignum_compare(a,b)<0;
     return integer_value(a)<integer_value(b);}
 
 /* Variadic monotonic comparator: (cmp a b c) ≡ (and (cmp a b) (cmp b c)).
@@ -388,10 +438,8 @@ void kernel_ONE_PLUS(Ref function,Ref arguments,MultipleValues* results){
     if(floatp(x)){
         results->values[0]=float_from_floating(float_value(x)+1.0);
     } else {
-        word r;
-        if(bocl_add_overflow(integer_value(x),(word)1,&r)){
-            ARITHMETIC_ERROR("Integer overflow in (1+ %"WORD_FORMAT")",integer_value(x));}
-        results->values[0]=integer_from_word(r);}
+        /* num_combine handles bignum operands and promotes on overflow. */
+        results->values[0]=num_combine('+',x,I(1));}
     close_live_pool(pool);}
 
 void kernel_ONE_MINUS(Ref function,Ref arguments,MultipleValues* results){
@@ -406,10 +454,8 @@ void kernel_ONE_MINUS(Ref function,Ref arguments,MultipleValues* results){
     if(floatp(x)){
         results->values[0]=float_from_floating(float_value(x)-1.0);
     } else {
-        word r;
-        if(bocl_sub_overflow(integer_value(x),(word)1,&r)){
-            ARITHMETIC_ERROR("Integer overflow in (1- %"WORD_FORMAT")",integer_value(x));}
-        results->values[0]=integer_from_word(r);}
+        /* num_combine handles bignum operands and promotes on overflow. */
+        results->values[0]=num_combine('-',x,I(1));}
     close_live_pool(pool);}
 
 void kernel_ABS(Ref function,Ref arguments,MultipleValues* results){
@@ -423,11 +469,13 @@ void kernel_ABS(Ref function,Ref arguments,MultipleValues* results){
     results->count=1;
     if(floatp(x)){
         results->values[0]=float_from_floating(fabs(float_value(x)));
+    } else if(bignump(x)){
+        results->values[0]=(bignum_compare(x,I(0))<0)?num_combine('-',I(0),x):x;
     } else {
         word v=integer_value(x);
-        if(v==WORD_MIN){
-            ARITHMETIC_ERROR("Integer overflow in (abs %"WORD_FORMAT")",v);}
-        results->values[0]=integer_from_word(v<0?-v:v);}
+        /* (abs most-negative-fixnum) overflows the word — promote to a bignum. */
+        if(v==WORD_MIN){ results->values[0]=num_combine('-',I(0),x); }
+        else { results->values[0]=integer_from_word(v<0?-v:v); }}
     close_live_pool(pool);}
 
 /* Variadic MIN and MAX: at least one argument; folded by the strict predicate. */
@@ -501,7 +549,7 @@ static intdiv_t int_round(word num, word den){
         else                  { out.q -= 1; out.r += den; }}
     return out;}
 
-#define DIVOP_KERNEL(cname,intop,floatop)                                      \
+#define DIVOP_KERNEL(cname,intop,floatop,modechar)                            \
     void cname(Ref function,Ref arguments,MultipleValues* results){            \
         uword pool=open_live_pool();                                           \
         add_to_live_pool(function);                                            \
@@ -519,6 +567,11 @@ static intdiv_t int_round(word num, word den){
             results->count=2;                                                  \
             results->values[0]=integer_from_word((word)q);                     \
             results->values[1]=float_from_floating(n - q*d);                   \
+        } else if(bignump(num)||bignump(den)){                                 \
+            Ref q,r; c_bignum_divmod(num,den,modechar,&q,&r);                  \
+            results->count=2;                                                  \
+            results->values[0]=q;                                              \
+            results->values[1]=r;                                              \
         } else {                                                               \
             word n=integer_value(num); word d=integer_value(den);              \
             if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }             \
@@ -530,10 +583,10 @@ static intdiv_t int_round(word num, word den){
             results->values[1]=integer_from_word(r.r); }                       \
         close_live_pool(pool);}
 
-DIVOP_KERNEL(kernel_TRUNCATE, int_truncate, trunc)
-DIVOP_KERNEL(kernel_FLOOR,    int_floor,    floor)
-DIVOP_KERNEL(kernel_CEILING,  int_ceiling,  ceil)
-DIVOP_KERNEL(kernel_ROUND,    int_round,    rint)
+DIVOP_KERNEL(kernel_TRUNCATE, int_truncate, trunc, 't')
+DIVOP_KERNEL(kernel_FLOOR,    int_floor,    floor, 'f')
+DIVOP_KERNEL(kernel_CEILING,  int_ceiling,  ceil,  'c')
+DIVOP_KERNEL(kernel_ROUND,    int_round,    rint,  'r')
 
 void kernel_MOD(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
@@ -550,6 +603,9 @@ void kernel_MOD(Ref function,Ref arguments,MultipleValues* results){
         if(d==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
         floating q=floor(n/d);
         results->values[0]=float_from_floating(n - q*d);
+    } else if(bignump(num)||bignump(den)){
+        Ref q,r; c_bignum_divmod(num,den,'f',&q,&r);   /* MOD = floor remainder */
+        results->values[0]=r;
     } else {
         word n=integer_value(num), d=integer_value(den);
         if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
@@ -572,6 +628,9 @@ void kernel_REM(Ref function,Ref arguments,MultipleValues* results){
         if(d==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
         floating q=trunc(n/d);
         results->values[0]=float_from_floating(n - q*d);
+    } else if(bignump(num)||bignump(den)){
+        Ref q,r; c_bignum_divmod(num,den,'t',&q,&r);   /* REM = truncate remainder */
+        results->values[0]=r;
     } else {
         word n=integer_value(num), d=integer_value(den);
         if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
@@ -772,22 +831,18 @@ void kernel_EXPT(Ref function,Ref arguments,MultipleValues* results){
     check_no_more_arguments(function,current);
     check_number(base); check_number(expo);
     results->count=1;
-    if(integerp(base) && integerp(expo) && integer_value(expo) >= 0){
-        /* Pure-integer fast path with overflow checking. */
-        word b = integer_value(base);
+    if((integerp(base)||bignump(base)) && integerp(expo) && integer_value(expo) >= 0){
+        /* Square-and-multiply via num_combine, which promotes to a bignum on
+           overflow (and accepts a bignum base).  Re-root r and b after each
+           reassignment so a GC inside num_combine cannot reclaim them. */
         word e = integer_value(expo);
-        word r = 1;
+        Ref r = I(1), b = base;
+        add_to_live_pool(r); add_to_live_pool(b);
         while(e > 0){
-            if(e & 1){
-                if(bocl_mul_overflow(r,b,&r)){
-                    ARITHMETIC_ERROR("Integer overflow in (EXPT %"WORD_FORMAT" %"WORD_FORMAT")",
-                                     integer_value(base), integer_value(expo));}}
+            if(e & 1){ r = num_combine('*', r, b); add_to_live_pool(r); }
             e >>= 1;
-            if(e){
-                if(bocl_mul_overflow(b,b,&b)){
-                    ARITHMETIC_ERROR("Integer overflow in (EXPT %"WORD_FORMAT" %"WORD_FORMAT")",
-                                     integer_value(base), integer_value(expo));}}}
-        results->values[0] = integer_from_word(r);
+            if(e){ b = num_combine('*', b, b); add_to_live_pool(b); }}
+        results->values[0] = r;
     } else {
         floating r = pow(as_floating(base), as_floating(expo));
         results->values[0] = float_from_floating(r);}
@@ -838,14 +893,20 @@ void kernel_GCD(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref tail = arguments;
-    word acc = 0;
+    word wacc = 0;       /* fast word accumulator (GCD never overflows) */
+    bool big  = false;
+    Ref  acc  = NIL_Symbol;
     while(consp(tail)){
         Ref x = cons_car(tail);
-        if(!integerp(x)){ TYPE_ERROR(x,INTEGER_Class); }
-        acc = gcd2(acc, integer_value(x));
+        if(!(integerp(x)||bignump(x))){ TYPE_ERROR(x,INTEGER_Class); }
+        if(big || bignump(x)){
+            if(!big){ acc=integer_from_word(wacc); big=true; }
+            acc = c_bignum_gcd(acc,x);
+        } else {
+            wacc = gcd2(wacc, integer_value(x)); }
         tail = cons_cdr(tail);}
     results->count=1;
-    results->values[0] = integer_from_word(acc);
+    results->values[0] = big ? acc : integer_from_word(wacc);
     close_live_pool(pool);}
 
 /* (LCM &rest integers) — least common multiple. (lcm) -> 1. */
@@ -853,21 +914,29 @@ void kernel_LCM(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref tail = arguments;
-    word acc = 1;
+    word wacc = 1;
+    bool big  = false;
+    Ref  acc  = NIL_Symbol;
     while(consp(tail)){
         Ref x = cons_car(tail);
-        if(!integerp(x)){ TYPE_ERROR(x,INTEGER_Class); }
-        word v = integer_value(x);
-        if(v == 0){ acc = 0; break; }
-        word g = gcd2(acc, v);
-        word q = v / g;
-        word r = 0;
-        if(bocl_mul_overflow(acc,q,&r)){
-            ARITHMETIC_ERROR("Integer overflow in LCM%s","");}
-        acc = abs_word(r);
+        if(!(integerp(x)||bignump(x))){ TYPE_ERROR(x,INTEGER_Class); }
+        if(big || bignump(x)){
+            if(!big){ acc=integer_from_word(wacc); big=true; }
+            acc = c_bignum_lcm(acc,x);
+        } else {
+            word v = integer_value(x);
+            if(v == 0){ wacc = 0; }
+            else {
+                word g = gcd2(wacc, v);
+                word q = v / g;
+                word r = 0;
+                if(bocl_mul_overflow(wacc,q,&r)){
+                    /* overflow -> promote to bignum LCM */
+                    acc=c_bignum_lcm(integer_from_word(wacc),x); big=true;
+                } else { wacc = abs_word(r); } } }
         tail = cons_cdr(tail);}
     results->count=1;
-    results->values[0] = integer_from_word(acc);
+    results->values[0] = big ? acc : integer_from_word(wacc);
     close_live_pool(pool);}
 
 /* (SIGNUM x) — -1, 0, +1 of the same numeric type as x. */

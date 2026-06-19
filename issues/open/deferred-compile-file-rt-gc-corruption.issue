@@ -1,0 +1,83 @@
+COMPILE-FILE of ansi-test/rt.lsp intermittently HANGS or signals a spurious
+type error — a GC / live-pool rooting bug.  This blocks the ANSI-test "clean
+run": gclload1 does (COMPILE-AND-LOAD "rt.lsp") = COMPILE-FILE + LOAD, so the
+whole suite stalls or aborts here.
+
+SYMPTOM (non-deterministic, heap-layout dependent):
+  - sometimes an infinite loop (compile-file never returns);
+  - sometimes  "In check_class: TYPE ERROR: got an object of class SYMBOL,
+                expected an object of class STRING".
+The two faces (hang vs. reading a STRING slot as a SYMBOL) are the classic
+signature of an object collected mid-use, then its memory reused.
+
+REPRODUCE:
+    sources/bocl --no-init --batch -on-error appease \
+      -l ../ansi-test/rt-package.lsp \
+      -x '(compile-file "/abs/path/ansi-test/rt.lsp" :output-file "/tmp/o.fasl")' \
+      -x '(format t "OK~%")(finish-output)(bocl:quit 0)'
+  Prints neither OK nor a clean error — it hangs, or prints the check_class
+  type error and dies.
+
+NARROWING DONE:
+  - COMPILE-FILE of a *minimal* file (defmacro/defun/defstruct) works.
+  - COMPILE-FILE of a byte-identical COPY of rt.lsp (e.g. /tmp/rth.lisp) often
+    works where the original path hangs — i.e. it is timing/heap-layout
+    dependent, NOT content- or path-specific (diff is empty; same 23695 bytes).
+  - Pre-existing: present at Slice 57 (the session summary already noted the
+    "check_class: expected STRING got SYMBOL" during compile-file rt.lsp).  NOT
+    introduced by the hooks work (Slices 58-60); confirmed by rebuilding at
+    Slice 57 and reproducing.
+  - The prime suspect is the Slice-57 package-qualified symbol printing path
+    (prin1 -> symbol_print_prefix -> pkg_find_symbol / find_symbol), which now
+    runs per-symbol while PRIN1 writes each (large, MACROEXPAND-ALL'd) top-level
+    form to the fasl.  pkg_find_symbol itself does not allocate, so the unrooted
+    Ref is more likely a temporary held across an allocation elsewhere in the
+    prin1 / macroexpand-all / fasl-write chain.
+
+NEXT STEPS:
+  - Build with a GC-stress mode (collect on every allocation) to make the
+    corruption deterministic, then bisect which Ref is held across an alloc
+    without add_to_live_pool (likely in printer.c symbol printing, or in
+    %compile-file-form's prin1 of the macroexpand-all result).
+  - As an interim unblock for the suite, COMPILE-AND-LOAD could fall back to a
+    plain LOAD of the source (plain LOAD of rt.lsp works), or COMPILE-FILE could
+    skip MACROEXPAND-ALL (write forms as-is) — but the latter exposed a separate
+    PRIN1 loop on some rt.lsp form, so the rooting bug should be fixed properly.
+
+Once fixed, re-run:
+  sources/bocl --no-init --batch -on-error appease -l ../ansi-test/doit.lsp --quit
+and process the remaining ANSI conformance failures (and bignums).
+
+;; UPDATE (Slice 62): COMPILE-FILE no longer MACROEXPAND-ALL's / PRIN1's forms —
+;; it is now a no-op that returns the output pathname and lets LOAD fall back to
+;; the .lsp source.  So COMPILE-AND-LOAD no longer exercises the offending
+;; symbol-qualified PRIN1 path, and the ANSI framework loads.  The underlying
+;; GC-rooting bug in the heavy-PRIN1 path may still lurk for other heavy printing;
+;; keep this open until root-caused.  (Much of last session's "hang" was actually
+;; machine saturation from runaway processes + a slow per-char copy, not the GC
+;; bug; the no-op COMPILE-FILE removes that slowness entirely.)
+
+;; UPDATE (bignum integration): the SAME corruption ("In check_class: TYPE ERROR:
+;; got SYMBOL, expected STRING") reproduces during a PLAIN PRELUDE LOAD — no
+;; compile-file, no -l, just `bocl -x '(princ 1)'` — once the heap is perturbed by
+;; the bignum kernel init (kernel_initialize_bignum allocates a BIGNUM built-in
+;; class + 3 primitive functions, ~15 small objects).  So the bug is NOT specific
+;; to compile-file / heavy PRIN1; any heap-layout shift can trigger it, and it now
+;; blocks the bignum work (which perturbs the heap at init).  New evidence:
+;;   - BOCL_NOGC=1  -> the prelude loads and the whole bignum feature works
+;;     (overflow promotion, expt, factorials, read/print of bignum literals,
+;;     comparisons, typep/integerp/rationalp/fixnum/bignum, demote-on-fit, print
+;;     /read round-trip — all correct).  => it is a use-after-free, not a logic bug.
+;;   - BOCL_GCCHECK=1 (verify_no_dangling after each mark) reports ZERO dangling
+;;     survivors.  => it is NOT an objcount / heap-structure rooting bug; it is a
+;;     C-STACK-LOCAL Ref held across an allocation without add_to_live_pool (a
+;;     temporary the collector cannot see), exactly the prime suspect noted above.
+;;   - lldb backtrace at the fatal type_error: the real fault is `(car X)` on a
+;;     non-cons X inside evale of a prelude form (X's class pointer is garbage —
+;;     reused memory); the "SYMBOL/STRING" is a secondary error raised while
+;;     formatting the first.
+;; NEXT: BOCL_GCSTRESS=N (collect every N allocs) + lldb to catch the freed object
+;; at its allocation site, then find the C frame holding the unrooted local.
+;; Until fixed, the bignum integration (kernel.c BIGNUM type, arithmetic.c
+;; num_combine dispatch, reader/printer hooks, bootstrap/bignum-integration.lisp)
+;; must stay gated / unmerged, since enabling it makes the default build unbootable.

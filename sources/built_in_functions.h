@@ -122,6 +122,8 @@ void kernel_REMF(Ref function,Ref arguments,MultipleValues* results);
 void kernel_VECTOR(Ref function,Ref arguments,MultipleValues* results);
 void kernel_VECTORP(Ref function,Ref arguments,MultipleValues* results);
 void kernel_VECTOR_LENGTH(Ref function,Ref arguments,MultipleValues* results);
+void kernel_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results);
+void kernel_SET_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SVREF(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SVREF_SET(Ref function,Ref arguments,MultipleValues* results);
 void kernel_BIT_VECTOR_P(Ref function,Ref arguments,MultipleValues* results);

@@ -11,6 +11,7 @@
 extern Ref COMMON_LISP_Package;
 extern Ref COMMON_LISP_USER_Package;
 extern Ref KEYWORD_Package;
+extern Ref BOCL_Package;   /* implementation-extensions package (hooks, QUIT) */
 
 /* The single global registry of named packages (alist of name → package). */
 extern Ref all_packages;
@@ -31,5 +32,13 @@ void package_export(Ref pkg, Ref sym);
 
 /* Return the current value of *PACKAGE*. */
 Ref current_package(void);
+
+/* Reader support for package-qualified and bare symbols. */
+Ref package_find_cstring(const char* name);               /* find a package by name, or NIL */
+Ref package_intern_current_cstring(const char* name);     /* bare sym: intern in *PACKAGE* */
+Ref package_intern_cstring_in(const char* name, Ref pkg); /* pkg::sym: intern in pkg */
+Ref package_find_external_cstring(const char* name, Ref pkg); /* pkg:sym: external symbol or NIL */
+/* Printer support: how to qualify SYMBOL under *PACKAGE* (see packages.c). */
+void symbol_print_prefix(Ref symbol, Ref* package_name_out, int* sep);
 
 #endif

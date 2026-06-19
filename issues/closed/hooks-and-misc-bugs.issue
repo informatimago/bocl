@@ -1,0 +1,159 @@
+I dont' see the *init-hook* functions being called.
+
+I have this in ~/.boclrc, and the "Have fun!" doesn't occur.
+
+    (in-package "CL-USER")
+    (use-package "BOCL")
+
+    (format t "~2%Welcome to ~A~2%"
+            (lisp-implementation-type)
+            (lisp-implementation-version))
+
+    (push (lambda ()
+            (format t "~&Have fun!~%")
+            (finish-output))
+          bocl:*init-hook*)
+
+    (push (lambda (signum)
+            (format t "~%Oops got signal ~A!~%" signum)
+            (finish-output))
+          bocl:*abort-hook*)
+
+
+    (push (lambda (status)
+            (format t "~%Bye, bye, cruel world! (with status ~A)~%" status)
+            (finish-output))
+          bocl:*quit-hook*)
+
+
+- the ~/.boclrc init file is not loaded.
+
+- the documentation doesn't mention the init files, the can be one of:
+
+| # | Stem                                | Bare allowed? |
+|---+-------------------------------------+---------------|
+| 1 | ~~/.bocl{,rc}{,.lisp,.fasl}~        | yes           |
+| 2 | ~~/.config/bocl/init{.lisp,.fasl}~  | no            |
+
+The first one that matches is loaded (.fasl is loaded if more recent than .lisp).
+
+So the order tried is:
+
+| .bocl                  |
+| .bocl.fasl             |
+| .bocl.lisp             |
+| .boclrc                |
+| .boclrc.fasl           |
+| .boclrc.lisp           |
+| .config/bocl/init.fasl |
+| .config/bocl/init.lisp |
+
+After the first file amongst these is found and loaded (if no -n -norc
+--no-init option is given), all the -i | --init options are processed
+and the specified init files are loaded.
+
+After this, *init-hook* are called.
+
+Then we enter the REPL.
+  
+- *abort-hook* are not called either:
+
+    ~/src/public/bocl
+    slice-41-issues-resolution
+    19:57[pjb@thalassa org.xquartz:0 bocl 35Gi]$ sources/bocl
+
+    Welcome to BOCL Version 0.0.83
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+
+    bocl> Terminated: 15
+
+    ~/src/public/bocl slice-41-issues-resolution 19:57[pjb@thalassa
+    org.xquartz:0 bocl 35Gi]$
+
+
+- ~/ is not processed in pathnames. It should be taken as an
+  abbreviation for (user-homedir-pathname).
+
+  (pathname "~/foo/bar") == (merge-pathnames "foo/bar" (user-homedir-pathname))
+
+
+    20:07[pjb@thalassa org.xquartz:0 bocl 35Gi]$ sources/bocl
+
+    Welcome to BOCL Version 0.0.83
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+
+    bocl> (load "~/.boclrc")
+
+
+- Missing format-argument to the simple-error file does not exist:
+      
+    In kernel_ERROR:
+    ERROR: Unhandled SIMPLE-ERROR: LOAD: file ~S does not exist
+
+
+    ~/src/public/bocl
+    slice-41-issues-resolution
+    20:09[pjb@thalassa org.xquartz:0 bocl 35Gi]$ sources/bocl
+
+    Welcome to BOCL Version 0.0.83
+    Copyright 2021-2026 Pascal J. Bourguignon
+    Licensed under AGPL; source codes available at:
+    http://gitlab.com/bocl/bocl/
+
+- no rc file loaded:
+  
+    bocl> (load "/Users/pjb/.boclrc")
+
+
+    Welcome to BOCL
+
+
+    T
+    bocl> (funcall (first bocl:*init-hook*))
+
+    Have fun!
+
+    NIL
+    bocl> (quit)
+
+    Bye, bye, cruel world! (with status 0)
+
+    ~/src/public/bocl
+    slice-41-issues-resolution
+    20:09[pjb@thalassa org.xquartz:0 bocl 35Gi]$ 
+
+
+;; ===================== RESOLUTION (Slices 59 + 60) =====================
+;; All items fixed:
+;; - ~/.boclrc now loaded: rc search order is ~/.bocl{,.fasl,.lisp},
+;;   ~/.boclrc{,.fasl,.lisp}, ~/.config/bocl/init.{fasl,lisp}; first match wins,
+;;   .fasl defers to a newer .lisp sibling.  (main.c)  [Slice 59]
+;; - *INIT-HOOK* / *QUIT-HOOK* now fire (they were never reached because the rc
+;;   file that registered them was not loaded).  [Slice 59]
+;; - *ABORT-HOOK* now fires on termination signals too (SIGTERM/SIGINT/SIGHUP),
+;;   not just SEGV/BUS/ABRT; crash handler installed unconditionally with a
+;;   re-entrancy guard.  (kernel.c)  [Slice 59]
+;;   (Underlying enabler: fixed HANDLER-CASE non-local pass-through FATAL, which
+;;    also broke BOCL:QUIT through the appease loader.  [Slice 59])
+;; - ~ in namestrings now abbreviates (USER-HOMEDIR-PATHNAME): (PATHNAME "~/x")
+;;   => $HOME/x; added USER-HOMEDIR-PATHNAME.  (kernel.c physical_pathname,
+;;   prelude)  [Slice 60]
+;; - Unhandled-condition report now applies the format arguments (was printing
+;;   the raw format-control, e.g. literal ~S): kernel_ERROR renders the report
+;;   via PRINC (princ_to_string).  [Slice 60]
+;; - Init files + search order documented (documentation.org, Extensions > The
+;;   REPL > Init (rc) files).  [Slice 60]
+
+;; Follow-up (Slice 61): the documented rc-candidate list (and the rc_candidates
+;; array) is now the UNION of bocl's historical candidates (~/.bocl,
+;; ~/.config/bocl/init, ~/.common-lisp, ~/.config/common-lisp/init, with .lisp)
+;; and the new per-stem {bare, .fasl, .lisp} variants — 15 entries, kept in sync
+;; between sources/main.c and documentation.org (Extensions > The REPL > Init
+;; files).  Previously the doc/list dropped the historical .common-lisp and bare
+;; .config/bocl/init candidates.

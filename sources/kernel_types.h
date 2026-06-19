@@ -48,6 +48,7 @@ typedef struct VectorOfUWord            VectorOfUWord;
 typedef struct VectorOfOctet            VectorOfOctet;
 typedef struct Character                Character;
 typedef struct Integer                  Integer;
+typedef struct Bignum                   Bignum;
 typedef struct Float                    Float;
 typedef struct Array                    Array;
 typedef struct OctetArray               OctetArray;
@@ -101,6 +102,21 @@ typedef struct Object {
     Slots* slots;
 } Object;
 
+/* Compact cons: car/cdr are stored INLINE in the object itself rather than in a
+   separate Cons slots block.  A cons is therefore a single 32-byte block
+   {header; class=CONS_Class; car; cdr} with objcount=3 — one allocation, one
+   dereference for car/cdr, half the GC objects.  It shares the first two fields
+   (header, class) with Object, so class_of()/consp() are unchanged; only the
+   cons accessors (cons_car/cons_cdr/cons_rplaca/cons_rplacd) read car/cdr from
+   here instead of through ->slots.  (See issues/open/deferred-cons-paged-heap
+   for the 16-byte next step.) */
+typedef struct ConsCell {
+    BLOCK_HEADER;
+    Ref class;   /* always CONS_Class */
+    Ref car;
+    Ref cdr;
+} ConsCell;
+
 
 
 
@@ -122,7 +138,8 @@ typedef enum {
 } frame_type;
 
 typedef struct Frame {
-    struct Frame* next;
+    struct Frame* next;      /* link on the global dynamic frame stack (g_frame_stack) */
+    struct Frame* env_next;  /* link on the establishing environment's lexical frame list */
     struct Frame* target;
     VectorOfObject* frame; /* the local variables and local functions */
     frame_type type;
@@ -207,15 +224,32 @@ typedef struct Integer {
     word value;
 } Integer;
 
+/* A BIGNUM boxes an arbitrary-precision integer that does not fit in a word.
+   VALUE is a CONS (SIGN . DIGITS) in the i%-format of bootstrap/bignum.lisp:
+   SIGN is the symbol + or -, DIGITS a low-order-first list of base-10^9 fixnum
+   digits.  The single Ref is GC-traced, so the digit list stays live with no
+   finalizer (this is why the Lisp engine is preferred over a malloc'd GMP). */
+typedef struct Bignum {
+    BLOCK_HEADER;       /* objcount = 1 */
+    Ref value;
+} Bignum;
+
 typedef struct Float {
     BLOCK_HEADER;
     floating value;
 } Float;
 
+/* fill_pointer is an UNTRACED inline word (objcount stays 2, so the collector
+   marks only element_type + elements and ignores it).  Encoding: 0 means "no
+   fill pointer"; an active length of N is stored as N+1.  Because allocate()
+   zeroes every block body, a freshly built vector/string/bit-vector carries no
+   fill pointer automatically — no constructor change, and no missed allocation
+   site can masquerade as fill pointer 0.  See array_fill_pointer() in kernel.c. */
 typedef struct Array {
     BLOCK_HEADER;
     Ref element_type;
     VectorOfObject* elements;
+    uword fill_pointer;        /* 0 = none; else active-length + 1 (see above) */
     uword VARRAY(dimensions);
 } Array;
 
@@ -223,6 +257,7 @@ typedef struct OctetArray {
     BLOCK_HEADER;
     Ref element_type;
     VectorOfOctet* elements;
+    uword fill_pointer;        /* 0 = none; else active-length + 1 (see above) */
     uword VARRAY(dimensions);
 } OctetArray;
 
@@ -300,6 +335,10 @@ typedef struct StructureClass {
     CLASS_HEADER;
     Ref offset; /* An integer, number of additionnal slots. */
     Ref slot_names; /* A list of symbols naming the slots. */
+    Ref cached_slots; /* memoized (slot-name . index) a-list for ALL slots, or
+                         NULL until first computed; reset to NULL on redefinition
+                         (a redefinition makes a fresh StructureClass object).
+                         MUST stay among the GC-marked Ref slots (objcount). */
     uword nslots; /* in instances of this instance of structure-class */
     /* Instances of this  instance of structure-class use VectorOfObject to store the slots. */
 } StructureClass;
@@ -343,22 +382,30 @@ typedef struct FuncallableStandardObject {
    (one global pool), and each package keeps a list of the symbols that
    are "in" it. Real per-package symbol isolation will come later. */
 typedef struct Package {
-    BLOCK_HEADER;
+    BLOCK_HEADER;            /* objcount = 7 */
     Ref name;        /* STRING — the package's primary name */
     Ref nicknames;   /* list of STRING */
-    Ref symbols;     /* list of symbol — interned in this package */
-    Ref exported;    /* list of symbol — visible via pkg:sym syntax */
-    Ref used;        /* list of Package — used-package list */
+    Ref present;     /* obarray (cons sentinel) — all symbols present (interned) here */
+    Ref external;    /* obarray (cons sentinel) — the external subset of `present` */
+    Ref shadowing;   /* list of symbol — the shadowing symbols of this package */
+    Ref used;        /* list of Package — packages this one uses (use-list) */
+    Ref used_by;     /* list of Package — packages that use this one */
 } Package;
 
 /* CL Hash Table. Phase 4 minimum: alist-backed (per design notes —
    "alists for simplicity"). test is one of the symbols EQ, EQL, EQUAL,
    EQUALP and selects the comparator. */
 typedef struct HashTable {
-    BLOCK_HEADER;
-    Ref test;        /* SYMBOL — EQ / EQL / EQUAL / EQUALP */
-    Ref entries;     /* alist: ((key . value) ...) */
-    Ref count;       /* INTEGER — number of entries */
+    BLOCK_HEADER;            /* objcount = 6 */
+    Ref test;             /* SYMBOL — EQ / EQL / EQUAL / EQUALP */
+    Ref entries;          /* alist: ((key . value) ...) */
+    Ref count;            /* INTEGER — number of entries */
+    /* Stored verbatim for the CL accessors; bocl's alist table doesn't rehash,
+       so these are cosmetic (returned by HASH-TABLE-SIZE / -REHASH-SIZE /
+       -REHASH-THRESHOLD and accepted back by MAKE-HASH-TABLE). */
+    Ref nominal_size;     /* INTEGER — nominal size (the BLOCK_HEADER `size` is unrelated) */
+    Ref rehash_size;      /* REAL */
+    Ref rehash_threshold; /* REAL in (0,1] */
 } HashTable;
 
 /* CL Condition object. Minimal: the class slot already lives in Object;
@@ -383,6 +430,19 @@ typedef struct Complex {
     Ref imagpart;       /* any real number */
 } Complex;
 
+/* CL Readtable.  syntax/macros/dispatch are SIMPLE-VECTORs indexed by character
+   code (0..127; codes >= 128 are constituents with no macro).  syntax[c] is a
+   fixnum syntax type (see +cs-*+ in reader.c); macros[c] is the reader-macro
+   function (or NIL); dispatch[c] is NIL or a 128-element SIMPLE-VECTOR mapping a
+   sub-character to its dispatch function. */
+typedef struct Readtable {
+    BLOCK_HEADER;       /* objcount = 4 */
+    Ref syntax;         /* SIMPLE-VECTOR[128] of fixnum syntax types */
+    Ref macros;         /* SIMPLE-VECTOR[128] of macro function or NIL */
+    Ref dispatch;       /* SIMPLE-VECTOR[128] of dispatch sub-table or NIL */
+    Ref readcase;       /* keyword :UPCASE / :DOWNCASE / :PRESERVE / :INVERT */
+} Readtable;
+
 /* Slots */
 
 typedef union Slots {
@@ -394,6 +454,7 @@ typedef union Slots {
     /* Objects: */
     Character                   character;
     Integer                     integer;
+    Bignum                      bignum;
     Float                       floater;
     Array                       array;
     OctetArray                  octet_array;
@@ -409,6 +470,7 @@ typedef union Slots {
     Condition                   condition;
     Ratio                       ratio;
     Complex                     complex;
+    Readtable                   readtable;
     /*                          Classes: */
     Class                       class;
     StandardClass               standard_class;

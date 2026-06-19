@@ -4,6 +4,7 @@
 #include "reader.h"
 #include "macros.h"
 #include "kernel.h"
+#include "packages.h"
 #include "variable.h"
 #include "boerror.h"
 #include "cons.h"
@@ -89,6 +90,7 @@ typedef struct parser_state {
     bool eof;
     bool error;
     bool escape;
+    bool suppress;   /* *READ-SUPPRESS*: reading a #+/#- discarded form */
     octet token[ARRAY_TOTAL_SIZE_LIMIT+1];
 } parser_state;
 
@@ -253,6 +255,13 @@ static Ref parse_string(parser_state* parser){
 
 static Ref parse_object(parser_state* parser);
 
+/* Readtable support (defined near reader_initialize). */
+static Ref g_standard_readtable, g_standard_macro, g_dispatch_marker;
+static Ref current_readtable(void);
+static Ref rt_macro(Ref rt,int ch);
+static Ref rtv_get(Ref vec,int i);
+static bool token_continues(Ref rt,int ch);
+
 /* Recursively expand a backquoted form into LIST / APPEND / CONS / QUOTE
    nodes. The reader uses tagged conses (UNQUOTE x) and (UNQUOTE-SPLICING x)
    for `,x` and `,@x`; this function eliminates them. Only one level of
@@ -366,8 +375,11 @@ static Ref parse_list(parser_state* parser){
     bool is_dotted=false;
     advance_character(parser);
     skip_spaces(parser);
-    if(parser->eof){
-        return NIL_Symbol;}
+    /* EOF before the closing ')' means the object ended in the middle of a list
+       — signal END-OF-FILE rather than looping (PARSE_OBJECT defers EOF after a
+       token, so parser->eof alone is unreliable here; consult the stream). */
+    if(parser->eof || feof(stream_cstream(parser->input_stream))){
+        END_OF_FILE(parser->input_stream);}
     while(parser->ch!=')'){
         /* Detect dotted-pair separator: a lone '.' followed by a non-constituent
            character (whitespace, close-paren, string, etc.).  The token ".5" or
@@ -388,8 +400,8 @@ static Ref parse_list(parser_state* parser){
         if(element != reader_skip_marker){
             push(element,&result);}
         skip_spaces(parser);
-        if(parser->eof){
-            return NIL_Symbol;}}
+        if(parser->eof || feof(stream_cstream(parser->input_stream))){
+            END_OF_FILE(parser->input_stream);}}
     /* Consume the closing ')' so an outer parse_list doesn't see it as its own. */
     advance_character(parser);
     parser->eof=false;
@@ -426,68 +438,82 @@ static Ref parse_bit_vector(parser_state* parser){
               parser->token[parser->length++]=parser->ch&1;
               break;
           default:
-              ungetc(parser->ch,stream_cstream(parser->input_stream));
+              /* A non-bit character terminates the bit run.  Leave it in
+                 parser->ch as the one-char lookahead — exactly like parse_token —
+                 and do NOT push it back: the caller (parse_list) and the
+                 top-level read already treat parser->ch as the terminating char.
+                 An ungetc here would DUPLICATE the delimiter (it would sit both
+                 in parser->ch and back in the stream), desyncing the next read
+                 and surfacing as a spurious stray ')' on the following form. */
               return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}}}
 
-/* scan_ratio: recognise "[-+]?digits/digits", return a ratio Ref or NIL_Symbol */
+/* The value of a digit character in BASE (2..36), or -1 if it is not a digit. */
+static int digit_in_base(int c,int base){
+    int d;
+    if(c>='0'&&c<='9'){ d=c-'0'; }
+    else if(c>='a'&&c<='z'){ d=c-'a'+10; }
+    else if(c>='A'&&c<='Z'){ d=c-'A'+10; }
+    else { return -1; }
+    return (d<base)?d:-1;}
+
+/* The current input radix (*READ-BASE*), clamped to 2..36, default 10. */
+static int current_read_base(void){
+    Ref rb=symbol_value(READ_BASE);
+    if(integerp(rb)){ word b=integer_value(rb); if(b>=2 && b<=36){ return (int)b; } }
+    return 10;}
+
+/* scan_ratio: recognise "[-+]?digits/digits" in the current radix. */
 static Ref scan_ratio(parser_state* parser){
     const char* token = (char*)parser->token;
-    /* Find a '/' in the token */
+    int base=current_read_base();
     const char* slash = strchr(token, '/');
     if(!slash || slash==token) return NIL_Symbol;  /* no slash or at start */
-    /* Both halves must be all-digit (optionally sign-prefixed on the numerator) */
     const char* p = token;
     if(*p=='-'||*p=='+') p++;
+    if(p>=slash) return NIL_Symbol;                /* no numerator digits */
     while(p < slash){
-        if(*p<'0' || *p>'9') return NIL_Symbol;
+        if(digit_in_base((unsigned char)*p,base)<0) return NIL_Symbol;
         p++;}
     const char* q = slash+1;
     if(*q=='\0') return NIL_Symbol;
     while(*q){
-        if(*q<'0' || *q>'9') return NIL_Symbol;
+        if(digit_in_base((unsigned char)*q,base)<0) return NIL_Symbol;
         q++;}
-    /* Parse numerator and denominator */
     word num_sign = (token[0]=='-') ? -1 : 1;
     word num=0;
     p = token + (token[0]=='-'||token[0]=='+' ? 1 : 0);
-    while(p < slash){ num = num*10 + (*p-'0'); p++; }
+    while(p < slash){ num = num*base + digit_in_base((unsigned char)*p,base); p++; }
     word den=0;
     q = slash+1;
-    while(*q){ den = den*10 + (*q-'0'); q++; }
+    while(*q){ den = den*base + digit_in_base((unsigned char)*q,base); q++; }
     if(den==0) return NIL_Symbol;
     return ratio_new(integer_from_word(num_sign*num), integer_from_word(den));}
 
 static Ref scan_integer(parser_state* parser){
-    /* [-+]?[0-9]+\.?  — sign is allowed ONLY at position 0; otherwise a
-       token like "1+" would mis-parse as the integer 1 and the "+" would
-       be silently dropped. */
+    /* [-+]?digits+\.?  in the current radix (*READ-BASE*).  Sign is allowed ONLY
+       at position 0.  A trailing '.' forces base 10 (CL: "123." is decimal). */
     const char* token=(char*)parser->token;
+    int base=current_read_base();
+    size_t len=0; while(token[len]){ len++; }
+    if(len>0 && token[len-1]=='.'){ base=10; }   /* decimal-point integer */
     word sign=1;
-    bool value_set=false;
-    word value=0;
     size_t pos=0;
-    word digit=0;
     if(token[0]=='-'){ sign=-1; pos=1; }
     else if(token[0]=='+'){ sign=+1; pos=1; }
+    bool value_set=false;
+    word value=0;
     while(token[pos]){
-        switch(token[pos]){
-          case '0':case '1':case '2':case '3':case '4':
-          case '5':case '6':case '7':case '8':case '9':
-              digit=token[pos]-'0';
-              if((WORD_MAX/10<value)
-                  ||((WORD_MAX/10==value)&&(WORD_MAX-10*(WORD_MAX/10)<=digit))){
-                  ARITHMETIC_ERROR("Integer too big maximum %"WORD_FORMAT,WORD_MAX);}
-              value=(value*10)+digit;
-              value_set=true;
-              pos++;
-              break;
-          case '.':
-              if(token[pos+1]=='\0'){
-                  pos++;
-                  break;}
-              return NIL_Symbol;
-          default:
-              return NIL_Symbol;}}
+        if(token[pos]=='.' && token[pos+1]=='\0'){ pos++; break; }   /* trailing . */
+        int digit=digit_in_base((unsigned char)token[pos],base);
+        if(digit<0){ return NIL_Symbol; }
+        if((WORD_MAX/base<value)
+            ||((WORD_MAX/base==value)&&(WORD_MAX-base*(WORD_MAX/base)<=(word)digit))){
+            /* Overflow: build a BIGNUM from the whole token via the C engine
+               (it handles the optional sign and trailing decimal point). */
+            return parse_bignum_cstring(token, base);}
+        value=(value*base)+digit;
+        value_set=true;
+        pos++;}
     return (value_set)
             ?integer_from_word(sign*value)
             :NIL_Symbol;}
@@ -544,14 +570,37 @@ static Ref scan_float(parser_state* parser){
         return NIL_Symbol;}
     return float_from_floating(value);}
 
+/* Fold an (unescaped) token's case per the current readtable's READTABLE-CASE,
+   in place; returns the token.  :INVERT inverts a single-case token and leaves a
+   mixed-case one untouched. */
+static char* apply_readtable_case(octet* token){
+    Ref rc = current_readtable()->slots->readtable.readcase;
+    if(rc == K(DOWNCASE)){ return (char*)octet_downcase(token); }
+    if(rc == K(PRESERVE)){ return (char*)token; }
+    if(rc == K(INVERT)){
+        bool up=false, lo=false;
+        for(octet* p=token; *p; p++){
+            if(*p>='A'&&*p<='Z'){ up=true; }
+            else if(*p>='a'&&*p<='z'){ lo=true; }}
+        if(up && !lo){ return (char*)octet_downcase(token); }
+        if(lo && !up){ return (char*)octet_upcase(token); }
+        return (char*)token;}                    /* mixed or no letters → preserve */
+    return (char*)octet_upcase(token);           /* :UPCASE (the default) */
+}
+
 static Ref scan_symbol(parser_state* parser,bool* valid){
-    const char* token=(const char*)octet_upcase(parser->token);
+    /* Under *READ-SUPPRESS* (reading a #+/#- discarded form) the token is
+       consumed but produces no symbol: don't intern, and don't error on an
+       unknown package qualifier. */
+    if(parser->suppress){ (*valid)=true; return NIL_Symbol; }
+    const char* token=apply_readtable_case(parser->token);
     const char* colon=strchr(token,':');
     (*valid)=false;
-    /* No colon: a plain symbol in the current package. */
+    /* No colon: a plain symbol interned in the current package (*PACKAGE*),
+       following its use-list. */
     if(!colon){
         (*valid)=true;
-        return symbol_intern_cstring(token);}
+        return package_intern_current_cstring(token);}
     /* Leading colon: a keyword (:foo). */
     if(colon==token){
         if(token[1]==':'){
@@ -559,41 +608,119 @@ static Ref scan_symbol(parser_state* parser,bool* valid){
             return NIL_Symbol;}
         (*valid)=true;
         return keyword_intern_cstring(token+1);}
-    /* Mid-token colon: pkg:sym (one colon, external only) or pkg::sym
-       (two colons, internal allowed). Phase 3 doesn't actually isolate
-       symbols per package — all live in KERNEL_obarray — so both forms
-       collapse to symbol_intern_cstring on the local name. The package
-       designator is parsed and validated but otherwise ignored. */
+    /* Mid-token colon: pkg:sym (one colon — sym must be external in pkg) or
+       pkg::sym (two colons — internal access, interns in pkg). */
     size_t pkg_len = (size_t)(colon - token);
     char pkg_buf[256];
     if(pkg_len >= sizeof(pkg_buf)){
         return NIL_Symbol;}
     for(size_t i=0;i<pkg_len;i++){ pkg_buf[i]=token[i]; }
     pkg_buf[pkg_len]='\0';
-    const char* name_part;
-    if(colon[1]==':'){
-        name_part = colon+2;
-    } else {
-        name_part = colon+1;}
+    bool internal_access = (colon[1]==':');
+    const char* name_part = internal_access ? colon+2 : colon+1;
     if(*name_part=='\0' || strchr(name_part,':')){
         return NIL_Symbol;}
     (*valid)=true;
-    /* KEYWORD:foo and :foo are equivalent. */
-    if(pkg_len==7
-       && pkg_buf[0]=='K' && pkg_buf[1]=='E' && pkg_buf[2]=='Y'
-       && pkg_buf[3]=='W' && pkg_buf[4]=='O' && pkg_buf[5]=='R'
-       && pkg_buf[6]=='D'){
+    Ref pkg = package_find_cstring(pkg_buf);
+    if(nullp(pkg)){
+        ERROR("READ: there is no package named %s",pkg_buf);}
+    if(pkg == KEYWORD_Package){
         return keyword_intern_cstring(name_part);}
-    return symbol_intern_cstring(name_part);}
+    if(internal_access){
+        return package_intern_cstring_in(name_part,pkg);}   /* pkg::sym */
+    /* pkg:sym — the symbol must be present AND external in pkg.  NULL (not
+       NIL_Symbol) means not-found, so reading CL:NIL yields the symbol NIL
+       rather than spuriously erroring. */
+    Ref sym = package_find_external_cstring(name_part,pkg);
+    if(!sym){
+        ERROR("READ: symbol %s is not external in package %s",name_part,pkg_buf);}
+    return sym;}
+
+/* CL upcase of a single octet (matches octet_upcase in bostring.c). */
+static octet reader_upcase1(octet c){
+    if(((97<=c)&&(c<=122)) || ((224<=c)&&(c<=254)&&(c!=247))){ return (octet)(c-32); }
+    return c;}
 
 static Ref parse_token(parser_state* parser){
+    Ref rt=current_readtable();
     parser->length=0;
-    while(!parser->error && !parser->eof && constituentp(parser->ch)){
-        check_token_too_long(parser,"Token");
-        parser->token[parser->length++]=parser->ch;
-        advance_character(parser);}
+    /* `escaped` becomes true at the first single-escape (\) or multi-escape (|…|)
+       in the token: such a token is unconditionally a SYMBOL whose name keeps the
+       case of escaped characters (unescaped ones still get readtable case).  We
+       fold case inline once escaping starts (retro-folding the unescaped prefix),
+       so the finished name can be interned verbatim. */
+    bool escaped=false;
+    /* Positions of the first (and immediately-following second) UNESCAPED colon:
+       these are package markers even in an escaped token, so :|a| is the keyword
+       |a|, not a symbol named ":a". -1 = none seen. */
+    int colon1=-1, colon2=-1;
+    while(!parser->error && !parser->eof){
+        if(parser->ch=='\\'){
+            if(!escaped){
+                for(halfword i=0;i<parser->length;i++){
+                    parser->token[i]=reader_upcase1(parser->token[i]);}
+                escaped=true;}
+            advance_character(parser);
+            if(parser->eof){
+                READER_ERROR(parser->input_stream,"Single escape \\ at end of input%s","");}
+            check_token_too_long(parser,"Token");
+            parser->token[parser->length++]=parser->ch;   /* escaped: verbatim */
+            advance_character(parser);}
+        else if(parser->ch=='|'){
+            if(!escaped){
+                for(halfword i=0;i<parser->length;i++){
+                    parser->token[i]=reader_upcase1(parser->token[i]);}
+                escaped=true;}
+            for(;;){
+                advance_character(parser);
+                if(parser->eof){
+                    READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}
+                if(parser->ch=='\\'){
+                    advance_character(parser);   /* the escaped char, taken literally */
+                    if(parser->eof){
+                        READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}}
+                else if(parser->ch=='|'){ break; }
+                check_token_too_long(parser,"Token");
+                parser->token[parser->length++]=parser->ch;}
+            advance_character(parser);}           /* past the closing | */
+        else if(token_continues(rt,parser->ch)){
+            check_token_too_long(parser,"Token");
+            if(parser->ch==':'){
+                if(colon1<0){ colon1=(int)parser->length; }
+                else if(colon2<0 && (int)parser->length==colon1+1){ colon2=(int)parser->length; }}
+            parser->token[parser->length++]=escaped?reader_upcase1(parser->ch):parser->ch;
+            advance_character(parser);}
+        else{ break; }}
+    /* A token terminated by end-of-file is still a complete token: clear the EOF
+       flag (as parse_list does after ')') so kernel_read returns the object
+       instead of signalling end-of-file.  e.g. (read-from-string "foo"), or a
+       reader macro doing (read stream) on the last token before EOF. */
+    if(parser->eof && parser->length>0){ parser->eof=false; }
     check_parser_error(parser);
     parser->token[parser->length]='\0';
+    if(escaped){
+        /* Escaped tokens are always symbols; the name is already correctly cased,
+           so no number scan or further case folding.  An UNESCAPED colon is still
+           a package marker (so :|a| is the keyword |a|, foo:|bar| qualifies in
+           FOO), while an escaped colon is just a name character. */
+        parser->eof=false;
+        const char* tok=(const char*)parser->token;
+        if(colon1<0){
+            return package_intern_current_cstring(tok);}
+        if(colon1==0){
+            return keyword_intern_cstring(tok + (colon2==1 ? 2 : 1));}
+        {   char pkg_buf[256];
+            if((size_t)colon1>=sizeof(pkg_buf)){ return NIL_Symbol; }
+            for(int i=0;i<colon1;i++){ pkg_buf[i]=tok[i]; }
+            pkg_buf[colon1]='\0';
+            const char* name_part=tok + (colon2==colon1+1 ? colon1+2 : colon1+1);
+            Ref pkg=package_find_cstring(pkg_buf);
+            if(nullp(pkg)){ ERROR("READ: there is no package named %s",pkg_buf); }
+            if(pkg==KEYWORD_Package){ return keyword_intern_cstring(name_part); }
+            if(colon2==colon1+1){ return package_intern_cstring_in(name_part,pkg); }
+            Ref sym=package_find_external_cstring(name_part,pkg);
+            if(sym){ return sym; }
+            ERROR("READ: %s is not external in package %s",name_part,pkg_buf); }}
     bool valid=true;
     Ref result=scan_integer(parser);
     if(result==NIL_Symbol){
@@ -607,7 +734,48 @@ static Ref parse_token(parser_state* parser){
     parser->eof=false; /* We've got a result, so defer EOF */
     return result;}
 
+/* Invoke a reader-macro function FN as (fn stream char [arg]); the stream is
+   already positioned just past CHAR.  Refresh the parser's lookahead afterwards
+   and treat a trailing EOF as a plain terminator.  Returns the macro's value, or
+   the skip marker if it returned no values. */
+static Ref call_reader_macro(parser_state* parser, Ref fn, octet ch, bool with_arg, Ref arg){
+    uword pool=open_live_pool();
+    add_to_live_pool(fn); add_to_live_pool(parser->input_stream); add_to_live_pool(arg);
+    Ref args = with_arg
+        ? list(parser->input_stream, code_character(I(ch)), arg, NULL)
+        : list(parser->input_stream, code_character(I(ch)), NULL);
+    add_to_live_pool(args);
+    MultipleValues mv;
+    kernel_apply(fn, args, &mv);
+    Ref res=(mv.count==0)?get_skip_marker():mv.values[0];
+    close_live_pool(pool);
+    add_to_live_pool(res);            /* re-root: close_live_pool trimmed it */
+    advance_character(parser);        /* refresh lookahead past the macro's input */
+    parser->eof=false;               /* object complete; EOF here is just the terminator */
+    return res;}
+
 static Ref parse_object(parser_state* parser){
+    /* Reader-macro characters in the current readtable.  A built-in marker
+       (g_standard_macro / g_dispatch_marker for the standard '#') is handled by
+       the hardwired dispatch below; any other function is a user reader macro,
+       and a g_dispatch_marker on a non-'#' character is a user dispatch macro
+       (made with make-dispatch-macro-character). */
+    if(!parser->suppress){
+        Ref rt=current_readtable();
+        Ref m=rt_macro(rt,parser->ch);
+        if(m!=NIL_Symbol && m!=g_standard_macro){
+            if(m==g_dispatch_marker && parser->ch!='#'){
+                octet disp=parser->ch;
+                octet sub=read_octet(parser->input_stream,&parser->eof,&parser->error);
+                check_parser_error(parser);
+                Ref subtab=rtv_get(rt->slots->readtable.dispatch,disp);
+                int idx=sub; if(idx>='a'&&idx<='z'){ idx-=32; }
+                Ref fn=(!nullp(subtab)&&idx>=0&&idx<128)?rtv_get(subtab,idx):NIL_Symbol;
+                if(nullp(fn)){ READER_ERROR(parser->input_stream,
+                                            "No dispatch function for %c",(char)sub); }
+                return call_reader_macro(parser, fn, sub, true, NIL_Symbol);}
+            if(m!=g_dispatch_marker){
+                return call_reader_macro(parser, m, parser->ch, false, NIL_Symbol);}}}
     switch(parser->ch){
         /* We cannot have a ';' since skip_space(parser); eats the comments too. */
       case '\'':
@@ -641,13 +809,42 @@ static Ref parse_object(parser_state* parser){
                           inner, NULL);}
       case '"':
           return parse_string(parser);
+      case '|': {
+          /* |...| — multi-escape: a symbol whose name is the literal,
+             case-PRESERVED characters between the bars; \ single-escapes the
+             next character (so \| and \\ are literal). */
+          parser->length=0;
+          for(;;){
+              advance_character(parser);
+              if(parser->eof){
+                  READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}
+              if(parser->ch=='\\'){
+                  advance_character(parser);   /* the escaped char, taken literally */
+                  if(parser->eof){
+                      READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}}
+              else if(parser->ch=='|'){
+                  break;}
+              check_token_too_long(parser,"Token");
+              parser->token[parser->length++]=parser->ch;}
+          parser->token[parser->length]='\0';
+          advance_character(parser);   /* past the closing | */
+          parser->eof=false;           /* a name terminated by EOF is still valid */
+          return package_intern_current_cstring((const char*)parser->token); }
       case '(':
           return parse_list(parser);
-      case '#':
+      case '#': {
+          word disp_arg=-1;   /* the optional numeric infix argument, e.g. #3A */
           parser->ch=read_octet(parser->input_stream,&parser->eof,&parser->error);
           check_parser_error(parser);
           if(parser->eof){
               return NIL_Symbol;}
+          if(parser->ch>='0' && parser->ch<='9'){
+              disp_arg=0;
+              while(parser->ch>='0' && parser->ch<='9'){
+                  disp_arg=disp_arg*10+(parser->ch-'0');
+                  parser->ch=read_octet(parser->input_stream,&parser->eof,&parser->error);
+                  check_parser_error(parser);
+                  if(parser->eof){ return NIL_Symbol; }}}
           switch(parser->ch){
             case '\\': return parse_character(parser);
             case '(':  return parse_vector(parser);
@@ -666,6 +863,7 @@ static Ref parse_object(parser_state* parser){
                 if(parser->ch != ')'){
                     READER_ERROR(parser->input_stream,"Expected ')' after #C parts%s","");}
                 advance_character(parser);   /* skip ')' */
+                parser->eof=false;           /* a closing ')' at EOF is fine (as in parse_list) */
                 return complex_new(re, im);}
 
             case '\'': {  /* #'name => (FUNCTION name) */
@@ -684,10 +882,12 @@ static Ref parse_object(parser_state* parser){
                     else if(prev=='|' && parser->ch=='#'){ depth--; prev=0; }
                     else { prev=parser->ch; }}
                 advance_character(parser);    /* past the closing # */
-                skip_spaces(parser);
-                /* Return the next object — block comments are whitespace. */
-                if(parser->eof){ return NIL_Symbol; }
-                return parse_object(parser); }
+                /* A block comment is whitespace.  Return the skip marker so the
+                   caller (parse_list / kernel_read) resumes scanning rather than
+                   forcing another object — correct even when the comment abuts
+                   ')' or EOF, e.g. "(a #| |# )".  (The old code recursively read
+                   the next object, which mis-read the ')' as an object.) */
+                return get_skip_marker(); }
             case '+':
             case '-': {  /* #+feature form / #-feature form */
                 bool negate = (parser->ch == '-');
@@ -702,14 +902,75 @@ static Ref parse_object(parser_state* parser){
                     return parse_object(parser);
                 } else {
                     /* Skip the next form silently; callers (parse_list /
-                       kernel_read) recognise reader_skip_marker. */
+                       kernel_read) recognise reader_skip_marker.  Bind
+                       *READ-SUPPRESS* (parser->suppress) so the discarded form
+                       neither interns symbols nor errors on unknown packages
+                       (e.g. "#+allegro (excl:foo ...)" on a non-Allegro build). */
+                    bool saved=parser->suppress;
+                    parser->suppress=true;
                     parse_object(parser);
+                    parser->suppress=saved;
                     return get_skip_marker();}}
-            default:
-                READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}
-          break;
+            case ':': {  /* #:name => a fresh uninterned symbol named NAME */
+                advance_character(parser);   /* skip ':' */
+                parser->length=0;
+                bool esc=false;   /* | … | or \ used — keep escaped case verbatim */
+                while(!parser->error && !parser->eof){
+                    if(parser->ch=='\\'){
+                        if(!esc){ for(halfword i=0;i<parser->length;i++){ parser->token[i]=reader_upcase1(parser->token[i]); } esc=true; }
+                        advance_character(parser);
+                        if(parser->eof){ break; }
+                        check_token_too_long(parser,"Token");
+                        parser->token[parser->length++]=parser->ch;
+                        advance_character(parser);}
+                    else if(parser->ch=='|'){
+                        if(!esc){ for(halfword i=0;i<parser->length;i++){ parser->token[i]=reader_upcase1(parser->token[i]); } esc=true; }
+                        for(;;){
+                            advance_character(parser);
+                            if(parser->eof){ break; }
+                            if(parser->ch=='\\'){ advance_character(parser); if(parser->eof){ break; } }
+                            else if(parser->ch=='|'){ break; }
+                            check_token_too_long(parser,"Token");
+                            parser->token[parser->length++]=parser->ch;}
+                        advance_character(parser);}
+                    else if(constituentp(parser->ch)){
+                        check_token_too_long(parser,"Token");
+                        parser->token[parser->length++]=esc?reader_upcase1(parser->ch):parser->ch;
+                        advance_character(parser);}
+                    else{ break; }}
+                check_parser_error(parser);
+                parser->token[parser->length]='\0';
+                parser->eof=false;   /* a name terminated by EOF is still valid */
+                if(!esc){ octet_upcase(parser->token); }
+                return symbol_new(string_new_cstring((const char*)parser->token)); }
+            case '.': {  /* #.form => evaluate FORM at read time (read-eval) */
+                extern Ref bocl_eval(Ref);
+                advance_character(parser);   /* skip '.' */
+                skip_spaces(parser);
+                Ref form=parse_object(parser);
+                return bocl_eval(form); }
+            case 'p': case 'P': {  /* #P"..." => a pathname */
+                advance_character(parser);   /* skip 'P' */
+                skip_spaces(parser);
+                Ref designator=parse_object(parser);
+                return pathname(designator); }
+            default: {
+                /* User-defined #-dispatch sub-character?
+                   (set-dispatch-macro-character #\# sub fn) — call (fn stream
+                   sub-char arg); bocl does not parse the numeric infix arg. */
+                Ref rt=current_readtable();
+                Ref subtab=rtv_get(rt->slots->readtable.dispatch,'#');
+                octet sub=parser->ch;
+                int idx=sub; if(idx>='a'&&idx<='z'){ idx-=32; }
+                Ref fn=(!nullp(subtab)&&idx>=0&&idx<128)?rtv_get(subtab,idx):NIL_Symbol;
+                if(!nullp(fn)){ return call_reader_macro(parser, fn, sub, true,
+                                                         disp_arg>=0?I(disp_arg):NIL_Symbol); }
+                READER_ERROR(parser->input_stream,"Invalid syntax #%c",parser->ch);}}
+          break;}
       default:
-          if(constituentp(parser->ch)){
+          if(constituentp(parser->ch) || parser->ch=='\\'){
+              /* '\' is the single-escape: it begins a symbol token whose first
+                 character is taken literally (parse_token handles the escape). */
               return parse_token(parser);}
           else{
               /* TODO: free the name! */
@@ -772,7 +1033,11 @@ Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_valu
         TYPE_ERROR(peek_type,CHARACTER_Class);}}
 
 
-Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
+static Ref read_impl(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p,bool preserve){
+    /* #n= / #n# labels are scoped to one top-level read: clear the label table
+       at the start of a non-recursive read (a recursive read — e.g. (read
+       stream) inside a reader macro — keeps the labels currently in scope). */
+    if(nullp(recursive_p)){ set_symbol_value(S(*READ-LABELS*),NIL_Symbol); }
     parser_state parser;
     parser.input_stream=input_stream;
     parser.length=0;
@@ -780,6 +1045,7 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
     parser.eof=false;
     parser.error=false;
     parser.escape=false;
+    parser.suppress=false;
     advance_character(&parser);
     skip_spaces(&parser);
     check_parser_error(&parser);
@@ -805,10 +1071,27 @@ Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recurs
         END_OF_FILE(input_stream);}
     if(parser.error){ /* Should not occur here */
         STREAM_ERROR(input_stream);}
+    /* Push back the one-char lookahead (the char that terminated OBJECT) so it
+       isn't lost across reads.  This makes two top-level forms with no separating
+       whitespace read correctly — "(a)(b)" no longer drops the second '(' — and,
+       crucially, lets a recursive read (e.g. inside a reader macro) leave a ')'
+       that belongs to an enclosing list for the outer parse_list to consume.  We
+       push back any non-whitespace, non-EOF char (a genuine stray top-level ')'
+       then surfaces as an error on the next read, which is conforming).
+       Plain READ drops trailing whitespace (harmless, and read_octet already
+       translated newlines so re-reading a pushed-back NEL would misbehave);
+       READ-PRESERVING-WHITESPACE (preserve=true) pushes it back so the caller
+       sees it (e.g. (read-preserving-whitespace) then (read-char) yields the
+       separating space). */
+    if(parser.ch != (octet)EOF && (preserve || !whitespacep(parser.ch))){
+        ungetc((int)parser.ch, stream_cstream(input_stream));}
     return object;}
 
-Ref kernel_read_preserving_whitespace(Ref input_stream,Ref eof_error_p,Ref eof_value,unused Ref recursive_p){
-    return kernel_read(input_stream,eof_error_p,eof_value,recursive_p);}
+Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p){
+    return read_impl(input_stream,eof_error_p,eof_value,recursive_p,false);}
+
+Ref kernel_read_preserving_whitespace(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p){
+    return read_impl(input_stream,eof_error_p,eof_value,recursive_p,true);}
 
 Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursive_p){
     NOT_IMPLEMENTED_YET();
@@ -832,12 +1115,267 @@ Ref kernel_read_from_string(Ref input_string,Ref eof_error_p,Ref eof_value,Ref s
     return result;}
 
 
+/* ============================================================ */
+/*  Readtable & reader macros                                    */
+/* ============================================================ */
+/* Character syntax types (CL standard; mirror the reference reader). */
+#define CS_INVALID                0
+#define CS_WHITESPACE             1
+#define CS_SINGLE_ESCAPE          2
+#define CS_MULTIPLE_ESCAPE        3
+#define CS_CONSTITUENT            4
+#define CS_TERMINATING_MACRO      5
+#define CS_NON_TERMINATING_MACRO  6
+
+extern Ref Object_new(Ref class, Slots* slots);
+
+/* g_standard_readtable / g_standard_macro / g_dispatch_marker are declared near
+   the top (forward-declared for parse_token/parse_object).  The two markers are
+   stored in the macros vector for the standard macro characters: the reader
+   recognises them by identity and uses its built-in (fast) dispatch; any OTHER
+   (user) function in the macros vector is invoked as a reader macro. */
+
+static Ref rtv_get(Ref vec,int i){ return vec->slots->array.elements->elements[i]; }
+static void rtv_set(Ref vec,int i,Ref v){ vec->slots->array.elements->elements[i]=v; }
+static Ref make_rt_vector(Ref fill){
+    Ref lst=NIL_Symbol;
+    for(int i=0;i<128;i++){ lst=cons(fill,lst); }
+    return vector_new(lst);}
+
+static int rt_syntax(Ref rt,int ch){
+    if(ch<0||ch>=128){ return CS_CONSTITUENT; }
+    return (int)integer_value(rtv_get(rt->slots->readtable.syntax,ch));}
+static Ref rt_macro(Ref rt,int ch){
+    if(ch<0||ch>=128){ return NIL_Symbol; }
+    return rtv_get(rt->slots->readtable.macros,ch);}
+
+/* The readtable in force (*READTABLE*), or the standard one as a fallback. */
+static Ref current_readtable(void){
+    Ref rt=symbol_value(READTABLE);
+    if(!typep(rt,READTABLE_Class)){ return g_standard_readtable; }
+    return rt;}
+
+/* A token continues across a character iff that character is a constituent or a
+   non-terminating macro character (whitespace and terminating macros end it).
+   whitespacep() is the authority for whitespace — it knows the reader's NEL
+   newline (code 133, outside the 0..127 syntax vector). */
+static bool token_continues(Ref rt,int ch){
+    if(whitespacep((octet)ch)){ return false; }
+    int s=rt_syntax(rt,ch);
+    return s==CS_CONSTITUENT || s==CS_NON_TERMINATING_MACRO;}
+
+/* The standard macro markers ARE callable: (fn stream char).  By the reader-macro
+   convention CHAR has already been consumed and STREAM sits just past it — which
+   is exactly the parser's lookahead invariant (p.ch = the char already read,
+   stream positioned after it).  So we seed a parser_state with p.ch = CHAR and
+   re-enter parse_object, reusing the entire hardwired dispatch (parse_list for
+   '(', parse_string for '"', the '#' dispatch, etc.) with no duplication.  The
+   one leftover lookahead char is pushed back so the caller's stream position is
+   right.  This is what lets reader macros call reader macros, and user code do
+   (funcall (get-macro-character #\\() stream char). */
+static void rm_standard_dispatch(Ref function, Ref arguments, MultipleValues* results){
+    (void)function;
+    Ref stream=car(arguments);
+    octet ch=(octet)integer_value(character_code(cadr(arguments)));
+    parser_state p;
+    p.input_stream=stream;
+    p.length=0;
+    p.ch=ch;
+    p.eof=false; p.error=false; p.escape=false; p.suppress=false;
+    Ref r=parse_object(&p);
+    if(!p.eof){ ungetc((int)p.ch, stream_cstream(stream)); }
+    if(r==get_skip_marker()){ results->count=0; }   /* a no-value macro (comment, #+) */
+    else { results->count=1; results->values[0]=r; }}
+
+static Ref make_standard_readtable(void){
+    uword pool=open_live_pool();
+    Ref syntax=make_rt_vector(I(CS_CONSTITUENT));   add_to_live_pool(syntax);
+    Ref macros=make_rt_vector(NIL_Symbol);          add_to_live_pool(macros);
+    Ref dispatch=make_rt_vector(NIL_Symbol);        add_to_live_pool(dispatch);
+    /* whitespace */
+    int ws[]={' ','\t','\n','\r','\f',11,-1};
+    for(int i=0;ws[i]>=0;i++){ rtv_set(syntax,ws[i],I(CS_WHITESPACE)); }
+    rtv_set(syntax,'\\',I(CS_SINGLE_ESCAPE));
+    rtv_set(syntax,'|', I(CS_MULTIPLE_ESCAPE));
+    /* terminating macro characters */
+    const char* term="()'\";`,";
+    for(const char* p=term;*p;p++){
+        rtv_set(syntax,(int)(unsigned char)*p,I(CS_TERMINATING_MACRO));
+        rtv_set(macros,(int)(unsigned char)*p,g_standard_macro);}
+    /* # — a non-terminating dispatch macro */
+    rtv_set(syntax,'#',I(CS_NON_TERMINATING_MACRO));
+    rtv_set(macros,'#',g_dispatch_marker);
+    rtv_set(dispatch,'#',make_rt_vector(NIL_Symbol));
+    Readtable* rt=(Readtable*)allocate(sizeof(Readtable));
+    rt->syntax=syntax; rt->macros=macros; rt->dispatch=dispatch; rt->readcase=K(UPCASE);
+    rt->objcount=4;
+    Ref result=Object_new(READTABLE_Class,(Slots*)rt);
+    close_live_pool(pool);
+    add_to_live_pool(result);
+    return result;}
+
+static Ref readtable_arg(Ref* current, Ref function){
+    Ref rt = nullp(*current) ? current_readtable() : pop_mandatory_argument(function,current);
+    if(!typep(rt,READTABLE_Class)){ TYPE_ERROR(rt,READTABLE_Class); }
+    return rt;}
+
+static int char_arg(Ref obj){
+    if(!typep(obj,CHARACTER_Class)){ TYPE_ERROR(obj,CHARACTER_Class); }
+    return (int)integer_value(character_code(obj));}
+
+static void k_READTABLEP(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments; Ref obj=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1; results->values[0]=as_boolean(typep(obj,READTABLE_Class));
+    close_live_pool(pool);}
+
+static void k_GET_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int ch=char_arg(pop_mandatory_argument(function,&current));
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    int s=rt_syntax(rt,ch);
+    results->count=2;
+    results->values[0]=rt_macro(rt,ch);
+    results->values[1]=as_boolean(s==CS_NON_TERMINATING_MACRO);
+    close_live_pool(pool);}
+
+static void k_SET_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int ch=char_arg(pop_mandatory_argument(function,&current));
+    Ref fn=pop_mandatory_argument(function,&current);
+    Ref non_term=nullp(current)?NIL_Symbol:pop_mandatory_argument(function,&current);
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    if(ch<0||ch>=128){ ERROR("SET-MACRO-CHARACTER: only codes 0..127 supported%s",""); }
+    rtv_set(rt->slots->readtable.syntax,ch,
+            I(is_true(non_term)?CS_NON_TERMINATING_MACRO:CS_TERMINATING_MACRO));
+    rtv_set(rt->slots->readtable.macros,ch,fn);
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+static void k_MAKE_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int ch=char_arg(pop_mandatory_argument(function,&current));
+    Ref non_term=nullp(current)?NIL_Symbol:pop_mandatory_argument(function,&current);
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    if(ch<0||ch>=128){ ERROR("MAKE-DISPATCH-MACRO-CHARACTER: only codes 0..127 supported%s",""); }
+    rtv_set(rt->slots->readtable.syntax,ch,
+            I(is_true(non_term)?CS_NON_TERMINATING_MACRO:CS_TERMINATING_MACRO));
+    rtv_set(rt->slots->readtable.macros,ch,g_dispatch_marker);
+    rtv_set(rt->slots->readtable.dispatch,ch,make_rt_vector(NIL_Symbol));
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+static void k_GET_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int disp=char_arg(pop_mandatory_argument(function,&current));
+    int sub =char_arg(pop_mandatory_argument(function,&current));
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    Ref subtab=(disp>=0&&disp<128)?rtv_get(rt->slots->readtable.dispatch,disp):NIL_Symbol;
+    if(nullp(subtab)){ ERROR("GET-DISPATCH-MACRO-CHARACTER: not a dispatch character%s",""); }
+    if(sub>='a'&&sub<='z'){ sub-=32; }   /* CL upcases the sub-character */
+    results->count=1;
+    results->values[0]=(sub>=0&&sub<128)?rtv_get(subtab,sub):NIL_Symbol;
+    close_live_pool(pool);}
+
+static void k_SET_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int disp=char_arg(pop_mandatory_argument(function,&current));
+    int sub =char_arg(pop_mandatory_argument(function,&current));
+    Ref fn=pop_mandatory_argument(function,&current);
+    Ref rt=readtable_arg(&current,function);
+    check_no_more_arguments(function,current);
+    Ref subtab=(disp>=0&&disp<128)?rtv_get(rt->slots->readtable.dispatch,disp):NIL_Symbol;
+    if(nullp(subtab)){ ERROR("SET-DISPATCH-MACRO-CHARACTER: not a dispatch character%s",""); }
+    if(sub>='a'&&sub<='z'){ sub-=32; }
+    if(sub>=0&&sub<128){ rtv_set(subtab,sub,fn); }
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
+static void k_COPY_READTABLE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref from=nullp(current)?current_readtable():pop_mandatory_argument(function,&current);
+    /* (the optional TO-READTABLE arg is accepted but a fresh copy is returned) */
+    if(!nullp(current)){ (void)pop_mandatory_argument(function,&current); }
+    check_no_more_arguments(function,current);
+    if(nullp(from)){ from=g_standard_readtable; }   /* (copy-readtable nil) => standard */
+    if(!typep(from,READTABLE_Class)){ TYPE_ERROR(from,READTABLE_Class); }
+    add_to_live_pool(from);
+    Ref syntax=make_rt_vector(I(CS_CONSTITUENT)); add_to_live_pool(syntax);
+    Ref macros=make_rt_vector(NIL_Symbol);        add_to_live_pool(macros);
+    Ref dispatch=make_rt_vector(NIL_Symbol);      add_to_live_pool(dispatch);
+    for(int i=0;i<128;i++){
+        rtv_set(syntax,i,rtv_get(from->slots->readtable.syntax,i));
+        rtv_set(macros,i,rtv_get(from->slots->readtable.macros,i));
+        Ref sub=rtv_get(from->slots->readtable.dispatch,i);
+        if(!nullp(sub)){
+            Ref nsub=make_rt_vector(NIL_Symbol);
+            for(int j=0;j<128;j++){ rtv_set(nsub,j,rtv_get(sub,j)); }
+            rtv_set(dispatch,i,nsub);}}
+    Readtable* rt=(Readtable*)allocate(sizeof(Readtable));
+    rt->syntax=syntax; rt->macros=macros; rt->dispatch=dispatch;
+    rt->readcase=from->slots->readtable.readcase; rt->objcount=4;
+    Ref result=Object_new(READTABLE_Class,(Slots*)rt);
+    close_live_pool(pool); add_to_live_pool(result);
+    results->count=1; results->values[0]=result;}
+
+static void k_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments; Ref rt=readtable_arg(&current, function);
+    check_no_more_arguments(function,current);
+    results->count=1; results->values[0]=rt->slots->readtable.readcase;
+    close_live_pool(pool);}
+
+/* Backing for (SETF (READTABLE-CASE rt) mode). */
+static void k_SET_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref rt=readtable_arg(&current, function);
+    Ref mode=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(mode!=K(UPCASE)&&mode!=K(DOWNCASE)&&mode!=K(PRESERVE)&&mode!=K(INVERT)){
+        ERROR("(SETF READTABLE-CASE): invalid mode %s",
+              string_cstring(prin1_to_string(mode)));}
+    rt->slots->readtable.readcase=mode;
+    results->count=1; results->values[0]=mode;
+    close_live_pool(pool);}
+
+static void register_reader_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
+    set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
+
 void reader_initialize(){
     define_parameter(READ_BASE,integer_from_word(10));
     define_parameter(READ_DEFAULT_FLOAT_FORMAT,S(SINGLE-FLOAT));
     define_parameter(READ_EVAL,S(T));
     define_parameter(READ_SUPPRESS,S(NIL));
-    define_parameter(READTABLE,S(NIL));}
+    define_parameter(S(*READ-LABELS*),NIL_Symbol);   /* #n= / #n# label table */
+    /* Build the standard readtable and the standard-macro markers. */
+    g_standard_macro  = built_in_function_new(S(%STANDARD-READER-MACRO),
+                                              list(S(STREAM),S(CHAR),NULL), rm_standard_dispatch);
+    g_dispatch_marker = built_in_function_new(S(%STANDARD-DISPATCH-MACRO),
+                                              list(S(STREAM),S(CHAR),NULL), rm_standard_dispatch);
+    push_to_rootset(g_standard_macro);
+    push_to_rootset(g_dispatch_marker);
+    g_standard_readtable = make_standard_readtable();
+    push_to_rootset(g_standard_readtable);
+    define_parameter(READTABLE,g_standard_readtable);
+    register_reader_fn(S(READTABLEP),                    list(S(OBJECT),NULL),               k_READTABLEP);
+    register_reader_fn(S(GET-MACRO-CHARACTER),           list(S(CHAR),NULL),                 k_GET_MACRO_CHARACTER);
+    register_reader_fn(S(SET-MACRO-CHARACTER),           list(S(CHAR),S(FN),NULL),           k_SET_MACRO_CHARACTER);
+    register_reader_fn(S(GET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),NULL),          k_GET_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(SET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(FN),NULL),    k_SET_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(MAKE-DISPATCH-MACRO-CHARACTER), list(S(CHAR),NULL),                 k_MAKE_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(COPY-READTABLE),                NIL_Symbol,                         k_COPY_READTABLE);
+    register_reader_fn(S(READTABLE-CASE),                NIL_Symbol,                         k_READTABLE_CASE);
+    register_reader_fn(symbol_intern_cstring("%SET-READTABLE-CASE"),
+                       NIL_Symbol,                                                           k_SET_READTABLE_CASE);}
 
 
 /**** THE END ****/

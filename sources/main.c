@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <sysexits.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "string_list.h"
 #include "kernel.h"
 #include "bocl.h"
@@ -18,6 +19,7 @@
 #include "printer.h"
 #include "reader.h"
 #include "variable.h"
+#include "eval.h"
 #include "version.h"
 
 static const char* source="http://gitlab.com/bocl/bocl/";
@@ -48,16 +50,27 @@ static string_list* expressions_and_loads=NULL;
 static char* package=NULL;
 
 
-/* Candidate RC file paths searched in order; first existing file wins.
-   A leading ~/ is expanded to $HOME/ at runtime. */
+/* Candidate RC (init) file paths searched in order; the first existing file
+   wins, EXCEPT that when a .fasl candidate is found, a more-recent .lisp sibling
+   is preferred (see find_rc_file).  A leading ~/ is expanded to $HOME/.  This is
+   the union of bocl's historical candidates (~/.bocl, ~/.config/bocl/init,
+   ~/.common-lisp, ~/.config/common-lisp/init, with .lisp) and the documented
+   per-stem {bare, .fasl, .lisp} set. */
 static const char* rc_candidates[]={
     "~/.bocl",
+    "~/.bocl.fasl",
     "~/.bocl.lisp",
+    "~/.boclrc",
+    "~/.boclrc.fasl",
+    "~/.boclrc.lisp",
     "~/.config/bocl/init",
+    "~/.config/bocl/init.fasl",
     "~/.config/bocl/init.lisp",
     "~/.common-lisp",
+    "~/.common-lisp.fasl",
     "~/.common-lisp.lisp",
     "~/.config/common-lisp/init",
+    "~/.config/common-lisp/init.fasl",
     "~/.config/common-lisp/init.lisp",
     NULL};
 
@@ -72,11 +85,26 @@ static char* expand_tilde(const char* path){
     snprintf(result,len+1,"%s%s",home,path+1); /* skip the '~' */
     return result;}
 
-/* Return the first readable RC file from rc_candidates, malloc'd, or NULL. */
+/* mtime of PATH in seconds, or -1 if it cannot be stat'd. */
+static long file_mtime(const char* path){
+    struct stat st;
+    if(stat(path,&st)!=0){ return -1; }
+    return (long)st.st_mtime;}
+
+/* Return the first readable RC file from rc_candidates, malloc'd, or NULL.
+   When the match is a .fasl whose .lisp sibling exists and is more recent, the
+   .lisp is returned instead (the fasl is stale). */
 static char* find_rc_file(void){
     for(int i=0; rc_candidates[i]; i++){
         char* path=expand_tilde(rc_candidates[i]);
         if(access(path,R_OK)==0){
+            size_t n=strlen(path);
+            if(n>5 && strcmp(path+n-5,".fasl")==0){
+                char* lisp=CHECK_POINTER(malloc(n+1));
+                snprintf(lisp,n+1,"%.*s.lisp",(int)(n-5),path);
+                if(access(lisp,R_OK)==0 && file_mtime(lisp)>file_mtime(path)){
+                    free(path); return lisp; }
+                free(lisp);}
             return path;}
         free(path);}
     return NULL;}
@@ -309,8 +337,12 @@ static void process_options(int argc,char** argv){
                               argv[i-1],
                               (*options[k].argument.variable.string),
                               argv[i]);}
-                  else{
-                      (*options[k].argument.variable.string)=argv[i];}
+                  /* Always apply the supplied value — including when a default
+                     was pre-set (on_error_action defaults to "exit", package to
+                     "COMMON-LISP-USER").  Previously the assignment lived only in
+                     the else branch, so -on-error/-p were silently ignored
+                     whenever a default existed. */
+                  (*options[k].argument.variable.string)=argv[i];
                   break;
               case elst:
                   string_list_push(strdup(argv[i]),options[k].argument.variable.list);
@@ -372,27 +404,53 @@ bool error_handler(Ref error){
       default:
           abort();}}
 
+/* The session body, run under the BOCL:QUIT top-level catch (see main()):
+   init/rc files, BOCL:*INIT-HOOK*, then the -x/-l forms, IN-PACKAGE and the
+   REPL.  Returns the exit status as an integer Ref. */
+static Ref run_session(void* ctx){
+    (void)ctx;
+    int status=0;
+    if(!do_norc){
+        char* rcfile=find_rc_file();
+        if(rcfile){
+            /* prepend so it loads before any -i files */
+            initfiles=string_list_cons(rcfile,initfiles);}}
+    {do_string_list(ifile,initfiles){
+            bocl_load_cstring(ifile);}}
+    string_list_free(initfiles);
+    initfiles=NULL;
+
+    /* BOCL:*INIT-HOOK* — after the init/rc files, before the main task. */
+    bocl_read_eval_cstring("(BOCL::%RUN-INIT-HOOKS)");
+
+    {do_string_list(expression,expressions_and_loads){
+            bocl_read_eval_cstring(expression);}}
+    string_list_free(expressions_and_loads);
+    expressions_and_loads=NULL;
+
+    if(package){
+        bocl_in_package(bocl_read_cstring(package));}
+
+    if(do_repl){
+        /* When a Lisp-level REPL (e.g. BOCL:REPL) is available, call it
+           instead.  For now, use the C bocl_repl() entry point directly. */
+        Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
+                             variable_value(S(*STANDARD-OUTPUT*)));
+        if(integerp(result)){
+            status=(int)integer_value(result);}}
+
+    return integer_from_word(status);}
+
 int main(int argc,char** argv){
+    /* Line-buffer stdout (and unbuffer stderr) so output is visible promptly
+       when redirected to a file or pipe (CI logs, tee), not just on a tty. */
+    setvbuf(stdout,NULL,_IOLBF,0);
+    setvbuf(stderr,NULL,_IONBF,0);
     pname=argv[0];
     program_path=argv[0];
     int status=0;
     kernel_initialize();
     process_options(argc,argv);
-
-    /* Load the Lisp prelude (bootstrap/prelude.lisp) so the full Common Lisp
-       surface (macros like OR, AND, LOOP, CLOS, etc.) is available before any
-       user file or expression runs.  --no-prelude suppresses this for tests
-       that exercise only the bare kernel. */
-    if(!do_noprelude && !do_version && !do_help){
-        char* prelude=find_prelude();
-        if(prelude){
-            bocl_load_cstring(prelude);
-            free(prelude);
-        } else if(!do_quiet){
-            fprintf(stderr,
-                    "bocl: warning: could not find bootstrap/prelude.lisp; "
-                    "running with the bare kernel only.\n"
-                    "      Set BOCL_PRELUDE or use --no-prelude to silence.\n");}}
 
     if(do_version){
         print_version();
@@ -415,6 +473,47 @@ int main(int argc,char** argv){
     define_parameter(S(*LOAD-PRINT*),S(NIL));
     define_parameter(S(*COMPILE-PRINT*),S(NIL));
 
+    /* Load the Lisp prelude (bootstrap/prelude.lisp) so the full Common Lisp
+       surface (macros like OR, AND, LOOP, CLOS, etc.) is available before any
+       rc file, init file, user expression, or loaded file runs.  --no-prelude
+       suppresses this for tests that exercise only the bare kernel.
+
+       This MUST happen BEFORE enabling LOAD-PRINT and LOAD-VERBOSE below: the
+       prelude defines the printer's special variables (PRINT-LENGTH,
+       PRINT-LEVEL, ...) partway through, so printing the result of each
+       loaded form during the bootstrap would reference them before they are
+       bound.  --print and --verbose therefore apply only to user files loaded
+       afterwards, never to the bootstrap itself. */
+    if(!do_noprelude){
+        /* The prelude defines the standard CL symbols, so load it with *PACKAGE*
+           bound to COMMON-LISP: every symbol it interns then lands in CL (where
+           the reader's bare symbols already go), instead of in CL-USER.  After
+           the bootstrap, user code defaults to COMMON-LISP-USER per the standard. */
+        extern Ref COMMON_LISP_Package, COMMON_LISP_USER_Package;
+        set_symbol_value(S(*PACKAGE*), COMMON_LISP_Package);
+        char* prelude=find_prelude();
+        if(prelude){
+            /* FIRST make the standard CL symbols external (generated
+               cl-exports.lisp, sibling of prelude.lisp): it uses only QUOTE and
+               the %EXPORT-STRINGS primitive, so it runs before the prelude and
+               the prelude's cl:FOO references then resolve to external symbols. */
+            char* p=strstr(prelude,"prelude.lisp");
+            if(p){
+                size_t base=(size_t)(p-prelude);
+                char* exports=malloc(base+sizeof("cl-exports.lisp"));
+                memcpy(exports,prelude,base);
+                strcpy(exports+base,"cl-exports.lisp");
+                bocl_load_cstring(exports);
+                free(exports);}
+            bocl_load_cstring(prelude);
+            free(prelude);
+        } else if(!do_quiet){
+            fprintf(stderr,
+                    "bocl: warning: could not find bootstrap/prelude.lisp; "
+                    "running with the bare kernel only.\n"
+                    "      Set BOCL_PRELUDE or use --no-prelude to silence.\n");}
+        set_symbol_value(S(*PACKAGE*), COMMON_LISP_USER_Package);}
+
     if(do_verbose){
         define_parameter(S(*LOAD-VERBOSE*),S(T));
         define_parameter(S(*COMPILE-VERBOSE*),S(T));
@@ -427,31 +526,26 @@ int main(int argc,char** argv){
         bocl_read_eval_cstring("(SETQ *LOAD-PRINT*      T)");
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
 
-    if(!do_norc){
-        char* rcfile=find_rc_file();
-        if(rcfile){
-            /* prepend so it loads before any -i files */
-            initfiles=string_list_cons(rcfile,initfiles);}}
-    {do_string_list(ifile,initfiles){
-            bocl_load_cstring(ifile);}}
-    string_list_free(initfiles);
-    initfiles=NULL;
+    /* The prelude has now loaded.  Under -on-error appease, enable per-form
+       recovery so user files (rc / init / -l, and everything they LOAD) skip
+       individual bad forms instead of aborting — this lets large suites such as
+       the ANSI tests load as much as possible and still reach their report. */
+    {   extern bool bocl_load_recover;
+        if(on_error==on_error_appease){ bocl_load_recover=true; }}
 
-    {do_string_list(expression,expressions_and_loads){
-            bocl_read_eval_cstring(expression);}}
-    string_list_free(expressions_and_loads);
-    expressions_and_loads=NULL;
+    /* The session — init/rc files, BOCL:*INIT-HOOK*, then -x/-l forms, IN-PACKAGE
+       and the REPL — runs inside a top-level CATCH for BOCL:QUIT, so QUIT (from
+       an init hook, a loaded form, or the REPL) performs a proper non-local exit
+       that runs pending UNWIND-PROTECT clean-ups.  *QUIT-HOOK* runs afterwards. */
+    {   Ref r=bocl_run_with_toplevel_catch(run_session,NULL);
+        if(integerp(r)){ status=(int)integer_value(r); }}
 
-    if(package){
-        bocl_in_package(bocl_read_cstring(package));}
-
-    if(do_repl){
-        /* When a Lisp-level REPL (e.g. BOCL:REPL) is available, call it
-           instead.  For now, use the C bocl_repl() entry point directly. */
-        Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
-                             variable_value(S(*STANDARD-OUTPUT*)));
-        if(integerp(result)){
-            status=(int)integer_value(result);}}
+    /* BOCL:*QUIT-HOOK* — best-effort clean-up, then flush, then exit. */
+    {   char buf[64];
+        snprintf(buf,sizeof(buf),"(BOCL::%%RUN-QUIT-HOOKS %d)",status);
+        bocl_read_eval_cstring(buf);}
+    fflush(stdout);
+    fflush(stderr);
 
     if(do_wait){
         wait_for_termination(status);}

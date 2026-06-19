@@ -1,0 +1,27 @@
+LOAD of a source file will perform a minimal compilation at load time.
+
+COMPILE will perform the minimal compilation of the source form and
+produce an interpreted function that is fully macroexpanded.
+
+COMPILE-FILE will produce a "fast load"file containing the
+macroexpanded forms (there should be no macro in the "fast load"
+file). and load of a "fast load" will therefore work faster, since no
+macro is to be found (but it can still check for them in case
+something went wrong).
+
+
+Note that minimal compilation is more than just macroexpansion. See
+https://www.lispworks.com/documentation/HyperSpec/Body/03_bbb.htm for
+the 3 items composing minimal compilation. 
+
+----------------------------------------------------------------------
+PROGRESS (slice 44):
+- MACROEXPAND-1, MACROEXPAND, MACROEXPAND-ALL implemented (prelude). MACROEXPAND-ALL
+  is the minimal-compilation code walker: result has no macros (handles quote,
+  function/lambda, let/let*, setq, the, and the default subform walk).
+- COMPILE-FILE now writes a real fast-load file of fully macroexpanded forms
+  (no macros) -> closes compile-file-output; LOAD of it works.
+- Runtime LOAD/eval already minimal-compiles lazily via macro displacement
+  (slice 39): a global-macro call is expanded once and cached in place.
+REMAINING: the COMPILE function (install a fully-macroexpanded interpreted
+function); eager macroexpand-all at LOAD time (currently lazy via displacement).

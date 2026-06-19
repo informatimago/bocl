@@ -6,6 +6,7 @@
 #include "environment.h"
 #include "variable.h"
 #include "bocl.h"
+#include "packages.h"
 
 /* Forward decls for the apply helpers implemented later in this file. */
 void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
@@ -24,66 +25,87 @@ Ref eval_global_environment(void){
 /* non_local_exit_t is declared in kernel.h so conditions.c can use it. */
 
 
+/* All control frames (BLOCK, CATCH, TAGBODY, HANDLER-CASE, HANDLER-BIND,
+   UNWIND-PROTECT, dynamic bindings, RESTART-CASE) live on ONE global dynamic
+   stack in LIFO order, rather than on per-environment lists.  This makes their
+   lookup follow the DYNAMIC call chain, so CATCH/THROW and HANDLER-CASE /
+   HANDLER-BIND work across function-call boundaries (essential for, e.g., a
+   test runner that wraps each test in a handler).  Variable and function
+   lookup are unaffected — they still walk the lexical environment chain.
+   Frame structs are plain C stack objects whose Ref contents are GC-protected
+   via the live pool, so keeping them on a global stack is GC-safe. */
+Frame* g_frame_stack = NULL;
+
+/* Forward decl: defined below, used by HANDLER-CASE's :no-error clause. */
+static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env);
+
+/* Strip leading (declare ...) forms from an implicit-progn body (HANDLER-CASE /
+   RESTART-CASE clause bodies may begin with declarations; bocl ignores their
+   content but must not evaluate `declare` as a function). */
+static Ref skip_declares(Ref body){
+    while(consp(body) && consp(car(body)) && car(car(body))==S(DECLARE)){
+        body=cdr(body);}
+    return body;}
+
 static void push_frame(Frame* frame,Ref environment){
+    /* Global dynamic stack — used by CATCH/THROW, HANDLER-CASE/HANDLER-BIND and
+       all non-local-exit unwinding, so those work across function-call
+       boundaries (the dynamic extent). */
+    frame->next=g_frame_stack;
+    g_frame_stack=frame;
+    /* Per-environment lexical list — used by BLOCK/TAGBODY lookup, which is
+       lexically scoped and must stay O(lexical-depth) rather than walking the
+       whole dynamic stack (otherwise deep nested loads crawl). */
     check_class(environment,ENVIRONMENT_Class);
     Environment* env=&(environment->slots->environment);
-    frame->next=env->frames;
+    frame->env_next=env->frames;
     env->frames=frame;}
 
 static Frame* pop_frame(Frame* frame,Ref environment){
-    check_class(environment,ENVIRONMENT_Class);
-    /*
-    if frame!=NULL, then check if frame==current_frame(environment)
-    (if not, then signal a fatal error).
-    pop the current frame and return it.
-    */
-    Environment* env=&(environment->slots->environment);
-    Frame* result=env->frames;
+    Frame* result=g_frame_stack;
     if(result==NULL){
         FATAL("Frame stack is %s!","empty");}
-    env->frames=result->next;
+    g_frame_stack=result->next;
+    /* Unlink from the establishing environment's lexical list too (LIFO: the
+       global top is also the top of its own environment's list). */
+    check_class(environment,ENVIRONMENT_Class);
+    Environment* env=&(environment->slots->environment);
+    if(env->frames==result){
+        env->frames=result->env_next;}
     if((frame!=NULL) && (frame!=result)){
         FATAL("Popped frame is not the %s frame.","expected");}
     return result;}
 
-/* Frames live on the env where the establishing special-op fired. Inner
-   LET / LET* / FLET / MACROLET create child envs that don't have those
-   frames in their own ->frames list, so we must walk the parent chain. */
+/* BLOCK / TAGBODY are LEXICALLY scoped: search the establishing environment and
+   its lexical parents (via the per-env list), not the dynamic stack. */
 
 static Frame* find_block_frame(Ref block_name,Ref environment){
     while(typep(environment,ENVIRONMENT_Class)){
         Environment* env=&(environment->slots->environment);
-        Frame* frame=env->frames;
-        while(frame){
+        for(Frame* frame=env->frames; frame; frame=frame->env_next){
             if(frame->type==frame_block
                && frame->parameters.block.name==block_name){
-                return frame;}
-            frame=frame->next;}
-        environment=env->next_environment;}
-    return NULL;}
-
-static Frame* find_catch_frame(Ref catch_object,Ref environment){
-    while(typep(environment,ENVIRONMENT_Class)){
-        Environment* env=&(environment->slots->environment);
-        Frame* frame=env->frames;
-        while(frame){
-            if(frame->type==frame_catch
-               && frame->parameters.catch.object==catch_object){
-                return frame;}
-            frame=frame->next;}
+                return frame;}}
         environment=env->next_environment;}
     return NULL;}
 
 static Frame* find_tagbody_frame(Ref tag,Ref environment){
     while(typep(environment,ENVIRONMENT_Class)){
         Environment* env=&(environment->slots->environment);
-        Frame* frame=env->frames;
-        while(frame){
+        for(Frame* frame=env->frames; frame; frame=frame->env_next){
             if(frame->type==frame_tagbody
                && !nullp(assq(tag,frame->parameters.tagbody.tags))){
-                return frame;}
-            frame=frame->next;}
+                return frame;}}
         environment=env->next_environment;}
+    return NULL;}
+
+/* CATCH/THROW is DYNAMICally scoped: search the global dynamic frame stack so a
+   THROW finds a CATCH established by any caller. */
+static Frame* find_catch_frame(Ref catch_object,unused Ref environment){
+    for(Frame* frame=g_frame_stack; frame; frame=frame->next){
+        if(frame->type==frame_catch
+           && frame->parameters.catch.object==catch_object){
+            return frame;}}
     return NULL;}
 
 unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
@@ -101,21 +123,10 @@ unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
 /* find_restart_frame: implemented in conditions.c as part of FIND-RESTART /
    INVOKE-RESTART.  The stub is removed. */
 
-static _Noreturn void unwind_next_frame(Frame* popped, Ref environment){
-    /* After popping `popped` from `environment`'s frames list, find the
-       new top frame to longjmp into. The next frame may be in a parent
-       env (LET / FLET / etc. create child envs whose frames list is
-       empty even though their parent has the BLOCK/HANDLER/etc. frame).
-       Pre-fix this just used popped->next which only walks within one
-       env and crashed on NULL when the popped frame was the only one
-       in its env. */
-    Frame* next = NULL;
-    Ref env_walk = environment;
-    while(typep(env_walk, ENVIRONMENT_Class)){
-        Frame* f = env_walk->slots->environment.frames;
-        if(f != NULL){ next = f; break; }
-        env_walk = env_walk->slots->environment.next_environment;
-    }
+static _Noreturn void unwind_next_frame(Frame* popped, unused Ref environment){
+    /* `popped` has just been removed from the global frame stack; the new top
+       is the next frame to unwind through on the way to popped->target. */
+    Frame* next = g_frame_stack;
     if(next == NULL){
         FATAL("unwind_next_frame: %s","no next frame; target not reached");}
     non_local_exit_t exit = (next == popped->target)
@@ -145,12 +156,20 @@ unused static void check_arg_count_even(Ref arguments){
         ERROR("Expected an even number of arguments but got %"UWORD_FORMAT"",length);}}
 
 static Ref tagbody_collect_tags(Ref body){
+    /* `body` is rooted (the whole list, so cdr-ing is safe); the accumulated
+       `tags` list must be re-rooted before each push so a GC inside push's cons
+       cannot reclaim the partial list. */
+    uword pool=open_live_pool();
+    add_to_live_pool(body);
     Ref tags=NIL_Symbol;
     while(consp(body)){
         if(symbolp(car(body))
            || integerp(car(body))){
+            add_to_live_pool(tags);
             push(body,&tags);}
         body=cdr(body);}
+    close_live_pool(pool);
+    add_to_live_pool(tags);   /* re-root the result (close trimmed it) */
     return tags;}
 
 
@@ -228,13 +247,7 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
    frames list — that's the "current top frame" for unwind purposes. */
 #define NON_LOCAL_EXIT(target_frame)                                    \
     do {                                                                \
-        Ref _env_walk = environment;                                    \
-        Frame* current_top = NULL;                                      \
-        while(typep(_env_walk, ENVIRONMENT_Class)){                     \
-            current_top = _env_walk->slots->environment.frames;         \
-            if(current_top != NULL){ break; }                           \
-            _env_walk = _env_walk->slots->environment.next_environment; \
-        }                                                               \
+        Frame* current_top = g_frame_stack;                             \
         if(current_top==NULL){                                          \
             FATAL("NON_LOCAL_EXIT: %s","no active frame");}             \
         current_top->target=(target_frame);                             \
@@ -244,13 +257,40 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
         longjmp(current_top->non_local_exit,(int)exit_code);            \
     } while(0)
 
-#define PASS_VALUES()      do{close_live_pool(pool);return ((results->count==0)?NIL_Symbol:results->values[0]);}while(0)
+/* These macros close the evale live-pool scope and return a result.  Closing
+   the pool TRIMS every object allocated during this evale — INCLUDING the
+   result — out of the live pool, so the returned value would be unrooted while
+   the caller is still about to use it (one allocation away from being
+   collected).  Re-root the result(s) in the now-current (outer) pool after
+   closing so the caller receives a value that survives GC. */
+#define PASS_VALUES()      do{close_live_pool(pool);for(uword _vi=0;_vi<results->count;_vi++){add_to_live_pool(results->values[_vi]);}return ((results->count==0)?NIL_Symbol:results->values[0]);}while(0)
 //#define VALUES0()          do{close_live_pool(pool);results->count=0;return NIL_Symbol;}while(0)
-#define VALUES1(v1)        do{close_live_pool(pool);results->count=1;return ((results->values[0]=(v1)));}while(0)
+#define VALUES1(v1)        do{Ref _v1=(v1);close_live_pool(pool);add_to_live_pool(_v1);results->count=1;return ((results->values[0]=_v1));}while(0)
 //#define VALUES2(v1,v2)     do{close_live_pool(pool);results->count=2;results->values[0]=(v1);return ((results->values[1]=(v2)));}while(0)
 //#define VALUES3(v1,v2,v3)  do{close_live_pool(pool);results->count=3;results->values[0]=(v1);results->values[1]=(v2);return ((results->values[2]=(v3)));}while(0)
-#define FIRST_VALUE()      do{close_live_pool(pool);return (results->count>0)?results->values[0]:NIL_Symbol;}while(0)
+#define FIRST_VALUE()      do{close_live_pool(pool);if(results->count>0){add_to_live_pool(results->values[0]);return results->values[0];}return NIL_Symbol;}while(0)
 
+
+/* Run BODY(ctx) inside a top-level CATCH for BOCL's quit tag, so BOCL:QUIT can
+   unwind — running pending UNWIND-PROTECT cleanups (WITH-OPEN-FILE etc.) — back
+   to here.  Returns BODY's value on normal completion, or the value thrown to
+   the quit tag by BOCL:QUIT.  main() wraps the whole session in this so QUIT is
+   a proper non-local exit. */
+Ref bocl_run_with_toplevel_catch(Ref (*body)(void*), void* ctx){
+    Ref environment = eval_global_environment();
+    Frame frame;
+    frame.type = frame_catch;
+    frame.parameters.catch.object =
+        package_intern_cstring_in("%QUIT-CATCH-TAG", BOCL_Package);
+    MultipleValues mv;
+    mv.count = 1; mv.values[0] = integer_from_word(0);
+    frame.results = &mv;
+    Ref result = integer_from_word(0);
+    int sel = setjmp(frame.non_local_exit);
+    UNWIND(sel){
+        UWBODY{ result = body(ctx); }
+        UWCLEANUP{ result = (mv.count>0) ? mv.values[0] : integer_from_word(0); }}
+    return result;}
 
 static eval_counters_t eval_counters={0};
 
@@ -357,8 +397,14 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                && consp(cdr(fname))
                && symbolp(cadr(fname))
                && nullp(cddr(fname))){
-                /* (SETF NAME) — no SETF support yet. */
-                ERROR("FUNCTION: (SETF %s) not yet supported",
+                /* (FUNCTION (SETF foo)) — the function registered by
+                   (defun (setf foo) ...). */
+                MultipleValues mv;
+                kernel_apply(symbol_function(symbol_intern_cstring("%SETF-FUNCTION")),
+                             list(cadr(fname),(Ref)NULL),&mv);
+                if(mv.count>=1 && !nullp(mv.values[0])){
+                    VALUES1(mv.values[0]);}
+                ERROR("FUNCTION: (SETF %s) is not defined",
                       string_cstring(symbol_name(cadr(fname))));}
             if(consp(fname) && eql(LAMBDA_Symbol,car(fname))){
                 /* (lambda (params...) body...) — turn into a closure. */
@@ -378,11 +424,21 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref name=car(arguments);
             Ref params=cadr(arguments);
             Ref body=cddr(arguments);
-            if(!symbolp(name)){
-                ERROR("DEFUN: %s is not a symbol",string_cstring(prin1_to_string(name)));}
-            Ref fn=function_new(name,params,body);
-            set_symbol_function(name,fn);
-            VALUES1(name);}
+            if(symbolp(name)){
+                Ref fn=function_new(name,params,body);
+                set_symbol_function(name,fn);
+                VALUES1(name);}
+            /* (defun (setf foo) (val arg...) ...) — register a SETF function for
+               FOO, consulted by the SETF macro and (FUNCTION (SETF foo)). */
+            if(consp(name) && eql(SETF_Symbol,car(name))
+               && consp(cdr(name)) && symbolp(cadr(name)) && nullp(cddr(name))){
+                Ref sym=cadr(name);
+                Ref fn=function_new(sym,params,body);
+                MultipleValues mv;
+                kernel_apply(symbol_function(symbol_intern_cstring("%REGISTER-SETF-FUNCTION")),
+                             list(sym,fn,(Ref)NULL),&mv);
+                VALUES1(name);}
+            ERROR("DEFUN: %s is not a valid function name",string_cstring(prin1_to_string(name)));}
 
         if(operator==S(DEFPARAMETER)){
             check_arg_count(arguments,2,3);  /* name value [doc] */
@@ -480,16 +536,35 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 if(!symbolp(name)){
                     ERROR("SETQ: %s is not a symbol",
                           string_cstring(prin1_to_string(name)));}
-                Ref value=evale(value_form,environment,results);
                 Ref variable=environment_find_variable(name,environment);
-                if(!nullp(variable)){
-                    env_set_variable_value(value,variable);}
+                if(!nullp(variable)
+                   && (env_local_symbol_macro_p(variable)
+                       || env_global_symbol_macro_p(variable))){
+                    /* SETQ of a symbol macro IS, by definition, SETF of its
+                       expansion (CLHS).  Build (SETF expansion value-form) and
+                       evaluate it so SETF handles the place and evaluates the
+                       value-form exactly once.  (Mirrors the read path above,
+                       which expands a symbol-macro reference to its expansion.) */
+                    Ref expansion = env_local_symbol_macro_p(variable)
+                        ? env_local_symbol_macro_expansion(variable)
+                        : env_global_symbol_macro_expansion(variable);
+                    uword pool=open_live_pool();
+                    add_to_live_pool(expansion);
+                    add_to_live_pool(value_form);
+                    Ref form=list(S(SETF),expansion,value_form,NULL);
+                    add_to_live_pool(form);
+                    last_value=evale(form,environment,results);
+                    close_live_pool(pool);}
                 else{
-                    /* Not lexically bound — assign the symbol's global value cell.
-                       Mirrors most CL implementations' implicit-global behaviour
-                       for a bare SETQ at top level. */
-                    set_symbol_value(name,value);}
-                last_value=value;
+                    Ref value=evale(value_form,environment,results);
+                    if(!nullp(variable)){
+                        env_set_variable_value(value,variable);}
+                    else{
+                        /* Not lexically bound — assign the symbol's global value
+                           cell.  Mirrors most CL implementations' implicit-global
+                           behaviour for a bare SETQ at top level. */
+                        set_symbol_value(name,value);}
+                    last_value=value;}
                 tail=cddr(tail);}
             VALUES1(last_value);}
 
@@ -530,6 +605,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             /* evaluate the initial-values in environment, and */
             /* bind the symbols to the values in new_environment */
             Ref new_environment=environment_new(environment,false);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted;
+              protect across the initial-value evale() calls below, which allocate
+              and may GC (otherwise new_environment is freed and reused). */
             bool has_dynamic_binding=false;
             {dolist(binding,bindings){
                     Ref name;
@@ -566,17 +644,21 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                          dolist(subform,body){
                              evale(subform,environment,results);}}
                      UWCLEANUP{
-                         /* restore on non-local exit */
+                         /* Restore the special bindings on non-local exit.  Only
+                          * the special variables among BINDINGS were dynamically
+                          * bound; lexical ones (the common case in a mixed LET)
+                          * are simply skipped — same as the normal-return path
+                          * below.  (Treating a lexical binding as an error here
+                          * was wrong: a non-local exit out of a LET that binds
+                          * even one special alongside lexicals would FATAL.) */
                          {dolist(binding,bindings){
                                  Ref name=consp(binding)?car(binding):binding;
                                  Ref var=environment_find_variable(name,environment);
-                                 if(!env_local_special_variable_p(var)){
-                                     FATAL("Oops unwinding dynamic binding of a nonn local special variable! %s",
-                                           string_cstring(symbol_name(name)));}
-                                 if(is_true(env_local_special_variable_saved_boundp(var))){
-                                     set_symbol_value(name,env_local_special_variable_saved_value(var));}
-                                 else{
-                                     symbol_make_unbound(name);}}}}}
+                                 if(env_local_special_variable_p(var)){
+                                     if(is_true(env_local_special_variable_saved_boundp(var))){
+                                         set_symbol_value(name,env_local_special_variable_saved_value(var));}
+                                     else{
+                                         symbol_make_unbound(name);}}}}}}
                  /* Normal-return restore: UWCLEANUP didn't run for normal exit.
                   * Non-local exits throw via unwind_next_frame so never reach here. */
                  {dolist(binding,bindings){
@@ -609,6 +691,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 if(eql(SPECIAL_Symbol,caadr(decl))){
                     dolist(sym,cdadr(decl)){ push(sym,&specials_star);}}}
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             environment=new_environment;
             bool has_dynamic_star=false;
             {dolist(binding,bindings){
@@ -669,6 +752,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref body=cddr(arguments);
             /* bind the symbols to the values */
             Ref new_environment=environment_new(environment,false);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(name,symbols){
                     bool boundp=symbol_boundp(name);
                     Ref value=boundp?symbol_value(name):NIL_Symbol;
@@ -719,6 +803,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 pop(&body);}
             /* Build the new env. Local-function bodies see the OUTER env (parent of new). */
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding)){
                         ERROR("FLET: %s","each binding must be (name lambda-list . body)");}
@@ -745,6 +830,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                evaluated only when the function is called, by which point all siblings
                are bound). */
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding)){
                         ERROR("LABELS: %s","each binding must be (name lambda-list . body)");}
@@ -771,6 +857,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding)){
                         ERROR("MACROLET: %s","each binding must be (name lambda-list . body)");}
@@ -797,6 +884,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
             Ref new_environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
                     if(!consp(binding) || !consp(cdr(binding))){
                         ERROR("SYMBOL-MACROLET: %s","each binding must be (name expansion)");}
@@ -916,6 +1004,20 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     MultipleValues tmp_results = {0};
                     dolist(subform,cleanup){
                         evale(subform,environment,&tmp_results);}}}
+            /* The shared unwind state machine runs UWCLEANUP only when UNWINDING
+               through this frame (select 1/2); its normal-entry row {1,2,4,9}
+               has no cleanup step.  CLHS requires UNWIND-PROTECT's cleanup forms
+               to run on NORMAL completion too, so run them here for that path.
+               (On a non-local exit, unwind_next_frame has already longjmp'd away
+               above, so this point is never reached — no double execution.)
+               This is why e.g. WITH-OPEN-FILE used to leave its output unflushed:
+               its CLOSE never ran on the normal path. */
+            if(check_non_local_exit(result)==0){
+                for(uword _i=0;_i<protect_results.count;_i++){
+                    add_to_live_pool(protect_results.values[_i]); }
+                MultipleValues tmp_results = {0};
+                dolist(subform,cleanup){
+                    evale(subform,environment,&tmp_results);}}
             *results = protect_results;
             PASS_VALUES();}
 
@@ -931,6 +1033,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref raw_clauses=cdr(arguments);
             /* Normalise each clause: (type (var) body...) → (type-class var body-form). */
             Ref clauses=NIL_Symbol;
+            Ref no_error_clause=NIL_Symbol;  /* (:no-error lambda-list body...) */
             {dolist(clause,raw_clauses){
                 if(!consp(clause) || !consp(cdr(clause))){
                     ERROR("HANDLER-CASE: malformed clause %s",
@@ -938,6 +1041,12 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref type_spec=car(clause);
                 Ref varlist  =cadr(clause);
                 Ref body     =cddr(clause);
+                /* :no-error clause — not a condition type.  It is run (with the
+                   handlers deactivated) when the protected form returns normally,
+                   with its lambda-list bound to the values the form produced. */
+                if(symbolp(type_spec) && type_spec==keyword_intern_cstring("NO-ERROR")){
+                    no_error_clause = list(varlist, cons(PROGN_Symbol, skip_declares(body)), NULL);
+                } else {
                 /* Resolve type_spec to a class object.
                  * Kernel classes take priority; if not found, try Lisp find-class
                  * (which searches CLOS *%classes* for user-defined conditions). */
@@ -961,9 +1070,10 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 /* varlist must be () or (var). */
                 Ref var = nullp(varlist) ? NIL_Symbol : car(varlist);
                 /* body becomes a PROGN form for uniform eval. */
-                Ref body_form = cons(PROGN_Symbol, body);
-                push(list(type_class, var, body_form, NULL), &clauses);}}
+                Ref body_form = cons(PROGN_Symbol, skip_declares(body));
+                push(list(type_class, var, body_form, NULL), &clauses);}}}
             clauses = nreverse(clauses);
+            add_to_live_pool(no_error_clause);
             /* Protect the clause list from GC for the entire HANDLER-CASE
                dynamic extent.  It lives only in a C-stack Frame (not a GC
                root), so any allocation triggered while evaluating the
@@ -982,19 +1092,35 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 push_frame(&frame, environment);
                 evale(form, environment, results);
                 pop_frame(&frame, environment);
+                /* Normal return: if there is a :no-error clause, run it (handlers
+                   now inactive) with its lambda-list bound to the form's values. */
+                if(!nullp(no_error_clause)){
+                    Ref vals=NIL_Symbol;
+                    for(uword _vi=results->count; _vi-->0;){ vals=cons(results->values[_vi],vals); }
+                    add_to_live_pool(vals);
+                    Ref ne_env=environment_new(environment,NIL_Symbol);
+                    add_to_live_pool(ne_env);
+                    bind_required_parameters(NIL_Symbol,car(no_error_clause),vals,ne_env);
+                    evale(cadr(no_error_clause),ne_env,results);}
                 PASS_VALUES();
             } else {
-                /* signal_condition longjmps us here; clause + cond on the frame. */
+                /* Non-local entry.  Two cases:
+                   - signal_condition matched a clause here (code 2): matched_clause
+                     is set — run the clause below.
+                   - a non-local exit (THROW/RETURN-FROM/GO/BOCL:QUIT, or a signal
+                     destined for an OUTER handler) is unwinding THROUGH us (code 1):
+                     matched_clause is nil — continue the unwind to the next frame
+                     on the way to its real target, exactly like CATCH/BLOCK do. */
                 pop_frame(&frame, environment);
                 Ref clause = frame.parameters.handler.matched_clause;
                 Ref cond   = frame.parameters.handler.condition;
                 if(nullp(clause)){
-                    /* unwind-only: re-raise to outer handler. Not currently used. */
-                    FATAL("HANDLER-CASE unwound without a matched clause%s","");}
+                    unwind_next_frame(&frame, environment); /* _Noreturn */ }
                 Ref var       = cadr(clause);
                 Ref body_form = caddr(clause);
                 /* Bind var to the condition in a fresh env and eval body. */
                 Ref new_env = environment_new(environment, NIL_Symbol);
+                add_to_live_pool(new_env); /* Object_new leaves it unrooted */
                 if(!nullp(var)){
                     Ref wrap = env_make_lexical_variable(var, cond);
                     environment_add_variable(wrap, new_env);}
@@ -1056,6 +1182,54 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 UWCLEANUP{}}
             PASS_VALUES();}
 
+        /* (RESTART-BIND ((name function [keyword form]...) ...) body...)
+           Establishes named restarts whose FUNCTION is called (in the dynamic
+           context of the invocation, NOT by unwinding to a clause — that is
+           RESTART-CASE) when INVOKE-RESTART names them.  The frame is a registry
+           + an unwind pass-through; INVOKE-RESTART detects a restart-bind restart
+           (its 2nd element is a function) and applies it directly. */
+        if(operator==S(RESTART-BIND)){
+            check_arg_count_min(arguments,1);
+            Ref raw_bindings = car(arguments);
+            Ref body         = cdr(arguments);
+            COLLECTING(restarts);
+            dolist(binding, raw_bindings){
+                if(!consp(binding) || !consp(cdr(binding))){
+                    ERROR("RESTART-BIND: malformed binding %s",
+                          string_cstring(prin1_to_string(binding)));}
+                Ref rname   = car(binding);
+                MultipleValues fr={0};
+                Ref fn      = evale(cadr(binding), environment, &fr);
+                /* :interactive-function (used by INVOKE-RESTART-INTERACTIVELY to
+                   compute the args); :report-function / :test-function ignored. */
+                Ref interactive_fn = NIL_Symbol;
+                {   Ref opts=cddr(binding);
+                    while(consp(opts) && consp(cdr(opts))){
+                        if(car(opts)==keyword_intern_cstring("INTERACTIVE-FUNCTION")){
+                            MultipleValues ir={0};
+                            interactive_fn = evale(cadr(opts), environment, &ir);
+                            break;}
+                        opts=cddr(opts);}}
+                COLLECT(restarts, list(rname, fn, interactive_fn, NULL));
+                add_to_live_pool(restarts);}   /* root partial list across the next evale */
+            restarts = nreverse(restarts);
+            add_to_live_pool(restarts);
+
+            Frame frame;
+            frame.type = frame_restart;
+            frame.parameters.restart.restarts      = restarts;
+            frame.parameters.restart.matched_name  = NIL_Symbol;
+            frame.parameters.restart.matched_args  = NIL_Symbol;
+            frame.results = results;
+            results->count = 0;   /* empty body -> NIL */
+            int code = setjmp(frame.non_local_exit);
+            UNWIND(code){
+                UWBODY{
+                    dolist(subform, body){
+                        evale(subform, environment, results);}}
+                UWCLEANUP{}}
+            PASS_VALUES();}
+
         /* (RESTART-CASE form (name lambda-list body...) ...)
            Establishes named restarts visible to FIND-RESTART / INVOKE-RESTART
            during the evaluation of `form`.  When a restart is invoked,
@@ -1088,7 +1262,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                        car(rest)==K(INTERACTIVE) ||
                        car(rest)==K(TEST))){
                     rest = cddr(rest);}
-                Ref body_form = cons(PROGN_Symbol, rest);
+                Ref body_form = cons(PROGN_Symbol, skip_declares(rest));
                 COLLECT(restarts, list(rname, varlist, body_form, NULL));}
             restarts = nreverse(restarts);
 
@@ -1122,17 +1296,12 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                           string_cstring(prin1_to_string(matched_name)));}
                 Ref varlist   = cadr(restart_spec);
                 Ref body_form = caddr(restart_spec);
-                /* Bind restart arguments to the lambda-list variables. */
+                /* Bind the restart arguments to the clause's lambda-list — a full
+                   ordinary lambda list, so &OPTIONAL / &REST / &KEY are honoured
+                   (the naive positional bind treated &OPTIONAL as a variable). */
                 Ref new_env = environment_new(environment, NIL_Symbol);
-                Ref args = matched_args;
-                dolist(param, varlist){
-                    if(consp(args)){
-                        Ref wrap = env_make_lexical_variable(param, car(args));
-                        environment_add_variable(wrap, new_env);
-                        args = cdr(args);}
-                    else {
-                        Ref wrap = env_make_lexical_variable(param, NIL_Symbol);
-                        environment_add_variable(wrap, new_env);}}
+                add_to_live_pool(new_env); /* Object_new leaves it unrooted */
+                bind_required_parameters(NIL_Symbol, varlist, matched_args, new_env);
                 evale(body_form, new_env, results);
                 PASS_VALUES();}}
 
@@ -1267,14 +1436,40 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             else{
                 FATAL("Function-namespace wrapper of unexpected type %p",(void*)local);}}
 
-        /* 2. Global DEFMACRO. */
+        /* 2. Global DEFMACRO (stored on the symbol's plist). */
         if(nullp(function) && nullp(macro)){
             Ref macro_fn = getf(symbol_plist(operator), S($MACRO), NIL_Symbol);
             if(!nullp(macro_fn)){
                 eval_counters.global_macro++;
                 MultipleValues mac_results = {0};
-                kernel_apply(macro_fn, arguments, &mac_results);
+                /* If the macro lambda-list begins with &WHOLE, prepend the whole
+                   form (a FRESH copy of its top cons, so the macro-displacement
+                   below — which mutates FORM in place — cannot corrupt the value
+                   captured by the &WHOLE variable) for bind_required_parameters. */
+                Ref mll=functionp(macro_fn)?macro_fn->slots->function.lambda_list:NIL_Symbol;
+                Ref margs=(consp(mll)&&car(mll)==S(&WHOLE))
+                          ?cons(cons(car(form),arguments),arguments):arguments;
+                kernel_apply(macro_fn, margs, &mac_results);
                 Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
+                /* Minimal compilation by macro displacement: cache the expansion
+                   in place so this global-macro call is expanded ONCE rather than
+                   on every evaluation.  This is the dominant cost in repeatedly-run
+                   code: WHEN/INCF/SETF/DOTIMES etc. otherwise rebuild their
+                   expansion (backquote conses + setf-expander gethash + gensym) on
+                   every iteration.  CLHS 3.2.2.2 permits caching macro expansions.
+                   Skip the degenerate expansion==form case (would loop forever). */
+                add_to_live_pool(expansion);   /* root across BOTH the displaced
+                    evale(form) below and the fall-through evale(expansion) — the
+                    fall-through previously ran with EXPANSION unrooted. */
+                if(expansion!=form && consp(form)){
+                    if(consp(expansion)){
+                        cons_rplaca(form,cons_car(expansion));
+                        cons_rplacd(form,cons_cdr(expansion));
+                    }else{
+                        cons_rplaca(form,PROGN_Symbol);
+                        cons_rplacd(form,cons(expansion,NIL_Symbol));}
+                    evale(form, environment, results);   /* run displaced form */
+                    PASS_VALUES();}
                 evale(expansion, environment, results);
                 PASS_VALUES();}
         }
@@ -1305,13 +1500,41 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                             :env_global_macro_name(macro);
             Ref fn=function_new(name,lambda_list,body);
             MultipleValues mac_results = {0};
-            kernel_apply(fn,arguments,&mac_results);
+            /* &WHOLE: prepend a fresh copy of the whole form (see above). */
+            Ref margs=(consp(lambda_list)&&car(lambda_list)==S(&WHOLE))
+                      ?cons(cons(car(form),arguments),arguments):arguments;
+            kernel_apply(fn,margs,&mac_results);
             Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
+            /* Minimal compilation by macro displacement: cache the expansion in
+               place so a global-macro call is expanded ONCE, not on every
+               evaluation.  This is the dominant cost in repeatedly-run code
+               (function bodies, loop bodies): without it, e.g. WHEN/INCF rebuild
+               their expansion — backquote conses + GENSYM symbol creation — on
+               every iteration.  CLHS 3.2.2.2 explicitly permits caching macro
+               expansions.  We only displace GLOBAL macros (a local/lexical macro
+               may expand differently in another scope) and skip the degenerate
+               expansion==form case (would re-expand forever). */
+            add_to_live_pool(expansion);   /* root across BOTH evale(form) and the
+                fall-through evale(expansion) — the fall-through (e.g. a local
+                macro, where the guard below is false) previously ran unrooted. */
+            if(env_global_macro_p(macro) && expansion!=form && consp(form)){
+                if(consp(expansion)){
+                    cons_rplaca(form,cons_car(expansion));
+                    cons_rplacd(form,cons_cdr(expansion));
+                }else{
+                    /* atom expansion X -> (progn X), keeping `form` a cons */
+                    cons_rplaca(form,PROGN_Symbol);
+                    cons_rplacd(form,cons(expansion,NIL_Symbol));}
+                evale(form,environment,results);   /* run the displaced form */
+                PASS_VALUES();}
             evale(expansion,environment,results);
             PASS_VALUES();}
 
         /* Function call: evaluate the arguments in order, then apply. */
         {uword fc_pool=open_live_pool();
+         add_to_live_pool(function);   /* a freshly closure_new()'d FUNCTION is
+            unrooted; protect it across the argument evale()s below, which
+            allocate and may GC (otherwise it is freed before kernel_apply). */
          COLLECTING(args);
          {dolist(subform,arguments){
                  add_to_live_pool(args);           /* protect accumulated list across evale */
@@ -1383,7 +1606,9 @@ static Ref lookup_key_argument(Ref keyword, Ref args, bool* found){
    &REST / &BODY (synonyms), &KEY (with default init forms; bindings
    to the local variable have the keyword's symbol-name without the
    leading colon, per CL convention), &ALLOW-OTHER-KEYS (suppresses the
-   unknown-keyword check). &AUX / &WHOLE / &ENVIRONMENT not yet. */
+   unknown-keyword check), &WHOLE (bound to the whole form, prepended by the
+   macro-call dispatch), &ENVIRONMENT (bound to NIL — bocl has no first-class
+   macro environments), and &AUX (sequential local bindings). */
 static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,Ref target_env){
     Ref ll=lambda_list;
     enum { in_required, in_optional, in_rest_done, in_key } state = in_required;
@@ -1392,9 +1617,27 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
     bool saw_rest = false;
     while(consp(ll)){
         Ref param=car(ll);
-        if(symbolp(param) && (param==S(&WHOLE) || param==S(&ENVIRONMENT))){
-            ERROR("Lambda-list keyword %s not yet implemented",
-                  string_cstring(symbol_name(param)));}
+        /* &WHOLE var — the whole form, prepended to ARGUMENTS by the macro-call
+           dispatch when the lambda-list begins with &WHOLE; bind and consume it. */
+        if(symbolp(param) && param==S(&WHOLE)){
+            ll=cdr(ll);
+            if(!consp(ll) || !symbolp(car(ll))){
+                ERROR("&WHOLE: expected a variable%s","");}
+            Ref whole_var=car(ll);
+            Ref whole_val=consp(arguments)?car(arguments):NIL_Symbol;
+            environment_add_variable(env_make_lexical_variable(whole_var,whole_val),target_env);
+            if(consp(arguments)){ arguments=cdr(arguments); }
+            ll=cdr(ll);
+            continue;}
+        /* &ENVIRONMENT var — bocl has no first-class macro environments; bind the
+           variable to NIL and do not consume an argument (it may appear anywhere). */
+        if(symbolp(param) && param==S(&ENVIRONMENT)){
+            ll=cdr(ll);
+            if(!consp(ll) || !symbolp(car(ll))){
+                ERROR("&ENVIRONMENT: expected a variable%s","");}
+            environment_add_variable(env_make_lexical_variable(car(ll),NIL_Symbol),target_env);
+            ll=cdr(ll);
+            continue;}
         /* &AUX (var) or (var init-form) — bind local variables in order. */
         if(symbolp(param) && param==S(&AUX)){
             ll=cdr(ll);

@@ -7,16 +7,19 @@
  *   cc -I$PREFIX/include driver.c $PREFIX/lib/libbocl.a -lm -o driver   # static
  *   cc -I$PREFIX/include driver.c -L$PREFIX/lib -lbocl -lm  -o driver   # shared
  *
- * Exits 0 on success, non-zero on failure.  No prelude is required: PRINT and +
- * are kernel primitives available right after kernel_initialize().
+ * Exits 0 on success, non-zero on failure.  This is a LINKAGE proof, so it uses
+ * only the bare-kernel API and does NOT evaluate: on the current kernel the
+ * evaluator and primitives like + / PRINT come from the Lisp prelude, which we
+ * do not load here.  Reading a literal integer and reading it back through the
+ * C accessor is enough to prove the library links and its public API is callable.
  */
 #include <stdio.h>
-#include <bocl/bocl.h>   /* pulls in <bocl/kernel.h>: Ref, kernel_initialize() */
+#include <bocl/bocl.h>   /* pulls in <bocl/kernel.h>: Ref, kernel_initialize(), integer_value() */
 
 int main(void){
     kernel_initialize();
-    /* Evaluate a trivial form; PRINT writes "42" to standard output. */
-    bocl_read_eval_cstring("(print (+ 40 2))");
-    fputs("\n[driver] linked bocl OK\n", stdout);
-    return 0;
+    Ref x = bocl_read_cstring("42");        /* the reader works on the bare kernel */
+    long v = (long)integer_value(x);
+    fprintf(stdout, "[driver] read 42 -> %ld; linked bocl OK\n", v);
+    return (v == 42) ? 0 : 1;
 }

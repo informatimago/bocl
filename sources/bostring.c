@@ -27,6 +27,15 @@ octet* octet_upcase(octet* string){
         current++;}
     return string;}
 
+octet* octet_downcase(octet* string){
+    octet* current=string;
+    while(*current){
+        if(((65<=(*current))&&((*current)<=90))
+           ||((192<=(*current))&&((*current)<=222)&&((*current)!=215))){
+            (*current)=(octet)((*current)+32);}
+        current++;}
+    return string;}
+
 
 Ref char_ref(Ref string,Ref index){
     uword len = string_length(string);

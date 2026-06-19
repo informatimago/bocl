@@ -1,0 +1,45 @@
+Deferred: 16-byte cons cells via a separate paged cons heap
+
+Status: deferred (idea captured during the Slice "compact cons / Option A" work).
+
+Context
+-------
+A cons currently costs 48 bytes in two heap blocks (Object{header,class,slots}
+24B + Cons{header,car,cdr} 24B).  "Option A" (done) inlines car/cdr into a
+single 32-byte block {header, class=CONS_Class, car, cdr}, objcount=3 — one
+allocation, one dereference, ~33% less memory.  That keeps the uniform
+mark-sweep heap and per-block header, so it is low risk.
+
+Further improvement (this issue)
+--------------------------------
+Drive cons cells down to the theoretical minimum of 16 bytes (just car+cdr)
+WITHOUT tagged pointers, by giving conses their OWN heap:
+
+  - Allocate cons cells from a dedicated set of pages (an array/arena) separate
+    from the general object heap.  Each slot is exactly {Ref car; Ref cdr} = 16B.
+  - The size, objcount(=2 references) and class(=CONS_Class) are IDENTICAL for
+    every cell, so they are stored ONCE for the whole arena (or implied by the
+    arena), not per cell.
+  - class_of / consp / the GC recognise a cons by checking whether the pointer
+    falls inside the cons arena's address range (a range check), NOT by reading
+    a per-object header — so it stays portable and safe (unlike low-bit tagged
+    pointers, which depend on alignment / compiler / target assumptions).
+
+Cost / why deferred
+-------------------
+  - Two heaps now: the cons arena needs its own allocation (free list of 16B
+    cells) and its own mark/sweep participation, plus dynamic growth (add pages)
+    coordinated with the main heap.  More moving parts.
+  - mark() must, for any Ref, decide "is this in the cons arena?" cheaply (sorted
+    page table / range test) and then treat its two words as car/cdr.
+  - sweep()/valid_block_start_p / next_block / coalescing are header-based today;
+    the cons arena needs parallel, header-free logic.
+
+Payoff: 48B -> 16B per cons (3x), fewer GC objects, better locality — best done
+after Option A is stable and if memory/throughput still warrants it (the ANSI
+suite's multi-GB working set is dominated by cons cells, so this is the biggest
+remaining single memory lever).
+
+Safety note: prefer this paged-arena approach over tagged-pointer fixnums/conses
+— it does not rely on pointer-bit availability and works across C compilers and
+target machines.

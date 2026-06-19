@@ -76,8 +76,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; utilities
 
-(import 'COM.INFORMATIMAGO.COMMON-LISP.UTILITY:NSUBSEQ)
-
+;; (bocl) Self-contained: NSUBSEQ was imported from
+;; COM.INFORMATIMAGO.COMMON-LISP.UTILITY; the single caller now uses SUBSEQ.
 
 (defun sequence-left-trim (bag-of-elements sequence
                            &key (key (function identity)) (test (function eql)))
@@ -172,15 +172,19 @@
 
 (defun u%plus (base a b)
   "Return (+ a b)"
-  (loop
-     :with cc = 0
-     :for aa = a :then (rest aa)
-     :for bb = b :then (rest bb)
-     :collect (let* ((s (+ (or (first aa) 0) (or (first bb) 0) cc)))
-                (if (< s base)
-                    (progn (setf cc 0) s)
-                    (progn (setf cc 1) (- s base))))
-     :while (or aa bb)))
+  ;; (bocl) Pre-test form: loop `while (or a b (plusp cc))`, adding exactly one
+  ;; extra iteration to flush the final carry.  PJB's original used a post-test
+  ;; `:collect ... :while`; this portable shape avoids depending on where LOOP
+  ;; runs a trailing while/until (a bocl LOOP bug found during this integration
+  ;; and since fixed in %loop-expand) and is correct on any conforming LOOP.
+  (let ((cc 0) (r '()))
+    (loop :while (or a b (plusp cc)) :do
+      (let ((s (+ (or (car a) 0) (or (car b) 0) cc)))
+        (if (< s base)
+            (progn (setf cc 0) (push s r))
+            (progn (setf cc 1) (push (- s base) r)))
+        (setf a (cdr a) b (cdr b))))
+    (nreverse r)))
 
 
 (defun u%minus (base a b)
@@ -199,20 +203,19 @@ PRE: (>= a b)"
 
 (defun u%times-digit (base digit a)
   "Return the product of a * digit."
-  (loop
-     :with cc = 0
-     :with p = '()
-     :for aa = a then (rest aa)
-     :do (let ((pp (+ (* digit (or (first aa) 0)) cc)))
-           (if (< pp base)
-               (progn
-                 (setf cc 0)
-                 (push pp p))
-               (multiple-value-bind (quotient remainder) (truncate pp base)
-                 (setf cc quotient)
-                 (push remainder p))))
-     :while aa
-     :finally (return (nreverse p))))
+  ;; (bocl) Pre-test form (see u%plus): flush the final carry explicitly instead
+  ;; of relying on a post-test `:do ... :while aa` (which bocl's LOOP mis-orders).
+  ;; After the loop cc < base, so it is a single extra digit.
+  (let ((cc 0) (p '()))
+    (dolist (ai a)
+      (let ((pp (+ (* digit ai) cc)))
+        (if (< pp base)
+            (progn (setf cc 0) (push pp p))
+            (multiple-value-bind (quotient remainder) (truncate pp base)
+              (setf cc quotient)
+              (push remainder p)))))
+    (when (plusp cc) (push cc p))
+    (nreverse p)))
 
 
 (defvar *u%zero* '())
@@ -406,7 +409,7 @@ PRE: (>= a b)"
                               h)
              :until (u%zerop n)
              :do (multiple-value-bind (q r) (u%divide base n ten)
-                   (push (gethash r digits) result)
+                   (push (gethash (u%normalize r) digits) result)
                    (setf n q))
              :finally (return (format nil "~{~A~}" result)))
           (loop
@@ -414,7 +417,9 @@ PRE: (>= a b)"
              :with ten = (u%decompose-base base 10.)
              :until (u%zerop n)
              :do (multiple-value-bind (q r) (u%divide base n ten)
-                   (push (first r) result)
+                   ;; (bocl) a zero remainder normalises to (), so (first r) is
+                   ;; NIL; coerce it to the digit 0 (else 0 digits print "NIL").
+                   (push (or (first r) 0) result)
                    (setf n q))
              :finally (return (format nil "~{~A~}" result))))))
 
@@ -524,12 +529,18 @@ PRE: (>= a b)"
 
 
 (defun test/u%parse-integer ()
-  (assert
-   (let ((base  (expt 2 32)))
-     (u%= (u%divide base (u%parse-integer base (princ-to-string (ext:! 1000)))
-                    (u%decompose-base base 1000))
-          (u%parse-integer base (princ-to-string (ext:! 999))))))
-
+  ;; (bocl) Rewritten self-contained: was (ext:! 1000) (ECL factorial) over base
+  ;; 2^32 (whose digit*digit overflows a 63-bit word).  No native bignum needed.
+  (let ((base 1000000000))
+    ;; parse -> princ round-trip on a big decimal with interior zeroes
+    (let ((s "123456789012345678901234567890098765432100000000007"))
+      (assert (string= s (u%princ-to-string base (u%parse-integer base s)))))
+    ;; (n*1000)/1000 = n, remainder 0 — exercises parse/times/divide together
+    (let* ((n     (u%parse-integer base "98765432109876543210"))
+           (n1000 (u%times base n (u%decompose-base base 1000))))
+      (multiple-value-bind (q r) (u%divide base n1000 (u%decompose-base base 1000))
+        (assert (u%zerop r))
+        (assert (u%= q n)))))
   :success)
 
 
@@ -546,43 +557,107 @@ PRE: (>= a b)"
 ;;;
 
 
+;;; A signed bignum is (SIGN . DIGITS) where SIGN is '+ or '- and DIGITS is an
+;;; unsigned bignum (low-order base-B digit list).  Canonical form: DIGITS is
+;;; u%normalize'd and zero is always (+) — never a "negative zero" (- ).
+
+(defun i%normalize (i)
+  "Canonicalise a signed bignum: normalise the magnitude and force +0."
+  (let ((d (u%normalize (cdr i))))
+    (cons (if (u%zerop d) '+ (car i)) d)))
+
+(defun i%sign (i)
+  "Return -1, 0, or +1 according to the sign of signed bignum I."
+  (cond ((u%zerop (cdr i)) 0)
+        ((eql (car i) '-) -1)
+        (t                1)))
+
+(defun i%zerop (i) (u%zerop (cdr i)))
+
+(defun i%abs (i) (cons '+ (u%normalize (cdr i))))
+
+
 (defun i%parse-integer (base string)
-  (let ((digits (u%parse-integer base
-                                 (if (or (char= #\+ (aref string 0))
-                                         (char= #\- (aref string 0)))
-                                     (nsubseq string 1)
-                                     string))))
-    (cons (if (and digits (char= #\- (aref string 0)))
-              '-
-              '+)
-          digits)))
+  (i%normalize
+   (let ((digits (u%parse-integer base
+                                  (if (or (char= #\+ (aref string 0))
+                                          (char= #\- (aref string 0)))
+                                      (subseq string 1)
+                                      string))))
+     (cons (if (and digits (char= #\- (aref string 0)))
+               '-
+               '+)
+           digits))))
 
 
 (defun i%plus (base a b)
-  (cond
-    ((eql (car a) (car b))
-     (cons (car a) (u%plus base (cdr a) (cdr b))))
-    ((u%< (cdr a) (cdr b))
-     (cons (car b) (u%minus base (cdr b) (cdr a))))
-    (t
-     (cons (car a) (u%minus base (cdr a) (cdr b))))))
+  (i%normalize
+   (cond
+     ((eql (car a) (car b))
+      (cons (car a) (u%plus base (cdr a) (cdr b))))
+     ((u%< (cdr a) (cdr b))
+      (cons (car b) (u%minus base (cdr b) (cdr a))))
+     (t
+      (cons (car a) (u%minus base (cdr a) (cdr b)))))))
 
 
 (defun i%minus (base a b)
-  (if (eql (car a) (car b))
-      (if (u%< (cdr a) (cdr b))
-          (cons (if (eql (car a) '+) '- '+) (u%minus base (cdr b) (cdr a)))
-          (cons (if (eql (car a) '+) '+ '-) (u%minus base (cdr a) (cdr b))))
-      (cons (car a) (u%plus base (cdr a) (cdr b)))))
+  (i%normalize
+   (if (eql (car a) (car b))
+       (if (u%< (cdr a) (cdr b))
+           (cons (if (eql (car a) '+) '- '+) (u%minus base (cdr b) (cdr a)))
+           (cons (if (eql (car a) '+) '+ '-) (u%minus base (cdr a) (cdr b))))
+       (cons (car a) (u%plus base (cdr a) (cdr b))))))
 
 
 (defun i%times (base a b)
-  (cons (if (eql (car a) '+)
-            (car b)
-            (if (eql (car b) '+)
-                '-
-                '+))
-        (u%times base (cdr a) (cdr b))))
+  (i%normalize
+   (cons (if (eql (car a) '+)
+             (car b)
+             (if (eql (car b) '+)
+                 '-
+                 '+))
+         (u%times base (cdr a) (cdr b)))))
+
+
+(defun i%divide (base a b)
+  "Signed truncating division: (values quotient remainder) with CL TRUNCATE
+semantics — round toward zero; the remainder takes the sign of A."
+  (multiple-value-bind (q r) (u%divide base (cdr a) (cdr b))
+    (values (i%normalize (cons (if (eql (car a) (car b)) '+ '-) q))
+            (i%normalize (cons (car a) r)))))
+
+
+(defun i%< (a b)
+  "Return (< a b) for signed bignums."
+  (let ((sa (i%sign a)) (sb (i%sign b)))
+    (cond ((< sa sb)    t)
+          ((> sa sb)    nil)
+          ((eql sa  1)  (u%< (cdr a) (cdr b)))    ; both positive
+          ((eql sa -1)  (u%< (cdr b) (cdr a)))    ; both negative
+          (t            nil))))                   ; both zero
+
+(defun i%<= (a b) (not (i%< b a)))
+(defun i%>  (a b) (i%< b a))
+(defun i%>= (a b) (not (i%< a b)))
+(defun i%=  (a b) (and (not (i%< a b)) (not (i%< b a))))
+(defun i%/= (a b) (not (i%= a b)))
+
+
+(defun i%princ-to-string (base i)
+  (let ((i (i%normalize i)))
+    (if (eql (car i) '-)
+        (concatenate 'string "-" (u%princ-to-string base (cdr i)))
+        (u%princ-to-string base (cdr i)))))
+
+
+(defun i%compose (base i)
+  "Return the native integer for signed bignum I (valid where it fits natively)."
+  (* (if (eql (car i) '-) -1 1) (u%compose-base base (cdr i))))
+
+(defun i%decompose (base n)
+  "Return the signed bignum representation of native integer N."
+  (cons (if (minusp n) '- '+) (u%decompose-base base (abs n))))
 
 
 
@@ -611,6 +686,43 @@ PRE: (>= a b)"
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
+;;; Signed (i%xxx) tests
+;;;
+
+(defun test/i% ()
+  "Cross-check signed ops against native arithmetic over a small range."
+  (let ((base 1000000000))
+    (loop :for a :from -30 :to 30 :do
+      (loop :for b :from -30 :to 30 :do
+        (let ((ia (i%decompose base a)) (ib (i%decompose base b)))
+          (assert (= (i%compose base (i%plus  base ia ib)) (+ a b)))
+          (assert (= (i%compose base (i%minus base ia ib)) (- a b)))
+          (assert (= (i%compose base (i%times base ia ib)) (* a b)))
+          (assert (eql (i%< ia ib) (and (< a b) t)))
+          (assert (eql (i%= ia ib) (and (= a b) t)))
+          (assert (eql (i%<= ia ib) (and (<= a b) t)))
+          (assert (eql (i%> ia ib) (and (> a b) t)))
+          ;; canonical: a zero result is never (- )
+          (dolist (r (list (i%plus base ia ib) (i%minus base ia ib) (i%times base ia ib)))
+            (assert (not (and (eql (car r) '-) (u%zerop (cdr r))))))
+          (unless (zerop b)
+            (multiple-value-bind (q r) (i%divide base ia ib)
+              (assert (= (i%compose base q) (truncate a b)))
+              (assert (= (i%compose base r) (rem a b)))))))))
+  :success)
+
+(defun test/i%princ ()
+  (let ((base 1000000000))
+    (assert (string= "0"             (i%princ-to-string base (i%decompose base 0))))
+    (assert (string= "-1000"         (i%princ-to-string base (i%decompose base -1000))))
+    (assert (string= "1000000000000" (i%princ-to-string base (i%decompose base 1000000000000))))
+    (assert (string= "-5321"         (i%princ-to-string base (i%parse-integer base "-5321"))))
+    (assert (equal '(+) (i%parse-integer base "-0"))))   ; no negative zero
+  :success)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
 ;;; TEST/ALL
 
 
@@ -629,7 +741,9 @@ PRE: (>= a b)"
               (test/u%<)
               (test/u%divide)
               (test/u%parse-integer)
-              (test/u%princ-to-string)))
+              (test/u%princ-to-string)
+              (test/i%)
+              (test/i%princ)))
     (format t "~&~60A" test)
     (format t "~A~%" (or (ignore-errors
                            (block :test
@@ -642,8 +756,8 @@ PRE: (>= a b)"
                          "[31m FAILURE [0m"))))
 
 
-(print '(time (test/all)))
-
+;; (bocl) Removed the stray top-level (print '(time (test/all))); run the suite
+;; explicitly with (test/all).
 ;; (time (test/all))
 
 

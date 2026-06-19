@@ -34,58 +34,59 @@ Ref make_simple_condition(Ref class, Ref format_control, Ref format_arguments){
    (no unwind); if it returns normally, continue the search.
    Returns NIL_Symbol if no HANDLER-CASE catches the condition (per CL SIGNAL
    semantics — SIGNAL returns NIL when unhandled). */
-Ref signal_condition(Ref cond, Ref environment){
+extern Frame* g_frame_stack;   /* the global dynamic control-frame stack (eval.c) */
+
+Ref signal_condition(Ref cond, unused Ref environment){
     Ref cls = class_of(cond);
 
-    /* Walk the entire environment chain so handlers established inside
-       inner LET / FLET / etc. frames are visible. */
-    Ref env_walk = environment;
-    while(typep(env_walk, ENVIRONMENT_Class)){
-        Frame* frame = env_walk->slots->environment.frames;
-        while(frame){
-            /* ---- HANDLER-BIND ---- */
-            if(frame->type == frame_handler_bind){
-                Ref bindings = frame->parameters.handler_bind.bindings;
-                while(consp(bindings)){
-                    Ref pair = car(bindings);
-                    Ref type_class = car(pair);
-                    Ref handler_fn  = cdr(pair);
-                    if(subclassp(cls, type_class)){
-                        /* Deactivate this frame while the handler runs so
-                           re-signaling the same condition from the handler
-                           skips this binding (CL spec requirement). */
-                        frame->type = frame_handler_bind_inactive;
-                        MultipleValues hresults;
-                        kernel_apply(handler_fn, list(cond, NULL), &hresults);
-                        frame->type = frame_handler_bind; /* restore */
-                        /* Handler returned normally — continue signaling. */
-                        goto next_frame;
-                    }
-                    bindings = cdr(bindings);}}
+    /* Walk the global dynamic frame stack (innermost first), so handlers
+       established by any dynamically-enclosing caller are visible — including
+       across function-call boundaries. */
+    Frame* frame = g_frame_stack;
+    while(frame){
+        /* ---- HANDLER-BIND ---- */
+        if(frame->type == frame_handler_bind){
+            Ref bindings = frame->parameters.handler_bind.bindings;
+            while(consp(bindings)){
+                Ref pair = car(bindings);
+                Ref type_class = car(pair);
+                Ref handler_fn  = cdr(pair);
+                if(subclassp(cls, type_class)){
+                    /* Deactivate this frame while the handler runs so
+                       re-signaling the same condition from the handler
+                       skips this binding (CL spec requirement). */
+                    frame->type = frame_handler_bind_inactive;
+                    MultipleValues hresults;
+                    kernel_apply(handler_fn, list(cond, NULL), &hresults);
+                    frame->type = frame_handler_bind; /* restore */
+                    /* Handler returned normally — continue signaling. */
+                    goto next_frame;
+                }
+                bindings = cdr(bindings);}}
 
-            /* ---- HANDLER-CASE ---- */
-            else if(frame->type == frame_handler){
-                Ref clauses = frame->parameters.handler.clauses;
-                while(consp(clauses)){
-                    Ref clause = cons_car(clauses);
-                    Ref type_class = car(clause);
-                    if(subclassp(cls, type_class)){
-                        frame->parameters.handler.matched_clause = clause;
-                        frame->parameters.handler.condition = cond;
-                        /* Reuse the NON_LOCAL_EXIT machinery: longjmp to the
-                           topmost frame in this env, chaining through UNWIND. */
-                        Frame* top = env_walk->slots->environment.frames;
-                        if(top == NULL){
-                            FATAL("signal_condition: %s",
-                                  "no frames in env yet a handler matched");}
-                        top->target = frame;
-                        int code = (top == frame) ? 2 : 1;
-                        longjmp(top->non_local_exit, code);}
-                    clauses = cons_cdr(clauses);}}
+        /* ---- HANDLER-CASE ---- */
+        else if(frame->type == frame_handler){
+            Ref clauses = frame->parameters.handler.clauses;
+            while(consp(clauses)){
+                Ref clause = cons_car(clauses);
+                Ref type_class = car(clause);
+                if(subclassp(cls, type_class)){
+                    frame->parameters.handler.matched_clause = clause;
+                    frame->parameters.handler.condition = cond;
+                    /* Unwind toward this handler through every intervening
+                       frame (running their cleanups) via the UNWIND machinery:
+                       longjmp into the current top frame, chaining to target. */
+                    Frame* top = g_frame_stack;
+                    if(top == NULL){
+                        FATAL("signal_condition: %s",
+                              "no frames yet a handler matched");}
+                    top->target = frame;
+                    int code = (top == frame) ? 2 : 1;
+                    longjmp(top->non_local_exit, code);}
+                clauses = cons_cdr(clauses);}}
 
-            next_frame:
-            frame = frame->next;}
-        env_walk = env_walk->slots->environment.next_environment;}
+        next_frame:
+        frame = frame->next;}
 
     /* No handler caught the condition. */
     return NIL_Symbol;}
@@ -149,13 +150,13 @@ static void kernel_ERROR(Ref function, Ref arguments, MultipleValues* results){
     /* If signal_condition returned, no handler matched — invoke the
        unhandled-error fallback. For now: print the message and exit
        via the C error() path. */
-    Condition* c = &cond->slots->condition;
-    char* fmt = typep(c->format_control, STRING_Class)
-        ? string_cstring(c->format_control)
-        : (char*)"unhandled condition";
+    /* Render the condition's REPORT (format-control applied to its
+       format-arguments) via PRINC, not the raw format-control — otherwise an
+       unhandled "LOAD: file ~S does not exist" prints the literal ~S. */
+    char* report = string_cstring(princ_to_string(cond));
     ERROR("Unhandled %s: %s",
           string_cstring(symbol_name(class_name(class_of(cond)))),
-          fmt);
+          report);
     /* unreachable */
     (void)results;
     close_live_pool(pool);}
@@ -238,18 +239,13 @@ static void kernel_SIMPLE_CONDITION_FORMAT_ARGUMENTS(Ref function, Ref arguments
 /* Walk the full env chain looking for any frame_restart frame that
    has a restart named `name`.  Returns the frame, or NULL if not
    found.  Innermost (most recently established) match wins. */
-static Frame* find_restart_frame_by_name(Ref name, Ref environment){
-    Ref env = environment;
-    while(typep(env, ENVIRONMENT_Class)){
-        Frame* frame = env->slots->environment.frames;
-        while(frame){
-            if(frame->type == frame_restart){
-                Ref restarts = frame->parameters.restart.restarts;
-                while(consp(restarts)){
-                    if(car(car(restarts)) == name){ return frame; }
-                    restarts = cdr(restarts);}}
-            frame = frame->next;}
-        env = env->slots->environment.next_environment;}
+static Frame* find_restart_frame_by_name(Ref name, unused Ref environment){
+    for(Frame* frame=g_frame_stack; frame; frame=frame->next){
+        if(frame->type == frame_restart){
+            Ref restarts = frame->parameters.restart.restarts;
+            while(consp(restarts)){
+                if(car(car(restarts)) == name){ return frame; }
+                restarts = cdr(restarts);}}}
     return NULL;}
 
 /* (FIND-RESTART name) → restart-designator or NIL.
@@ -287,18 +283,26 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     if(target == NULL){
         ERROR("INVOKE-RESTART: no active restart named %s",
               string_cstring(prin1_to_string(name)));}
-    /* Set the matched restart on the frame. */
+    /* RESTART-BIND restart: its spec's 2nd element is a callable — apply it in
+       place (in the dynamic context of this INVOKE-RESTART) and return its values,
+       rather than unwinding to a RESTART-CASE clause. */
+    {   Ref rs = target->parameters.restart.restarts;
+        while(consp(rs)){
+            Ref spec = car(rs);
+            if(consp(spec) && car(spec)==name){
+                Ref fn = consp(cdr(spec)) ? cadr(spec) : NIL_Symbol;
+                if(functionp(fn) || closurep(fn) || built_in_function_p(fn)){
+                    kernel_apply(fn, restart_args, results);
+                    close_live_pool(pool);
+                    return;}
+                break;}
+            rs = cdr(rs);}}
+    /* Set the matched restart on the frame (RESTART-CASE: unwind below). */
     target->parameters.restart.matched_name = name;
     target->parameters.restart.matched_args = restart_args;
-    /* Trigger a non-local exit toward `target`.  Use the same strategy as
-       NON_LOCAL_EXIT: find the current topmost frame and longjmp toward
-       target, letting the UNWIND chain propagate through intermediates. */
-    Frame* top = NULL;
-    Ref env2 = env;
-    while(typep(env2, ENVIRONMENT_Class)){
-        top = env2->slots->environment.frames;
-        if(top){ break; }
-        env2 = env2->slots->environment.next_environment;}
+    /* Trigger a non-local exit toward `target`: longjmp into the current top
+       frame, letting the UNWIND chain propagate through intermediates. */
+    Frame* top = g_frame_stack;
     if(top == NULL){
         FATAL("INVOKE-RESTART: %s","no active frame");}
     top->target = target;
@@ -308,10 +312,61 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     (void)results;
     close_live_pool(pool);}
 
-/* (INVOKE-RESTART-INTERACTIVELY name) — same as invoke-restart with no args. */
+/* (INVOKE-RESTART-INTERACTIVELY restart-designator) — invoke the named restart,
+   computing its arguments via the restart's :interactive-function (a restart-bind
+   restart stores it as the 3rd element of its spec).  With no interactive
+   function, invoke with no args. */
 static void kernel_INVOKE_RESTART_INTERACTIVELY(Ref function, Ref arguments, MultipleValues* results){
-    /* Delegate: add NIL args list */
-    kernel_INVOKE_RESTART(function, arguments, results);}
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref name = pop_mandatory_argument(function, &current);
+    if(!symbolp(name)){
+        ERROR("INVOKE-RESTART-INTERACTIVELY: expected a symbol, got %s",
+              string_cstring(prin1_to_string(name)));}
+    Frame* target = find_restart_frame_by_name(name, eval_global_environment());
+    if(target == NULL){
+        ERROR("INVOKE-RESTART-INTERACTIVELY: no active restart named %s",
+              string_cstring(prin1_to_string(name)));}
+    /* Find the restart spec; (name fn interactive-fn) for restart-bind. */
+    Ref spec = NIL_Symbol;
+    {   Ref rs = target->parameters.restart.restarts;
+        while(consp(rs)){ if(consp(car(rs))&&car(car(rs))==name){ spec=car(rs); break; } rs=cdr(rs); }}
+    Ref ifn = (consp(spec)&&consp(cdr(spec))&&consp(cddr(spec))) ? caddr(spec) : NIL_Symbol;
+    Ref args = NIL_Symbol;
+    if(functionp(ifn) || closurep(ifn) || built_in_function_p(ifn)){
+        MultipleValues ir = {0};
+        kernel_apply(ifn, NIL_Symbol, &ir);
+        args = (ir.count > 0) ? ir.values[0] : NIL_Symbol;}
+    /* Delegate to INVOKE-RESTART with (name . args). */
+    kernel_INVOKE_RESTART(function, cons(name, args), results);
+    close_live_pool(pool);}
+
+/* (COMPUTE-RESTARTS &optional condition) — the active restart objects, innermost
+   first.  A restart object IS its name symbol in bocl; the optional condition is
+   ignored (restarts are not condition-associated here). */
+static void kernel_COMPUTE_RESTARTS(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(arguments);
+    Ref acc = NIL_Symbol;
+    for(Frame* frame=g_frame_stack; frame; frame=frame->next){
+        if(frame->type == frame_restart){
+            Ref rs = frame->parameters.restart.restarts;
+            while(consp(rs)){ push(car(car(rs)), &acc); rs = cdr(rs); }}}
+    results->count = 1;
+    results->values[0] = nreverse(acc);
+    close_live_pool(pool);}
+
+/* (RESTART-NAME restart) — the name of a restart object (which is its name). */
+static void kernel_RESTART_NAME(Ref function, Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current = arguments;
+    Ref restart = pop_mandatory_argument(function, &current);
+    check_no_more_arguments(function, current);
+    results->count = 1;
+    results->values[0] = restart;
+    close_live_pool(pool);}
 
 /* (ABORT) — invoke the innermost ABORT restart or fatal-error if none. */
 static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
@@ -320,15 +375,18 @@ static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
     Ref env = eval_global_environment();
     Frame* target = find_restart_frame_by_name(S(ABORT), env);
     if(target == NULL){
-        FATAL("ABORT: no active %s restart", "ABORT");}
+        /* CLHS: ABORT with no applicable abort restart signals a CONTROL-ERROR
+           (a recoverable condition), not a process abort. */
+        Ref cond = make_simple_condition(CONTROL_ERROR_Class,
+                                         T("ABORT: no active ABORT restart"),
+                                         NIL_Symbol);
+        add_to_live_pool(cond);
+        signal_condition(cond, env);
+        /* No handler caught it — surface as an ordinary error, never FATAL. */
+        ERROR("ABORT: no active ABORT restart%s", "");}
     target->parameters.restart.matched_name = S(ABORT);
     target->parameters.restart.matched_args = NIL_Symbol;
-    Frame* top = NULL;
-    Ref env2 = env;
-    while(typep(env2, ENVIRONMENT_Class)){
-        top = env2->slots->environment.frames;
-        if(top){ break; }
-        env2 = env2->slots->environment.next_environment;}
+    Frame* top = g_frame_stack;
     if(top == NULL){ FATAL("ABORT: %s","no active frame"); }
     top->target = target;
     int code = (top == target) ? (int)non_local_exit_target : (int)non_local_exit_unwind;
@@ -357,5 +415,7 @@ void kernel_initialize_conditions(void){
     register_fn(S(FIND-RESTART),                      ll_restart, kernel_FIND_RESTART);
     register_fn(S(INVOKE-RESTART),                    ll_restart, kernel_INVOKE_RESTART);
     register_fn(S(INVOKE-RESTART-INTERACTIVELY),      ll_restart, kernel_INVOKE_RESTART_INTERACTIVELY);
+    register_fn(S(COMPUTE-RESTARTS),                  list(S(&OPTIONAL),S(CONDITION),NULL), kernel_COMPUTE_RESTARTS);
+    register_fn(S(RESTART-NAME),                      list(S(RESTART),NULL), kernel_RESTART_NAME);
     register_fn(S(ABORT),                             ll_empty,   kernel_ABORT);
 }

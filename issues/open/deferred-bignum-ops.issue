@@ -1,0 +1,36 @@
+BIGNUM integration — operations not yet wired to the bignum engine.
+
+The bignum integration (kernel BIGNUM type, num_combine dispatch, reader/printer
+hooks, bootstrap/bignum-integration.lisp glue over bootstrap/bignum.lisp) covers:
+  +  -  *            (overflow promotion + bignum operands)
+  =  /=  <  >  <=  >=
+  1+  1-  abs  min  max  expt        (these route through num_combine / num_lt)
+  integer literals (reader) ; decimal printing (printer)
+  integerp/rationalp/realp/numberp ; typep/subtypep fixnum|bignum ; demote-on-fit
+  /  (exact only -> integer)
+
+DONE (C engine, kernel.c c_bignum_*; wired in arithmetic.c):
+  - + - * and exact /                         (Slice 74, C engine)
+  - truncate / floor / ceiling / round        (c_bignum_divmod, modes t/f/c/r)
+  - mod / rem                                  (floor / truncate remainder)
+  - gcd / lcm                                  (c_bignum_gcd Euclid; c_bignum_lcm,
+                                                with word fast-path + overflow promo)
+  All verified incl. half-to-even rounding and floor/ceiling/mod/rem sign rules.
+
+NOT YET wired — these C primitives still call integer_value() and therefore
+signal a TYPE-ERROR on a BIGNUM argument:
+  - ash, logand / logior / logxor / lognot, integer-length, logcount — bitwise.
+    The engine stores sign+magnitude base-10^9 digit lists, so bit ops need
+    either a base-2^k representation or bit extraction by repeated divmod.
+    ASH is the easy one: (ash x n) = x * 2^n (n>=0, via c_bignum_mul) or
+    (floor x (expt 2 (- n))) (n<0).  The logical ops need two's-complement
+    semantics — simplest path is a base-2^k (e.g. 2^30) limb view derived by
+    divmod, or bit extraction by repeated /2.
+  - isqrt of a bignum (and sqrt -> float via bignum_to_floating, already wired
+    for as_floating).
+  - RATIO with a bignum numerator/denominator: bignum `/` that is NOT exact
+    currently errors ("a ratio with a bignum part is not yet supported").
+    ratio_new() (kernel.c) stores num/den as fixnum words; it needs to accept
+    BIGNUM components (store Refs, compare/reduce via the engine).
+
+Do the remaining ops incrementally and re-run the ANSI numeric tests after each.

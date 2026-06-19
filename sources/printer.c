@@ -9,6 +9,7 @@
 #include "stream.h"
 #include "bostring.h"
 #include "character.h"
+#include "packages.h"
 
 /* Printer */
 
@@ -17,12 +18,95 @@ Ref prin1_to_string(Ref object){
     prin1(object,stream);
     return string_output_stream_get_string(stream);}
 
+Ref princ_to_string(Ref object){
+    Ref stream=stream_output_string(S(CHARACTER));
+    princ(object,stream);
+    return string_output_stream_get_string(stream);}
+
 Ref print(Ref object,Ref stream){
     terpri(stream);
     prin1(object,stream);
     return object;}
 
+/* Conditions are kernel objects (not %obj CLOS instances), so the Lisp-level
+   prin1 dispatch never reaches them.  Route them through the Lisp PRINT-OBJECT
+   generic here, so the method on CONDITION (and any user/library methods) prints
+   the formatted report instead of "#<SIMPLE-ERROR 0x…>".  Returns true if it
+   handled OBJECT.  A static guard prevents unbounded re-entry when a condition's
+   report itself references another condition. */
+static bool g_in_condition_print = false;
+static bool print_condition_via_print_object(Ref object,Ref stream,bool escape){
+    if(g_in_condition_print){ return false; }
+    if(!typep(object,CONDITION_Class)){ return false; }
+    Ref po=S(PRINT-OBJECT);
+    if(!symbol_fboundp(po)){ return false; }   /* before the prelude defines it */
+    g_in_condition_print=true;
+    /* The C printer's prin1/princ do not themselves bind *PRINT-ESCAPE*, so set
+       it around the dispatch (PRIN1 => escaped #<…>, PRINC => bare report). */
+    Ref pe=S(*PRINT-ESCAPE*);
+    Ref saved=symbol_value(pe);
+    set_symbol_value(pe, escape?T_Symbol:NIL_Symbol);
+    uword pool=open_live_pool();
+    add_to_live_pool(object); add_to_live_pool(stream); add_to_live_pool(saved);
+    MultipleValues mv;
+    kernel_apply(symbol_function(po),list(object,stream,NULL),&mv);
+    close_live_pool(pool);
+    set_symbol_value(pe, saved);
+    g_in_condition_print=false;
+    return true;}
+
+/* ---- *PRINT-CIRCLE* support + recursion backstop ------------------------- */
+/* When *PRINT-CIRCLE* is true, a pre-pass records every cons reachable from the
+   object and marks the ones referenced more than once; the print pass labels
+   those with #n= on first appearance and #n# afterwards, so shared and circular
+   structure prints (and reads back) correctly instead of recursing forever.
+   PRIN1_MAX_DEPTH is a backstop against deep/uncircle-printed structure. */
+#define PRIN1_MAX_DEPTH 16384
+static int g_prin1_depth = 0;
+
+typedef struct { Ref obj; int label; } CircleEntry;  /* label: 0 once, -1 shared, >0 assigned */
+static CircleEntry* g_circle = NULL;
+static int g_circle_count = 0, g_circle_cap = 0, g_circle_next_label = 0;
+static bool g_circle_active = false;
+
+static int circle_index(Ref obj){
+    for(int i=0;i<g_circle_count;i++){ if(g_circle[i].obj==obj){ return i; } }
+    return -1;}
+
+static void circle_scan(Ref obj,int depth){
+    if(depth>PRIN1_MAX_DEPTH){ return; }
+    bool is_cons=consp(obj), is_vec=vectorp(obj);
+    if(!is_cons && !is_vec){ return; }
+    int idx=circle_index(obj);
+    if(idx>=0){ g_circle[idx].label=-1; return; }   /* second visit: shared */
+    if(g_circle_count>=g_circle_cap){
+        g_circle_cap = g_circle_cap ? g_circle_cap*2 : 256;
+        g_circle = realloc(g_circle,(size_t)g_circle_cap*sizeof(CircleEntry)); }
+    g_circle[g_circle_count].obj=obj;
+    g_circle[g_circle_count].label=0;
+    g_circle_count++;
+    if(is_cons){ circle_scan(car(obj),depth+1); circle_scan(cdr(obj),depth+1); }
+    else { uword len=vector_length(obj);
+           for(uword i=0;i<len;i++){ circle_scan(obj->slots->array.elements->elements[i],depth+1); } }}
+
+static Ref prin1_inner(Ref object,Ref stream);
 Ref prin1(Ref object,Ref stream){
+    if(g_prin1_depth >= PRIN1_MAX_DEPTH){
+        fprintf(stream_output_cstream(stream),"...");
+        return object;}
+    bool top = (g_prin1_depth==0);
+    bool saved_active=g_circle_active; int saved_count=g_circle_count, saved_label=g_circle_next_label;
+    if(top){
+        Ref pc=variable_value(S(*PRINT-CIRCLE*));
+        if(!nullp(pc)){ g_circle_count=0; g_circle_next_label=0; circle_scan(object,0); g_circle_active=true; }
+        else { g_circle_active=false; }}
+    g_prin1_depth++;
+    Ref r = prin1_inner(object,stream);
+    g_prin1_depth--;
+    if(top){ g_circle_active=saved_active; g_circle_count=saved_count; g_circle_next_label=saved_label; }
+    return r;}
+
+static Ref prin1_inner(Ref object,Ref stream){
     FILE* out=stream_output_cstream(stream);
 
     if(characterp(object)){
@@ -39,6 +123,10 @@ Ref prin1(Ref object,Ref stream){
 
     if(integerp(object)){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
+        return object;}
+
+    if(bignump(object)){
+        print_bignum(object,out);   /* C decimal printer (kernel.c) */
         return object;}
 
     if(ratiop(object)){
@@ -65,10 +153,28 @@ Ref prin1(Ref object,Ref stream){
         return object;}
 
     if(symbolp(object)){
+        /* prin1 qualifies a symbol by package when it is not accessible as
+           itself in *PACKAGE*, so the written form reads back to the same symbol
+           (needed for fasls and readable output across packages). */
+        Ref pkgname; int sep;
+        symbol_print_prefix(object,&pkgname,&sep);
+        if(sep==3){ fprintf(out,"#:"); }
+        else if(sep!=0){
+            princ(pkgname,stream);
+            fprintf(out, sep==1 ? ":" : "::"); }
         princ(symbol_name(object),stream);
         return object;}
 
     if(consp(object)){
+        /* *PRINT-CIRCLE*: emit #n# for an already-printed shared cons, #n= the
+           first time. */
+        if(g_circle_active){
+            int idx=circle_index(object);
+            if(idx>=0){
+                int lab=g_circle[idx].label;
+                if(lab>0){ fprintf(out,"#%d#",lab); return object; }
+                if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
+                             fprintf(out,"#%d=",g_circle_next_label); }}}
         /* Respect *PRINT-LENGTH* — truncate after this many elements. */
         Ref plen_ref = variable_value(S(*PRINT-LENGTH*));
         word print_length = (integerp(plen_ref)) ? integer_value(plen_ref) : -1;
@@ -77,14 +183,26 @@ Ref prin1(Ref object,Ref stream){
         word elem=0;
         prin1(car(current),stream); elem++;
         current=cdr(current);
+        /* Floyd cycle detection on the CDR spine is the backstop when
+           *PRINT-CIRCLE* is OFF; when ON, a shared CDR cell is printed via its
+           label (". #n#") instead of being walked. */
+        Ref slow=object; int advance_slow=0;
         while(consp(current)){
+            if(g_circle_active){
+                int idx=circle_index(current);
+                if(idx>=0 && g_circle[idx].label!=0){
+                    fprintf(out," . "); prin1(current,stream);
+                    current=NIL_Symbol; break; }}
             if(print_length >= 0 && elem >= print_length){
                 fprintf(out," ...");
                 break;}
             fprintf(out," ");
             prin1(car(current),stream);
             current=cdr(current);
-            elem++;}
+            elem++;
+            if(advance_slow){ slow=cdr(slow); }
+            advance_slow=!advance_slow;
+            if(current==slow){ fprintf(out," . #<circular>"); current=NIL_Symbol; break; }}
         if(!nullp(current) && !consp(current)){
             fprintf(out," . ");
             prin1(current, stream);}
@@ -116,6 +234,13 @@ Ref prin1(Ref object,Ref stream){
     if(vectorp(object)){
         /* A vector prints as #(e1 e2 …). Vectors are
            Array-backed under the hood, so iterate via array.elements. */
+        if(g_circle_active){
+            int idx=circle_index(object);
+            if(idx>=0){
+                int lab=g_circle[idx].label;
+                if(lab>0){ fprintf(out,"#%d#",lab); return object; }
+                if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
+                             fprintf(out,"#%d=",g_circle_next_label); }}}
         fprintf(out,"#(");
         uword len = vector_length(object);
         for(uword i=0; i<len; i++){
@@ -123,6 +248,16 @@ Ref prin1(Ref object,Ref stream){
             prin1(object->slots->array.elements->elements[i], stream);}
         fprintf(out,")");
         return object;}
+
+    /* Pathnames print in their readable #P"namestring" form (both physical and
+       logical pathnames are PATHNAME_Class). */
+    if(typep(object,PATHNAME_Class)){
+        fprintf(out,"#P");
+        prin1(namestring(object),stream);   /* prints the namestring as "…" */
+        return object;}
+
+    /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
+    if(print_condition_via_print_object(object,stream,true)){ return object; }
 
     /* Dispatch to PRINT-OBJECT for CLOS instances (%obj structs).
        clos_instance_p() returns true only after (%clos-register) is called,
@@ -174,6 +309,10 @@ Ref princ(Ref object,Ref stream){
         fprintf(out,"%"WORD_FORMAT,integer_value(object));
         return object;}
 
+    if(bignump(object)){
+        print_bignum(object,out);   /* C decimal printer (kernel.c) */
+        return object;}
+
     if(ratiop(object)){
         fprintf(out,"%"WORD_FORMAT"/%"WORD_FORMAT,
                 integer_value(ratio_numerator(object)),
@@ -220,6 +359,33 @@ Ref princ(Ref object,Ref stream){
             princ(current, stream);}
         fprintf(out,")");
         return object;}
+
+    /* BIT-VECTOR / VECTOR — the aesthetic (#*… / #(…)) form coincides with the
+       readable one, so PRINC prints them like PRIN1.  BIT-VECTOR before VECTOR
+       (a bit-vector is a vector subtype). */
+    if(bit_vector_p(object)){
+        fprintf(out,"#*");
+        uword blen = bit_vector_length(object);
+        for(uword i=0; i<blen; i++){
+            fprintf(out,"%ld",(long)integer_value(bit(object,integer_from_word((word)i))));}
+        return object;}
+
+    if(vectorp(object)){
+        fprintf(out,"#(");
+        uword len = vector_length(object);
+        for(uword i=0; i<len; i++){
+            if(i>0){ fprintf(out," "); }
+            princ(object->slots->array.elements->elements[i], stream);}
+        fprintf(out,")");
+        return object;}
+
+    /* PRINC of a pathname writes its namestring (no #P"…" escaping). */
+    if(typep(object,PATHNAME_Class)){
+        princ(namestring(object),stream);
+        return object;}
+
+    /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
+    if(print_condition_via_print_object(object,stream,false)){ return object; }
 
     /* Safe fallback for CLOS instances in princ too. */
     if(clos_instance_p(object)){

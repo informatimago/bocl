@@ -106,6 +106,7 @@
                              (symbol-name slot-name) (symbol-name name))
                      (format t "        structure_set(~A,instance,cdr(entry));}~%" (c-par-name slot-name)))
                    (format t "    close_live_pool(pool);~%")
+                   (format t "    add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */~%")
                    (format t "    return instance;}~%")))
 
             (dolist (constructor constructors)
@@ -130,6 +131,7 @@
               (format t "        Ref index = integer_from_word(i);~%")
               (format t "        structure_set(structure_get(~A,index),instance,index);}~%" (c-par-name old-struct))
               (format t "    close_live_pool(pool);~%")
+              (format t "    add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */~%")
               (format t "    return instance;}~%"))
 
             (map nil (lambda (accessor slot-name)

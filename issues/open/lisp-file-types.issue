@@ -1,0 +1,161 @@
+Since bocl is intended to compile CL implementations, they may be
+written with various file naming conventions, so we must be adaptable.
+
+For example, for Common Lisp sources, the following file types have been used:
+
+| file-type |
+|-----------|
+| cl        |
+| lisp      |
+| lsp       |
+| l         |
+
+But others could be possible.
+
+Similarly, for compiled files, several file-types have been used:
+
+| file-type |
+|-----------|
+| fas       |
+| fasl      |
+
+and others.
+
+Also any case is possible for these file types, both cases and mixed
+cases are possible, both on case sensitive file systems, and on case
+insensitive file systems.
+
+** Variable: BOCL:*SOURCE-FILE-TYPES*
+
+The BOCL:*SOURCE-FILE-TYPES* variable specifies what file-type are
+tried to find a source file that is specified without a file-type. The
+list contains file-types (strings), or (:case-insensive "file-type").
+file-types are taken case sensitively (but remains insensitive on a
+case-insensitive file-system). if (:case-insensive "file-type") is
+specified, the file type is searched in a case insensitive way even on
+a case sensitive file-system.  The first file-type that is found is
+used.
+
+When (:case-insensive "file-type") is specified, the order in which
+the various options are tried is not specified, apart that the given
+"file-type" is tried first.
+
+With a  case-sensitive file-system containing:
+| file-namestring |
+|-----------------|
+| foo.LSP         |
+| foo.Lsp         |
+| foo.lSp         |
+| foo.lsP         |
+(:case-insensitive "lsp") could select any of them.
+
+
+With a  case-sensitive file-system containing:
+| file-namestring |
+|-----------------|
+| foo.LSP         |
+| foo.Lsp         |
+| foo.lSp         |
+| foo.lsP         |
+| foo.lsp         |
+(:case-insensitive "lsp") would select "foo.lsp" since "lsp" is tried first.
+
+** Variable: BOCL:*COMPILED-FILE-TYPES*
+
+Similarly a BOCL:*COMPILED-FILE-TYPES* list specifies the file-type
+expected for compiled files.
+
+** Variable: BOCL:*DEFAULT-COMPILED-FILE-TYPE*
+
+Specifies the default compiled-file type.
+
+** Summary of default values:
+
+| variable                            | default value                              |
+|-------------------------------------+--------------------------------------------|
+| bocl:*accepted-source-file-types*   | '("lisp" "LISP" (:case-insensitive "lisp") |
+|                                     | (:case-insensitive "lsp")                  |
+|                                     | (:case-insensitive "cl")                   |
+|                                     | (:case-insensitive "l"))                   |
+|                                     |                                            |
+| bocl:*accepted-compiled-file-types* | '("fasl" "FASL" (:case-insensitive "fasl") |
+|                                     | (:case-insensitive "fas")                  |
+|                                     | (:case-insensitive "obj")                  |
+|                                     | (:case-insensitive "o"))                   |
+|                                     |                                            |
+| bocl:*default-compiled-file-type*   | "fasl"                                     |
+|                                     |                                            |
+
+
+** LOAD pathname &key …
+
+The following pseudo-codes are applied after merging with *DEFAULT-PATHNAME-DEFAULTS*.
+
+Pseudo code to select the file to load:
+
+#+begin_src lisp
+  (cond
+    ((pathname has a file-type)
+     (do-load pathname))
+
+    ((file at pathname exists)
+     (do-load pathname))
+
+    ((file with one of the *accepted-compiled-file-types* is found)
+     (if (file with one of the *accepted-source-file-types* is found)
+         ;; we have both a .fasl and a .lisp file, we load the more recent one:
+         (if (more-recent (file-write-date (file with one of the *accepted-compiled-file-types*))
+                          (file-write-date (file with one of the *accepted-source-file-types*)))
+             (do-load (file with one of the *accepted-compiled-file-types*))
+             (do-load (file with one of the *accepted-source-file-types*)))
+         ;; we only have a .fasl file:
+         (do-load (file with one of the *accepted-compiled-file-types*))))
+
+    ;; we don't have a .fasl file:
+    ((file with one of the *accepted-source-file-types* is found)
+     (do-load (file with one of the source-file-type)))
+
+    ;; we don't have a file to load
+    (t (error "No file at pathname")))
+
+#+end_src
+
+** COMPILE-FILE source-file &key object-file …
+
+The following pseudo-codes are applied after merging with *DEFAULT-PATHNAME-DEFAULTS*.
+
+Pseudo code to select the file to compile:
+
+#+begin_src lisp
+  (cond
+    ((pathname has a file-type)
+     (do-compile-file pathname))
+
+    ((file at pathname exists)
+     (do-compile-file pathname))
+
+    ((file with one of the *accepted-source-file-types* is found)
+     (do-compile-file (file with one of the source-file-type)))
+
+    ;; we don't have a file to load
+    (t (error "No file at pathname")))
+#+end_src
+
+To select the output-file pathname:
+
+If the  output-file pathname is given, then it's used as is.
+Otherwise, the output-file pathname is derived from the actual input
+file pathname, by replacing the file-type with:
+bocl:*default-compiled-file-type*
+#+begin_src lisp
+(make-pathname :defaults actual-input-pathname :type bocl:*default-compiled-file-type*)
+#+end_src
+
+----------------------------------------------------------------------
+PROGRESS (slice 44):
+- Defined *ACCEPTED-SOURCE-FILE-TYPES*, *ACCEPTED-COMPILED-FILE-TYPES*,
+  *DEFAULT-COMPILED-FILE-TYPE* with the specified defaults, plus the
+  %FIND-TYPED-FILE helper.  COMPILE-FILE-PATHNAME now uses
+  *DEFAULT-COMPILED-FILE-TYPE*.
+REMAINING: wire the full LOAD / COMPILE-FILE file-selection pseudocode
+(try typed candidates; load the more recent of compiled vs source).

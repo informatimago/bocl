@@ -5,6 +5,9 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <signal.h>
+#include <execinfo.h>
+#include <unistd.h>
 #include "kernel.h"
 #include "kernel_types.h"
 #include "kernel_objects.h"
@@ -32,11 +35,10 @@
 
 Ref                              Object_new                         (Ref  class,        Slots*   slots);
 
-static Array*                    Array_slots                        (Ref  element_type, halfword rank, halfword* dimensions);
+Array*                           Array_slots                        (Ref  element_type, halfword rank, halfword* dimensions);
 static BuiltInClass*             BuiltInClass_slots                 (Ref  name,         Ref  superclasses);
 static Character*                Character_slots                    (Ref  name,         Ref  code);
 static Class*                    Class_slots                        (Ref  name,         Ref  superclasses);
-static Cons*                     Cons_slots                         (Ref  car,          Ref  cdr);
 static Float*                    Float_slots                        (floating value);
 static Closure*                  Closure_slots                      (Ref  function,     Ref environment);
 static Function*                 Function_slots                     (Ref  lisp_name,    Ref lambda_list, Ref body);
@@ -64,7 +66,15 @@ static Environment*              Environment_slots                  (Ref next_en
 /* Object */
 
 Ref Object_new(Ref class,Slots* slots){
+    /* Root class + slots across the allocation: a caller typically writes
+       Object_new(CLASS, X_slots(...)) with the fresh slots held only in a C
+       temporary, so a GC inside allocate() would reclaim it.  Balanced
+       open/close => no live-pool growth (rooted only for the allocation). */
+    uword pool=open_live_pool();
+    add_to_live_pool(class);
+    add_to_live_pool((Ref)slots);
     Ref that=allocate(sizeof(*that));
+    close_live_pool(pool);
     that->objcount=2;
     that->class=class;
     that->slots=slots;
@@ -90,7 +100,10 @@ VectorOfObject* VectorOfObject_slots(halfword size){
 
 VectorOfUWord* VectorOfUWord_slots(halfword size){
     VectorOfUWord* that=allocate(offsetof(VectorOfUWord,elements)+sizeof(that->elements[0])*VARRAY_MIN(size));
-    memset(that->elements,CHECK_HALFWORD_TO_INT(size),sizeof(that->elements[0]));
+    /* Count must be SIZE elements, not one: a SIZE==0 vector has no element
+       storage, so writing one element here overruns into the next block's
+       header (see VectorOfOctet_slots).  No-op for SIZE==0. */
+    memset(that->elements,0,(size_t)size*sizeof(that->elements[0]));
     return that;}
 
 
@@ -99,7 +112,13 @@ VectorOfUWord* VectorOfUWord_slots(halfword size){
 VectorOfOctet* VectorOfOctet_slots(halfword length){
     VectorOfOctet* that=allocate(offsetof(VectorOfOctet,elements)+sizeof(that->elements[0])*VARRAY_MIN(length));
     that->length=length;
-    memset(that->elements,CHECK_HALFWORD_TO_INT(length),sizeof(that->elements[0]));
+    /* Zero exactly the LENGTH allocated element bytes.  The count must be LENGTH,
+       not sizeof(element): with the zero-length-array layout a LENGTH==0 vector
+       has no element storage, and writing even one byte at that->elements lands
+       in the next block's header (clobbering its size field -> size-0 block ->
+       next_block() self-loop -> heap-walk hang).  allocate() already zeroed the
+       body, so this is belt-and-braces for LENGTH>0 and a no-op for LENGTH==0. */
+    memset(that->elements,0,(size_t)length);
     return that;}
 
 VectorOfOctet* VectorOfOctet_slots_cstring(const char* value){
@@ -522,6 +541,518 @@ static void kernel_initialize_integers(void){
         push(integer_table[i-INTEGER_INTERN_MIN],&integerset);}}
 
 
+/* -------------------------------------------------------------------- *
+ *  BIGNUM — arbitrary-precision integers backed by the Lisp engine       *
+ *  (bootstrap/bignum.lisp + bootstrap/bignum-integration.lisp).          *
+ *                                                                        *
+ *  A Bignum boxes one Ref: the (SIGN . DIGITS) i%-format cons.  All       *
+ *  bignum arithmetic lives in Lisp; num_combine() (arithmetic.c) promotes *
+ *  on overflow and dispatches bignum operands to the glue.  This file     *
+ *  provides only the type, the demote-on-fit constructor, and the three   *
+ *  kernel primitives the glue calls.                                      *
+ * -------------------------------------------------------------------- */
+
+Ref BIGNUM_Class = &uninitialized_object;
+
+bool bignump(Ref object){
+    return class_of(object)==BIGNUM_Class;}
+
+Ref bignum_new(Ref value){
+    Bignum* slots=allocate(sizeof(Bignum));
+    slots->value=value;
+    slots->objcount=1;
+    return Object_new(BIGNUM_Class,(Slots*)slots);}
+
+Ref bignum_value(Ref object){
+    check_class(object,BIGNUM_Class);
+    return object->slots->bignum.value;}
+
+/* Base of the Lisp digit representation; MUST match +bignum-base+ in the glue.
+   (10^9)^2 = 10^18 < WORD_MAX (9.22e18), so the engine never overflows a word. */
+#define BIGNUM_BASE ((uword)1000000000)
+
+/* Horner reconstruction of the magnitude of a low-order-first digit list.
+   Sets *overflow when the value exceeds a word.  Recurses to depth = #digits;
+   callers cap that at 3 (a >=4-digit base-10^9 number cannot fit a word). */
+static uword bignum_magnitude(Ref digits, bool* overflow){
+    if(!consp(digits)){ return 0; }
+    uword rest=bignum_magnitude(cons_cdr(digits),overflow);
+    if(*overflow){ return 0; }
+    uword r;
+    if(__builtin_mul_overflow(rest,BIGNUM_BASE,&r)){ *overflow=true; return 0; }
+    if(__builtin_add_overflow(r,(uword)integer_value(cons_car(digits)),&r)){
+        *overflow=true; return 0; }
+    return r;}
+
+/* Given a canonical (SIGN . DIGITS) cons (SIGN is + or -, DIGITS normalized
+   low-order-first), return a fixnum when the value fits in a word, else box it. */
+Ref make_integer_from_bignum(Ref signed_bignum){
+    Ref sign=cons_car(signed_bignum);
+    Ref digits=cons_cdr(signed_bignum);
+    bool neg=(sign==S(-));
+    word n=0;
+    for(Ref d=digits; consp(d) && n<4; d=cons_cdr(d)){ n++; }
+    if(n==0){ return I(0); }
+    if(n<=3){
+        bool overflow=false;
+        uword mag=bignum_magnitude(digits,&overflow);
+        if(!overflow){
+            if(!neg){
+                if(mag<=(uword)WORD_MAX){ return integer_from_word((word)mag); }
+            } else {
+                if(mag<=(uword)WORD_MAX){ return integer_from_word(-(word)mag); }
+                if(mag==(uword)WORD_MAX+1u){ return integer_from_word(WORD_MIN); }
+            }
+        }
+    }
+    return bignum_new(signed_bignum);}
+
+/* ==================================================================== *
+ *  C bignum engine — schoolbook arithmetic over base-10^9 uword limbs.   *
+ *                                                                        *
+ *  Operands/results use the same (SIGN . DIGITS) i%-format cons that the *
+ *  Lisp reader/printer build, so I/O interoperates unchanged; only the   *
+ *  inner loops move to C (replacing the interpreted Lisp arithmetic).    *
+ *  A "magnitude" is a uword[] of base-10^9 limbs, low-order first,        *
+ *  normalized (no high-order zero limbs).  These helpers are pure C and  *
+ *  allocate no Refs, so no GC can run inside them.                       *
+ * ==================================================================== */
+
+static size_t mag_norm(const uword* a, size_t n){
+    while(n>0 && a[n-1]==0) n--;
+    return n; }
+
+static int mag_cmp(const uword* a, size_t na, const uword* b, size_t nb){
+    na=mag_norm(a,na); nb=mag_norm(b,nb);
+    if(na!=nb){ return na<nb ? -1 : 1; }
+    for(size_t i=na; i-->0;){ if(a[i]!=b[i]){ return a[i]<b[i] ? -1 : 1; } }
+    return 0; }
+
+/* out = a+b ; out needs max(na,nb)+1 limbs ; returns length. */
+static size_t mag_add(const uword* a, size_t na, const uword* b, size_t nb, uword* out){
+    size_t n = na>nb ? na : nb;
+    uword carry=0;
+    for(size_t i=0;i<n;i++){
+        uword s = carry + (i<na?a[i]:0) + (i<nb?b[i]:0);
+        out[i] = s % BIGNUM_BASE;
+        carry  = s / BIGNUM_BASE; }
+    if(carry){ out[n++]=carry; }
+    return n; }
+
+/* out = a-b ; requires a>=b ; out needs na limbs ; returns normalized length. */
+static size_t mag_sub(const uword* a, size_t na, const uword* b, size_t nb, uword* out){
+    word borrow=0;
+    for(size_t i=0;i<na;i++){
+        word d = (word)a[i] - borrow - (word)(i<nb?b[i]:0);
+        if(d<0){ d += (word)BIGNUM_BASE; borrow=1; } else { borrow=0; }
+        out[i]=(uword)d; }
+    return mag_norm(out,na); }
+
+/* out = a*m (m<BIGNUM_BASE) ; out needs na+1 limbs ; returns length. */
+static size_t mag_mul_limb(const uword* a, size_t na, uword m, uword* out){
+    uword carry=0;
+    for(size_t i=0;i<na;i++){
+        uword cur = a[i]*m + carry;
+        out[i] = cur % BIGNUM_BASE;
+        carry  = cur / BIGNUM_BASE; }
+    size_t n=na;
+    if(carry){ out[n++]=carry; }
+    return mag_norm(out,n); }
+
+/* out = a*b ; out needs na+nb limbs (will be written in full) ; returns length. */
+static size_t mag_mul(const uword* a, size_t na, const uword* b, size_t nb, uword* out){
+    size_t no=na+nb;
+    for(size_t i=0;i<no;i++){ out[i]=0; }
+    for(size_t i=0;i<na;i++){
+        uword carry=0;
+        for(size_t j=0;j<nb;j++){
+            uword cur = out[i+j] + a[i]*b[j] + carry;   /* < BIGNUM_BASE^2, fits uword */
+            out[i+j] = cur % BIGNUM_BASE;
+            carry    = cur / BIGNUM_BASE; }
+        size_t k=i+nb;
+        while(carry){ uword cur=out[k]+carry; out[k]=cur%BIGNUM_BASE; carry=cur/BIGNUM_BASE; k++; } }
+    return mag_norm(out,no); }
+
+/* U/V (V nonzero).  Q needs nu limbs, R needs nv+1 limbs.  Long division with a
+   binary search for each base-10^9 quotient digit.  scratch needs nv+2 limbs. */
+static void mag_divmod(const uword* U, size_t nu, const uword* V, size_t nv,
+                       uword* Q, size_t* nq, uword* R, size_t* nr, uword* scratch){
+    nv=mag_norm(V,nv);
+    for(size_t i=0;i<nu;i++){ Q[i]=0; }
+    if(mag_cmp(U,nu,V,nv)<0){
+        *nq=0;
+        for(size_t i=0;i<nu;i++){ R[i]=U[i]; }
+        *nr=mag_norm(R,nu);
+        return; }
+    size_t rn=0;                                  /* current remainder length in R */
+    for(size_t qi=nu; qi-->0;){
+        for(size_t i=rn; i-->0;){ R[i+1]=R[i]; }   /* R = R*BASE + U[qi] */
+        R[0]=U[qi];
+        rn=mag_norm(R,rn+1);
+        uword lo=0, hi=BIGNUM_BASE-1, q=0;          /* find max q with q*V <= R */
+        while(lo<=hi){
+            uword mid = lo + (hi-lo)/2;
+            size_t tn = mag_mul_limb(V,nv,mid,scratch);
+            if(mag_cmp(scratch,tn,R,rn)<=0){ q=mid; lo=mid+1; }
+            else { hi=mid-1; } }
+        Q[qi]=q;
+        size_t tn=mag_mul_limb(V,nv,q,scratch);
+        rn=mag_sub(R,rn,scratch,tn,R); }
+    *nq=mag_norm(Q,nu);
+    *nr=mag_norm(R,rn); }
+
+/* Read a fixnum-or-bignum into a freshly malloc'd magnitude + sign. */
+static uword* bn_decompose(Ref x, size_t* n_out, bool* neg_out){
+    if(bignump(x)){
+        Ref sb=bignum_value(x);                 /* (SIGN . DIGITS) */
+        *neg_out = (cons_car(sb)==S(-));
+        Ref d=cons_cdr(sb);
+        size_t n=0;
+        for(Ref p=d; consp(p); p=cons_cdr(p)){ n++; }
+        uword* mag=malloc((n?n:1)*sizeof(uword));
+        size_t i=0;
+        for(Ref p=d; consp(p); p=cons_cdr(p)){ mag[i++]=(uword)integer_value(cons_car(p)); }
+        *n_out=mag_norm(mag,n);
+        return mag; }
+    word v=integer_value(x);
+    bool neg = v<0;
+    uword u = neg ? (uword)(-(v+1))+1u : (uword)v;   /* |v|, safe at WORD_MIN */
+    uword* mag=malloc(3*sizeof(uword));
+    size_t n=0;
+    while(u){ mag[n++]=u%BIGNUM_BASE; u/=BIGNUM_BASE; }
+    *neg_out=neg;
+    *n_out=n;
+    return mag; }
+
+/* Build an INTEGER (demoted fixnum, or boxed BIGNUM) from a magnitude+sign.
+   GC is disabled across the bounded result-list construction so the partial
+   (SIGN . DIGITS) list never needs live-pool rooting. */
+static Ref make_integer_from_limbs(bool neg, uword* mag, size_t n){
+    n=mag_norm(mag,n);
+    if(n==0){ return integer_from_word(0); }
+    if(n<=3){
+        uword v=0; bool of=false;
+        for(size_t i=n; i-->0;){
+            if(__builtin_mul_overflow(v,BIGNUM_BASE,&v)){ of=true; break; }
+            if(__builtin_add_overflow(v,mag[i],&v)){ of=true; break; } }
+        if(!of){
+            if(!neg){ if(v<=(uword)WORD_MAX){ return integer_from_word((word)v); } }
+            else { if(v<=(uword)WORD_MAX){ return integer_from_word(-(word)v); }
+                   if(v==(uword)WORD_MAX+1u){ return integer_from_word(WORD_MIN); } } } }
+    bool saved=garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    Ref digits=NIL_Symbol;
+    for(size_t i=n; i-->0;){ digits=cons(integer_from_word((word)mag[i]),digits); }
+    Ref sb=cons(neg?S(-):S(+),digits);
+    Ref result=bignum_new(sb);
+    set_garbage_collection_enabled(saved);
+    return result; }
+
+static Ref bn_signed_add(uword* ma, size_t na, bool sa,
+                         uword* mb, size_t nb, bool sb){
+    if(sa==sb){
+        size_t cap=(na>nb?na:nb)+1;
+        uword* out=malloc(cap*sizeof(uword));
+        size_t no=mag_add(ma,na,mb,nb,out);
+        Ref r=make_integer_from_limbs(sa,out,no);
+        free(out);
+        return r; }
+    int c=mag_cmp(ma,na,mb,nb);
+    if(c==0){ return integer_from_word(0); }
+    uword* out=malloc((c>0?na:nb)*sizeof(uword));
+    size_t no = c>0 ? mag_sub(ma,na,mb,nb,out) : mag_sub(mb,nb,ma,na,out);
+    Ref r=make_integer_from_limbs(c>0?sa:sb,out,no);
+    free(out);
+    return r; }
+
+Ref c_bignum_add(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    Ref r=bn_signed_add(ma,na,sa,mb,nb,sb);
+    free(ma); free(mb);
+    return r; }
+
+Ref c_bignum_sub(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    Ref r=bn_signed_add(ma,na,sa,mb,nb,!sb);   /* a-b = a+(-b) */
+    free(ma); free(mb);
+    return r; }
+
+Ref c_bignum_mul(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    Ref r;
+    if(na==0||nb==0){ r=integer_from_word(0); }
+    else {
+        uword* out=malloc((na+nb)*sizeof(uword));
+        size_t no=mag_mul(ma,na,mb,nb,out);
+        r=make_integer_from_limbs(sa!=sb,out,no);
+        free(out); }
+    free(ma); free(mb);
+    return r; }
+
+/* CL '/' on integers: exact quotient, else a ratio (bignum ratios unsupported). */
+Ref c_bignum_divide(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    if(nb==0){ free(ma); free(mb); ARITHMETIC_ERROR("Division by zero%s",""); }
+    Ref r;
+    if(na==0){ r=integer_from_word(0); }
+    else {
+        uword* Q=malloc(na*sizeof(uword));
+        uword* R=malloc((nb+1)*sizeof(uword));
+        uword* sc=malloc((nb+2)*sizeof(uword));
+        size_t nq,nr;
+        mag_divmod(ma,na,mb,nb,Q,&nq,R,&nr,sc);
+        if(nr!=0){
+            free(Q); free(R); free(sc); free(ma); free(mb);
+            ARITHMETIC_ERROR("a ratio with a bignum part is not yet supported%s",""); }
+        r=make_integer_from_limbs(sa!=sb,Q,nq);
+        free(Q); free(R); free(sc); }
+    free(ma); free(mb);
+    return r; }
+
+int c_bignum_cmp(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    if(na==0){ sa=false; }                 /* zero is non-negative */
+    if(nb==0){ sb=false; }
+    int r;
+    if(sa!=sb){ r = sa ? -1 : 1; }
+    else { int m=mag_cmp(ma,na,mb,nb); r = sa ? -m : m; }
+    free(ma); free(mb);
+    return r; }
+
+/* Signed division with CL rounding MODE: 't' truncate (toward 0), 'f' floor
+   (toward -inf), 'c' ceiling (toward +inf), 'r' round (half to even).  Writes the
+   quotient to *q_out and remainder to *r_out (n = q*d + r).  Either operand may be
+   a bignum.  GC is disabled across the bounded Ref construction so the
+   intermediates need no live-pool rooting. */
+void c_bignum_divmod(Ref a, Ref b, char mode, Ref* q_out, Ref* r_out){
+    size_t na,nb; bool sa,sb;
+    uword* ma=bn_decompose(a,&na,&sa);
+    uword* mb=bn_decompose(b,&nb,&sb);
+    if(nb==0){ free(ma); free(mb); ARITHMETIC_ERROR("Division by zero%s",""); }
+    uword* Q=malloc((na?na:1)*sizeof(uword));
+    uword* R=malloc((nb+1)*sizeof(uword));
+    uword* sc=malloc((nb+2)*sizeof(uword));
+    size_t nq,nr;
+    mag_divmod(ma,na,mb,nb,Q,&nq,R,&nr,sc);
+    bool rzero=(nr==0);
+    bool qodd =(nq>0)&&(Q[0]&1u);                  /* parity of truncate quotient */
+    int  rcmp=0;                                   /* round: 2*|R| vs |b| */
+    if(mode=='r'){
+        uword* tr=malloc((nr+1)*sizeof(uword));
+        size_t ntr=mag_mul_limb(R,nr,2,tr);
+        rcmp=mag_cmp(tr,ntr,mb,nb);
+        free(tr); }
+    bool saved=garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    Ref qt=make_integer_from_limbs(sa!=sb,Q,nq);   /* truncate quotient        */
+    Ref rt=make_integer_from_limbs(sa,R,nr);        /* truncate remainder (sa)  */
+    Ref q=qt, r=rt;
+    if(!rzero){
+        bool away=false;
+        switch(mode){
+          case 't': break;
+          case 'f': away=(sa!=sb); break;           /* negative quotient -> down */
+          case 'c': away=(sa==sb); break;           /* positive quotient -> up   */
+          case 'r': away=(rcmp>0)||(rcmp==0&&qodd); break;
+          default:  break; }
+        if(away){
+            if(sa!=sb){ q=c_bignum_sub(qt,integer_from_word(1)); r=c_bignum_add(rt,b); }
+            else      { q=c_bignum_add(qt,integer_from_word(1)); r=c_bignum_sub(rt,b); } } }
+    set_garbage_collection_enabled(saved);
+    free(ma); free(mb); free(Q); free(R); free(sc);
+    *q_out=q; *r_out=r; }
+
+/* Euclid's algorithm on magnitudes; result is the non-negative GCD. */
+Ref c_bignum_gcd(Ref a, Ref b){
+    size_t na,nb; bool sa,sb;
+    uword* x=bn_decompose(a,&na,&sa);
+    uword* y=bn_decompose(b,&nb,&sb);
+    size_t cap=(na>nb?na:nb)+2;
+    uword* X=malloc(cap*sizeof(uword)); uword* Y=malloc(cap*sizeof(uword));
+    uword* Q=malloc(cap*sizeof(uword)); uword* R=malloc(cap*sizeof(uword));
+    uword* sc=malloc(cap*sizeof(uword));
+    for(size_t i=0;i<na;i++){ X[i]=x[i]; } for(size_t i=0;i<nb;i++){ Y[i]=y[i]; }
+    free(x); free(y);
+    size_t nx=na, ny=nb;
+    while(ny>0){
+        size_t nq,nr;
+        mag_divmod(X,nx,Y,ny,Q,&nq,R,&nr,sc);       /* R = X mod Y */
+        for(size_t i=0;i<ny;i++){ X[i]=Y[i]; } nx=ny;
+        for(size_t i=0;i<nr;i++){ Y[i]=R[i]; } ny=nr; }
+    Ref r=make_integer_from_limbs(false,X,nx);
+    free(X); free(Y); free(Q); free(R); free(sc);
+    return r; }
+
+/* LCM = |a|/gcd(a,b) * |b| (divide first to avoid an extra-wide intermediate). */
+Ref c_bignum_lcm(Ref a, Ref b){
+    Ref zero=integer_from_word(0);
+    if(c_bignum_cmp(a,zero)==0 || c_bignum_cmp(b,zero)==0){ return zero; }
+    bool saved=garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    Ref g =c_bignum_gcd(a,b);
+    Ref aa=(c_bignum_cmp(a,zero)<0)?c_bignum_sub(zero,a):a;
+    Ref bb=(c_bignum_cmp(b,zero)<0)?c_bignum_sub(zero,b):b;
+    Ref q =c_bignum_divide(aa,g);
+    Ref result=c_bignum_mul(q,bb);
+    set_garbage_collection_enabled(saved);
+    return result; }
+
+/* Write a BIGNUM's decimal representation straight to OUT.  Each non-top base-10^9
+   limb is exactly 9 decimal digits, so no division is needed.  No Ref allocation,
+   hence no GC — replaces the interpreted Lisp printer (and its rooting gap). */
+void print_bignum(Ref object, FILE* out){
+    Ref sb=bignum_value(object);
+    bool neg=(cons_car(sb)==S(-));
+    Ref d=cons_cdr(sb);
+    size_t n=0;
+    for(Ref p=d; consp(p); p=cons_cdr(p)){ n++; }
+    if(n==0){ fputc('0',out); return; }
+    uword* mag=malloc(n*sizeof(uword));
+    size_t i=0;
+    for(Ref p=d; consp(p); p=cons_cdr(p)){ mag[i++]=(uword)integer_value(cons_car(p)); }
+    n=mag_norm(mag,n);
+    if(n==0){ free(mag); fputc('0',out); return; }
+    if(neg){ fputc('-',out); }
+    fprintf(out,"%llu",(unsigned long long)mag[n-1]);
+    for(size_t k=n-1; k-->0;){ fprintf(out,"%09llu",(unsigned long long)mag[k]); }
+    free(mag); }
+
+static int bn_digit(unsigned char c, int base){
+    int d;
+    if(c>='0'&&c<='9'){ d=c-'0'; }
+    else if(c>='a'&&c<='z'){ d=c-'a'+10; }
+    else if(c>='A'&&c<='Z'){ d=c-'A'+10; }
+    else { return -1; }
+    return d<base ? d : -1; }
+
+/* Parse a (possibly signed, possibly trailing-'.') integer literal in BASE that
+   overflowed a word, into a BIGNUM (demoted if it somehow fits).  Horner over
+   base-10^9 limbs.  Returns NIL on a malformed token. */
+Ref parse_bignum_cstring(const char* token, int base){
+    bool neg=false;
+    const char* p=token;
+    if(*p=='-'){ neg=true; p++; } else if(*p=='+'){ p++; }
+    size_t len=0; while(p[len]){ len++; }
+    size_t cap=len+2;
+    uword* mag=calloc(cap,sizeof(uword));
+    uword* tmp=calloc(cap,sizeof(uword));
+    size_t n=0;
+    for(; *p; p++){
+        if(*p=='.' && p[1]=='\0'){ break; }            /* trailing decimal point */
+        int dd=bn_digit((unsigned char)*p, base);
+        if(dd<0){ free(mag); free(tmp); return NIL_Symbol; }
+        size_t tn=mag_mul_limb(mag,n,(uword)base,tmp);  /* tmp = mag*base */
+        uword carry=(uword)dd;                           /* tmp += dd */
+        size_t k=0;
+        for(; k<tn && carry; k++){ uword s=tmp[k]+carry; tmp[k]=s%BIGNUM_BASE; carry=s/BIGNUM_BASE; }
+        if(carry){ tmp[tn++]=carry; }
+        uword* t=mag; mag=tmp; tmp=t;                    /* swap */
+        n=tn; }
+    Ref r=make_integer_from_limbs(neg,mag,n);
+    free(mag); free(tmp);
+    return r; }
+
+void kernel_BIGNUMP(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=as_boolean(bignump(x));
+    close_live_pool(pool);}
+
+void kernel_BIGNUM_VALUE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=bignum_value(x);
+    close_live_pool(pool);}
+
+void kernel_MAKE_INTEGER_FROM_BIGNUM(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref sb=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0]=make_integer_from_bignum(sb);
+    close_live_pool(pool);}
+
+/* (%GC-STRESS n) — diagnostic: set the GC-stress period at runtime (0 = off). */
+void kernel_GC_STRESS(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref n=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    set_gc_stress((long)integer_value(n));
+    results->count=1;
+    results->values[0]=n;
+    close_live_pool(pool);}
+
+/* (%GC-ENABLE x) — diagnostic: enable (x non-nil) or disable (nil) the GC. */
+void kernel_GC_ENABLE(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    set_garbage_collection_enabled(!nullp(x));
+    results->count=1;
+    results->values[0]=x;
+    close_live_pool(pool);}
+
+/* (%POISON x) — diagnostic: enable (x non-nil) / disable (nil) the use-after-free
+   finder at runtime, so it can target a post-prelude workload. */
+void kernel_POISON(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref x=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    set_gc_poison(!nullp(x));
+    results->count=1;
+    results->values[0]=x;
+    close_live_pool(pool);}
+
+void kernel_initialize_bignum(void){
+    /* BIGNUM is a built-in subclass of INTEGER, so TYPEP/INTEGERP/RATIONALP/
+       REALP/NUMBERP all treat a bignum as an integer.  Registered into
+       kernel_classes so FIND-CLASS and the kernel TYPEP resolve the name. */
+    BIGNUM_Class=built_in_class_new(symbol_intern_cstring("BIGNUM"));
+    boot_class_add_superclass(BIGNUM_Class,INTEGER_Class);
+    push(BIGNUM_Class,&kernel_classes);
+    /* Primitives used by bootstrap/bignum-integration.lisp. */
+    Ref ll_x=list(S(X),NULL);
+    set_symbol_function(S(%BIGNUMP),
+        built_in_function_new(S(%BIGNUMP),ll_x,kernel_BIGNUMP));
+    set_symbol_function(S(%BIGNUM-VALUE),
+        built_in_function_new(S(%BIGNUM-VALUE),ll_x,kernel_BIGNUM_VALUE));
+    set_symbol_function(S(%MAKE-INTEGER-FROM-BIGNUM),
+        built_in_function_new(S(%MAKE-INTEGER-FROM-BIGNUM),
+                              list(S(SIGNED-BIGNUM),NULL),kernel_MAKE_INTEGER_FROM_BIGNUM));
+    set_symbol_function(S(%GC-STRESS),
+        built_in_function_new(S(%GC-STRESS),ll_x,kernel_GC_STRESS));
+    set_symbol_function(S(%GC-ENABLE),
+        built_in_function_new(S(%GC-ENABLE),ll_x,kernel_GC_ENABLE));
+    set_symbol_function(S(%POISON),
+        built_in_function_new(S(%POISON),ll_x,kernel_POISON));}
+
+
 /* FLOAT */
 
 Float* Float_slots(floating value){
@@ -557,10 +1088,18 @@ Ref ratio_new(Ref num, Ref den){
     word g = gcd_word(n < 0 ? -n : n, d);
     if(g > 1){ n /= g; d /= g; }
     if(d == 1){ return integer_from_word(n); }
+    /* Build the numerator/denominator INTEGER objects BEFORE allocating the
+       Ratio, and root them in the live pool.  Otherwise a GC triggered by the
+       second integer_from_word() would scan the half-built Ratio (objcount=2)
+       and follow the uninitialised num/den slots as if they were Refs. */
+    Ref num_i = integer_from_word(n);
+    add_to_live_pool(num_i);
+    Ref den_i = integer_from_word(d);
+    add_to_live_pool(den_i);
     Ratio* slots = allocate(sizeof(Ratio));
-    slots->objcount = 2;
-    slots->numerator   = integer_from_word(n);
-    slots->denominator = integer_from_word(d);
+    slots->numerator   = num_i;
+    slots->denominator = den_i;
+    slots->objcount    = 2;
     return Object_new(RATIO_Class, (Slots*)slots);}
 
 bool ratiop(Ref object){
@@ -585,13 +1124,17 @@ floating ratio_to_float(Ref r){
 /* COMPLEX */
 
 Ref complex_new(Ref re, Ref im){
-    /* (complex r 0) = r when r is real */
-    if(integerp(im) && integer_value(im) == 0) return re;
-    if(floatp(im)   && float_value(im)    == 0.0) return re;
+    /* (complex r 0) collapses to the real R only when BOTH parts are rational
+       and the imaginary part is the integer 0 (CLHS 12.1.5.3): a float part
+       forces a complex result even when the imaginary part is 0.0, so
+       #C(1.0 0.0) stays complex. */
+    if(integerp(im) && integer_value(im) == 0 && !floatp(re)) return re;
+    /* re/im are already-rooted Refs; set slots before objcount so a GC during
+       Object_new() never sees a half-built Complex. */
     Complex* slots = allocate(sizeof(Complex));
-    slots->objcount = 2;
     slots->realpart = re;
     slots->imagpart = im;
+    slots->objcount = 2;
     return Object_new(COMPLEX_Class, (Slots*)slots);}
 
 bool complexp(Ref object){
@@ -607,31 +1150,44 @@ Ref complex_imagpart(Ref c){
 
 /* CONS */
 
-Cons* Cons_slots(Ref car,Ref cdr){
-    Cons* that=allocate(sizeof(*that));
-    that->objcount=2;
+Ref cons(Ref car,Ref cdr){
+    /* Single-block compact cons (see ConsCell in kernel_types.h): one
+       allocation, car/cdr inline.  Fill slots before setting objcount so the
+       collector never sees uninitialised reference slots.  car/cdr must already
+       be rooted by the caller (same contract as before — cons is far too hot to
+       root them here; the unrooted-arg gaps are fixed at the specific call
+       sites: tagbody_collect_tags, environment_add_*, etc.). */
+    ConsCell* that=allocate(sizeof(ConsCell));
+    that->class=CONS_Class;
     that->car=car;
     that->cdr=cdr;
-    return that;}
-
-Ref cons(Ref car,Ref cdr){
-    return Object_new(CONS_Class,(Slots*)Cons_slots(car,cdr));}
+    that->objcount=3;
+    return (Ref)that;}
 
 bool consp(Ref object){
     return class_of(object)==CONS_Class;}
 
 Ref cons_car(Ref cell){
-    return cell->slots->cons.car;}
+    /* Poison finder: catch a raw car/cdr of a freed+quarantined cons — the case
+       class_of misses (a rooting-gap cycle is traversed via these, never through
+       class_of).  gc_poison_mode is false in normal runs (predictable branch). */
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
+    return ((ConsCell*)cell)->car;}
 
 Ref cons_cdr(Ref cell){
-    return cell->slots->cons.cdr;}
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
+    return ((ConsCell*)cell)->cdr;}
 
 Ref cons_rplaca(Ref cell,Ref newcar){
-    cell->slots->cons.car=newcar;
+    /* Poison finder: a WRITE to a freed+quarantined cons is how rooting-gap cycles
+       get created (rplacd into a reused cell).  Catch it here too. */
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
+    ((ConsCell*)cell)->car=newcar;
     return cell;}
 
 Ref cons_rplacd(Ref cell,Ref newcdr){
-    cell->slots->cons.cdr=newcdr;
+    if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
+    ((ConsCell*)cell)->cdr=newcdr;
     return cell;}
 
 
@@ -719,32 +1275,92 @@ Symbol* Symbol_slots(Ref name,Ref package){
     that->plist=NIL_Symbol;
     return that;}
 
+/* ----------------------------------------------------------------------
+ * Symbol-table index (obarray hash).
+ *
+ * find_symbol used to linear-scan the obarray (a cons list), comparing names
+ * with string_eq — O(n) per intern, O(n^2) to read a large program.  (The ANSI
+ * suite spent ~30% of load time in string_eq/find_symbol.)  The cons list stays
+ * authoritative — it roots the symbols and supports package iteration — and we
+ * add a C-side open-addressing hash, name -> symbol, purely as an index:
+ *   - the GC is non-moving, so cached symbol pointers stay valid;
+ *   - every symbol in the index is also on the obarray list (hence rooted), so
+ *     the index needs no GC roots and is never scanned by the collector;
+ *   - the obarray symbol list is mutated in exactly one place
+ *     (symbol_intern_obarray), which updates the index, so they never diverge.
+ * The index is built lazily from the current list the first time an obarray is
+ * seen, capturing any symbols installed during bootstrap.  All storage is the
+ * C heap (malloc/calloc), so none of this triggers a Lisp GC.
+ * -------------------------------------------------------------------- */
+typedef struct SymHash {
+    Ref             obarray;
+    Ref*            buckets;   /* symbol Refs; NULL == empty slot */
+    uword*          hashes;    /* cached name hash for each occupied slot */
+    uword           capacity;  /* power of two */
+    uword           count;
+    struct SymHash* next;
+} SymHash;
+
+static SymHash* g_sym_hashes = NULL;
+
+static uword sym_name_hash(Ref name){
+    /* FNV-1a over the name's octets. */
+    uword h = 1469598103934665603UL;
+    uword length = string_length(name);
+    const octet* p = name->slots->octet_array.elements->elements;
+    for(uword i=0;i<length;i++){ h ^= (uword)p[i]; h *= 1099511628211UL; }
+    return h;}
+
+static void sym_hash_put(SymHash* H,Ref symbol,uword hash){
+    uword mask = H->capacity - 1;
+    uword i = hash & mask;
+    while(H->buckets[i] != NULL){ i = (i+1) & mask; }
+    H->buckets[i] = symbol;
+    H->hashes[i]  = hash;
+    H->count++;}
+
+static void sym_hash_grow(SymHash* H){
+    uword  oldcap = H->capacity;
+    Ref*   oldb   = H->buckets;
+    uword* oldh   = H->hashes;
+    H->capacity = oldcap * 2;
+    H->buckets  = (Ref*)  calloc(H->capacity, sizeof(Ref));
+    H->hashes   = (uword*)calloc(H->capacity, sizeof(uword));
+    H->count    = 0;
+    for(uword i=0;i<oldcap;i++){ if(oldb[i]){ sym_hash_put(H,oldb[i],oldh[i]); } }
+    free(oldb); free(oldh);}
+
+static void sym_hash_add(SymHash* H,Ref symbol){
+    if((H->count + 1) * 10 >= H->capacity * 7){ sym_hash_grow(H); }   /* load < 0.7 */
+    sym_hash_put(H, symbol, sym_name_hash(symbol->slots->symbol.name));}
+
+static SymHash* sym_hash_for(Ref obarray){
+    for(SymHash* H=g_sym_hashes; H; H=H->next){
+        if(H->obarray==obarray){ return H; }}
+    SymHash* H = (SymHash*)malloc(sizeof(SymHash));
+    H->obarray  = obarray;
+    H->capacity = 2048;
+    H->buckets  = (Ref*)  calloc(H->capacity, sizeof(Ref));
+    H->hashes   = (uword*)calloc(H->capacity, sizeof(uword));
+    H->count    = 0;
+    H->next     = g_sym_hashes;
+    g_sym_hashes = H;
+    /* Build from the symbols already on the list. */
+    Ref syms = cons_cdr(obarray);
+    while(consp(syms)){ sym_hash_add(H, cons_car(syms)); syms = cons_cdr(syms); }
+    return H;}
+
 Ref find_symbol(Ref name,Ref obarray){
-#ifdef DEBUG
-    {
-        static long c=0;
-        fprintf(stderr,"find_symbol %3ld: %-40s in %-16s",
-                c++,string_cstring(name),
-                string_cstring(symbol_name(cons_car(obarray))));
-        Ref syms=cons_cdr(obarray);
-        long sc=0;
-        while(consp(syms)){
-            sc++;
-            if(string_eq(symbol_name(cons_car(syms)),name)){
-                fprintf(stderr,"found %s\n",
-                        string_cstring(symbol_name(cons_car(syms))));}
-            if(symbol_package(cons_car(syms))!=obarray){
-                fprintf(stderr,"wrong package for %s\n",
-                        string_cstring(symbol_name(cons_car(syms))));}
-            syms=cons_cdr(syms);}
-        fprintf(stderr," %3ld symbols\n",sc);}
-#endif
-    Ref syms=cons_cdr(obarray);
-    while(consp(syms) && !string_eq(cons_car(syms)->slots->symbol.name,name)){
-        syms=cons_cdr(syms);}
-    return consp(syms)
-            ? cons_car(syms)
-            : NULL;}
+    SymHash* H = sym_hash_for(obarray);
+    uword hash = sym_name_hash(name);
+    uword mask = H->capacity - 1;
+    uword i = hash & mask;
+    while(H->buckets[i] != NULL){
+        if(H->hashes[i]==hash
+           && string_eq(H->buckets[i]->slots->symbol.name, name)){
+            return H->buckets[i];}
+        i = (i+1) & mask;}
+    return NULL;}
 
 Ref symbol_new(Ref name){
     /* make an uninterned symbol */
@@ -755,18 +1371,81 @@ Ref symbol_new_cstring(const char* name){
     return symbol_new(string_new_cstring(name));}
 
 static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
-    Ref symbol=find_symbol(name,obarray);
+    Ref symbol=find_symbol(name,obarray);   /* builds/uses the obarray hash index */
     if(symbol){
         (*internal)=true;
         return symbol;}
     (*internal)=false;
+    /* Cold path only (interning a NEW symbol, rare after bootstrap): root
+       name + obarray + the fresh symbol across the Symbol_slots / Object_new /
+       cons / sym_hash_add allocations — a GC in any of them would otherwise free
+       `name` (reachable only through this C local until stored in the symbol).
+       The rooting is kept OUT of the hot found-path above so it does not perturb
+       layout on every S(...) lookup. */
+    uword pool=open_live_pool();
+    add_to_live_pool(name);
+    add_to_live_pool(obarray);
     symbol=Object_new(SYMBOL_Class, (Slots*)Symbol_slots(name,obarray));
+    add_to_live_pool(symbol);
+    /* Home package: once the package system exists, KERNEL_obarray IS the
+       COMMON-LISP package and KEYWORD_obarray IS the KEYWORD package, so set the
+       symbol's home package accordingly.  During very early bootstrap (before
+       kernel_initialize_packages) the packages are NULL; those symbols get their
+       home package fixed up at the end of kernel_initialize_packages. */
+    {   extern Ref COMMON_LISP_Package, KEYWORD_Package;
+        if(obarray==KERNEL_obarray && COMMON_LISP_Package){
+            symbol->slots->symbol.package=COMMON_LISP_Package; }
+        else if(obarray==KEYWORD_obarray && KEYWORD_Package){
+            symbol->slots->symbol.package=KEYWORD_Package; }}
     cons_rplacd(obarray,cons(symbol,cons_cdr(obarray)));
+    sym_hash_add(sym_hash_for(obarray),symbol);   /* keep the index in sync */
+    close_live_pool(pool);
     return symbol;}
 
 Ref symbol_intern(Ref name){
     bool internal;
     return symbol_intern_obarray(name,KERNEL_obarray,&internal);}
+
+/* Package support (packages.c): an "obarray" is a cons sentinel whose CDR is the
+   symbol list, indexed by a SymHash.  These let the package system reuse the
+   fast name->symbol index for each package's present/external tables. */
+Ref make_obarray(void){
+    return cons(NIL_Symbol,NIL_Symbol);}
+
+/* Rebuild an obarray's SymHash index from its current symbol list (used after a
+   removal, which is rare). */
+static void sym_hash_rebuild(Ref obarray){
+    SymHash* H=sym_hash_for(obarray);
+    for(uword i=0;i<H->capacity;i++){ H->buckets[i]=NULL; H->hashes[i]=0; }
+    H->count=0;
+    Ref syms=cons_cdr(obarray);
+    while(consp(syms)){ sym_hash_add(H,cons_car(syms)); syms=cons_cdr(syms); }}
+
+/* Add an EXISTING symbol to an obarray (no-op if a symbol of that name is
+   already there).  Used to populate a package's present/external tables. */
+void obarray_add_symbol(Ref obarray,Ref sym){
+    if(find_symbol(symbol_name(sym),obarray)){ return; }
+    /* Cold path only (adding a NEW symbol): root obarray + sym across the cons +
+       sym_hash_add — a GC in either would free one of these C-local-only Refs.
+       Same gap + fix as symbol_intern_obarray; kept out of the hot found-path. */
+    uword pool=open_live_pool();
+    add_to_live_pool(obarray);
+    add_to_live_pool(sym);
+    cons_rplacd(obarray,cons(sym,cons_cdr(obarray)));
+    sym_hash_add(sym_hash_for(obarray),sym);
+    close_live_pool(pool);}
+
+/* Remove a symbol from an obarray (list + index).  Returns true if removed. */
+bool obarray_remove_symbol(Ref obarray,Ref sym){
+    Ref prev=obarray, it=cons_cdr(obarray);
+    bool found=false;
+    while(consp(it)){
+        if(cons_car(it)==sym){ cons_rplacd(prev,cons_cdr(it)); found=true; break; }
+        prev=it; it=cons_cdr(it);}
+    if(found){
+        /* Rebuild the index for this obarray (simplest correct approach). */
+        sym_hash_rebuild(obarray);}
+    return found;}
 
 Ref symbol_intern_cstring(const char* name){
     return symbol_intern(string_new_cstring(name));}
@@ -912,6 +1591,43 @@ bool bit_vector_equal(Ref a,Ref b){
     return true;}
 
 
+/* FILL POINTERS ----------------------------------------------------------
+   A fill pointer lives inline in the vector's slots block: the untraced
+   `fill_pointer` word of Array (for VECTOR) / OctetArray (for STRING and
+   BIT-VECTOR).  Encoding: 0 = no fill pointer, active length N stored as N+1
+   (so a zeroed/fresh vector has none — see kernel_types.h).  Storing it in the
+   object — rather than an external table — means a vector that becomes garbage
+   is collected normally, with no pinning.  AREF/CHAR/SVREF and *_length keep
+   reading dimensions[0] (the physical size), so they correctly ignore the fill
+   pointer per CLHS; only LENGTH/ELT/STRING and the VECTOR-PUSH family use it. */
+static uword* fill_pointer_loc(Ref v){
+    Ref c=class_of(v);
+    if(c==VECTOR_Class)     return &v->slots->array.fill_pointer;
+    if(c==STRING_Class)     return &v->slots->octet_array.fill_pointer;
+    if(c==BIT_VECTOR_Class) return &v->slots->octet_array.fill_pointer;
+    return NULL;}   /* not a fill-pointer-capable object */
+
+bool array_has_fill_pointer(Ref v){
+    uword* loc=fill_pointer_loc(v);
+    return loc && (*loc!=0);}
+
+/* The fill pointer of V as an INTEGER, or NIL when V has none (or is not a
+   vector at all — callers pass arbitrary objects, e.g. LENGTH). */
+Ref array_fill_pointer(Ref v){
+    uword* loc=fill_pointer_loc(v);
+    return (loc && *loc!=0) ? integer_from_uword(*loc-1) : NIL_Symbol;}
+
+/* Set V's fill pointer to FP (a non-negative integer), registering V as having
+   one.  Errors if V cannot carry a fill pointer. */
+Ref array_set_fill_pointer(Ref v,Ref fp){
+    uword* loc=fill_pointer_loc(v);
+    if(!loc){ TYPE_ERROR(v,VECTOR_Class); }
+    word f=integer_value(fp);
+    if(f<0){ ERROR("fill pointer must be non-negative, got %" WORD_FORMAT,f); }
+    *loc=(uword)f+1;
+    return fp;}
+
+
 /* CLASS */
 
 Class* Class_slots(Ref name,Ref superclasses){
@@ -939,6 +1655,7 @@ Ref class_new(Ref name){
 static Ref clos_obj_sc  = NULL;  /* structure class for %obj (CLOS instances) */
 static Ref clos_cls_sc  = NULL;  /* structure class for %cls (CLOS class objects) */
 static Ref sym_cpl      = NULL;  /* the 'CPL slot of %cls */
+static Ref sym_class_name = NULL;/* the 'NAME slot of %cls */
 static uword clos_obj_class_slot_idx = 0; /* index of 'class slot in %obj storage */
 
 void clos_register_bridge(Ref obj_sc, Ref cls_sc){
@@ -946,7 +1663,8 @@ void clos_register_bridge(Ref obj_sc, Ref cls_sc){
     clos_cls_sc = cls_sc;
     /* Cache slot index: 'class is the FIRST user slot in %obj after BLOCK_HEADER. */
     clos_obj_class_slot_idx = 0;  /* %obj: (defstruct (%obj) class slots) — class=0 */
-    sym_cpl     = symbol_intern_cstring("CPL");}
+    sym_cpl       = symbol_intern_cstring("CPL");
+    sym_class_name= symbol_intern_cstring("NAME");}
 
 bool clos_instance_p(Ref obj){
     return clos_obj_sc != NULL && obj != NULL && obj->class == clos_obj_sc;}
@@ -955,6 +1673,10 @@ bool clos_class_p(Ref cls){
     return clos_cls_sc != NULL && cls != NULL && cls->class == clos_cls_sc;}
 
 Ref class_of(Ref object){
+    /* Use-after-free finder: if this object was freed + quarantined (BOCL_POISON),
+       its class is the poison sentinel — report and abort. */
+    if(gc_poison_mode && object && (uintptr_t)object->class==0x015015015015015eULL){
+        gc_poison_report(object);}
     /* For CLOS instances (%obj structs), return the CLOS class stored in
      * the 'class slot (index 0 in the structure's slot vector).
      * Direct array access avoids allocating via structure_get. */
@@ -989,14 +1711,35 @@ Ref find_class(Ref name){
                 return class;}}}
     return NULL;}
 
+/* Name of a class designator that may be either a kernel CLASS object or a CLOS
+   %cls structure. */
+static Ref class_designator_name(Ref class){
+    if(class == NULL){ return NIL_Symbol; }
+    if(clos_class_p(class)){
+        return sym_class_name != NULL ? structure_get(class, sym_class_name) : NIL_Symbol;}
+    /* Otherwise a kernel CLASS object (subclassp is only called with class
+       designators, like the ->slots->class access below); class_same's symbolp
+       guard rejects any non-symbol that might be read for a stray non-class. */
+    return class->slots->class.name;}
+
+/* Two class designators name the SAME class iff identical, or — bridging the two
+   parallel condition hierarchies — they have the same non-NIL class name.  bocl
+   has both a kernel built-in class (e.g. WARNING_Class) and a CLOS %cls for each
+   standard condition type; a make-condition'd condition's class is the %cls while
+   a handler type resolves to the kernel class, so identity alone would miss. */
+static bool class_same(Ref a, Ref b){
+    if(a==b){ return true; }
+    Ref na = class_designator_name(a);
+    return na != NIL_Symbol && symbolp(na) && na == class_designator_name(b);}
+
 bool subclassp(Ref class,Ref superclass){
-    if(class==superclass){
+    if(class_same(class, superclass)){
         return true;}
     /* Handle CLOS class objects (%cls): walk the CPL list. */
     if(clos_class_p(class) && sym_cpl != NULL){
         Ref cpl = structure_get(class, sym_cpl);
         while(consp(cpl)){
-            if(cons_car(cpl) == superclass){ return true; }
+            if(class_same(cons_car(cpl), superclass)){ return true; }
             cpl = cons_cdr(cpl);}
         return false;}
     Ref direct_superclasses=class->slots->class.direct_superclasses;
@@ -1053,7 +1796,7 @@ void check_class(Ref object,Ref class){
 Ref boot_last(Ref list){
     Ref next;
     if(consp(list)){
-        while(consp(next=list->slots->cons.cdr)){
+        while(consp(next=cons_cdr(list))){
             list=next;}
         return list;}
     else if(nullp(list)){
@@ -1066,7 +1809,7 @@ Ref boot_nconc(Ref list,Ref tail){
         return tail;}
     else if(consp(list)){
         Ref last_cell=boot_last(list);
-        last_cell->slots->cons.cdr=tail;
+        cons_rplacd(last_cell,tail);
         return list;}
     else{
         TYPE_ERROR(list,LIST_Class);}}
@@ -1142,15 +1885,17 @@ StructureClass* StructureClass_slots(Ref class_name,Ref direct_superclass,Ref of
     add_to_live_pool(offset);
     add_to_live_pool(slot_names);
     StructureClass* that=allocate(sizeof(*that));
-    that->objcount=4;
+    that->objcount=5;   /* name, direct_superclasses, offset, slot_names, cached_slots */
     that->name=class_name;
     that->direct_superclasses=list(direct_superclass,NULL);
     that->offset=offset;
     that->slot_names=slot_names;
+    that->cached_slots=NULL;   /* not yet computed (allocate() already zeroed it) */
     that->nslots=direct_superclass->slots->structure_class.nslots
             +(uword)integer_value(offset)
             +list_length(slot_names);
     close_live_pool(pool);
+    add_to_live_pool((Ref)that);   /* re-root: caller's Object_new allocates (GC) before storing `that` */
     return that;}
 
 Ref make_structure_class(Ref name,Ref direct_superclass,Ref offset,Ref slots){
@@ -1181,6 +1926,7 @@ Ref make_structure_class(Ref name,Ref direct_superclass,Ref offset,Ref slots){
     Ref class=Object_new(STRUCTURE_CLASS_Class,
                          (Slots*)StructureClass_slots(name,direct_superclass,offset,slots));
     close_live_pool(pool);
+    add_to_live_pool(class);   /* re-root: close_live_pool trimmed the fresh class */
     return class;}
 
 Ref make_structure_instance(Ref structure_class){
@@ -1192,8 +1938,10 @@ Ref make_structure_instance(Ref structure_class){
     */
     check_class(structure_class,STRUCTURE_CLASS_Class);
     VectorOfObject* slots=VectorOfObject_slots(CHECK_UWORD_TO_HALFWORD(structure_class->slots->structure_class.nslots));
+    add_to_live_pool((Ref)slots);   /* root the fresh slots across Object_new's allocation */
     Ref instance=Object_new(structure_class,(Slots*)slots);
     close_live_pool(pool);
+    add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
     return instance;}
 
 
@@ -1222,11 +1970,36 @@ Ref physical_pathname_new(VectorOfOctet* path){
     return Object_new(find_class(symbol_intern_cstring("PHYSICAL-PATHNAME")),
                       (Slots*)path);}
 
+/* If PATH begins with ~ followed by '/' or end-of-string, return a malloc'd
+   copy with the leading ~ replaced by $HOME (trailing slashes of $HOME trimmed),
+   i.e. ~ abbreviates (USER-HOMEDIR-PATHNAME); otherwise a plain copy.  ~user is
+   not handled.  Caller frees. */
+static char* expand_home_namestring(const char* path){
+    if(path[0]=='~' && (path[1]=='/' || path[1]=='\0')){
+        const char* home=getenv("HOME");
+        if(home && home[0]){
+            size_t hlen=strlen(home);
+            while(hlen>1 && home[hlen-1]=='/'){ hlen--; }
+            size_t rlen=strlen(path+1);             /* part after '~' (incl. '/') */
+            char* result=CHECK_POINTER(malloc(hlen+rlen+1));
+            memcpy(result,home,hlen);
+            memcpy(result+hlen,path+1,rlen+1);      /* +1 copies the NUL */
+            return result;}}
+    return strdup(path);}
+
 Ref physical_pathname_new_cstring(const char* path){
-    return physical_pathname_new(VectorOfOctet_slots_cstring(path));}
+    char* expanded=expand_home_namestring(path);
+    Ref result=physical_pathname_new(VectorOfOctet_slots_cstring(expanded));
+    free(expanded);
+    return result;}
 
 Ref physical_pathname(Ref namestring){
     check_class(namestring,STRING_Class);
+    /* A leading ~ abbreviates the user's home directory; expand via the cstring
+       path (which trims/joins $HOME). */
+    {   OctetArray* oa0 = &namestring->slots->octet_array;
+        if(oa0->dimensions[0] >= 1 && oa0->elements->elements[0] == '~'){
+            return physical_pathname_new_cstring(string_cstring(namestring));}}
     /* Copy the string's bytes into a fresh VectorOfOctet so the pathname has
        its own backing store. We cannot share the string's slots directly:
        STRING is laid out as an OctetArray (element_type, elements*,
@@ -1255,9 +2028,13 @@ bool physical_pathname_equal(Ref a,Ref b){
     if(a->slots->vector_of_octet.length
        !=b->slots->vector_of_octet.length){
         return false;}
-    OctetArray* aa=&(a->slots->octet_array);
-    OctetArray* bb=&(b->slots->octet_array);
-    return vector_of_octet_equalp(aa->elements,bb->elements);}
+    /* A PHYSICAL-PATHNAME's slots IS a VectorOfOctet (see physical_pathname_new),
+       not an OctetArray.  Reading ->octet_array.elements reinterprets the inline
+       namestring bytes as a VectorOfOctet* and dereferences garbage (crash whose
+       fault address is the namestring's own characters).  Compare the two
+       VectorOfOctet slots directly. */
+    return vector_of_octet_equalp(&(a->slots->vector_of_octet),
+                                  &(b->slots->vector_of_octet));}
 
 
 /* EXTERNAL-FORMAT */
@@ -1614,7 +2391,15 @@ Ref environment_new(Ref next_environment,Ref toplevelp){
 Closure* Closure_slots(Ref function,Ref environment){
     check_type(function,FUNCTION_Class);
     check_type(environment,ENVIRONMENT_Class);
+    /* Root the args across allocate(): a caller typically passes a FUNCTION that
+       is itself a fresh Object_new() result held only in a C temporary (e.g.
+       closure_new(function_new(...), env)), so a GC inside allocate() would
+       reclaim it and leave that->function dangling. */
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(environment);
     Closure* that=allocate(sizeof(*that));
+    close_live_pool(pool);
     that->objcount=2;
     that->function=function;
     that->environment=environment;
@@ -1628,7 +2413,12 @@ Function* Function_slots(Ref lisp_name,Ref lambda_list,Ref body){
     check_type(lisp_name,SYMBOL_Class);
     check_type(lambda_list,LIST_Class);
     check_type(body,LIST_Class);
+    uword pool=open_live_pool();           /* root args across allocate() */
+    add_to_live_pool(lisp_name);
+    add_to_live_pool(lambda_list);
+    add_to_live_pool(body);
     Function* that=allocate(sizeof(*that));
+    close_live_pool(pool);
     that->objcount=3;
     that->lisp_name=lisp_name;
     that->lambda_list=lambda_list;
@@ -1752,26 +2542,33 @@ Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
 
 static Ref rootset;
 static Ref kernel_initialize_rootset(void){
+    extern Ref all_packages;   /* the package registry (sentinel header, packages.c) */
     rootset=NIL_Symbol;
     push(UNBOUND_Object,&rootset);
     push(KERNEL_obarray,&rootset);
     push(KEYWORD_obarray,&rootset);
     push(kernel_classes,&rootset);
     push(characterset,&rootset);
-    /* The package registry (name -> package alist) is a plain C global; without
-       rooting it here the GC reclaims it during prelude loading, after which
-       (IN-PACKAGE "COMMON-LISP-USER") and FIND-PACKAGE fail. */
     push(all_packages,&rootset);
     return rootset;}
 
 Ref kernel_rootset(void){
     return rootset;}
 
+/* The GC marks memory.c's RootSet->kernel_rootset, a snapshot installed once by
+   set_rootset() at init.  push/delete here mutate the `rootset` LIST HEAD, so
+   the snapshot must be re-installed after every change — otherwise objects
+   added post-init (notably the global environment, pushed on first eval) are
+   invisible to the collector and get swept while still in use.  This manifested
+   as heap-dependent corruption: the global env collected and its memory reused
+   (e.g. environment_find_function dereferencing a string). */
 void push_to_rootset(Ref object){
-    rootset=cons(object,rootset);}
+    rootset=cons(object,rootset);
+    set_rootset((Block*)rootset);}
 
 void delete_from_rootset(Ref object){
-    rootset=delete(object,rootset);}
+    rootset=delete(object,rootset);
+    set_rootset((Block*)rootset);}
 
 
 static void kernel_LISP_IMPLEMENTATION_TYPE(unused Ref function,Ref arguments,MultipleValues* results){
@@ -1844,7 +2641,65 @@ static void kernel_initialize_features(void){
     define_variable(S(*COMPILE-FILE-TRUENAME*),  NIL_Symbol);
 }
 
+/* Debug aid: when BOCL_BACKTRACE is set, dump a native backtrace on a fatal
+   signal (so heap-layout-dependent crashes can be located without a debugger,
+   which perturbs the layout and hides them). */
+/* BOCL:*ABORT-HOOK* — best effort, called from the crash handler with the GC
+   disabled.  We only enter Lisp if a hook is actually registered (cheap symbol
+   check, no allocation otherwise), to keep ordinary crashes unperturbed.  The
+   Lisp runner wraps each hook in IGNORE-ERRORS. */
+static void bocl_run_abort_hooks(int sig){
+    extern Ref BOCL_Package;
+    if(BOCL_Package==NULL || !typep(BOCL_Package,PACKAGE_Class)){ return; }
+    Ref present=BOCL_Package->slots->package.present;
+    Ref hooks_sym=find_symbol(string_new_cstring("*ABORT-HOOK*"),present);
+    if(!hooks_sym || nullp(symbol_value(hooks_sym))){ return; }
+    Ref fn_sym=find_symbol(string_new_cstring("%RUN-ABORT-HOOKS"),present);
+    if(!fn_sym || !symbol_fboundp(fn_sym)){ return; }
+    MultipleValues mv;
+    kernel_apply(symbol_function(fn_sym),cons(integer_from_word(sig),NIL_Symbol),&mv);}
+
+static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
+    (void)ucontext;
+    /* Re-entrancy guard: if running the hooks itself faults, don't loop —
+       fall straight through to the default action on the second entry. */
+    static volatile sig_atomic_t in_handler = 0;
+    if(!in_handler){
+        in_handler = 1;
+        /* The system may be corrupt: stop the GC and do minimal work. */
+        set_garbage_collection_enabled(false);
+        /* Dump the native backtrace FIRST — before the Lisp abort-hooks, which
+           allocate / walk the (possibly corrupt) heap and can re-fault, costing us
+           the backtrace via the re-entrancy guard. */
+        if(getenv("BOCL_BACKTRACE")){
+            char buf[128];
+            int len = snprintf(buf,sizeof(buf),
+                               "\n=== bocl: fatal signal %d; fault address = %p ===\n",
+                               sig, info ? info->si_addr : (void*)0);
+            write(2, buf, (size_t)len);
+            void* bt[64];
+            int n = backtrace(bt, 64);
+            backtrace_symbols_fd(bt, n, 2);}
+        bocl_run_abort_hooks(sig);}
+    signal(sig, SIG_DFL);
+    raise(sig);}
+
 void kernel_initialize(void){
+    /* Install the crash handler so BOCL:*ABORT-HOOK* runs when the process is
+       terminating on a signal — both faults (SEGV/BUS/ABRT) and termination
+       requests (TERM/INT/HUP).  The native backtrace dump stays gated on
+       BOCL_BACKTRACE.  The handler re-raises with the default action so the
+       process still dies as it would have. */
+    {   struct sigaction sa;
+        memset(&sa,0,sizeof(sa));
+        sa.sa_sigaction = bocl_crash_handler;
+        sa.sa_flags = SA_SIGINFO;
+        sigaction(SIGSEGV,&sa,NULL);
+        sigaction(SIGBUS, &sa,NULL);
+        sigaction(SIGABRT,&sa,NULL);
+        sigaction(SIGTERM,&sa,NULL);
+        sigaction(SIGINT, &sa,NULL);
+        sigaction(SIGHUP, &sa,NULL);}
     memory_initialize();
     set_garbage_collection_enabled(false);
 
@@ -1852,6 +2707,7 @@ void kernel_initialize(void){
     kernel_initialize_built_in_functions();
     kernel_initialize_arithmetic();
     kernel_initialize_integers();
+    kernel_initialize_bignum();
     kernel_initialize_characters();
     kernel_initialize_features();
 

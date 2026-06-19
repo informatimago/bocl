@@ -1,7 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
+#include <stddef.h>
 #include <sysexits.h>
+#include <execinfo.h>
+#include <stdint.h>
 #include "memory.h"
 #include "boerror.h"
 #include "kernel.h"
@@ -98,7 +102,12 @@ static bool free_block_p(Block* block){
     return block->objcount==FREE_BLOCK;}
 
 static bool marked_block_p(Block* block){
-    return 0!=(block->objcount&(~(FREE_BLOCK>>1)));}
+    /* The mark bit is the high bit of objcount.  FREE_BLOCK (all-ones) also has
+       that bit set, so a free block must NOT be reported as marked — otherwise
+       sweep_zone (which tests marked_block_p before reclaiming) would clear_block
+       a free block to FREE_BLOCK>>1 and drop it from the free list, leaking and
+       corrupting the heap. */
+    return block->objcount!=FREE_BLOCK && 0!=(block->objcount&(~(FREE_BLOCK>>1)));}
 
 static void mark_block(Block* block){
     block->objcount|=(~(FREE_BLOCK>>1));}
@@ -168,24 +177,33 @@ static FreeBlock* before_best_free_block(FreeBlock* free_list,halfword size){
         prev = prev->next;}
     return NULL;}
 
-static Block* allocate_in_best_zone(Zone* zone,halfword size){
-    /*
-    Assume zone is the best zone, and zone->before_best_candidate
-    points to the best candidate free block.
-    Allocates a block from it.
-    */
-    FreeBlock* free=zone->before_best_candidate;
-    halfword remaining=CHECK_SIZE_TO_HALFWORD(free->next->size-size);
+/* Allocate SIZE bytes out of the first adequate block on LIST (first-fit).
+   IS_LARGE says LIST is the zone's large_list, which must keep its invariant
+   "every entry is >= LARGE_THRESHOLD" so that any request < LARGE_THRESHOLD is
+   satisfied by the head block in O(1).  Splitting a block can shrink the
+   remainder below the threshold; when that happens on the large_list we MOVE
+   the remainder to the small_list, otherwise the sub-threshold remainders pile
+   up at the head and every later allocation first-fit-walks past them — an
+   O(n) drift that made ANSI-suite loading quadratic in the live heap size. */
+static Block* allocate_from_list(Zone* zone,FreeBlock* list,halfword size,bool is_large){
+    FreeBlock* prev=before_best_free_block(list,size);
+    if(!prev){ return NULL; }
+    FreeBlock* fb=prev->next;
+    halfword remaining=CHECK_SIZE_TO_HALFWORD(fb->size-size);
     if(MinimumBlockSize<=remaining){
-        /* split */
-        Block* block=(void*)((char*)(free->next)+remaining);
-        free->next->size=remaining;
+        /* split: carve the allocated block off the tail, remainder stays at fb */
+        Block* block=(void*)((char*)fb+remaining);
+        fb->size=remaining;
         block->size=size;
         block->objcount=0;
+        if(is_large && remaining<LARGE_THRESHOLD){
+            prev->next=fb->next;                 /* unlink from large_list      */
+            fb->next=zone->small_list.next;      /* re-file under small_list     */
+            zone->small_list.next=fb;}
         return block;
     }else{
-        Block* block=(Block*)free->next;
-        free->next=free->next->next;
+        Block* block=(Block*)fb;
+        prev->next=fb->next;
         block->objcount=0;
         return block;}}
 
@@ -193,11 +211,10 @@ static Block* allocate_in_zone(Zone* zone,halfword size){
     /* Try large_list first (every entry is >= LARGE_THRESHOLD, so any
        allocation request < LARGE_THRESHOLD finds an adequate block
        immediately in O(1)).  Fall back to small_list for small requests. */
-    FreeBlock* candidate=before_best_free_block(&(zone->large_list),size);
-    if(!candidate && size<LARGE_THRESHOLD)
-        candidate=before_best_free_block(&(zone->small_list),size);
-    zone->before_best_candidate=candidate;
-    return candidate?allocate_in_best_zone(zone,size):NULL;}
+    Block* block=allocate_from_list(zone,&(zone->large_list),size,true);
+    if(!block && size<LARGE_THRESHOLD){
+        block=allocate_from_list(zone,&(zone->small_list),size,false);}
+    return block;}
 
 static Block* allocate_in_zones(halfword size){
     /* First-fit across zones: allocate from the first zone that has space. */
@@ -212,6 +229,12 @@ static Block* allocate_internal(size_t size){
     If no free block is available, the garbage collector is invoked (unless disabled).
     */
     halfword hsize=CHECK_SIZE_TO_HALFWORD(((size+sizeof(word)-1)/sizeof(word))*sizeof(word));
+    /* Every block must be at least MinimumBlockSize so that, once freed, it can
+       hold a FreeBlock's `next` pointer.  Sub-minimum blocks (e.g. zero-length
+       VectorOfObject storage for #()) would otherwise overwrite the FOLLOWING
+       block's header when sweep writes fb->next at offset 8 — clobbering its size
+       field with an in-zone pointer (heap-walk skips the rest of the zone). */
+    if(hsize < MinimumBlockSize){ hsize = MinimumBlockSize; }
     Block* block=NULL;
     if(DefaultZoneSize<hsize+sizeof(Zone)){
         Zone* new_zone=zone_allocate(hsize+sizeof(Zone));
@@ -227,8 +250,96 @@ static Block* allocate_internal(size_t size){
                 block=allocate_in_zone(new_zone,hsize);}}}
     return block;}
 
+/* GC-stress: when BOCL_GCSTRESS=N is set, force a full collection every N
+   allocations (N=1 = every allocation).  This makes latent "object not rooted
+   before a nested allocate" bugs reproduce deterministically rather than
+   depending on heap layout.  A moderate N (e.g. 64) keeps the prelude load
+   tractable while still exercising the collector heavily. */
+static long gc_stress_n = -1;   /* -1 = unchecked, 0 = off, >0 = period */
+static long gc_stress_c = 0;
+
+/* Runtime override (diagnostic): set the GC-stress period after startup so the
+   finder can stress a post-prelude workload (e.g. one ANSI test file) without
+   paying GCSTRESS over the whole 7000-line prelude load. */
+void set_gc_stress(long n){ gc_stress_n = (n<0?0:n); gc_stress_c = 0; }
+
+/* Heap-integrity walk (BOCL_HEAPCHECK=N): every N allocations, walk every zone
+   block-by-block and verify the blocks tile the zone exactly with plausible
+   sizes/objcounts.  A stray out-of-bounds write that clobbers a block header is
+   caught here (the next walk lands mid-block or overruns the zone), pinpointing
+   the form whose evaluation corrupted the heap.  Aborts with a backtrace on the
+   first inconsistency. */
+static long  heap_check_n = -1;
+static long  heap_check_c = 0;
+static uword heap_check_after = 0;     /* BOCL_HEAPCHECK_AFTER: skip the first N allocs (the prelude) */
+static uword heap_total_allocs = 0;
+static uword block_physical_slot_count(Block* b);   /* defined below (mark phase) */
+
+static void heap_dump_and_abort(const char* msg, Zone* z, Block* b){
+    fprintf(stderr,"\nHEAPCHECK: %s  (zone %p [%p..%p], block %p size=%lu objcount=%ld)\n",
+            msg,(void*)z,(void*)first_block(z),(void*)end_block(z),
+            (void*)b,(unsigned long)(b?b->size:0),(long)(b?b->objcount:0));
+    fflush(stderr);
+    void* bt[40]; int n=backtrace(bt,40); backtrace_symbols_fd(bt,n,fileno(stderr));
+    abort();
+}
+
+static void heap_verify_free_list(Zone* z, FreeBlock* sentinel, const char* which){
+    char* zstart = (char*)first_block(z);
+    char* zend   = (char*)end_block(z);
+    uword guard  = 0;
+    for(FreeBlock* f = sentinel->next; f != NULL; f = f->next){
+        if((char*)f < zstart || (char*)f >= zend) heap_dump_and_abort(which, z, (Block*)f);
+        if((uword)f % sizeof(void*) != 0)         heap_dump_and_abort(which, z, (Block*)f);
+        if(f->size == 0 || f->size % sizeof(word) != 0 || (char*)f + f->size > zend)
+                                                  heap_dump_and_abort(which, z, (Block*)f);
+        if(!free_block_p((Block*)f))              heap_dump_and_abort(which, z, (Block*)f);
+        if(++guard > (zend - zstart) / (uword)MinimumBlockSize + 16)
+                                                  heap_dump_and_abort("free-list cycle", z, (Block*)f);}
+}
+
+static void heap_verify(void){
+    for(Zone* z=Zones; z!=NULL; z=z->next_zone){
+        Block* end = end_block(z);
+        Block* b   = first_block(z);
+        while(b < end){
+            uword bsz = b->size;
+            if(bsz == 0)                          heap_dump_and_abort("block size is zero", z, b);
+            if(bsz % sizeof(word) != 0)           heap_dump_and_abort("block size not word-aligned", z, b);
+            if(((char*)b + bsz) > (char*)end)     heap_dump_and_abort("block overruns zone end", z, b);
+            if(!free_block_p(b) && marked_block_p(b))
+                                                  heap_dump_and_abort("non-free block has GC mark bit set outside GC", z, b);
+            if(!free_block_p(b) && block_objcount(b) > block_physical_slot_count(b))
+                                                  heap_dump_and_abort("objcount > physical slots", z, b);
+            b = next_block(b);}
+        if(b != end)                              heap_dump_and_abort("blocks did not tile zone exactly", z, b);
+        heap_verify_free_list(z, &z->large_list, "large free-list node corrupt");
+        heap_verify_free_list(z, &z->small_list, "small free-list node corrupt");}
+}
+
 void* allocate(size_t size){
+    if(gc_stress_n < 0){
+        const char* s = getenv("BOCL_GCSTRESS");
+        gc_stress_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;}
+    if(gc_stress_n > 0 && garbage_collection_is_enabled()){
+        if(++gc_stress_c >= gc_stress_n){ gc_stress_c = 0; garbage_collect(); }}
+    if(heap_check_n < 0){
+        const char* s = getenv("BOCL_HEAPCHECK");
+        heap_check_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;
+        const char* a = getenv("BOCL_HEAPCHECK_AFTER");
+        heap_check_after = a ? (uword)atol(a) : 0;}
+    heap_total_allocs++;
+    if(heap_check_n > 0 && heap_total_allocs >= heap_check_after){
+        if(++heap_check_c >= heap_check_n){ heap_check_c = 0; heap_verify(); }}
     Block* result=allocate_internal(size);
+    /* Zero the object body.  A constructor that sets `objcount` before filling
+       its reference slots (with a nested allocation in between that can trigger
+       GC) would otherwise expose freed/garbage pointers to the collector, which
+       follows them and corrupts the heap — heap-dependent, hard-to-find crashes.
+       With the body zeroed, an unfilled slot reads as NULL, and mark() skips
+       NULL.  This neutralises that entire class of rooting bug at the source. */
+    {   size_t hdr = offsetof(Block, blocks);
+        if(size > hdr){ memset((char*)result + hdr, 0, size - hdr); }}
     add_to_live_pool((void*)result);
     return result;}
 
@@ -294,15 +405,76 @@ static void mark_wstack_push(Block* b){
         mark_wstack_cap = new_cap;}
     mark_wstack[mark_wstack_top++] = b;}
 
+/* ---- Use-after-free finder (BOCL_POISON): poison + quarantine -------------
+   When BOCL_POISON is set, the sweep does NOT reclaim dead blocks; it POISONs
+   them (class slot -> a sentinel) and QUARANTINEs them (never reused), recording
+   the C backtrace of the GC that freed them (which contains the function that
+   triggered the allocation->GC while still holding an unrooted Ref to the
+   block).  If a dangling C-local later USES such a block, class_of sees the
+   sentinel and we print that recorded backtrace — pinpointing the missing
+   add_to_live_pool with ZERO false positives.  Run under GCSTRESS to trigger
+   gaps fast; aborts on the first dangling use.  Leaks (bounded by run length). */
+#define POISON_SENTINEL  ((Block*)(uintptr_t)0x015015015015015eULL)
+#define POISON_OBJCOUNT  (((uword)FREE_BLOCK)-1u)
+#define POISON_RING      262144   /* bounded quarantine: most-recent freed blocks */
+#define POISON_BT_DEPTH  24
+
+bool          gc_poison_mode = false;
+static bool   gc_poison_bt   = false;   /* BOCL_POISON_BT: capture per-free backtraces (slow) */
+/* Lazily malloc'd (only when poison mode is on) so the finder has ZERO static
+   footprint otherwise — a ~50 MB .bss would shift the heap layout and could mask
+   or move layout-dependent GC behaviour in ordinary runs. */
+static Block** poison_ring        = NULL;             /* [POISON_RING]            */
+static void*   (*poison_ring_bt)[POISON_BT_DEPTH] = NULL; /* [POISON_RING][DEPTH] */
+static int*    poison_ring_btlen  = NULL;             /* [POISON_RING]            */
+static int     poison_ring_head   = 0;
+
+static bool poisoned_block_p(Block* b){ return b->objcount==(halfword)POISON_OBJCOUNT; }
+
+/* Poison a dead block + quarantine it in the ring.  When the ring is full, the
+   oldest quarantined block is released (objcount=FREE_BLOCK) so the next sweep
+   reclaims it — bounding memory to POISON_RING blocks while still catching any
+   dangling use that occurs within the last POISON_RING frees (uses almost always
+   happen within a few GCs of the free).  We only touch blocks[0] (class) and
+   objcount, never the payload slots (raw cons_car/->slots read those). */
+static void poison_block(Block* b){
+    Block* old = poison_ring[poison_ring_head];
+    if(old){ old->objcount = FREE_BLOCK; }          /* release oldest -> reclaimable */
+    poison_ring[poison_ring_head]   = b;
+    poison_ring_btlen[poison_ring_head] = gc_poison_bt
+        ? backtrace(poison_ring_bt[poison_ring_head], POISON_BT_DEPTH)
+        : 0;   /* per-free backtrace is the slow part; opt in via BOCL_POISON_BT */
+    poison_ring_head = (poison_ring_head + 1) % POISON_RING;
+    b->blocks[0] = POISON_SENTINEL;                 /* class slot -> sentinel       */
+    b->objcount  = (halfword)POISON_OBJCOUNT;}      /* quarantine marker; payload left
+       intact — filling it with a bad pointer was unsound (a constructor reusing an
+       evicted block without fully initializing a slot read the stale value). */
+
+_Noreturn void gc_poison_report(Ref object){
+    Block* b=(Block*)object;
+    fprintf(stderr,"\n*** USE-AFTER-FREE: object %p used after the GC freed it ***\n",(void*)b);
+    int slot=-1;
+    for(int i=0;i<POISON_RING;i++){ if(poison_ring[i]==b){ slot=i; break; } }
+    if(slot>=0){
+        fprintf(stderr,"--- backtrace at the GC that FREED it"
+                       " (the function missing add_to_live_pool is here) ---\n");
+        backtrace_symbols_fd(poison_ring_bt[slot],poison_ring_btlen[slot],fileno(stderr));}
+    else{ fprintf(stderr,"(free backtrace evicted from quarantine ring)\n"); }
+    fprintf(stderr,"--- backtrace at the USE ---\n");
+    void* ub[POISON_BT_DEPTH]; int un=backtrace(ub,POISON_BT_DEPTH);
+    backtrace_symbols_fd(ub,un,fileno(stderr));
+    fflush(stderr);
+    abort();}
+
 static void mark(Block* root){
     /* Seed the worklist — use valid_block_start_p, not just pointer_in_zones,
        to reject refs that land in the middle of another block. */
-    if(!root || !valid_block_start_p(root) || marked_block_p(root)) return;
+    if(!root || !valid_block_start_p(root) || (gc_poison_mode&&poisoned_block_p(root)) || marked_block_p(root)) return;
     mark_wstack_top = 0;
     mark_wstack_push(root);
     while(mark_wstack_top > 0){
         Block* b = mark_wstack[--mark_wstack_top];
-        if(!b || !valid_block_start_p(b) || marked_block_p(b)) continue;
+        if(!b || !valid_block_start_p(b) || (gc_poison_mode&&poisoned_block_p(b)) || marked_block_p(b)) continue;
         mark_block(b);
         uword cnt = block_objcount(b);
         uword max = block_physical_slot_count(b);
@@ -385,10 +557,18 @@ static uword sweep_zone(Zone* zone){
     while(current < end){
         Block* nxt = next_block(current);   /* pre-compute before possible extension */
 
-        if(marked_block_p(current)){
+        if(gc_poison_mode && poisoned_block_p(current)){
+            tail = NULL;   /* quarantined — never reclaimed, never coalesced */
+        }else if(marked_block_p(current)){
             clear_block(current);
             tail = NULL;
+        }else if(gc_poison_mode && !free_block_p(current)){
+            total += current->size;
+            poison_block(current);   /* dead block -> poison + quarantine */
+            tail = NULL;
         }else{
+            /* free block (either mode) or dead block (normal mode) -> reclaim.
+               In poison mode this reclaims ring-evicted blocks (now FREE_BLOCK). */
             if(!free_block_p(current))
                 total += current->size;
             FreeBlock* fb = (FreeBlock*)current;
@@ -473,18 +653,65 @@ void close_live_pool(uword objcount){
     if(objcount < rootset->live_pool->offset+LivePool_MaxSize+1){
         rootset->live_pool->objcount = (halfword)(objcount - rootset->live_pool->offset);}}
 
-
+/* Debug aid (BOCL_GCCHECK): after marking, every SURVIVING object's reference
+   slots must point to objects that also survive.  A survivor that references a
+   doomed (unmarked) child means that child is about to be wrongly freed while
+   still reachable — i.e. a real rooting/objcount bug.  Report the offending
+   parent so the bug can be traced to a specific constructor. */
+static void verify_no_dangling(void){
+    do_zones(zone){
+        Block* end = end_block(zone);
+        Block* b   = first_block(zone);
+        while(b < end){
+            Block* nxt = next_block(b);
+            if(!free_block_p(b) && marked_block_p(b)){
+                uword cnt = block_objcount(b);
+                uword max = block_physical_slot_count(b);
+                if(cnt > max){ cnt = max; }
+                for(uword i = 0; i < cnt; i++){
+                    Block* child = b->blocks[i];
+                    if(child && valid_block_start_p(child)
+                       && !free_block_p(child) && !marked_block_p(child)){
+                        fprintf(stderr,
+                            "GCCHECK: survivor %p (objcount=%lu size=%lu) slot %lu -> DOOMED %p (objcount=%lu size=%lu)\n",
+                            (void*)b, (unsigned long)block_objcount(b), (unsigned long)b->size,
+                            (unsigned long)i, (void*)child,
+                            (unsigned long)block_objcount(child), (unsigned long)child->size);
+                        fflush(stderr);}}}
+            b = nxt;}}}
 
 uword garbage_collect(void){
     if(!garbage_collection_enabled){
         return 0;}
     mark((Block*)rootset);
+    if(getenv("BOCL_GCCHECK")){ verify_no_dangling(); }
     uword freed = sweep();
     return freed;}
 
 
 
+/* Allocate the quarantine ring on demand (env BOCL_POISON or the (%poison t)
+   runtime toggle).  Returns false if it cannot be allocated. */
+static bool poison_ring_ensure(void){
+    if(poison_ring){ return true; }
+    poison_ring       = calloc(POISON_RING, sizeof(*poison_ring));
+    poison_ring_bt    = calloc(POISON_RING, sizeof(*poison_ring_bt));
+    poison_ring_btlen = calloc(POISON_RING, sizeof(*poison_ring_btlen));
+    if(!poison_ring || !poison_ring_bt || !poison_ring_btlen){
+        fprintf(stderr,"BOCL_POISON: out of memory for quarantine ring\n");
+        return false;}
+    return true;}
+
+void set_gc_poison(bool on){
+    /* Must allocate the ring before enabling: poison_block() writes into it.  The
+       runtime toggle bypassed memory_initialize's allocation otherwise (a NULL
+       ring -> crash). */
+    if(on && !poison_ring_ensure()){ gc_poison_mode = false; return; }
+    gc_poison_mode = on;}
+
 void memory_initialize(void){
+    gc_poison_bt   = getenv("BOCL_POISON_BT")!=NULL; /* per-free backtraces (slow) */
+    if(getenv("BOCL_POISON")){ set_gc_poison(true); }
     zone_allocate(DefaultZoneSize);
     rootset=(RootSet*)allocate_internal(sizeof(*rootset));
     rootset->objcount=2;
@@ -500,16 +727,15 @@ void memory_initialize(void){
 
 /* For memory dump: */
 static bool in_root_set_p(Block* block){
-    /* We assume the root set is a lisp list */
+    /* The root set is a lisp list of (compact) conses: each cons is a single
+       block {class, car, cdr} with objcount==3 — car is blocks[1], cdr blocks[2]. */
     Block* current=rootset->kernel_rootset;
     if(current==NULL){
         return false;}
-    while(current
-          && (block_objcount(current)==2)
-          && (block_objcount(current->blocks[1])==2)){
-        if(current->blocks[1]->blocks[0]==block){
+    while(current && block_objcount(current)==3){
+        if(current->blocks[1]==block){   /* car == the searched object */
             return true;}
-        current=current->blocks[1]->blocks[1];}
+        current=current->blocks[2];}     /* cdr == next cons */
     return false;}
 
 static bool in_free_list(FreeBlock* list,Block* block){

@@ -3,6 +3,7 @@
 #include <string.h>
 #include "kernel.h"
 #include "cons.h"
+#include "variable.h"
 
 /* Phase 5.2: FUNCALL / APPLY / MAPCAR / MAPC / EVERY / SOME / NOTANY /
    NOTEVERY as kernel built-ins. These all evaluate the function argument
@@ -53,7 +54,14 @@ static void kernel_APPLY(Ref function, Ref arguments, MultipleValues* results){
    invoke `visit` with the result. Stop when ANY list is exhausted. */
 typedef void (*tuple_visitor)(Ref result_value, void* ctx);
 
-static void map_walk(Ref fn, Ref lists, tuple_visitor visit, void* ctx){
+static void map_walk(Ref fn, Ref lists, tuple_visitor visit, void* ctx, Ref* keep){
+    /* KEEP (or NULL): a pointer to the head of a result list the visitor
+       accumulates across iterations.  The visitor conses inside MW_POOL, whose
+       close (below) trims those cells out of the live pool — so without this the
+       partial result is unrooted across the next kernel_apply and gets freed and
+       reused (heap corruption).  We re-root *KEEP after each close, trimming to
+       ACC_POOL first so the live pool does not grow per iteration. */
+    uword acc_pool = open_live_pool();
     while(true){
         /* If any list is empty, stop. */
         {Ref it = lists;
@@ -89,7 +97,8 @@ static void map_walk(Ref fn, Ref lists, tuple_visitor visit, void* ctx){
         Ref result = (r.count > 0) ? r.values[0] : NIL_Symbol;
         add_to_live_pool(result);
         visit(result, ctx);
-        close_live_pool(mw_pool);}}
+        close_live_pool(mw_pool);
+        if(keep){ close_live_pool(acc_pool); add_to_live_pool(*keep); }}}
 
 /* MAPCAR — collect the results. */
 typedef struct {
@@ -115,7 +124,7 @@ static void kernel_MAPCAR(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("MAPCAR: %s","needs at least one list");}
     collect_ctx c = { NIL_Symbol, NIL_Symbol };
-    map_walk(fn, current, collect_visit, &c);
+    map_walk(fn, current, collect_visit, &c, &c.head);
     results->count = 1;
     results->values[0] = c.head;
     close_live_pool(pool);}
@@ -133,7 +142,7 @@ static void kernel_MAPC(Ref function, Ref arguments, MultipleValues* results){
         ERROR("MAPC: %s","needs at least one list");}
     Ref first_list = cons_car(current);
     discard_ctx c = { 0 };
-    map_walk(fn, current, discard_visit, &c);
+    map_walk(fn, current, discard_visit, &c, NULL);
     results->count = 1;
     results->values[0] = first_list;
     close_live_pool(pool);}
@@ -155,7 +164,7 @@ static void kernel_EVERY(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("EVERY: %s","needs at least one list");}
     pred_ctx c = { 0, 0 };
-    map_walk(fn, current, every_visit, &c);
+    map_walk(fn, current, every_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.found_false ? NIL_Symbol : T_Symbol;
     close_live_pool(pool);}
@@ -176,7 +185,7 @@ static void kernel_SOME(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("SOME: %s","needs at least one list");}
     some_ctx c = { NIL_Symbol, 0 };
-    map_walk(fn, current, some_visit, &c);
+    map_walk(fn, current, some_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.captured ? c.first_true : NIL_Symbol;
     close_live_pool(pool);}
@@ -191,7 +200,7 @@ static void kernel_NOTEVERY(Ref function, Ref arguments, MultipleValues* results
     if(nullp(current)){
         ERROR("NOTEVERY: %s","needs at least one list");}
     pred_ctx c = { 0, 0 };
-    map_walk(fn, current, every_visit, &c);
+    map_walk(fn, current, every_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.found_false ? T_Symbol : NIL_Symbol;
     close_live_pool(pool);}
@@ -204,7 +213,7 @@ static void kernel_NOTANY(Ref function, Ref arguments, MultipleValues* results){
     if(nullp(current)){
         ERROR("NOTANY: %s","needs at least one list");}
     some_ctx c = { NIL_Symbol, 0 };
-    map_walk(fn, current, some_visit, &c);
+    map_walk(fn, current, some_visit, &c, NULL);
     results->count = 1;
     results->values[0] = c.captured ? NIL_Symbol : T_Symbol;
     close_live_pool(pool);}
@@ -269,20 +278,37 @@ static void kernel_CHAR_SET(Ref function, Ref arguments, MultipleValues* results
     results->values[0] = ch;
     close_live_pool(pool);}
 
-/* (GENSYM &optional prefix) — return a fresh uninterned symbol whose name
-   is `prefix` followed by an integer counter. Default prefix is "G". */
-static word gensym_counter = 0;
+/* (GENSYM &optional x) — fresh uninterned symbol named PREFIX followed by a
+   number.  X is either a STRING prefix (default "G"), using and incrementing
+   *GENSYM-COUNTER*, or a non-negative INTEGER used directly as the suffix, leaving
+   *GENSYM-COUNTER* unchanged (CLHS GENSYM).  Implemented in C — a Lisp re-impl
+   allocates enough per call to wake a latent GC gap during the prelude load. */
 static void kernel_GENSYM(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
     add_to_live_pool(arguments);
     Ref current = arguments;
-    Ref prefix = nullp(current)
-                 ? string_new_cstring("G")
-                 : pop_mandatory_argument(function, &current);
+    Ref arg = nullp(current) ? NIL_Symbol : pop_mandatory_argument(function, &current);
     check_no_more_arguments(function, current);
-    char* prefix_c = string_cstring(prefix);
-    char counter_buf[32];
-    snprintf(counter_buf, sizeof(counter_buf), "%ld", (long)(++gensym_counter));
+    add_to_live_pool(arg);
+
+    char        counter_buf[32];
+    const char* prefix_c     = "G";
+    char*       prefix_owned = NULL;
+
+    if(integerp(arg)){
+        /* integer designator: use directly, do not touch *GENSYM-COUNTER*. */
+        snprintf(counter_buf, sizeof(counter_buf), "%ld", (long)integer_value(arg));
+    } else {
+        if(!nullp(arg)){
+            if(!stringp(arg)){ TYPE_ERROR(arg, STRING_Class); }
+            prefix_owned = string_cstring(arg);
+            prefix_c     = prefix_owned;}
+        Ref counter_sym = S(*GENSYM-COUNTER*);
+        Ref cv = symbol_value(counter_sym);
+        word n = integerp(cv) ? integer_value(cv) : 0;
+        snprintf(counter_buf, sizeof(counter_buf), "%ld", (long)n);
+        set_symbol_value(counter_sym, integer_from_word(n + 1));}
+
     size_t plen = strlen(prefix_c);
     size_t clen = strlen(counter_buf);
     char* full = malloc(plen + clen + 1);
@@ -291,7 +317,7 @@ static void kernel_GENSYM(Ref function, Ref arguments, MultipleValues* results){
     full[plen + clen] = '\0';
     Ref sym = symbol_new(string_new_cstring(full));
     free(full);
-    free(prefix_c);
+    if(prefix_owned){ free(prefix_owned); }
     results->count = 1;
     results->values[0] = sym;
     close_live_pool(pool);}
@@ -333,6 +359,7 @@ void kernel_initialize_sequences(void){
     register_fn(S(NOTANY),   ll_fn_rest_lists, kernel_NOTANY);
     register_fn(S(IDENTITY), list(S(X), NULL), kernel_IDENTITY);
     register_fn(S(GENSYM),   NIL_Symbol,       kernel_GENSYM);
+    define_variable(S(*GENSYM-COUNTER*), I(0));   /* GENSYM's counter, CLHS */
 
     /* String-library kernel primitives — see prelude.lisp for the Lisp
        layer that sits on top of these. */

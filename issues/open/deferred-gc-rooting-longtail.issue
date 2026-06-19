@@ -1,0 +1,140 @@
+GC rooting long-tail — BOCL_POISON use-after-free finder + the layout-sensitive
+gaps it exposes.
+
+== The finder (DONE, committed) ==
+sources/memory.c implements a precise use-after-free finder, enabled by the
+BOCL_POISON environment variable (zero static/runtime footprint when off — the
+quarantine ring is lazily malloc'd only in poison mode, so it cannot perturb
+ordinary runs).  How it works:
+
+  - In poison mode the sweep does NOT reclaim dead blocks.  Each dead block is
+    POISONED (its class slot -> a sentinel, 0x015015015015015e) and QUARANTINED in
+    a bounded ring (POISON_RING most-recent frees); the C backtrace of the GC that
+    freed it is recorded alongside.  When the ring is full the oldest entry is
+    released (objcount=FREE_BLOCK) so the next sweep reclaims it — memory stays
+    bounded.
+  - class_of() detects the sentinel: if a dangling C local later dereferences a
+    freed+quarantined block, we print the recorded FREE backtrace (which contains
+    the function that triggered the allocation->GC while still holding an unrooted
+    Ref — i.e. the exact missing add_to_live_pool) plus the USE backtrace, then
+    abort.  ZERO false positives: only refs the code actually dereferences are
+    reported.
+
+Usage:  BOCL_POISON=1 BOCL_GCSTRESS=1 ./bocl ... 2>&1
+        (GCSTRESS=1 makes a GC fire at every allocation so narrow gap windows are
+        hit quickly; the run aborts on the first dangling use.)
+
+== Gaps found, and why their fixes are deferred ==
+The finder precisely located several real gaps in the C bootstrap (each: a fresh,
+unrooted Ref freed by a GC inside a subsequent allocation, then used):
+
+  1. symbol_intern_obarray (kernel.c): the symbol name STRING, freed inside
+     Symbol_slots/Object_new, then hashed by sym_name_hash->string_length.
+  2. bocl_load_cstring (bocl.c): (a) the pathname built for stream_open, freed by
+     the K(...)/S(...) keyword interns in the argument list; (b) the input stream
+     `inp` + *LOAD-PATHNAME*/*LOAD-TRUENAME* saved values, across the read/eval loop.
+  3. package_intern_current_cstring / package_intern_cstring_in /
+     package_find_external_cstring (packages.c): the fresh name STRING, freed by
+     current_package()/pkg_intern()/find_symbol() while it is being hashed.
+
+The OBVIOUS fix (open_live_pool / add_to_live_pool / close_live_pool around each
+body) is balanced and correct in isolation, BUT in the hot load/intern paths it
+PERTURBS HEAP LAYOUT, and that wakes OTHER latent rooting gaps that were dormant
+at the old layout — observed concretely:
+
+  - symbol_intern_obarray rooting -> (princ (+ most-positive-fixnum 1)) hangs.
+  - bocl_load_cstring rooting    -> (princ (expt 2 100)) hangs (while (+ ...) and
+                                    50! still work) — a latent gap on the expt /
+                                    bignum path.
+
+This is the same Heisenbug class as the finder's own .bss footprint (now fixed by
+lazy-malloc): the codebase has a LONG TAIL of latent gaps, and fixing one shifts
+the layout enough to expose another.  So the fixes cannot be landed one at a time
+without a net regression.
+
+== RESOLVED — focused fixpoint pass ==
+All three rooting gaps are now FIXED, and the bignum regression did NOT recur.
+
+Key technique (the hypothesis from the old "complementary option" — confirmed):
+  - symbol_intern_obarray: root name+obarray+symbol ONLY in the COLD not-found
+    branch (interning a brand-new symbol — rare after bootstrap), leaving the hot
+    find_symbol found-path (every S(...) lookup) untouched.  This covers the real
+    gap (a GC inside Symbol_slots/Object_new frees `name`) WITHOUT the hot-path
+    layout churn that previously woke the bignum gap.  Verified: bignum is clean
+    5/5 on a clean slate (expt, 60!, truncate, gcd) AND (+ most-positive-fixnum 1)
+    / (expt 2 100) stay clean.  The Heisenbug did not recur.
+  - bocl_load_cstring: build+root the pathname before stream_open, and keep one
+    pool open across the whole load for inp + LOAD-PATHNAME/LOAD-TRUENAME values.
+  - package_intern_current_cstring / _cstring_in / find_external_cstring: root the
+    fresh name STRING across current_package()/pkg_intern()/find_symbol().
+
+Verification (poison OFF, clean slate, procs confirmed 0 between runs):
+  - finder on load path under BOCL_POISON=1 BOCL_GCSTRESS=1: no dangling use.
+  - bignum 5/5 ok; load 3/3 ok; no regression on the SACLA files that load clean.
+
+New diagnostics added (kernel.c): (%gc-stress n) sets the GC-stress period at
+runtime and (%gc-enable x) toggles the GC — so the finder can stress (or the
+investigator can disable GC on) a POST-prelude workload, e.g. one ANSI test file,
+without paying GCSTRESS/poison over the whole 7000-line prelude load.  Call them
+qualified: (cl::%gc-stress 1) / (cl::%gc-enable nil).
+
+== The remaining SACLA crashes are NOT rooting gaps ==
+Classified with (cl::%gc-enable nil) — load the file with the GC DISABLED:
+  - must-symbol  SEGV (class_of(0x8000), corrupted stack) — SEGVs with GC OFF.
+  - must-printer SEGV — SEGVs with GC OFF.
+  - must-cons    HANG (after NSUBST-IF-NOT undefined) — HANGS with GC OFF.
+  - must-do      HANG (after VAR unbound) — HANGS with GC OFF.
+A crash that persists with the GC disabled is GC-INDEPENDENT: these are logic
+bugs in partially-implemented areas (the tests reach SET, *GENSYM-COUNTER*,
+NSUBST-IF-NOT, &whole, etc.), not rooting gaps.  Tracked separately in
+issues/open/deferred-sacla-logic-bugs.issue.
+
+NB (still true): a timed-out run leaves a runaway bocl at 100% CPU that STARVES
+later runs into false "hangs"; always `pkill -9 -f sources/bocl` + confirm 0 procs
+between timed runs (this confounded an earlier must-eval/bignum scan).
+
+== STILL OPEN (long tail): GCSTRESS=1 cannot even boot — subclassp/typep gap ==
+Found 2026-06 while validating the fill-pointer-as-a-field change (Slice 96).
+Under BOCL_GCSTRESS=1 the interpreter SEGVs during STARTUP — before any user
+form runs — deterministically (5/5), even with a trivial `-x '(princ :ok)'`:
+
+  BOCL_GCSTRESS=1 ./sources/bocl --no-init --batch -on-error appease -x '(princ :ok)'
+
+  EXC_BAD_ACCESS in class_designator_name (kernel.c:1712, `class->slots->class.name`)
+    class_designator_name      kernel.c:1712   <- `class` is a freed block
+    class_same                 kernel.c:1721
+    subclassp                  kernel.c:1725
+    typep                      kernel.c:1766
+    environment_find_function  environment.c:184
+    evale                      eval.c:1367
+    bocl_load_cstring(.../bootstrap/cl-exports.lisp)   <- during startup load
+
+So a class designator reaching subclassp/typep via environment_find_function is
+freed by a GC fired inside the resolution path (a missing add_to_live_pool on the
+class — or the function name / environment — across an allocation in that path).
+The condition-class NAME bridge (class_designator_name / class_same, Slice 88) is
+where the dangling pointer is finally dereferenced, but the gap is upstream.
+
+PRE-EXISTING and NOT caused by the fill-pointer change: it reproduces identically
+on the parent commit (d3395ac) rebuilt without the kernel change.  The
+fill-pointer field only shifts heap layout, which changes WHICH long-tail gap
+fires first (same Heisenbug class as documented above) — it does not create one.
+
+Next step: BOCL_POISON=1 BOCL_GCSTRESS=1 on the trivial startup run should print
+the FREE backtrace pinpointing the missing root in the subclassp/typep/
+environment_find_function path (the finder aborts on first dangling use, so the
+startup cost is bounded — it dies early here).
+
+NB also: GC under (cl::%gc-stress N) is pathologically slow in general (a tiny
+plain-cons loop times out at 90s, ~85% sys time) — independent of fill pointers.
+So a full post-prelude GCSTRESS workload is impractical; validate layout changes
+via normal-GC suite loads (which still drive thousands of collections) instead.
+
+== Status ==
+Three named rooting gaps RESOLVED (cold-branch technique, no bignum regression).
+LONG TAIL STILL OPEN: GCSTRESS=1 no longer boots (subclassp/typep gap above) — a
+new concrete entry point for the finder.  Finder committed and working.
+Tooling note: BOCL_POISON+GCSTRESS=1 is too slow (a backtrace per freed block) to
+COMPLETE a full post-prelude workload, so deep paths are verified under normal GC
+(multiple clean-slate runs) rather than exhaustively under the finder; (%gc-stress)
+narrows that gap for targeted files.

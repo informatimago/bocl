@@ -37,21 +37,40 @@ _Noreturn void fatal(const char* fname,const char* message_format,...){
     exit(EX_SOFTWARE);}
 
 _Noreturn void error(const char* fname,const char* message_format,...){
-    /* C-level terminal fallback: print to stderr and exit.
-       The Lisp-level (ERROR ...) is handled by kernel_ERROR in conditions.c,
-       which signals a SIMPLE-ERROR and only calls this function if no handler
-       matched.  Direct C callers (bounds checks, size overflows, …) also land
-       here; to make those catchable from Lisp, route through kernel_ERROR
-       rather than the C ERROR() macro. */
+    /* Format the message once into a buffer so we can both signal it as a
+       catchable condition and, if nobody handles it, print it on the way out. */
+    char body[1024];
     va_list ap;
-    fprintf(stderr,"\nIn %s:\n",fname);
     va_start(ap,message_format);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
-    vfprintf(stderr,message_format,ap);
+    vsnprintf(body,sizeof(body),message_format,ap);
 #pragma GCC diagnostic pop
     va_end(ap);
-    fprintf(stderr,"\n\n");
+
+    /* Signal a catchable SIMPLE-ERROR so that HANDLER-CASE / HANDLER-BIND —
+       in particular the ANSI test runner's per-test handlers — can recover
+       from errors raised inside C built-ins (undefined function, bad args,
+       unsupported operations, …) instead of the whole process dying.  This
+       mirrors type_error().  Bootstrap guard: skip while the condition class
+       is still being initialised (its metaclass slot is NULL then). */
+    if(SIMPLE_ERROR_Class->class != NULL){
+        uword pool = open_live_pool();
+        char msg[1100];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+        snprintf(msg,sizeof(msg),"In %s: %s",fname,body);
+#pragma GCC diagnostic pop
+        Ref fmt  = string_new_cstring(msg);
+        add_to_live_pool(fmt);
+        Ref cond = make_simple_condition(SIMPLE_ERROR_Class, fmt, NIL_Symbol);
+        add_to_live_pool(cond);
+        signal_condition(cond, eval_global_environment());
+        /* signal_condition returned — no handler matched; fall through. */
+        close_live_pool(pool);}
+
+    fprintf(stderr,"\nIn %s:\n",fname);
+    fprintf(stderr,"%s\n\n",body);
     exit(EX_DATAERR);}
 
 
