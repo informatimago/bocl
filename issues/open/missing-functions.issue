@@ -24,3 +24,43 @@ ANSI cl-symbols tests (which use FIND-SYMBOL).  Fixing FIND-SYMBOL/package
 membership is a prerequisite for a precise audit and is tracked here.
 Remaining: fix find-symbol package resolution, then audit + implement the
 missing functions.  Issue kept OPEN.
+
+----------------------------------------------------------------------
+PROGRESS (slice 50, v1.1.7):
+The FIND-SYMBOL / package-resolution blocker is RESOLVED (true packages, see
+bocl-packages memory / closed package work), so the systematic audit was run:
+  (do-external-symbols (s "COMMON-LISP") ...)  classifying each by
+  special-operator-p / macro-function / fboundp.
+Audit result over the 978 external COMMON-LISP symbols:
+  579 fbound functions, 72 macros, 25 special operators, 302 not callable.
+The 302 are mostly type names, variables/constants, declaration identifiers and
+lambda-list keywords (correctly not functions).  After filtering those out, the
+genuinely missing FUNCTIONS were implemented (bootstrap/prelude.lisp):
+  sinh cosh tanh asinh acosh atanh cis conjugate phase
+  logtest ldb-test  ffloor fceiling fround ftruncate
+  constantp compiled-function-p function-lambda-expression
+  truename file-author get-decoded-time clear-output
+All verified (hyperbolic inverses round-trip; cis/conjugate use kernel COMPLEX;
+ffloor&co. return float quotients; constantp on self-eval/quote/keywords).
+
+STILL MISSING (kept open) — these need kernel/subsystem support, not a one-liner:
+- CLOS generic-function protocol: add-method remove-method allocate-instance
+  compute-applicable-methods method-qualifiers function-keywords
+  reinitialize-instance make-instances-obsolete slot-missing slot-unbound
+  no-applicable-method no-next-method update-instance-for-redefined-class
+  invalid-method-error method-combination-error.
+- Stream subtypes / ops: file-position file-string-length unread-char
+  broadcast-stream-streams concatenated-stream-streams synonym-stream-symbol
+  echo-stream-input-stream echo-stream-output-stream
+  two-way-stream-input-stream two-way-stream-output-stream.
+- Reader / pretty-printer: read-delimited-list parse-namestring
+  set-syntax-from-char formatter pprint-fill pprint-linear pprint-tab
+  pprint-tabular pprint-dispatch (+ the pprint-* macros).
+- Condition accessor: package-error-package.
+- Misc interactive: inspect dribble step trace untrace with-compilation-unit.
+- INTROSPECTION GAP (separate from "missing"): defun defmacro defvar
+  defparameter defconstant lambda in-package handler-case handler-bind
+  restart-case restart-bind etc. WORK (evale handles them) but
+  special-operator-p / macro-function / fboundp all return NIL for them, so the
+  audit lists them as not-callable.  Making the introspection predicates report
+  these correctly is a tractable follow-up.

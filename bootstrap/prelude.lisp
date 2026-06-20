@@ -8552,6 +8552,81 @@ result array; return that array."
             (t (error "COMPILE: NAME must be NIL or a symbol, got ~S" name)))))
     (values result nil nil)))
 
+;;; --- Missing CL functions (issue missing-functions) -------------------
+;;; Implemented from the fboundp audit over the 978 external COMMON-LISP
+;;; symbols.  Pure functions built on existing kernel primitives.
+
+;; Hyperbolic functions and their inverses (CLHS 12.2).
+(defun sinh (x) (/ (- (exp x) (exp (- x))) 2))
+(defun cosh (x) (/ (+ (exp x) (exp (- x))) 2))
+(defun tanh (x) (let ((e (exp (* 2 x)))) (/ (- e 1) (+ e 1))))
+(defun asinh (x) (log (+ x (sqrt (+ (* x x) 1)))))
+(defun acosh (x) (log (+ x (* (sqrt (- x 1)) (sqrt (+ x 1))))))
+(defun atanh (x) (/ (log (/ (+ 1 x) (- 1 x))) 2))
+
+;; cis / conjugate / phase (CLHS 12.2).
+(defun cis (radians)
+  "Return e^(i*RADIANS) = (complex (cos radians) (sin radians))."
+  (complex (cos radians) (sin radians)))
+(defun conjugate (number)
+  (if (complexp number)
+      (complex (realpart number) (- (imagpart number)))
+      number))
+(defun phase (number)
+  "The angle of NUMBER's polar representation (radians)."
+  (if (complexp number)
+      (atan (imagpart number) (realpart number))
+      (if (minusp number) pi 0)))
+
+;; Bit-test helpers (CLHS 12.2).
+(defun logtest (integer1 integer2)
+  (not (zerop (logand integer1 integer2))))
+(defun ldb-test (bytespec integer)
+  (not (zerop (ldb bytespec integer))))
+
+;; Float division operators (CLHS 12.2) — like floor/ceiling/round/truncate but
+;; the quotient is returned as a float.
+(defun ffloor (number &optional (divisor 1))
+  (multiple-value-bind (q r) (floor number divisor) (values (float q) r)))
+(defun fceiling (number &optional (divisor 1))
+  (multiple-value-bind (q r) (ceiling number divisor) (values (float q) r)))
+(defun fround (number &optional (divisor 1))
+  (multiple-value-bind (q r) (round number divisor) (values (float q) r)))
+(defun ftruncate (number &optional (divisor 1))
+  (multiple-value-bind (q r) (truncate number divisor) (values (float q) r)))
+
+;; Misc predicates / accessors.
+(defun constantp (form &optional environment)
+  "True for self-evaluating objects, QUOTE forms, keywords, and T/NIL."
+  (declare (ignore environment))
+  (or (keywordp form) (numberp form) (stringp form) (characterp form)
+      (eq form t) (eq form nil) (vectorp form)
+      (and (consp form) (eq (car form) 'quote))))
+(defun compiled-function-p (object)
+  "bocl interprets; no function is a loaded compiled-function."
+  (declare (ignore object))
+  nil)
+(defun function-lambda-expression (function)
+  "bocl keeps no source for functions; return (values nil t name)."
+  (declare (ignore function))
+  (values nil t nil))
+
+;; File / time helpers.
+(defun truename (filespec)
+  (or (probe-file filespec)
+      (error "TRUENAME: file ~S does not exist" filespec)))
+(defun file-author (pathspec)
+  "bocl does not record file authors."
+  (declare (ignore pathspec))
+  nil)
+(defun get-decoded-time ()
+  "Decode the current time (CLHS 25.1.4.1)."
+  (decode-universal-time (get-universal-time)))
+(defun clear-output (&optional stream)
+  "No buffered partial output to discard in bocl."
+  (declare (ignore stream))
+  nil)
+
 ;;; --- compile-file-pathname now honours *default-compiled-file-type* --
 (defun compile-file-pathname (input-file &key output-file &allow-other-keys)
   "Pathname COMPILE-FILE writes to: the source pathname with its type changed to
