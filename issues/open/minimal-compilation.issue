@@ -25,3 +25,30 @@ PROGRESS (slice 44):
   (slice 39): a global-macro call is expanded once and cached in place.
 REMAINING: the COMPILE function (install a fully-macroexpanded interpreted
 function); eager macroexpand-all at LOAD time (currently lazy via displacement).
+
+----------------------------------------------------------------------
+PROGRESS (slice 49, v1.1.6):
+- COMPILE implemented in the prelude (overriding the kernel COMPILE primitive,
+  which only EVAL'd the lambda).  It now MACROEXPAND-ALLs the definition before
+  building the interpreted function, so the result is fully macroexpanded and
+  fixed at compile time.  Supported: (compile nil lambda-expr) -> fn;
+  (compile nil fn) -> fn; (compile name lambda-expr) -> install + return name;
+  (compile name) -> name.  Returns (values result warnings-p failure-p).
+  Verified: a macro redefined AFTER (compile nil '(lambda () (mymac 5))) does
+  not change the compiled function's result (eager expansion proven).
+- Decision on "eager macroexpand-all at LOAD time": LOAD keeps using lazy macro
+  DISPLACEMENT (slice 39).  Forcing MACROEXPAND-ALL on every loaded top-level
+  form is unsafe today because the walker is intentionally incomplete (it does
+  not yet understand the local-macro binding forms MACROLET / SYMBOL-MACROLET
+  — it would mishandle their headers).  Displacement reaches the same macro-free
+  steady state without that risk and is the conforming choice for minimal-
+  compilation-at-load.
+- MACROEXPAND-ALL now also walks FLET / LABELS (keeping each local function's
+  name + lambda list, expanding its body and the main body).
+
+STILL REMAINING (kept open):
+- COMPILE-FILE writing a real macro-free fast-load file: blocked by the GC-
+  rooting corruption documented in issues/open/deferred-compile-file-rt-gc-
+  corruption.issue (the MACROEXPAND-ALL + package-qualified PRIN1 write path).
+- MACROEXPAND-ALL for the local-macro forms MACROLET / SYMBOL-MACROLET (these
+  need local-macro environment tracking during the walk).

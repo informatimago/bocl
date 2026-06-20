@@ -8500,8 +8500,57 @@ result array; return that array."
                    (setq l (cddr l))))))
     ((eq (car form) 'the)
      (list 'the (cadr form) (macroexpand-all (caddr form))))
+    ((member (car form) '(flet labels))
+     ;; (flet/labels ((name lambda-list body...) ...) body...): keep each name
+     ;; and lambda-list, walk the function bodies and the main body.
+     (list* (car form)
+            (mapcar (lambda (b)
+                      (if (and (consp b) (consp (cdr b)))
+                          (list* (car b) (cadr b) (mapcar #'macroexpand-all (cddr b)))
+                          b))
+                    (cadr form))
+            (mapcar #'macroexpand-all (cddr form))))
     (t                                                    ; special op or call
      (cons (car form) (mapcar #'macroexpand-all (cdr form))))))
+
+;;; --- COMPILE (issue minimal-compilation) ------------------------------
+;;; Minimal compilation (CLHS 3.2.2): COMPILE produces an interpreted function
+;;; whose body is FULLY MACROEXPANDED — no macro call remains, so the function's
+;;; behaviour is fixed at compile time and a later redefinition of a macro it
+;;; used does not change it.  This replaces the kernel COMPILE primitive (which
+;;; only EVAL'd the lambda, leaving macros to be displaced lazily on first call).
+(defun %compile-definition (definition)
+  "Coerce DEFINITION (a lambda expression, (function ...) form, or a function)
+   to a function whose body has been MACROEXPAND-ALL'd."
+  (cond
+    ((functionp definition) definition)                  ; already a function
+    ((and (consp definition) (eq (car definition) 'lambda))
+     (eval (list 'function (macroexpand-all definition))))
+    ((and (consp definition) (eq (car definition) 'function))
+     (eval (macroexpand-all definition)))
+    (t (eval definition))))
+
+(defun compile (name &optional (definition nil definition-supplied-p))
+  "Minimal-compile NAME/DEFINITION, returning (values result warnings-p failure-p).
+   (compile nil lambda-expr) -> the (macroexpanded) function;
+   (compile nil function)    -> the function unchanged;
+   (compile name lambda-expr) -> install the function under NAME, return NAME;
+   (compile name)            -> NAME (bocl keeps no source, so the current
+                                 definition is taken as already compiled)."
+  (let ((result
+          (cond
+            ((null name)
+             (unless definition-supplied-p
+               (error "COMPILE: a definition is required when NAME is NIL"))
+             (%compile-definition definition))
+            ((and (symbolp name) (not definition-supplied-p))
+             name)
+            ((symbolp name)
+             (let ((fn (%compile-definition definition)))
+               (when (functionp fn) (setf (symbol-function name) fn))
+               name))
+            (t (error "COMPILE: NAME must be NIL or a symbol, got ~S" name)))))
+    (values result nil nil)))
 
 ;;; --- compile-file-pathname now honours *default-compiled-file-type* --
 (defun compile-file-pathname (input-file &key output-file &allow-other-keys)
