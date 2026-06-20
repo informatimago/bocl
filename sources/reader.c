@@ -1136,7 +1136,8 @@ extern Ref Object_new(Ref class, Slots* slots);
    (user) function in the macros vector is invoked as a reader macro. */
 
 static Ref rtv_get(Ref vec,int i){ return vec->slots->array.elements->elements[i]; }
-static void rtv_set(Ref vec,int i,Ref v){ vec->slots->array.elements->elements[i]=v; }
+static void rtv_set(Ref vec,int i,Ref v){ vec->slots->array.elements->elements[i]=v;
+    gc_write_barrier(vec->slots->array.elements); }
 static Ref make_rt_vector(Ref fill){
     Ref lst=NIL_Symbol;
     for(int i=0;i<128;i++){ lst=cons(fill,lst); }
@@ -1344,6 +1345,7 @@ static void k_SET_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* re
         ERROR("(SETF READTABLE-CASE): invalid mode %s",
               string_cstring(prin1_to_string(mode)));}
     rt->slots->readtable.readcase=mode;
+    gc_write_barrier(rt->slots);
     results->count=1; results->values[0]=mode;
     close_live_pool(pool);}
 

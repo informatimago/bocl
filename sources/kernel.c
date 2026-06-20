@@ -1183,11 +1183,13 @@ Ref cons_rplaca(Ref cell,Ref newcar){
        get created (rplacd into a reused cell).  Catch it here too. */
     if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
     ((ConsCell*)cell)->car=newcar;
+    gc_write_barrier(cell);   /* car/cdr live inline in the cons block itself */
     return cell;}
 
 Ref cons_rplacd(Ref cell,Ref newcdr){
     if(gc_poison_mode && (uintptr_t)cell->class==0x015015015015015eULL){ gc_poison_report(cell); }
     ((ConsCell*)cell)->cdr=newcdr;
+    gc_write_barrier(cell);
     return cell;}
 
 
@@ -1482,35 +1484,47 @@ Ref symbol_plist(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     return symbol->slots->symbol.plist;}
 
+/* The mutated Ref lives in the Symbol slots block (symbol->slots), so that is
+   the write-barrier target — NOT the symbol Object wrapper. */
 Ref symbol_make_unbound(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     symbol->slots->symbol.value=UNBOUND_Object;
+    gc_write_barrier(symbol->slots);
     return symbol;}
 
 Ref symbol_make_funbound(Ref symbol){
     check_type(symbol,SYMBOL_Class);
     symbol->slots->symbol.function=UNBOUND_Object;
+    gc_write_barrier(symbol->slots);
     return symbol;}
 
 Ref set_symbol_package(Ref symbol,Ref new_package){
     check_type(symbol,SYMBOL_Class);
-    return symbol->slots->symbol.package=new_package;}
+    symbol->slots->symbol.package=new_package;
+    gc_write_barrier(symbol->slots);
+    return new_package;}
 
 Ref set_symbol_value(Ref symbol,Ref new_value){
     check_type(symbol,SYMBOL_Class);
-    return symbol->slots->symbol.value=new_value;}
+    symbol->slots->symbol.value=new_value;
+    gc_write_barrier(symbol->slots);
+    return new_value;}
 
 Ref set_symbol_function(Ref symbol,Ref new_function){
     check_type(symbol,SYMBOL_Class);
     /* Accept any callable: kernel function, user closure, or built-in. */
     if(!functionp(new_function) && !closurep(new_function) && !built_in_function_p(new_function)){
         TYPE_ERROR(new_function,FUNCTION_Class);}
-    return symbol->slots->symbol.function=new_function;}
+    symbol->slots->symbol.function=new_function;
+    gc_write_barrier(symbol->slots);
+    return new_function;}
 
 Ref set_symbol_plist(Ref symbol,Ref new_plist){
     check_type(symbol,SYMBOL_Class);
     if(consp(new_plist)||nullp(new_plist)){
-        return symbol->slots->symbol.plist=new_plist;}
+        symbol->slots->symbol.plist=new_plist;
+        gc_write_barrier(symbol->slots);
+        return new_plist;}
     else{
         TYPE_ERROR(new_plist,LIST_Class);}}
 
@@ -1702,7 +1716,8 @@ void class_add_superclass(Ref class, Ref superclass){
         class->slots->class.direct_superclasses=nconc(class->slots->class.direct_superclasses,
                                                       cons(superclass,NIL_Symbol));}
     else{
-        class->slots->class.direct_superclasses=cons(superclass,NIL_Symbol);}}
+        class->slots->class.direct_superclasses=cons(superclass,NIL_Symbol);}
+    gc_write_barrier(class->slots);   /* direct_superclasses lives in the Class slots block */}
 
 Ref find_class(Ref name){
     /* Search the kernel class list only (no Lisp call to avoid recursion). */
@@ -1819,7 +1834,8 @@ void boot_class_add_superclass(Ref class, Ref superclass){
         class->slots->class.direct_superclasses=boot_nconc(class->slots->class.direct_superclasses,
                                                            cons(superclass,NIL_Symbol));}
     else{
-        class->slots->class.direct_superclasses=cons(superclass,NIL_Symbol);}}
+        class->slots->class.direct_superclasses=cons(superclass,NIL_Symbol);}
+    gc_write_barrier(class->slots);}
 
 
 

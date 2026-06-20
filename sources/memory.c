@@ -135,6 +135,51 @@ static void clear_block(Block* block){
 static halfword block_objcount(Block* block){
     return block->objcount&GC_COUNT_MASK;}
 
+static bool old_block_p(Block* block){
+    /* As with marked_block_p, FREE_BLOCK (all-ones) has the old bit set too, so
+       a free block must never be reported as old. */
+    return block->objcount!=FREE_BLOCK && 0!=(block->objcount&GC_OLD_BIT);}
+
+/* Public, GC-safe replacement for raw `obj->...objcount` reads that mean
+   "how many Ref slots does this block have": masks off the mark/old flag bits.
+   Used by hash_table.c / structure.c, which read a VectorOfObject's element
+   count straight from objcount — those reads would include GC_OLD_BIT once a
+   block is promoted, yielding a wildly wrong count. */
+uword object_slot_count(void* object){
+    return block_objcount((Block*)object);}
+
+/* ---- Remembered set / write barrier (generational GC) --------------------
+   A minor collection traces only gen-0 (young) objects; it does NOT trace
+   gen-1 (old) objects.  So a young object reachable ONLY through an old
+   object's slot would be missed and wrongly swept.  The write barrier records
+   every old block that has a Ref stored into it since the last minor GC; the
+   minor collector then scans those remembered blocks' direct slots as extra
+   roots.  We over-approximate (record on ANY store while the block is old,
+   regardless of whether the stored value is actually young) — the minor mark
+   filters to young children, and duplicates are harmless (marking is
+   idempotent).  A cheap consecutive-duplicate check absorbs tight mutation
+   loops on one object.  The set is malloc-managed (like mark_wstack) and lives
+   for the process; the minor collector clears it (remset_top=0) after scanning.
+
+   IMPORTANT: the barrier target is the block that PHYSICALLY holds the mutated
+   slot — for `obj->slots->X.field` that is obj->slots (the Slots block), and
+   for svref it is vector->slots->array.elements (the inner VectorOfObject) —
+   NOT the outer Object, because the minor mark only follows a remembered
+   block's DIRECT children. */
+static Block** remset     = NULL;
+static uword   remset_cap = 0;
+static uword   remset_top = 0;
+
+void gc_write_barrier(void* container){
+    Block* b = (Block*)container;
+    if(!b || !old_block_p(b)) return;
+    if(remset_top && remset[remset_top-1]==b) return;   /* consecutive-dup filter */
+    if(remset_top >= remset_cap){
+        uword nc = remset_cap ? remset_cap*2 : 4096;
+        remset = realloc(remset, nc*sizeof(Block*));
+        remset_cap = nc;}
+    remset[remset_top++] = b;}
+
 
 static Zone* zone_allocate(size_t size){
     /* Allocate and initialize a new zone of the given total size. */
