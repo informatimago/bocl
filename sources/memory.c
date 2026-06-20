@@ -680,12 +680,43 @@ static void verify_no_dangling(void){
                         fflush(stderr);}}}
             b = nxt;}}}
 
+/* ---- BOCL_GCLOG: per-collection diagnostics -----------------------------
+   When BOCL_GCLOG is set, print one line per collection: kind (minor/major),
+   bytes freed this collection, and a post-sweep snapshot of the heap (live
+   bytes, free bytes, total heap bytes, zone count) plus the running
+   minor/major collection counts.  This is the instrument the diagnosis used
+   to show the load is ~99% garbage and the heap balloons before any GC fires.
+   Computing live/free walks the whole heap, so it is gated on the env var. */
+static int   gc_log_enabled = -1;       /* -1 = unchecked */
+uword        gc_minor_count = 0;
+uword        gc_major_count = 0;
+
+static void gc_log(const char* kind, uword freed){
+    uword zones=0, heap=0, live=0, freebytes=0;
+    for(Zone* z=Zones; z; z=z->next_zone){
+        zones++; heap += z->size;
+        Block* end=end_block(z);
+        for(Block* b=first_block(z); b<end; b=next_block(b)){
+            if(free_block_p(b)) freebytes += b->size;
+            else                live      += b->size;}}
+    fprintf(stderr,
+        "[GC %-5s] #%lu freed=%lu live=%lu free=%lu heap=%lu zones=%lu"
+        " (minor=%lu major=%lu)\n",
+        kind,(unsigned long)(gc_minor_count+gc_major_count),
+        (unsigned long)freed,(unsigned long)live,(unsigned long)freebytes,
+        (unsigned long)heap,(unsigned long)zones,
+        (unsigned long)gc_minor_count,(unsigned long)gc_major_count);
+    fflush(stderr);}
+
 uword garbage_collect(void){
     if(!garbage_collection_enabled){
         return 0;}
+    if(gc_log_enabled < 0){ gc_log_enabled = getenv("BOCL_GCLOG")?1:0; }
+    gc_major_count++;
     mark((Block*)rootset);
     if(getenv("BOCL_GCCHECK")){ verify_no_dangling(); }
     uword freed = sweep();
+    if(gc_log_enabled){ gc_log("major", freed); }
     return freed;}
 
 
