@@ -1,3 +1,11 @@
+/* realpath() is gated behind _XOPEN_SOURCE>=700 / _DEFAULT_SOURCE in glibc's
+   stdlib.h; -std=c17 sets __STRICT_ANSI__ which hides it under a plain
+   _POSIX_C_SOURCE.  Request it explicitly so the declaration is visible
+   (gcc 14 promotes implicit-function-declaration to a hard error). Must
+   precede every system header.  Matches the master-branch portability fix. */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #include "bocl.h"
 #include "memory.h"
 #include "boerror.h"

@@ -77,14 +77,21 @@ print_types: $(print_types_SRCS:%.c=%.d) $(print_types_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(print_types_SRCS:%.c=%.o)"
 	$(VERBOSE) $(LINKBIN) -o $@ $(print_types_SRCS:%.c=%.o)
 
+# NOTE: -lm/-lc must come AFTER the objects.  GNU ld defaults to --as-needed,
+# which drops a library placed before the objects that reference it (the libm
+# math calls in arithmetic.c).  macOS ld64 keeps them regardless of order, so
+# this only surfaces on Linux.  LINKLIB/LINKBIN put $(LIBRARIES) before the
+# objects, so we append the math/libc deps here instead.
+LINK_DEPS = -lm -lc
+
 libbocl.$(SO): $(libbocl_SRCS:%.c=%.d) $(libbocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
-	$(VERBOSE) $(LINKLIB) -o $@ $(libbocl_SRCS:%.c=%.o)
+	$(VERBOSE) $(LINKLIB) -o $@ $(libbocl_SRCS:%.c=%.o) $(LINK_DEPS)
 
 # for now, we link all the bocl objects into bocl:
 bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
-	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)
+	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o) $(LINK_DEPS)
 
 #bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) libbocl.$(SO)
 #	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
