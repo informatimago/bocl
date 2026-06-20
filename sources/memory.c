@@ -98,6 +98,23 @@ static Block* end_block(Zone* zone){
 static Block* next_block(Block* block){
     return (void*)(((char*)block)+block->size);}
 
+/* ---- objcount bit layout (generational GC) -------------------------------
+   objcount is 32 bits in every config (halfword on LP64, uword=uint32 on 32-bit).
+   We carve two GC flag bits off the top, leaving 30 bits for the actual count:
+
+       bit 31  GC_MARK_BIT   set during the mark phase (cleared by clear_block)
+       bit 30  GC_OLD_BIT    generation: 1 = old (gen-1), 0 = young (gen-0)
+       bit 0..29 GC_COUNT_MASK  number of leading Ref slots in the block
+
+   FREE_BLOCK is all-ones, so it has BOTH flag bits set; every predicate that
+   could see a free block (marked_block_p, old_block_p) must exclude FREE_BLOCK
+   first.  The mark bit is sticky-clearable: clear_block clears ONLY bit 31, so
+   the old bit survives a mark/sweep — which is exactly what a generational
+   collector needs (clearing a survivor's mark must not demote its generation). */
+#define GC_MARK_BIT   (~(FREE_BLOCK>>1))   /* high bit              (0x80000000) */
+#define GC_OLD_BIT    (GC_MARK_BIT>>1)     /* next bit down         (0x40000000) */
+#define GC_COUNT_MASK (FREE_BLOCK>>2)      /* low 30 bits           (0x3FFFFFFF) */
+
 static bool free_block_p(Block* block){
     return block->objcount==FREE_BLOCK;}
 
@@ -107,16 +124,16 @@ static bool marked_block_p(Block* block){
        sweep_zone (which tests marked_block_p before reclaiming) would clear_block
        a free block to FREE_BLOCK>>1 and drop it from the free list, leaking and
        corrupting the heap. */
-    return block->objcount!=FREE_BLOCK && 0!=(block->objcount&(~(FREE_BLOCK>>1)));}
+    return block->objcount!=FREE_BLOCK && 0!=(block->objcount&GC_MARK_BIT);}
 
 static void mark_block(Block* block){
-    block->objcount|=(~(FREE_BLOCK>>1));}
+    block->objcount|=GC_MARK_BIT;}
 
 static void clear_block(Block* block){
-    block->objcount&=(FREE_BLOCK>>1);}
+    block->objcount&=~GC_MARK_BIT;}   /* clears ONLY the mark bit; old bit + count survive */
 
 static halfword block_objcount(Block* block){
-    return block->objcount&(FREE_BLOCK>>1);}
+    return block->objcount&GC_COUNT_MASK;}
 
 
 static Zone* zone_allocate(size_t size){
