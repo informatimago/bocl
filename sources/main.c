@@ -533,6 +533,18 @@ int main(int argc,char** argv){
     {   extern bool bocl_load_recover;
         if(on_error==on_error_appease){ bocl_load_recover=true; }}
 
+    /* Publish the --on-error action to Lisp as BOCL:*ON-ERROR* so the REPL's
+       %REPL-EVAL wrapper can decide whether an unhandled error enters the
+       debugger (:debug), is reported (:appease/:abort) or exits (:exit). */
+    if(!do_noprelude){
+        const char* k = (on_error==on_error_debug)   ? ":DEBUG"
+                      : (on_error==on_error_exit)     ? ":EXIT"
+                      : (on_error==on_error_abort)    ? ":ABORT"
+                      :                                 ":APPEASE";
+        char buf[64];
+        snprintf(buf,sizeof(buf),"(SETQ BOCL:*ON-ERROR* %s)",k);
+        bocl_read_eval_cstring(buf);}
+
     /* The session — init/rc files, BOCL:*INIT-HOOK*, then -x/-l forms, IN-PACKAGE
        and the REPL — runs inside a top-level CATCH for BOCL:QUIT, so QUIT (from
        an init hook, a loaded form, or the REPL) performs a proper non-local exit

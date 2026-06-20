@@ -394,6 +394,55 @@ static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
     (void)results;
     close_live_pool(pool);}
 
+/* (%BACKTRACE) → list of control-frame descriptors, innermost (top of stack)
+   first.  Each descriptor is a list (kind . data):
+     (:unwind-protect) (:dynamic-binding)
+     (:block name) (:catch tag) (:tagbody)
+     (:handler-case) (:handler-bind) (:restart name...)
+   bocl has no first-class function-call stack, so this exposes the active
+   dynamic CONTROL frames (handler / restart / block / catch / unwind-protect /
+   dynamic-binding), which is what the kernel can report today.  The Lisp wrappers
+   BOCL:BACKTRACE / FRAME-KIND / FRAME-NAME / PRINT-FRAME build on this. */
+static void kernel_BACKTRACE(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    Ref out = NIL_Symbol;
+    for(Frame* f = g_frame_stack; f; f = f->next){
+        Ref desc;
+        switch(f->type){
+          case frame_protect:
+            desc = list(keyword_intern_cstring("UNWIND-PROTECT"), NULL); break;
+          case frame_dynamic_binding:
+            desc = list(keyword_intern_cstring("DYNAMIC-BINDING"), NULL); break;
+          case frame_block:
+            desc = list(keyword_intern_cstring("BLOCK"), f->parameters.block.name, NULL); break;
+          case frame_catch:
+            desc = list(keyword_intern_cstring("CATCH"), f->parameters.catch.object, NULL); break;
+          case frame_tagbody:
+            desc = list(keyword_intern_cstring("TAGBODY"), NULL); break;
+          case frame_handler:
+            desc = list(keyword_intern_cstring("HANDLER-CASE"), NULL); break;
+          case frame_handler_bind:
+          case frame_handler_bind_inactive:
+            desc = list(keyword_intern_cstring("HANDLER-BIND"), NULL); break;
+          case frame_restart: {
+            /* (:restart name1 name2 ...) — names of the frame's restarts. */
+            Ref names = NIL_Symbol;
+            for(Ref rs = f->parameters.restart.restarts; consp(rs); rs = cdr(rs)){
+                push(car(car(rs)), &names);
+                add_to_live_pool(names);}
+            desc = cons(keyword_intern_cstring("RESTART"), nreverse(names));
+            break;}
+          default:
+            desc = list(keyword_intern_cstring("FRAME"), NULL); break;}
+        add_to_live_pool(desc);
+        push(desc, &out);
+        add_to_live_pool(out);}
+    out = nreverse(out);
+    close_live_pool(pool);
+    add_to_live_pool(out);
+    results->count = 1;
+    results->values[0] = out;}
+
 static void register_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
     set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
 
@@ -417,5 +466,6 @@ void kernel_initialize_conditions(void){
     register_fn(S(INVOKE-RESTART-INTERACTIVELY),      ll_restart, kernel_INVOKE_RESTART_INTERACTIVELY);
     register_fn(S(COMPUTE-RESTARTS),                  list(S(&OPTIONAL),S(CONDITION),NULL), kernel_COMPUTE_RESTARTS);
     register_fn(S(RESTART-NAME),                      list(S(RESTART),NULL), kernel_RESTART_NAME);
+    register_fn(symbol_intern_cstring("%BACKTRACE"),  ll_empty,   kernel_BACKTRACE);
     register_fn(S(ABORT),                             ll_empty,   kernel_ABORT);
 }

@@ -9169,9 +9169,230 @@ the rest take :INITIAL-ELEMENT."
 (defun %run-abort-hooks (signum)
   (dolist (f *abort-hook*) (ignore-errors (funcall f signum))))
 
-(export '(*init-hook* *abort-hook* *quit-hook* *prompt-function* quit))
+;;; ---- Debugger support (issue bocl-or-bash-debugger) ------------------
+
+(defvar *on-error* :debug
+  "What the top-level REPL does with an unhandled SERIOUS-CONDITION: :DEBUG enters
+   the debugger, :APPEASE / :ABORT report it and return to the prompt, :EXIT exits
+   the process.  Set from the --on-error command-line option by the launcher.")
+
+;; Printer specials bound by INVOKE-DEBUGGER around the debugger's own output and
+;; its evaluation REPL (issue table).  The user may customise these.
+(defvar *debugger-print-array*        t)
+(defvar *debugger-print-base*         10)
+(defvar *debugger-print-case*         :upcase)
+(defvar *debugger-print-circle*       t)
+(defvar *debugger-print-escape*       t)
+(defvar *debugger-print-gensym*       t)
+(defvar *debugger-print-length*       8)
+(defvar *debugger-print-level*        3)
+(defvar *debugger-print-lines*        2)
+(defvar *debugger-print-pretty*       nil)
+(defvar *debugger-print-radix*        nil)
+(defvar *debugger-print-readably*     nil)
+(defvar *debugger-print-right-margin* 72)
+
+;; Backtrace API.  bocl has no function-call stack yet, so a "frame" is currently
+;; an opaque descriptor of an active dynamic CONTROL frame (the kernel %BACKTRACE).
+(defun backtrace ()
+  "List of the current frames, innermost (top of stack) first."
+  (common-lisp::%backtrace))
+
+(defun frame-kind (frame)
+  "Keyword denoting the kind of FRAME (:BLOCK :CATCH :RESTART :HANDLER-CASE
+   :HANDLER-BIND :UNWIND-PROTECT :DYNAMIC-BINDING :TAGBODY), or NIL."
+  (and (consp frame) (car frame)))
+
+(defun frame-name (frame)
+  "The name(s) associated with FRAME (block/catch name; list of restart names),
+   or NIL for frames that carry no name."
+  (cond ((not (consp frame)) nil)
+        ((eq (car frame) :restart) (cdr frame))
+        ((consp (cdr frame)) (cadr frame))
+        (t nil)))
+
+(defun print-frame (frame &optional (stream *standard-output*) &key (verbosity 0))
+  "Print FRAME on STREAM.  VERBOSITY 0 prints the kind and name; higher levels are
+   reserved for parameter names/values once a function-call stack exists."
+  (declare (ignore verbosity))
+  (let ((kind (frame-kind frame)) (name (frame-name frame)))
+    (case kind
+      ((:block :catch) (format stream "~(~A~) ~S" kind name))
+      (:restart        (format stream "restart~{ ~S~}" name))
+      ((nil)           (format stream "<frame>"))
+      (otherwise       (format stream "~(~A~)" kind))))
+  frame)
+
+(export '(*init-hook* *abort-hook* *quit-hook* *prompt-function* quit
+          *on-error* backtrace frame-kind frame-name print-frame
+          *debugger-print-array* *debugger-print-base* *debugger-print-case*
+          *debugger-print-circle* *debugger-print-escape* *debugger-print-gensym*
+          *debugger-print-length* *debugger-print-level* *debugger-print-lines*
+          *debugger-print-pretty* *debugger-print-radix* *debugger-print-readably*
+          *debugger-print-right-margin*))
 
 (in-package "COMMON-LISP")
+
+;;; ---- The minimal debugger (issue bocl-or-bash-debugger) --------------
+;;; INVOKE-DEBUGGER prints the condition, the backtrace and the restart menu,
+;;; then runs a debugger REPL that reads commands from *DEBUG-IO*: keyword
+;;; commands (:BACKTRACE :RESTARTS :RESTART :CONTINUE :ABORT :QUIT :HELP) and a
+;;; bare restart number invoke restarts / leave the debugger; anything else is
+;;; evaluated as a Lisp form in the error's dynamic context.
+
+(defvar *debugger-hook* nil
+  "NIL or a function of (condition hook) called by INVOKE-DEBUGGER before the
+   built-in debugger, with *DEBUGGER-HOOK* bound to NIL during the call.")
+
+(defun %debug-output ()
+  "An output stream for the debugger (*DEBUG-IO* if usable, else *STANDARD-OUTPUT*)."
+  (if (and (boundp '*debug-io*) (streamp *debug-io*) (output-stream-p *debug-io*))
+      *debug-io*
+      *standard-output*))
+
+(defun %debug-input ()
+  "An input stream for the debugger (*DEBUG-IO* if usable, else *STANDARD-INPUT*)."
+  (if (and (boundp '*debug-io*) (streamp *debug-io*) (input-stream-p *debug-io*))
+      *debug-io*
+      *standard-input*))
+
+(defun %print-backtrace (stream)
+  (format stream "~&Backtrace (innermost frame first):~%")
+  (let ((i 0))
+    (dolist (f (bocl:backtrace))
+      (format stream "  ~2D: " i)
+      (bocl:print-frame f stream :verbosity 0)
+      (terpri stream)
+      (incf i)))
+  (values))
+
+(defun %print-restart-menu (stream restarts)
+  (if restarts
+      (progn
+        (format stream "~&Available restarts:~%")
+        (let ((i 0))
+          (dolist (r restarts)
+            (format stream "  ~2D: [~A]~%" i (restart-name r))
+            (incf i))))
+      (format stream "~&No available restarts.~%"))
+  (values))
+
+(defun %invoke-selected-restart (stream restarts which condition)
+  (let ((r (cond ((integerp which) (nth which restarts))
+                 ((symbolp which)  (find-restart which condition))
+                 (t nil))))
+    (if r
+        (invoke-restart r)               ; transfers control; does not return
+        (format stream "~&No such restart: ~S~%" which))))
+
+(defun %debugger-help (stream)
+  (format stream "~&Debugger commands:~%~
+                  ~&  :backtrace        print the backtrace~
+                  ~&  :restarts         print the restart menu~
+                  ~&  :restart N|name   invoke a restart (or just type its number)~
+                  ~&  :continue         return NIL from the debugger~
+                  ~&  :abort            return to the top-level REPL~
+                  ~&  :quit             exit bocl~
+                  ~&  <form>            evaluate <form> and print its values~%")
+  (values))
+
+(defun %run-debugger (condition)
+  (let ((out (%debug-output)) (in (%debug-input)))
+    (fresh-line out)
+    (format out "~&Debugger invoked on condition of type ~A:~%  ~A~%"
+            (type-of condition) condition)
+    (%print-backtrace out)
+    (let ((restarts (compute-restarts condition)))
+      (%print-restart-menu out restarts)
+      (loop
+        (format out "~&debug> ")
+        (force-output out)
+        (let ((cmd (read in nil '%eof)))
+          (cond
+            ((eq cmd '%eof)       (return nil))
+            ((eq cmd :continue)   (return nil))
+            ((eq cmd :abort)
+             (let ((r (find-restart 'abort condition)))
+               (if r (invoke-restart r) (return nil))))
+            ((eq cmd :quit)       (bocl:quit))
+            ((eq cmd :backtrace)  (%print-backtrace out))
+            ((eq cmd :restarts)
+             (setq restarts (compute-restarts condition))
+             (%print-restart-menu out restarts))
+            ((eq cmd :restart)
+             (%invoke-selected-restart out restarts (read in nil '%eof) condition))
+            ((eq cmd :help)       (%debugger-help out))
+            ((integerp cmd)
+             (%invoke-selected-restart out restarts cmd condition))
+            (t
+             (handler-case
+                 (let ((vals (multiple-value-list (eval cmd))))
+                   (if vals
+                       (dolist (v vals) (format out "~&~S~%" v))
+                       (format out "~&; No values~%")))
+               (serious-condition (e)
+                 (format out "~&; Error during debugger eval: ~A~%" e))))))))))
+
+(defun invoke-debugger (condition)
+  "Enter the debugger on CONDITION (CLHS 9.1.4.2).  Honours *DEBUGGER-HOOK*, binds
+   the CL printer specials from the BOCL:*DEBUGGER-PRINT-* variables, then runs the
+   built-in debugger.  Returns NIL if the debugger is 'continued'."
+  (when *debugger-hook*
+    (let ((hook *debugger-hook*))
+      (let ((*debugger-hook* nil))
+        (funcall hook condition hook))))
+  (let ((*print-array*        bocl:*debugger-print-array*)
+        (*print-base*         bocl:*debugger-print-base*)
+        (*print-case*         bocl:*debugger-print-case*)
+        (*print-circle*       bocl:*debugger-print-circle*)
+        (*print-escape*       bocl:*debugger-print-escape*)
+        (*print-gensym*       bocl:*debugger-print-gensym*)
+        (*print-length*       bocl:*debugger-print-length*)
+        (*print-level*        bocl:*debugger-print-level*)
+        (*print-lines*        bocl:*debugger-print-lines*)
+        (*print-pretty*       bocl:*debugger-print-pretty*)
+        (*print-radix*        bocl:*debugger-print-radix*)
+        (*print-readably*     bocl:*debugger-print-readably*)
+        (*print-right-margin* bocl:*debugger-print-right-margin*))
+    (%run-debugger condition)))
+
+(defun break (&optional (format-control "Break") &rest format-arguments)
+  "Enter the debugger with a CONTINUE restart (CLHS 9.1).  Returns NIL when the
+   debugger continues."
+  (restart-case
+      (let ((*debugger-hook* nil))
+        (invoke-debugger
+         (make-condition 'simple-condition
+                         :format-control format-control
+                         :format-arguments format-arguments)))
+    (continue () :report "Return from BREAK." nil))
+  nil)
+
+(defun %report-repl-condition (condition)
+  (let ((err (if (boundp '*error-output*) *error-output* *standard-output*)))
+    (format err "~&;; Unhandled ~A:~%;;   ~A~%" (type-of condition) condition)
+    (force-output err))
+  (values))
+
+(defun %repl-eval (form)
+  "Evaluate FORM for the top-level REPL, returning its values.  An unhandled
+   SERIOUS-CONDITION enters the debugger (when BOCL:*ON-ERROR* is :DEBUG) or is
+   reported (:APPEASE/:ABORT) or exits (:EXIT); the process is never killed and
+   control returns to the REPL."
+  (block done
+    (restart-case
+        (handler-bind
+            ((serious-condition
+               (lambda (c)
+                 (case bocl:*on-error*
+                   (:appease (%report-repl-condition c) (invoke-restart 'abort))
+                   (:abort   (%report-repl-condition c) (invoke-restart 'abort))
+                   (:exit    (%report-repl-condition c) (bocl:quit 1))
+                   (otherwise
+                    (invoke-debugger c)        ; :debug — may transfer via a restart
+                    (invoke-restart 'abort)))))) ; debugger continued -> back to REPL
+          (return-from done (eval form)))
+      (abort () :report "Return to the top-level REPL." (return-from done (values))))))
 
 ;;; ---- BIGNUM support -------------------------------------------------------
 ;;; When the kernel was built with bignum support (the %BIGNUMP primitive is

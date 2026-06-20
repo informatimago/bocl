@@ -172,3 +172,47 @@ REMAINING (the bulk — a real minimal debugger):
 - Point 2: investigate the emacs `M-x shell` input-pushback (bocl appears to exit
   and the typed line reaches bash) — likely terminal/EOF handling, reproduce
   under M-x shell.
+
+----------------------------------------------------------------------
+PROGRESS (slice 51, v1.1.8) — the minimal debugger is implemented.
+----------------------------------------------------------------------
+DONE:
+- Point 1: --on-error debug now calls INVOKE-DEBUGGER on an unhandled error.
+  The launcher publishes the action as BOCL:*ON-ERROR* (:debug/:exit/:abort/
+  :appease, sources/main.c) and the REPL routes every form through the new
+  %REPL-EVAL wrapper (sources/bocl.c + prelude) which, on an unhandled
+  SERIOUS-CONDITION, enters the debugger (:debug), reports and returns to the
+  prompt (:appease/:abort), or reports and exits (:exit).
+- Point 2: the REPL no longer dies on an unhandled error — %REPL-EVAL wraps each
+  form in RESTART-CASE (ABORT) + HANDLER-BIND, so an error returns to the prompt
+  instead of letting the C error path exit() the process (which is what dropped
+  the typed-ahead line back to the surrounding bash / M-x shell).  Verified: an
+  error under --on-error debug/appease leaves the REPL alive and later forms run.
+- Point 3 — kernel backtrace API: new C primitive %BACKTRACE (sources/conditions.c)
+  walks the dynamic control-frame stack; Lisp wrappers BOCL:BACKTRACE,
+  BOCL:FRAME-KIND, BOCL:FRAME-NAME, BOCL:PRINT-FRAME (frame stream :verbosity).
+- Point 3 — INVOKE-DEBUGGER (prelude, replacing the old (error condition) stub):
+  honours *DEBUGGER-HOOK*; binds the CL *PRINT-* specials from the 13
+  BOCL:*DEBUGGER-PRINT-* variables (all defined); prints the condition, the
+  backtrace and the restart menu; runs a debugger REPL on *DEBUG-IO* (falling
+  back to *STANDARD-INPUT*/*STANDARD-OUTPUT*, since *DEBUG-IO*/*TERMINAL-IO* are
+  NIL in bocl) with keyword commands :BACKTRACE :RESTARTS :RESTART(N|name)
+  :CONTINUE :ABORT :QUIT :HELP, a bare integer to pick a restart by number, and
+  any other form evaluated as Lisp in the error's dynamic context.
+- BREAK now enters the debugger with a CONTINUE restart (was a stub).
+Verified end to end via piped stdin: error -> debugger banner + backtrace +
+restart menu; :backtrace / :restarts re-print; :restart name and bare number
+invoke restarts; lisp forms evaluate (e.g. *print-base* shows the debugger
+binding 10); :abort/:continue return to the REPL; break + :continue resumes;
+handled errors (handler-case) do NOT enter the debugger.
+
+REMAINING (kept open — needs a kernel function-call stack):
+- The backtrace currently exposes the active dynamic CONTROL frames (block,
+  catch, handler-case/bind, restart, unwind-protect, dynamic-binding, tagbody),
+  NOT function-call frames.  So FRAME-NAME gives function names only for BLOCK
+  frames (a DEFUN body is a block named after the function) and PRINT-FRAME
+  :verbosity 1/2 (parameter names / bound values) is not yet meaningful.  A real
+  call/binding stack in the kernel (each apply pushing a frame, restored across
+  longjmp) is the prerequisite; it is the larger remaining piece of this issue.
+- Cosmetic: the debugger's own frames (BACKTRACE/%PRINT-BACKTRACE/%RUN-DEBUGGER)
+  appear at the top of the backtrace; they could be elided.

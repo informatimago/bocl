@@ -91,9 +91,17 @@ Ref bocl_repl(Ref inp,Ref out){
         set_symbol_value(vp2,symbol_value(vp1));
         set_symbol_value(vp1,symbol_value(vd));
         set_symbol_value(vd,sexp);
-        /* Evaluate, capturing ALL values (for / // ///). */
+        /* Evaluate, capturing ALL values (for / // ///).  When the prelude is
+           loaded, route through the Lisp %REPL-EVAL wrapper so an unhandled error
+           enters the debugger / is reported per BOCL:*ON-ERROR* instead of killing
+           the whole process (issue bocl-or-bash-debugger).  Fall back to a direct
+           EVAL on the bare kernel (no prelude). */
         MultipleValues results={0};
-        evale(sexp,eval_global_environment(),&results);
+        {   Ref re=symbol_intern_cstring("%REPL-EVAL");
+            if(symbol_fboundp(re)){
+                kernel_apply(symbol_function(re),cons(sexp,NIL_Symbol),&results);
+            } else {
+                evale(sexp,eval_global_environment(),&results);}}
         Ref primary=(results.count>0)?results.values[0]:NIL_Symbol;
         Ref vals=NIL_Symbol;
         for(uword i=results.count;i-->0;){ vals=cons(results.values[i],vals); }
