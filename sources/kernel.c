@@ -2685,6 +2685,60 @@ static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
     signal(sig, SIG_DFL);
     raise(sig);}
 
+/* BOCL:*STOP-HOOK* / *CONT-HOOK* — best effort, run from the SIGTSTP / SIGCONT
+   handlers.  Unlike the abort hooks the process is NOT dying, so the GC is left
+   enabled; the hooks should keep to async-safe work (terminal reset, reopen a
+   connection, …).  We only enter Lisp when a hook is actually registered (cheap
+   symbol check, no allocation otherwise), so default Ctrl-Z / resume behaviour is
+   unchanged when no hook is set.  The Lisp runner wraps each hook in
+   IGNORE-ERRORS. */
+static void bocl_run_nullary_hooks(const char* hook_var, const char* runner){
+    extern Ref BOCL_Package;
+    if(BOCL_Package==NULL || !typep(BOCL_Package,PACKAGE_Class)){ return; }
+    Ref present=BOCL_Package->slots->package.present;
+    Ref hooks_sym=find_symbol(string_new_cstring(hook_var),present);
+    if(!hooks_sym || nullp(symbol_value(hooks_sym))){ return; }
+    Ref fn_sym=find_symbol(string_new_cstring(runner),present);
+    if(!fn_sym || !symbol_fboundp(fn_sym)){ return; }
+    MultipleValues mv;
+    kernel_apply(symbol_function(fn_sym),NIL_Symbol,&mv);}
+
+static void bocl_install_tstp_handler(void);
+
+/* SIGTSTP (Ctrl-Z): run *STOP-HOOK*, then actually suspend.  SIGTSTP is blocked
+   inside its own handler by default, so to make the stop take effect now we
+   restore the default disposition, unblock it and re-raise; execution resumes
+   here when the process is continued, where we re-arm this handler. */
+static void bocl_tstp_handler(int sig){
+    (void)sig;
+    static volatile sig_atomic_t in_stop = 0;
+    if(!in_stop){
+        in_stop = 1;
+        bocl_run_nullary_hooks("*STOP-HOOK*","%RUN-STOP-HOOKS");
+        in_stop = 0;}
+    signal(SIGTSTP, SIG_DFL);
+    {   sigset_t m; sigemptyset(&m); sigaddset(&m, SIGTSTP);
+        sigprocmask(SIG_UNBLOCK, &m, NULL);}
+    raise(SIGTSTP);                 /* <-- the process suspends here */
+    /* ---- resumed by SIGCONT ---- */
+    bocl_install_tstp_handler();}   /* re-arm for the next Ctrl-Z */
+
+/* SIGCONT: the process is resuming — run *CONT-HOOK*. */
+static void bocl_cont_handler(int sig){
+    (void)sig;
+    static volatile sig_atomic_t in_cont = 0;
+    if(in_cont){ return; }
+    in_cont = 1;
+    bocl_run_nullary_hooks("*CONT-HOOK*","%RUN-CONT-HOOKS");
+    in_cont = 0;}
+
+static void bocl_install_tstp_handler(void){
+    struct sigaction sa;
+    memset(&sa,0,sizeof(sa));
+    sa.sa_handler = bocl_tstp_handler;
+    sa.sa_flags = SA_RESTART;       /* resume a syscall interrupted by Ctrl-Z */
+    sigaction(SIGTSTP,&sa,NULL);}
+
 void kernel_initialize(void){
     /* Install the crash handler so BOCL:*ABORT-HOOK* runs when the process is
        terminating on a signal — both faults (SEGV/BUS/ABRT) and termination
@@ -2701,6 +2755,15 @@ void kernel_initialize(void){
         sigaction(SIGTERM,&sa,NULL);
         sigaction(SIGINT, &sa,NULL);
         sigaction(SIGHUP, &sa,NULL);}
+    /* Job-control hooks (issue deferred-signal-hooks): run BOCL:*STOP-HOOK*
+       before suspending on SIGTSTP (Ctrl-Z) and BOCL:*CONT-HOOK* on resume.
+       These leave default suspend/resume behaviour intact when no hook is set. */
+    bocl_install_tstp_handler();
+    {   struct sigaction sa;
+        memset(&sa,0,sizeof(sa));
+        sa.sa_handler = bocl_cont_handler;
+        sa.sa_flags = SA_RESTART;
+        sigaction(SIGCONT,&sa,NULL);}
     memory_initialize();
     set_garbage_collection_enabled(false);
 

@@ -9150,6 +9150,17 @@ the rest take :INITIAL-ELEMENT."
 (defvar *quit-hook* '()
   "List of (lambda (status)) function designators, each called inside
    IGNORE-ERRORS by BOCL:QUIT before the process exits.")
+(defvar *stop-hook* '()
+  "List of (lambda ()) function designators, each called inside IGNORE-ERRORS
+   when the process is about to be suspended by SIGTSTP (Ctrl-Z) — e.g. to reset
+   the terminal out of raw/ncurses mode or release a resource that cannot be
+   serviced while stopped.  Best effort, run from the signal handler (the system
+   is live but the hooks should keep to async-safe work); the process then
+   actually suspends.  Restored on resume by [[*cont-hook*]].")
+(defvar *cont-hook* '()
+  "List of (lambda ()) function designators, each called inside IGNORE-ERRORS
+   when the process resumes after a stop (SIGCONT) — e.g. to re-enter ncurses raw
+   mode or re-open a connection released in [[*stop-hook*]].  Best effort.")
 (defvar *prompt-function* nil
   "NIL, or a function designator of one argument (a stream).  When non-NIL the
    REPL calls (funcall *prompt-function* stream) to write each prompt instead of
@@ -9168,6 +9179,10 @@ the rest take :INITIAL-ELEMENT."
   (dolist (f *quit-hook*) (ignore-errors (funcall f status))))
 (defun %run-abort-hooks (signum)
   (dolist (f *abort-hook*) (ignore-errors (funcall f signum))))
+(defun %run-stop-hooks ()
+  (dolist (f *stop-hook*) (ignore-errors (funcall f))))
+(defun %run-cont-hooks ()
+  (dolist (f *cont-hook*) (ignore-errors (funcall f))))
 
 ;;; ---- Debugger support (issue bocl-or-bash-debugger) ------------------
 
@@ -9223,7 +9238,8 @@ the rest take :INITIAL-ELEMENT."
       (otherwise       (format stream "~(~A~)" kind))))
   frame)
 
-(export '(*init-hook* *abort-hook* *quit-hook* *prompt-function* quit
+(export '(*init-hook* *abort-hook* *quit-hook* *stop-hook* *cont-hook*
+          *prompt-function* quit
           *on-error* backtrace frame-kind frame-name print-frame
           *debugger-print-array* *debugger-print-base* *debugger-print-case*
           *debugger-print-circle* *debugger-print-escape* *debugger-print-gensym*

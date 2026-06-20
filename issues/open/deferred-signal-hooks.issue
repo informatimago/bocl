@@ -131,3 +131,39 @@ handler for non-fatal signals — they defer.
 - Likely a deferred-signal mechanism for the non-fatal signals; keep the
   best-effort in-handler path (GC off, re-entrancy guard, sigaltstack) only for
   the genuine Core faults.
+
+------------------------------------------------------------------------------
+PROGRESS (slice 54, v1.1.11) — *STOP-HOOK* / *CONT-HOOK* implemented.
+------------------------------------------------------------------------------
+Done (the well-defined job-control part of section 7):
+- BOCL:*STOP-HOOK* and BOCL:*CONT-HOOK* — lists of (lambda ()) designators,
+  exported and documented next to *ABORT-HOOK*/*QUIT-HOOK* (bootstrap/prelude.lisp),
+  with %RUN-STOP-HOOKS / %RUN-CONT-HOOKS runners (each hook wrapped in
+  IGNORE-ERRORS).
+- C handlers (sources/kernel.c, installed in kernel_initialize):
+  * SIGTSTP: runs *STOP-HOOK*, then suspends properly — restores SIG_DFL,
+    unblocks SIGTSTP and re-raises so the stop takes effect; on resume it re-arms
+    its own handler.  SA_RESTART so a syscall interrupted by Ctrl-Z resumes.
+  * SIGCONT: runs *CONT-HOOK*.
+  Both are best effort, run from the handler (matching the existing *ABORT-HOOK*
+  contract — keep hooks async-safe), the GC is left enabled (the process is not
+  dying), each guarded against re-entry, and they only enter Lisp when a hook is
+  actually registered, so default Ctrl-Z/resume behaviour is unchanged otherwise.
+Verified (sending the signals to bocl's real PID, not a `timeout` wrapper):
+  SIGCONT -> *CONT-HOOK* runs; SIGTSTP -> *STOP-HOOK* runs and the REPL stays
+  alive across stop+continue (REPL-ALIVE).  NOTE: the actual process suspension
+  could not be exercised in the headless sandbox because bocl runs in an ORPHANED
+  process group with no controlling terminal, so the OS discards a SIG_DFL stop;
+  that is an environment artifact, not a code issue (it suspends under a real
+  terminal / Ctrl-Z).
+
+Still open (the larger design from sections 3-4, deliberately not rushed):
+- A signal-disposition table choosing WHICH signals bocl claims by default (the
+  issue's caution: do NOT blindly grab SIGPIPE/SIGALRM/SIGUSR*/SIGIO, leave
+  SIGWINCH for TUIs) and a way to opt in/out per signal.
+- A deferred-signal mechanism (flag set in handler, run at a safe point) for the
+  non-fatal signals — currently best-effort-in-handler like *ABORT-HOOK*.
+- SIGINT -> interactive-interrupt into the debugger (vs the current terminate +
+  *ABORT-HOOK*); now that INVOKE-DEBUGGER exists (bocl-or-bash-debugger) this is
+  more tractable.
+- sigaltstack for SIGSEGV/SIGBUS; SA_RESTART policy review; SIGPIPE policy.
