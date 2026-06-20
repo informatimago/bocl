@@ -1,0 +1,37 @@
+;; DEFERRED (split off from simple-error-print-object-method.issue).
+;;
+;; DEFINE-CONDITION (and DEFCLASS) cannot inherit from a *kernel* condition
+;; class.  E.g.:
+;;
+;;   (define-condition terrible-error (simple-error) ())
+;;   => Unhandled SIMPLE-ERROR: DEFCLASS ~S: superclass ~S not found
+;;
+;; DEFCLASS resolves superclasses only against the CLOS *%classes* registry, but
+;; ERROR / SIMPLE-ERROR / SIMPLE-CONDITION / WARNING etc. are kernel classes (not
+;; %cls objects), so they are "not found".  To support user condition types that
+;; inherit the standard condition hierarchy, DEFCLASS superclass resolution must
+;; fall back to the kernel class registry (and the CLOS class must bridge to the
+;; kernel CPL so TYPEP / method dispatch keep working).
+;;
+;; Note: printing of simple-conditions/simple-errors and PRINT-OBJECT methods on
+;; condition classes now work (see issues/closed/simple-error-print-object-method).
+
+----------------------------------------------------------------------
+RESOLVED (verified slice 52, v1.1.9) — moved to issues/closed.
+This now works, courtesy of the CLOS/kernel bridge added since the issue was
+filed: kernel condition classes are registered as %cls objects in *%classes*
+(so FIND-CLASS / DEFCLASS superclass resolution find them) and the C-level
+%clos-register teaches the kernel's class_of/subclassp to walk a CLOS class's
+CPL — so a CLOS class that inherits a kernel condition class bridges to the
+kernel CPL for TYPEP and HANDLER-CASE dispatch.
+
+Verified:
+  (define-condition terrible-error (simple-error) ())            ; defines cleanly
+  (typep (make-condition 'terrible-error) 'error)      => T
+  (typep (make-condition 'terrible-error) 'simple-error) => T
+  (handler-case (error 'terrible-error ...) (simple-error (e) ...))  ; catches
+  (handler-case (error 'terrible-error)     (error (e) ...))        ; catches
+  (define-condition my-err (simple-error) ((code :initarg :code :reader my-err-code)))
+    -> (my-err-code (make-condition 'my-err :code 42)) => 42
+  (defclass plain-sub (error) ((tag :initarg :tag :accessor tag-of)))
+    -> make-instance + accessor + (typep inst 'error) => T
