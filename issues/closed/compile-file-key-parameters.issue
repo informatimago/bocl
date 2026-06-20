@@ -1,0 +1,51 @@
+&key parameters should validate the form of the &rest argument list:
+it should be a list of even length, and it should contain a SYMBOL at
+even indexed positions. If &allow-other-keys is not specified
+(careful, there are two ways to specify it, one in the lambda-list,
+the other in the parameter list :allow-other-keys t) Basically it
+should be a p-list with symbols as keys.
+
+("~/src/lisp/encours/symbol-sxhash.fas") is not a valid &rest argument list for &key.
+(:output-file "/tmp/symbol-sxhash.fas") is a valid &rest argument list for &key.
+
+
+compile-file should signal an error instead of ignoring the invalid argument:
+but I guess the problem impacts all &key functions.
+
+~/src/public/bocl
+11:17[pjb@thalassa org.xquartz:0 bocl 25Gi]$ sources/bocl
+
+Welcome to BOCL Version 0.0.64
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+bocl> (namestring  (compile-file "~/src/lisp/encours/symbol-sxhash.lisp" "~/src/lisp/encours/symbol-sxhash.fas"))
+
+"~/src/lisp/encours/symbol-sxhash.fasl"
+bocl> (namestring  (compile-file "~/src/lisp/encours/symbol-sxhash.lisp" :output-file "/tmp/symbol-sxhash.fas"))
+
+"/tmp/symbol-sxhash.fas"
+bocl> 
+
+----------------------------------------------------------------------
+DONE (slice 48, v1.1.5) — issue resolved, moved to issues/closed.
+&KEY argument lists are now validated in the kernel lambda-list binder
+(bind_required_parameters, sources/eval.c), for every &KEY function and macro:
+  - the keyword-argument portion must be a PROPER LIST of EVEN length;
+  - every key (even index) must be a SYMBOL;
+  - unless other keys are allowed — &ALLOW-OTHER-KEYS in the lambda list, or
+    :ALLOW-OTHER-KEYS with a non-NIL value in the call — every key must name one
+    of the declared &KEY parameters (:ALLOW-OTHER-KEYS itself is always accepted).
+Violations signal a PROGRAM-ERROR (new program_error()/PROGRAM_ERROR in
+sources/boerror.c, signalling PROGRAM_ERROR_Class so HANDLER-CASE can catch it).
+The declared keywords are accumulated during binding (rooted across init-form
+evaluation); &REST + &KEY and &KEY + &AUX combinations validate correctly.
+
+Verified: the issue's exact case (compile-file "x.lisp" "x.fas") — where the
+positional "x.fas" was silently swallowed as a bad &rest plist — now signals a
+PROGRAM-ERROR; valid (compile-file "x.lisp" :output-file "x.fas") still works;
+unknown key / odd length / non-symbol key all raise PROGRAM-ERROR;
+:allow-other-keys t and &allow-other-keys suppress the unknown-key check;
+make-array/make-hash-table/sort/remove/find/reduce &KEY calls unaffected.

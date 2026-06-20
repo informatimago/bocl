@@ -1601,6 +1601,54 @@ static Ref lookup_key_argument(Ref keyword, Ref args, bool* found){
     (*found) = false;
     return NIL_Symbol;}
 
+/* True when the keyword-argument list ARGS contains :ALLOW-OTHER-KEYS with a
+   non-NIL value (CLHS 3.4.1.4.1 — this suppresses the unknown-keyword check
+   regardless of the lambda list). */
+static bool args_allow_other_keys(Ref args){
+    bool found=false;
+    Ref v=lookup_key_argument(keyword_intern_cstring("ALLOW-OTHER-KEYS"),args,&found);
+    return found && !nullp(v);}
+
+/* Validate the keyword-argument portion of a call to a &KEY function or macro.
+   ARGS is the flat (:k v …) list; ACCEPTED is the list of declared keyword
+   symbols.  Always required (CLHS 3.5.1.4 / 3.5.1.6): ARGS is a proper list of
+   even length whose keys are symbols.  Unless SUPPRESS (from &ALLOW-OTHER-KEYS
+   in the lambda list, or :ALLOW-OTHER-KEYS non-NIL in ARGS), each key must be
+   one of the declared keywords (:ALLOW-OTHER-KEYS itself is always accepted).
+   Violations signal a PROGRAM-ERROR. */
+static void check_key_arguments(Ref function,Ref args,Ref accepted,bool suppress){
+    Ref name=function_name(function);
+    Ref it=args;
+    while(consp(it)){
+        Ref k=cons_car(it);
+        if(!symbolp(k)){
+            PROGRAM_ERROR("%s: keyword-argument key is not a symbol: %s",
+                          string_cstring(prin1_to_string(name)),
+                          string_cstring(prin1_to_string(k)));}
+        if(!consp(cons_cdr(it))){
+            PROGRAM_ERROR("%s: odd-length keyword-argument list: %s",
+                          string_cstring(prin1_to_string(name)),
+                          string_cstring(prin1_to_string(args)));}
+        it=cons_cdr(cons_cdr(it));}
+    if(!nullp(it)){
+        PROGRAM_ERROR("%s: keyword arguments are not a proper list: %s",
+                      string_cstring(prin1_to_string(name)),
+                      string_cstring(prin1_to_string(args)));}
+    if(suppress){ return; }
+    Ref aok=keyword_intern_cstring("ALLOW-OTHER-KEYS");
+    it=args;
+    while(consp(it) && consp(cons_cdr(it))){
+        Ref k=cons_car(it);
+        bool ok=eql(k,aok);
+        if(!ok){
+            for(Ref a=accepted; consp(a); a=cons_cdr(a)){
+                if(eql(k,cons_car(a))){ ok=true; break; }}}
+        if(!ok){
+            PROGRAM_ERROR("%s: unknown keyword argument %s (not one of the &KEY parameters)",
+                          string_cstring(prin1_to_string(name)),
+                          string_cstring(prin1_to_string(k)));}
+        it=cons_cdr(cons_cdr(it));}}
+
 /* Bind the lambda-list parameters to the values in `arguments` into
    target_env. Supports required, &OPTIONAL (with default-init form),
    &REST / &BODY (synonyms), &KEY (with default init forms; bindings
@@ -1615,6 +1663,8 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
     Ref rest_value = NIL_Symbol;  /* if &REST was bound, the kw-args list */
     bool allow_other_keys = false;
     bool saw_rest = false;
+    bool saw_key = false;             /* lambda list contains &KEY */
+    Ref accepted_keys = NIL_Symbol;   /* declared &KEY keyword symbols, rooted */
     while(consp(ll)){
         Ref param=car(ll);
         /* &WHOLE var — the whole form, prepended to ARGUMENTS by the macro-call
@@ -1640,6 +1690,11 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
             continue;}
         /* &AUX (var) or (var init-form) — bind local variables in order. */
         if(symbolp(param) && param==S(&AUX)){
+            /* &AUX is always last and returns early, so validate any preceding
+               &KEY arguments here before binding the &AUX locals. */
+            if(saw_key){
+                check_key_arguments(function, rest_value, accepted_keys,
+                                    allow_other_keys || args_allow_other_keys(rest_value));}
             ll=cdr(ll);
             while(consp(ll)){
                 Ref aux_spec=car(ll);
@@ -1680,6 +1735,7 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
                the flat keyword-value list. */
             if(!saw_rest){ rest_value = arguments; }
             state = in_key;
+            saw_key = true;
             ll = cdr(ll);
             continue;}
         if(symbolp(param) && param==S(&ALLOW-OTHER-KEYS)){
@@ -1752,6 +1808,10 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
             } else {
                 ERROR("Bad &KEY parameter: %s",
                       string_cstring(prin1_to_string(param)));}
+            /* Record the declared keyword for the unknown-keyword check; root
+               it across the init-form evale below (which may GC). */
+            push(keyword, &accepted_keys);
+            add_to_live_pool(accepted_keys);
             bool found = false;
             Ref value = lookup_key_argument(keyword, rest_value, &found);
             if(!found){
@@ -1775,9 +1835,11 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
         ll=cdr(ll);}
     if(state == in_required || state == in_optional){
         check_no_more_arguments(function,arguments);}
-    /* &KEY with neither &REST nor &ALLOW-OTHER-KEYS: every supplied
-       keyword should match a known one. For now we trust the caller. */
-    (void)allow_other_keys;}
+    /* Validate the keyword-argument plist for any &KEY lambda list (shape +
+       unknown-keyword check, unless other keys are allowed). */
+    if(saw_key){
+        check_key_arguments(function, rest_value, accepted_keys,
+                            allow_other_keys || args_allow_other_keys(rest_value));}}
 
 /* Run `body` in `environment` with a block frame named `block_name` so
    RETURN-FROM works inside user code. (Parameter named `environment` because
