@@ -159,3 +159,25 @@ PROGRESS (slice 44):
   *DEFAULT-COMPILED-FILE-TYPE*.
 REMAINING: wire the full LOAD / COMPILE-FILE file-selection pseudocode
 (try typed candidates; load the more recent of compiled vs source).
+
+----------------------------------------------------------------------
+DONE (slice 47, v1.1.4) — issue resolved, moved to issues/closed.
+- LOAD now implements the full file-selection pseudocode (bootstrap/prelude.lisp):
+  (1) explicit file-type -> load it; an absent file with a known *compiled*
+      file-type falls back to its source sibling (keeps the COMPILE-AND-LOAD
+      idiom working, since bocl writes no real fast-load file);
+  (2) typeless and the named file exists -> load it;
+  (3) typeless -> search *ACCEPTED-COMPILED-FILE-TYPES* and
+      *ACCEPTED-SOURCE-FILE-TYPES*; when both a compiled and a source candidate
+      exist, load the more recent (FILE-WRITE-DATE); else load whichever exists;
+      else honour :IF-DOES-NOT-EXIST.
+- COMPILE-FILE now implements its input-selection pseudocode: explicit type or
+  an existing file is used as is; otherwise the accepted source file types are
+  searched; no source -> error.  Output pathname still derives from
+  *DEFAULT-COMPILED-FILE-TYPE* via COMPILE-FILE-PATHNAME.
+- New helpers: %FIND-SOURCE-FILE, %FIND-COMPILED-FILE, %KNOWN-FILE-TYPE-P,
+  %EXPLICIT-TYPE-P (built on the existing %FIND-TYPED-FILE).
+- Verified: lowercase/UPPER/case-insensitive type search; newer-compiled-wins;
+  compiled-type fallback to source; .cl/.lsp resolution; :if-does-not-exist nil
+  -> NIL; missing -> error; compile-file typeless -> resolves source, returns
+  .fasl pathname; compile-file with no source -> error.

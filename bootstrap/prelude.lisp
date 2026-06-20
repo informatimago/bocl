@@ -8162,19 +8162,40 @@ result array; return that array."
    writing any compiled files."
   (declare (ignore verbose print external-format))
   (let* ((merged (merge-pathnames filespec *default-pathname-defaults*))
-         (ns     (namestring merged)))
-    (cond
-      ((probe-file ns) (funcall *%kernel-load* ns))
-      (t
-       (let* ((dir  (directory-namestring merged))
-              (name (pathname-name merged))
-              (src  (and name (concatenate 'string dir name ".lsp"))))
+         (ns     (namestring merged))
+         (type   (pathname-type merged)))
+    (flet ((do-load (path) (funcall *%kernel-load* path))
+           (missing ()
+             (if if-does-not-exist
+                 (error "LOAD: file ~S does not exist" ns)
+                 nil)))
+      (cond
+        ;; (1) An explicit file-type was given.
+        ((%explicit-type-p merged)
          (cond
-           ((and src (not (string= src ns)) (probe-file src))
-            (funcall *%kernel-load* src))
-           (if-does-not-exist
-            (error "LOAD: file ~S does not exist" ns))
-           (t nil)))))))
+           ((probe-file ns) (do-load ns))
+           ;; bocl writes no real fast-load file, so LOAD of a named-but-absent
+           ;; compiled file falls back to its source sibling — this is what makes
+           ;; the COMPILE-AND-LOAD idiom (load (compile-file f)) work.
+           ((%known-file-type-p type *accepted-compiled-file-types*)
+            (let ((source (%find-source-file merged)))
+              (if source (do-load source) (missing))))
+           (t (missing))))
+        ;; (2) No type, but the file exists exactly as named.
+        ((probe-file ns) (do-load ns))
+        ;; (3) No type: search the accepted compiled/source candidates and load
+        ;;     the more recent when both exist.
+        (t
+         (let ((compiled (%find-compiled-file merged))
+               (source   (%find-source-file merged)))
+           (cond
+             ((and compiled source)
+              (if (>= (file-write-date compiled) (file-write-date source))
+                  (do-load compiled)
+                  (do-load source)))
+             (compiled (do-load compiled))
+             (source   (do-load source))
+             (t (missing)))))))))
 
 ;;; ---- PROCLAIM / DECLAIM --------------------------------------------------
 ;;; Global declarations are advisory in bocl (an interpreter that does no
@@ -8407,6 +8428,29 @@ result array; return that array."
           (let ((ns (concatenate 'string dir name "." c)))
             (when (probe-file ns) (return-from %find-typed-file ns))))))))
 
+(defun %find-source-file (pathname)
+  "Namestring of the first existing source sibling of PATHNAME, or NIL."
+  (%find-typed-file pathname *accepted-source-file-types*))
+
+(defun %find-compiled-file (pathname)
+  "Namestring of the first existing compiled sibling of PATHNAME, or NIL."
+  (%find-typed-file pathname *accepted-compiled-file-types*))
+
+(defun %known-file-type-p (type types)
+  "True if the string TYPE matches one of the accepted file TYPES.  Plain
+   (case-sensitive) entries are matched with STRING=, (:case-insensitive ..)
+   entries with STRING-EQUAL."
+  (and type (stringp type)
+       (some (lambda (ft)
+               (let ((s (%ftype-string ft)))
+                 (if (consp ft) (string-equal type s) (string= type s))))
+             types)))
+
+(defun %explicit-type-p (pathname)
+  "True if PATHNAME carries an explicit, non-empty file type."
+  (let ((tp (pathname-type pathname)))
+    (and tp (stringp tp) (plusp (length tp)))))
+
 ;;; --- MACROEXPAND-1 / MACROEXPAND / MACROEXPAND-ALL -------------------
 ;;; bocl stores a global macro's expander on the symbol plist ($MACRO); the
 ;;; expander takes the macro call's arguments (the cdr of the form).
@@ -8487,8 +8531,17 @@ result array; return that array."
    source.  Any pre-existing (stale) fast-load file is deleted so it cannot
    shadow the source.  Returns (values output-truename warnings-p failure-p);
    failure-p is always NIL."
-  (let* ((in  (merge-pathnames input-file *default-pathname-defaults*))
-         (out (compile-file-pathname in :output-file output-file)))
+  (let* ((merged (merge-pathnames input-file *default-pathname-defaults*))
+         ;; Select the actual source file (issue lisp-file-types pseudocode):
+         ;; an explicit type or an existing file is used as is; otherwise search
+         ;; the accepted source file types.
+         (actual (cond
+                   ((%explicit-type-p merged)      (namestring merged))
+                   ((probe-file (namestring merged)) (namestring merged))
+                   ((%find-source-file merged))
+                   (t (error "COMPILE-FILE: no source file for ~S"
+                             (namestring merged)))))
+         (out    (compile-file-pathname actual :output-file output-file)))
     ;; LOAD only falls back to the .lsp source when the .fasl is ABSENT; remove a
     ;; stale .fasl (e.g. left by an older COMPILE-FILE) so the fresh source wins.
     (when (probe-file out) (ignore-errors (delete-file out)))

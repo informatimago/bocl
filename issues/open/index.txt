@@ -1,5 +1,4 @@
 bocl-or-bash-debugger.issue
-lisp-file-types.issue
 compile-file-key-parameters.issue
 minimal-compilation.issue
 missing-functions.issue
