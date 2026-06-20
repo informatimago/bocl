@@ -34,3 +34,26 @@ signal a TYPE-ERROR on a BIGNUM argument:
     BIGNUM components (store Refs, compare/reduce via the engine).
 
 Do the remaining ops incrementally and re-run the ANSI numeric tests after each.
+
+----------------------------------------------------------------------
+PROGRESS (slice 53, v1.1.10) — bit operations + ISQRT now bignum-aware.
+Implemented in bootstrap/bignum-integration.lisp on top of the wired bignum
+arithmetic (* / FLOOR / EXPT / MOD), each with a fixnum fast-path through the
+saved kernel primitive so all-fixnum calls are unchanged:
+  - ASH: left shift = multiply by 2^count (fixes the silent (ash 1 70) => 0
+    overflow bug — now promotes to a bignum); right shift = floor by 2^|count|.
+  - LOGAND / LOGIOR / LOGXOR / LOGNOT: full two's-complement semantics (correct
+    for negative operands too), via a bitwise combiner walking LSB->MSB to the
+    sign-extension steady state.
+  - INTEGER-LENGTH, LOGCOUNT: bignum loops.
+  - ISQRT: Newton's method for bignums.
+Verified: (ash 1 70)=2^70, (ash 2^70 -65)=32, (logand 2^70 (1- 2^70))=0,
+(logior/logxor 2^70 1)=2^70+1, (lognot 2^70)=-(2^70+1), (logand -2 2^70)=2^70,
+(integer-length 2^70)=71, (logcount (1- 2^70))=70, (isqrt 2^140)=2^70,
+(isqrt 10^40)=10^20; fixnum ash/logand/lognot unaffected.
+
+STILL REMAINING (kept open):
+- RATIO with a bignum numerator or denominator: %bignum-divide still errors on a
+  non-exact quotient ("a ratio with a bignum part is not yet supported"); the
+  kernel ratio_new() stores num/den as fixnum words and needs to accept BIGNUM
+  components (a C change).

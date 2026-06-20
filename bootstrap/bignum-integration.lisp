@@ -89,3 +89,105 @@ fits, else a bignum."
 (defun %bignum-to-string (bignum)
   "Decimal string for a boxed BIGNUM, used by the printer."
   (i%princ-to-string +bignum-base+ (%bignum-value bignum)))
+
+;;; --- Bit operations on bignums (issue deferred-bignum-ops) -----------------
+;;; The kernel ASH / LOGAND / LOGIOR / LOGXOR / LOGNOT / INTEGER-LENGTH /
+;;; LOGCOUNT / ISQRT primitives signal a TYPE-ERROR (and ASH silently returned 0)
+;;; on a BIGNUM operand.  We implement them in Lisp on top of the already-wired
+;;; bignum arithmetic (* / FLOOR / EXPT / MOD), with two's-complement semantics
+;;; for the logical ops, and keep a fixnum fast-path through the saved kernel
+;;; primitives so all-fixnum calls are unaffected.
+
+(defparameter *%kernel-ash*            (symbol-function 'ash))
+(defparameter *%kernel-logand*         (symbol-function 'logand))
+(defparameter *%kernel-logior*         (symbol-function 'logior))
+(defparameter *%kernel-logxor*         (symbol-function 'logxor))
+(defparameter *%kernel-lognot*         (symbol-function 'lognot))
+(defparameter *%kernel-integer-length* (symbol-function 'integer-length))
+(defparameter *%kernel-logcount*       (symbol-function 'logcount))
+(defparameter *%kernel-isqrt*          (symbol-function 'isqrt))
+
+(defun ash (integer count)
+  "Arithmetic shift, bignum-safe.  Left shift = multiply by 2^count (auto-promotes
+   on overflow, which the kernel ASH did not — it returned 0); right shift = floor
+   by 2^|count|."
+  (cond
+    ((zerop count) integer)
+    ((plusp count)
+     (if (%bignump integer)
+         (* integer (expt 2 count))
+         ;; fixnum left shift: trust the kernel only if it does not overflow,
+         ;; detected by shifting the result back; otherwise promote via multiply.
+         (let ((r (funcall *%kernel-ash* integer count)))
+           (if (eql (funcall *%kernel-ash* r (- count)) integer)
+               r
+               (* integer (expt 2 count))))))
+    (t                                   ; right shift (count < 0)
+     (if (%bignump integer)
+         (values (floor integer (expt 2 (- count))))
+         (funcall *%kernel-ash* integer count)))))
+
+;; Two's-complement bitwise combiner: walk the bits LSB->MSB until both operands
+;; reach their sign-extension steady state (0 for non-negative, -1 for negative).
+(defun %and-bit (p q) (* p q))
+(defun %ior-bit (p q) (- 1 (* (- 1 p) (- 1 q))))
+(defun %xor-bit (p q) (mod (+ p q) 2))
+
+(defun %logop (combiner a b)
+  (let ((result 0) (weight 1) (x a) (y b))
+    (loop
+      (when (and (or (zerop x) (eql x -1)) (or (zerop y) (eql y -1))) (return))
+      (when (= 1 (funcall combiner (mod x 2) (mod y 2)))
+        (setq result (+ result weight)))
+      (setq weight (* weight 2) x (ash x -1) y (ash y -1)))
+    ;; The infinite sign tail: bits above are combiner(sign-a, sign-b) forever.
+    (if (= 1 (funcall combiner (if (eql x -1) 1 0) (if (eql y -1) 1 0)))
+        (- result weight)
+        result)))
+
+(defun logand (&rest integers)
+  (if (some #'%bignump integers)
+      (reduce (lambda (a b) (%logop #'%and-bit a b)) integers :initial-value -1)
+      (apply *%kernel-logand* integers)))
+
+(defun logior (&rest integers)
+  (if (some #'%bignump integers)
+      (reduce (lambda (a b) (%logop #'%ior-bit a b)) integers :initial-value 0)
+      (apply *%kernel-logior* integers)))
+
+(defun logxor (&rest integers)
+  (if (some #'%bignump integers)
+      (reduce (lambda (a b) (%logop #'%xor-bit a b)) integers :initial-value 0)
+      (apply *%kernel-logxor* integers)))
+
+(defun lognot (integer)
+  (if (%bignump integer)
+      (- -1 integer)                     ; ~x = -x-1 = -1 - x
+      (funcall *%kernel-lognot* integer)))
+
+(defun integer-length (integer)
+  (if (%bignump integer)
+      (let ((n (if (minusp integer) (lognot integer) integer)) (len 0))
+        (loop (when (zerop n) (return len))
+              (setq n (ash n -1))
+              (incf len)))
+      (funcall *%kernel-integer-length* integer)))
+
+(defun logcount (integer)
+  (if (%bignump integer)
+      (let ((n (if (minusp integer) (lognot integer) integer)) (count 0))
+        (loop (when (zerop n) (return count))
+              (when (= 1 (mod n 2)) (incf count))
+              (setq n (ash n -1))))
+      (funcall *%kernel-logcount* integer)))
+
+(defun isqrt (n)
+  "Greatest integer whose square is <= N (CLHS).  Newton's method for bignums."
+  (cond
+    ((minusp n) (error "ISQRT: argument must be non-negative: ~S" n))
+    ((not (%bignump n)) (funcall *%kernel-isqrt* n))
+    ((< n 4) 1)                          ; n is a bignum >= 4 below
+    (t (let ((x (ash 1 (ceiling (integer-length n) 2))))   ; x >= sqrt(n)
+         (loop
+           (let ((y (ash (+ x (floor n x)) -1)))           ; (x + n/x)/2
+             (if (< y x) (setq x y) (return x))))))))
