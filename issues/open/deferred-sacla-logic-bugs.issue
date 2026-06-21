@@ -42,6 +42,24 @@ driver false-positives — sacla "must" forms pass on any non-NIL value, not onl
 T; the driver now checks for NIL.)  Note: the deep GC use-after-free (must-cons
 F589 under natural GC) is unchanged and still parked until new-gc.
 
+== FIXED (Slice 65) — *PRINT-LEVEL* / *PRINT-LENGTH* / *PRINT-ARRAY* nil ==
+Drove all 439 must-printer forms with the GC off: 156 flagged -> 95.
+  - *PRINT-LEVEL*: the kernel printer now tracks a nesting depth (g_print_level_
+    depth, +1 per list/vector entered) and prints "#" for a composite at depth >=
+    *PRINT-LEVEL* (F270-F276 etc.).
+  - *PRINT-LENGTH*: length 0 now prints "(...)" / "#(...)"; vectors honour the
+    limit too (F280 etc.).  (Lists already truncated with " ..." past the limit.)
+  - *PRINT-ARRAY* NIL: vectors and bit-vectors now print the #<…> form instead of
+    #(…) / #*… (F254-F259, F374-F376).
+Both PRIN1 and PRINC paths updated; depth resets at each top-level print.
+Remaining must-printer (95): full readtable-case x *print-case* symbol printing
+(~30, needs the readtable-case-aware escape/case algorithm), bignum RATIO literals
+(~13, the reader truncates a bignum numerator/denominator — deferred-bignum-ops),
+*PRINT-LEVEL*/*PRINT-LENGTH* and *PRINT-CIRCLE* INSIDE #nA arrays (the Lisp
+%MD-EMIT helper doesn't consult them), and a few singletons (F228 :readably should
+force the #: gensym prefix, F229 *read-base* numeric-symbol escaping, F260 bit
+fill-pointer array as #*).
+
 == FIXED (Slice 64) — circular-array print no longer hangs (must-printer) ==
 The Slice-59 #nA printer recursed forever on a circular array (a literal
 #1=#2A((..)(.. #1#)) or a 0-D array with (eq x (aref x))) — must-printer F389+

@@ -84,6 +84,23 @@ static bool print_condition_via_print_object(Ref object,Ref stream,bool escape){
 #define PRIN1_MAX_DEPTH 16384
 static int g_prin1_depth = 0;
 
+/* *PRINT-LEVEL* nesting depth: 0 at the top object, +1 per composite (list /
+   vector / array) entered.  When a composite would print at depth >= *PRINT-LEVEL*
+   it prints "#" instead (CLHS 22.1.3.4). */
+static int g_print_level_depth = 0;
+static word current_print_level(void){
+    Ref lv = variable_value(S(*PRINT-LEVEL*));
+    return integerp(lv) ? integer_value(lv) : -1;   /* -1 => unlimited */
+}
+static word current_print_length(void){
+    Ref ln = variable_value(S(*PRINT-LENGTH*));
+    return integerp(ln) ? integer_value(ln) : -1;   /* -1 => unlimited */
+}
+/* True when *PRINT-ARRAY* is NIL — vectors/bit-vectors/arrays then print #<…>. */
+static bool print_array_off(void){
+    return nullp(variable_value(S(*PRINT-ARRAY*)));
+}
+
 typedef struct { Ref obj; int label; } CircleEntry;  /* label: 0 once, -1 shared, >0 assigned */
 static CircleEntry* g_circle = NULL;
 static int g_circle_count = 0, g_circle_cap = 0, g_circle_next_label = 0;
@@ -270,6 +287,7 @@ Ref prin1(Ref object,Ref stream){
         return object;}
     bool top = (g_prin1_depth==0);
     bool saved_active=g_circle_active; int saved_count=g_circle_count, saved_label=g_circle_next_label;
+    if(top){ g_print_level_depth=0; }
     if(top){
         Ref pc=variable_value(S(*PRINT-CIRCLE*));
         if(!nullp(pc)){ g_circle_count=0; g_circle_next_label=0; circle_scan(object,0); g_circle_active=true; }
@@ -336,6 +354,9 @@ static Ref prin1_inner(Ref object,Ref stream){
         return object;}
 
     if(consp(object)){
+        /* *PRINT-LEVEL*: a list deeper than the limit prints as "#". */
+        word plevel = current_print_level();
+        if(plevel >= 0 && g_print_level_depth >= plevel){ fputc('#',out); return object; }
         /* *PRINT-CIRCLE*: emit #n# for an already-printed shared cons, #n= the
            first time. */
         if(g_circle_active){
@@ -346,8 +367,9 @@ static Ref prin1_inner(Ref object,Ref stream){
                 if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
                              fprintf(out,"#%d=",g_circle_next_label); }}}
         /* Respect *PRINT-LENGTH* — truncate after this many elements. */
-        Ref plen_ref = variable_value(S(*PRINT-LENGTH*));
-        word print_length = (integerp(plen_ref)) ? integer_value(plen_ref) : -1;
+        word print_length = current_print_length();
+        if(print_length == 0){ fprintf(out,"(...)"); return object; }
+        g_print_level_depth++;
         Ref current=object;
         fprintf(out,"(");
         word elem=0;
@@ -377,6 +399,7 @@ static Ref prin1_inner(Ref object,Ref stream){
             fprintf(out," . ");
             prin1(current, stream);}
         fprintf(out,")");
+        g_print_level_depth--;
         return object;}
 
     if(stringp(object)){
@@ -393,6 +416,9 @@ static Ref prin1_inner(Ref object,Ref stream){
 
     /* BIT-VECTOR must come before VECTOR (bit-vectors are a subtype). */
     if(bit_vector_p(object)){
+        if(print_array_off()){
+            fprintf(out,"#<"); prin1(class_name(class_of(object)),stream);
+            fprintf(out," %p>",(void*)object); return object; }
         fprintf(out,"#*");
         uword blen = bit_vector_length(object);
         for(uword i=0; i<blen; i++){
@@ -402,6 +428,13 @@ static Ref prin1_inner(Ref object,Ref stream){
         return object;}
 
     if(vectorp(object)){
+        /* *PRINT-ARRAY* NIL => print the unreadable #<…> form instead of #(…). */
+        if(print_array_off()){
+            fprintf(out,"#<"); prin1(class_name(class_of(object)),stream);
+            fprintf(out," %p>",(void*)object); return object; }
+        /* *PRINT-LEVEL*: a vector deeper than the limit prints as "#". */
+        word plevel = current_print_level();
+        if(plevel >= 0 && g_print_level_depth >= plevel){ fputc('#',out); return object; }
         /* A vector prints as #(e1 e2 …). Vectors are
            Array-backed under the hood, so iterate via array.elements. */
         if(g_circle_active){
@@ -411,12 +444,17 @@ static Ref prin1_inner(Ref object,Ref stream){
                 if(lab>0){ fprintf(out,"#%d#",lab); return object; }
                 if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
                              fprintf(out,"#%d=",g_circle_next_label); }}}
+        word plen = current_print_length();
+        if(plen == 0){ fprintf(out,"#(...)"); return object; }
+        g_print_level_depth++;
         fprintf(out,"#(");
         uword len = vector_length(object);
         for(uword i=0; i<len; i++){
             if(i>0){ fprintf(out," "); }
+            if(plen >= 0 && (word)i >= plen){ fprintf(out,"..."); break; }
             prin1(object->slots->array.elements->elements[i], stream);}
         fprintf(out,")");
+        g_print_level_depth--;
         return object;}
 
     /* Pathnames print in their readable #P"namestring" form (both physical and
@@ -513,24 +551,36 @@ Ref princ(Ref object,Ref stream){
         return object;}
 
     if(consp(object)){
+        word plevel = current_print_level();
+        if(plevel >= 0 && g_print_level_depth >= plevel){ fputc('#',out); return object; }
+        word plen = current_print_length();
+        if(plen == 0){ fprintf(out,"(...)"); return object; }
+        g_print_level_depth++;
         Ref current=object;
         fprintf(out,"(");
         princ(car(current),stream);
         current=cdr(current);
+        word elem=1;
         while(consp(current)){
+            if(plen >= 0 && elem >= plen){ fprintf(out," ..."); current=NIL_Symbol; break; }
             fprintf(out," ");
             princ(car(current),stream);
-            current=cdr(current);}
-        if(!nullp(current)){
+            current=cdr(current);
+            elem++;}
+        if(!nullp(current) && !consp(current)){
             fprintf(out," . ");
             princ(current, stream);}
         fprintf(out,")");
+        g_print_level_depth--;
         return object;}
 
     /* BIT-VECTOR / VECTOR — the aesthetic (#*… / #(…)) form coincides with the
        readable one, so PRINC prints them like PRIN1.  BIT-VECTOR before VECTOR
        (a bit-vector is a vector subtype). */
     if(bit_vector_p(object)){
+        if(print_array_off()){
+            fprintf(out,"#<"); princ(class_name(class_of(object)),stream);
+            fprintf(out," %p>",(void*)object); return object; }
         fprintf(out,"#*");
         uword blen = bit_vector_length(object);
         for(uword i=0; i<blen; i++){
@@ -538,12 +588,22 @@ Ref princ(Ref object,Ref stream){
         return object;}
 
     if(vectorp(object)){
+        if(print_array_off()){
+            fprintf(out,"#<"); princ(class_name(class_of(object)),stream);
+            fprintf(out," %p>",(void*)object); return object; }
+        word plevel = current_print_level();
+        if(plevel >= 0 && g_print_level_depth >= plevel){ fputc('#',out); return object; }
+        word plen = current_print_length();
+        if(plen == 0){ fprintf(out,"#(...)"); return object; }
+        g_print_level_depth++;
         fprintf(out,"#(");
         uword len = vector_length(object);
         for(uword i=0; i<len; i++){
             if(i>0){ fprintf(out," "); }
+            if(plen >= 0 && (word)i >= plen){ fprintf(out,"..."); break; }
             princ(object->slots->array.elements->elements[i], stream);}
         fprintf(out,")");
+        g_print_level_depth--;
         return object;}
 
     /* PRINC of a pathname writes its namestring (no #P"…" escaping). */
