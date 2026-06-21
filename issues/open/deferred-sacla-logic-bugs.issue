@@ -16,6 +16,20 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== FIXED (Slice 57) — *PRINT-CASE* + *PRINT-GENSYM* (symbol printing) ==
+  - *PRINT-CASE* (:UPCASE/:DOWNCASE/:CAPITALIZE): print_name_escaped() now folds
+    the case of UNESCAPED symbol/keyword/package names (escaped |…| names stay
+    verbatim per CLHS 22.1.3.3.1).  Default :UPCASE is a verbatim no-op, so normal
+    output is unchanged; :DOWNCASE -> "foo", :CAPITALIZE -> "Foo-Bar".  Assumes the
+    standard readtable-case :UPCASE (full readtable-case-aware printing — needed
+    for must-printer F203/204/205/233, which sweep readtable-case x *print-case* —
+    is still open; those are NOT regressions, they fail today too).
+  - *PRINT-GENSYM* (default T): the #: prefix on an uninterned symbol is now
+    suppressed when *PRINT-GENSYM* is NIL (must-printer F225:
+    (write-to-string (make-symbol "G01") :gensym nil :escape t) => "G01").
+Verified 10/10 targeted (downcase/capitalize, keyword, escaped-stays-verbatim,
+gensym on/off, round-trip preserved) with no change to default printing.
+
 == FIXED (Slice 56) — *PRINT-BASE* / *PRINT-RADIX* radix printing (~80 forms) ==
 The kernel printer ignored *PRINT-BASE* and *PRINT-RADIX*: integers, bignums, and
 ratios always printed in decimal with no radix prefix (must-printer F51-F125,

@@ -143,11 +143,43 @@ static bool symbol_name_needs_escape(const char* s, uword len){
     return false;
 }
 
+/* *PRINT-CASE*: 0 = :UPCASE (verbatim, the default), 1 = :DOWNCASE, 2 =
+   :CAPITALIZE.  Compared by name so we need no keyword Refs in C. */
+static int current_print_case(void){
+    Ref c = variable_value(S(*PRINT-CASE*));
+    if(symbolp(c)){
+        char* nm = string_cstring(symbol_name(c));
+        if(strcmp(nm,"DOWNCASE")==0){ return 1; }
+        if(strcmp(nm,"CAPITALIZE")==0){ return 2; }
+    }
+    return 0;
+}
+
+/* Write a symbol/package name to OUT.  Unescaped names are restyled by
+   *PRINT-CASE* (which, per CLHS 22.1.3.3.1, applies only when vertical-bar
+   syntax is NOT used — escaped names keep every char verbatim).  We assume the
+   standard readtable-case :UPCASE, so the stored uppercase letters are the ones
+   *PRINT-CASE* may fold; this is a no-op for the default :UPCASE. */
 static void print_name_escaped(Ref name, FILE* out){
     char* s   = string_cstring(name);
     uword len = string_length(name);
     if(!symbol_name_needs_escape(s,len)){
-        fwrite(s,1,(size_t)len,out);
+        int pcase=current_print_case();
+        if(pcase==0){ fwrite(s,1,(size_t)len,out); return; }
+        bool word_start=true;
+        for(uword i=0;i<len;i++){
+            unsigned char c=(unsigned char)s[i];
+            bool alpha=(c>='A'&&c<='Z')||(c>='a'&&c<='z');
+            bool alnum=alpha||(c>='0'&&c<='9');
+            unsigned char o=c;
+            if(pcase==1){ if(c>='A'&&c<='Z'){ o=(unsigned char)(c+32); } }
+            else { /* :CAPITALIZE — first alpha of each word up, the rest down */
+                if(alpha){
+                    if(word_start){ if(c>='a'&&c<='z'){ o=(unsigned char)(c-32); } }
+                    else          { if(c>='A'&&c<='Z'){ o=(unsigned char)(c+32); } } } }
+            fputc(o,out);
+            word_start = !alnum;
+        }
         return; }
     fputc('|',out);
     for(uword i=0;i<len;i++){
@@ -276,7 +308,7 @@ static Ref prin1_inner(Ref object,Ref stream){
            numeric-looking characters reads back unchanged. */
         Ref pkgname; int sep;
         symbol_print_prefix(object,&pkgname,&sep);
-        if(sep==3){ fprintf(out,"#:"); }
+        if(sep==3){ if(!nullp(variable_value(S(*PRINT-GENSYM*)))){ fprintf(out,"#:"); } }
         else if(sep!=0){
             print_name_escaped(pkgname,out);
             fprintf(out, sep==1 ? ":" : "::"); }
