@@ -109,3 +109,48 @@ RISK: this touches the core collector + every mutation site. A missed
 write barrier = a live young object swept = use-after-free, heap-state
 dependent (the exact class documented in bocl-gc-rooting). Go slow; lean
 on GCSTRESS/GCCHECK/HEAPCHECK after every step.
+
+
+IMPLEMENTATION STATUS (v1.0.2 .. v1.0.7 on new-gc)
+--------------------------------------------------
+All six steps landed; correctness validated, perf goal demonstrated.
+
+  v1.0.2  build: realpath decl + libm link order (Linux/gcc-14 prereq).
+  Step 0  v1.0.3  BOCL_GCLOG (freed/live/free/heap/zones + minor/major counts).
+  Step 1  v1.0.4  GC_OLD_BIT (objcount bit 30); block_objcount masks it off;
+                  clear_block keeps it (sticky mark).  Byte-identical.
+  Step 2  v1.0.5  Write barrier + remembered set.  gc_write_barrier(container)
+                  records an OLD block on any Ref store; the target is the block
+                  that PHYSICALLY holds the slot (cons cell / obj->slots Slots
+                  block / vector's inner VectorOfObject).  Routed through the C
+                  primitive mutators (cons_rplaca/d, svref_set, structure_set,
+                  set_symbol_*) — covering all their callers — plus the direct
+                  field-write bypass sites (hash table, packages, class
+                  superclasses, structure cached_slots, environment push-lists,
+                  reader vectors).  object_slot_count() replaces raw element-count
+                  reads of objcount.  Inert until promotion exists => byte-identical.
+  Step 3  v1.0.6  Minor collection + promotion model.  Promotion happens ONLY at
+                  a MAJOR GC; a minor marks young (rootset + remset), reclaims
+                  young garbage, promotes nothing.  Scaffold (RootSet + LivePool
+                  chain) kept young; a major PINS the live-pool working set young
+                  (gc_collect_pinned/demote_pinned) so a constructor mid-build is
+                  never promoted out from under its initializing stores; a major
+                  then rebuilds the remset by a full-heap scan (recovers the
+                  promoted-wrapper -> pinned-slots edge Object_new creates).
+                  Validated: SACLA byte-identical; ZERO GCCHECK(minor) dangling
+                  reports under interleaved major+minor stress across must-cons /
+                  -array / -hash-table / -data-and-control / -package / -symbol.
+  Steps 4+5 v1.0.7  Proactive policy (opt-in: BOCL_GC_YOUNG_KB / _MAJOR_EVERY).
+                  Minor GC every N KB of allocation, major every M minors.
+                  Measured (120k function-call garbage, ~12 MB live):
+                    legacy OFF: 74.1 s, 134 MB / 2 zones, 60 majors.
+                    proactive : 26.5 s, 67 MB / 1 zone, 471 minor + 31 major.
+                  ~2.8x faster AND half the peak heap.
+
+REMAINING (blocks proactive-by-default): the pre-existing GC rooting long-tail
+(issues/open/deferred-gc-rooting-longtail).  Firing the collector frequently
+during a complex load (file loading / interning) hits dormant unrooted-Ref gaps
+(e.g. BOCL_GCSTRESS=1 still SEGVs at startup via subclassp/typep).  Those
+layout-sensitive fixes are a separate fixpoint task; once they land,
+BOCL_GC_YOUNG_KB can default on and the ANSI-test module-load timings can be
+re-measured end-to-end (the original target metric).
