@@ -403,6 +403,24 @@ static void heap_verify(void){
 static long gc_minor_stress_n = -1;   /* BOCL_GCMINORSTRESS: force a MINOR GC every N allocs */
 static long gc_minor_stress_c = 0;
 
+/* ---- Proactive generational collection policy (opt-in) -------------------
+   The legacy collector fires only when every zone is full, so a garbage-heavy
+   load (the ANSI-test suite: ~99% garbage) balloons the heap to gigabytes
+   before anything is reclaimed, and the per-allocation zone walk then goes
+   super-linear.  This policy fires a MINOR GC every BOCL_GC_YOUNG_KB kilobytes
+   of allocation (keeping the heap small without re-marking the old generation)
+   and promotes the survivors with a MAJOR GC every BOCL_GC_MAJOR_EVERY minors.
+
+   OFF BY DEFAULT (BOCL_GC_YOUNG_KB unset/0): normal operation is byte-identical
+   to the legacy collector.  Proactive collection is opt-in because firing the
+   collector frequently during a load also exercises the pre-existing GC rooting
+   long-tail (issues/open/deferred-gc-rooting-longtail) — those fixes are a
+   separate, layout-sensitive fixpoint task and are not part of this branch. */
+static long  gc_policy_young_kb     = -1;   /* -1 unchecked, 0 off, >0 = KB threshold */
+static long  gc_policy_major_every  = 16;
+static uword gc_policy_young_bytes  = 0;
+static long  gc_policy_minors_done  = 0;
+
 void* allocate(size_t size){
     if(gc_stress_n < 0){
         const char* s = getenv("BOCL_GCSTRESS");
@@ -414,6 +432,19 @@ void* allocate(size_t size){
         gc_minor_stress_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;}
     if(gc_minor_stress_n > 0 && garbage_collection_is_enabled()){
         if(++gc_minor_stress_c >= gc_minor_stress_n){ gc_minor_stress_c = 0; minor_collect(); }}
+    if(gc_policy_young_kb < 0){
+        const char* s = getenv("BOCL_GC_YOUNG_KB");
+        gc_policy_young_kb = s ? (atol(s) < 0 ? 0 : atol(s)) : 0;
+        const char* m = getenv("BOCL_GC_MAJOR_EVERY");
+        if(m){ gc_policy_major_every = atol(m); }}
+    if(gc_policy_young_kb > 0 && garbage_collection_is_enabled()){
+        gc_policy_young_bytes += size;
+        if(gc_policy_young_bytes >= (uword)gc_policy_young_kb * 1024u){
+            gc_policy_young_bytes = 0;
+            if(gc_policy_major_every > 0 && ++gc_policy_minors_done >= gc_policy_major_every){
+                gc_policy_minors_done = 0; garbage_collect();
+            }else{
+                minor_collect();}}}
     if(heap_check_n < 0){
         const char* s = getenv("BOCL_HEAPCHECK");
         heap_check_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;
