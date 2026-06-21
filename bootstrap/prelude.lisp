@@ -1019,11 +1019,15 @@ NIL when TEST has no hashable equivalent."
 ;;  Association lists (slice 12).                                        ;;
 ;; -------------------------------------------------------------------- ;;
 
-(defun assoc (item list &key (test #'eql) (key #'identity))
-  "Return the first pair in LIST whose CAR satisfies TEST with ITEM."
+(defun assoc (item list &key (test #'eql test-p) test-not (key #'identity))
+  "Return the first pair in LIST whose CAR satisfies TEST (or, if :TEST-NOT is
+   supplied, fails it) with ITEM."
+  (when (and test-p test-not) (error "ASSOC: both :TEST and :TEST-NOT supplied"))
   (dolist (pair list nil)
     (when (and (consp pair)
-               (funcall test item (funcall key (car pair))))
+               (if test-not
+                   (not (funcall test-not item (funcall key (car pair))))
+                   (funcall test item (funcall key (car pair)))))
       (return pair))))
 
 (defun assoc-if (predicate list &key (key #'identity))
@@ -1040,11 +1044,15 @@ NIL when TEST has no hashable equivalent."
                (not (funcall predicate (funcall key (car pair)))))
       (return pair))))
 
-(defun rassoc (item list &key (test #'eql) (key #'identity))
-  "Return the first pair in LIST whose CDR satisfies TEST with ITEM."
+(defun rassoc (item list &key (test #'eql test-p) test-not (key #'identity))
+  "Return the first pair in LIST whose CDR satisfies TEST (or, if :TEST-NOT is
+   supplied, fails it) with ITEM."
+  (when (and test-p test-not) (error "RASSOC: both :TEST and :TEST-NOT supplied"))
   (dolist (pair list nil)
     (when (and (consp pair)
-               (funcall test item (funcall key (cdr pair))))
+               (if test-not
+                   (not (funcall test-not item (funcall key (cdr pair))))
+                   (funcall test item (funcall key (cdr pair)))))
       (return pair))))
 
 (defun rassoc-if (predicate list &key (key #'identity))
