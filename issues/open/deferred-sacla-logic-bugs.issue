@@ -42,6 +42,16 @@ driver false-positives — sacla "must" forms pass on any non-NIL value, not onl
 T; the driver now checks for NIL.)  Note: the deep GC use-after-free (must-cons
 F589 under natural GC) is unchanged and still parked until new-gc.
 
+== FIXED (Slice 64) — circular-array print no longer hangs (must-printer) ==
+The Slice-59 #nA printer recursed forever on a circular array (a literal
+#1=#2A((..)(.. #1#)) or a 0-D array with (eq x (aref x))) — must-printer F389+
+hung/overflowed the C stack mid-suite, hiding all later results.  Rewrote the
+printer (%MD-EMIT) to recurse in Lisp for nested %md-array elements carrying a
+lexical SEEN stack (a dynamic-special guard did NOT survive the kernel PRIN1
+callback); a self-referential array now prints "#<circular-array>" and terminates.
+Normal and array-of-array printing unchanged.  must-printer now drives to
+completion (439 forms) instead of dying at F389.
+
 == FIXED (Slice 59) — aggregate #nA(...) array printing ==
 Multidimensional / adjustable / displaced arrays (%md-array structs) printed as
 the opaque #<%MD-ARRAY 0x…> instead of a readable aggregate.  Now:

@@ -8947,43 +8947,55 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
 ;;      %md-array.  ESCAPE selects PRIN1 (T) vs PRINC (NIL) for each element.
 (defun %md-array-print-string (a escape)
   (when (and (%md-array-p a) *print-array*)
-    (let* ((dims (%md-array-dimensions a))
-           (rank (length dims)))
-      (cond
-        ;; A CHARACTER array (adjustable/displaced/fill-pointer string) prints as
-        ;; a string of its active (fill-pointer-bounded) elements.
-        ((eq (%md-array-element-type a) 'character)
-         (let* ((fp  (%md-array-fill-pointer a))
-                (n   (or fp (reduce #'* dims :initial-value 1)))
-                (str (make-string n)))
-           (dotimes (i n) (setf (char str i) (row-major-aref a i)))
-           (with-output-to-string (s) (if escape (prin1 str s) (princ str s)))))
-        (t
-         (let ((idx 0))
-           (with-output-to-string (s)
-             (labels ((leaf ()
-                        (if escape
-                            (prin1 (row-major-aref a idx) s)
-                            (princ (row-major-aref a idx) s))
-                        (incf idx))
-                      (rec (ds)
-                        (if (null ds)
-                            (leaf)                         ; rank-0 scalar element
-                            (progn
-                              (write-char #\( s)
-                              (dotimes (k (car ds))
-                                (when (plusp k) (write-char #\Space s))
-                                (rec (cdr ds)))
-                              (write-char #\) s)))))
-               (cond
-                 ((= rank 1)                               ; #(...) vector syntax
-                  (write-string "#(" s)
-                  (dotimes (k (car dims))
-                    (when (plusp k) (write-char #\Space s))
-                    (leaf))
-                  (write-char #\) s))
-                 (t (format s "#~DA" rank)                 ; #nA(...) for rank >= 0
-                    (rec dims)))))))))))
+    (with-output-to-string (s)
+      (%md-emit a escape s (list a)))))
+
+(defun %md-emit (a escape s seen)
+  ;; Emit the aggregate printed form of %md-array A to stream S.  SEEN is the
+  ;; stack of arrays currently being printed (a lexical cycle guard — bocl has no
+  ;; #n=/#n# array-circle printing yet, and a circular array like #1=#2A((..)(..
+  ;; #1#)) would otherwise recurse forever).  Nested %md-array elements recurse
+  ;; here (staying in Lisp); other elements print with PRIN1 (escape) / PRINC.
+  (let ((dims (%md-array-dimensions a))
+        (et   (%md-array-element-type a)))
+    (cond
+      ;; A CHARACTER array (adjustable/displaced/fill-pointer string) prints as a
+      ;; string of its active (fill-pointer-bounded) elements.
+      ((eq et 'character)
+       (let* ((fp  (%md-array-fill-pointer a))
+              (n   (or fp (reduce #'* dims :initial-value 1)))
+              (str (make-string n)))
+         (dotimes (i n) (setf (char str i) (row-major-aref a i)))
+         (if escape (prin1 str s) (princ str s))))
+      (t
+       (let ((idx 0) (rank (length dims)))
+         (labels ((emit-elt ()
+                    (let ((e (row-major-aref a idx)))
+                      (incf idx)
+                      (cond ((and (%md-array-p e) (member e seen :test #'eq))
+                             (write-string "#<circular-array>" s))
+                            ((%md-array-p e)
+                             (%md-emit e escape s (cons e seen)))
+                            (escape (prin1 e s))
+                            (t (princ e s)))))
+                  (rec (ds)
+                    (if (null ds)
+                        (emit-elt)                         ; rank-0 scalar element
+                        (progn
+                          (write-char #\( s)
+                          (dotimes (k (car ds))
+                            (when (plusp k) (write-char #\Space s))
+                            (rec (cdr ds)))
+                          (write-char #\) s)))))
+           (cond
+             ((= rank 1)                                   ; #(...) vector syntax
+              (write-string "#(" s)
+              (dotimes (k (car dims))
+                (when (plusp k) (write-char #\Space s))
+                (emit-elt))
+              (write-char #\) s))
+             (t (format s "#~DA" rank)                     ; #nA(...) for rank >= 0
+                (rec dims)))))))))
 
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
