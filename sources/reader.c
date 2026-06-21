@@ -809,27 +809,13 @@ static Ref parse_object(parser_state* parser){
                           inner, NULL);}
       case '"':
           return parse_string(parser);
-      case '|': {
-          /* |...| — multi-escape: a symbol whose name is the literal,
-             case-PRESERVED characters between the bars; \ single-escapes the
-             next character (so \| and \\ are literal). */
-          parser->length=0;
-          for(;;){
-              advance_character(parser);
-              if(parser->eof){
-                  READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}
-              if(parser->ch=='\\'){
-                  advance_character(parser);   /* the escaped char, taken literally */
-                  if(parser->eof){
-                      READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}}
-              else if(parser->ch=='|'){
-                  break;}
-              check_token_too_long(parser,"Token");
-              parser->token[parser->length++]=parser->ch;}
-          parser->token[parser->length]='\0';
-          advance_character(parser);   /* past the closing | */
-          parser->eof=false;           /* a name terminated by EOF is still valid */
-          return package_intern_current_cstring((const char*)parser->token); }
+      case '|':
+          /* |...| — multi-escape.  A leading bar is just the first segment of a
+             token that may concatenate more bars, single escapes, unescaped
+             constituents, and PACKAGE markers (|pkg|::|name|).  parse_token
+             handles all of that (it enters its multi-escape branch on this '|'),
+             so delegate rather than re-implement a broken shortcut here. */
+          return parse_token(parser);
       case '(':
           return parse_list(parser);
       case '#': {
