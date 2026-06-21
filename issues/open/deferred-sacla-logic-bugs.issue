@@ -42,6 +42,11 @@ driver false-positives — sacla "must" forms pass on any non-NIL value, not onl
 T; the driver now checks for NIL.)  Note: the deep GC use-after-free (must-cons
 F589 under natural GC) is unchanged and still parked until new-gc.
 
+== FIXED (Slice 66) — *PRINT-READABLY* forces the #: gensym prefix ==
+F228: (write-to-string (make-symbol "G01") :gensym nil :readably t) must print
+"#:G01" — an uninterned symbol has to read back, so *PRINT-READABLY* overrides
+*PRINT-GENSYM* NIL.  The PRIN1 symbol branch now emits #: when either is set.
+
 == FIXED (Slice 65) — *PRINT-LEVEL* / *PRINT-LENGTH* / *PRINT-ARRAY* nil ==
 Drove all 439 must-printer forms with the GC off: 156 flagged -> 95.
   - *PRINT-LEVEL*: the kernel printer now tracks a nesting depth (g_print_level_

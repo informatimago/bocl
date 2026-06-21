@@ -346,7 +346,10 @@ static Ref prin1_inner(Ref object,Ref stream){
            numeric-looking characters reads back unchanged. */
         Ref pkgname; int sep;
         symbol_print_prefix(object,&pkgname,&sep);
-        if(sep==3){ if(!nullp(variable_value(S(*PRINT-GENSYM*)))){ fprintf(out,"#:"); } }
+        /* #: prefix for an uninterned symbol when *PRINT-GENSYM* is true, or
+           always when *PRINT-READABLY* (an uninterned symbol must read back). */
+        if(sep==3){ if(!nullp(variable_value(S(*PRINT-GENSYM*))) ||
+                       !nullp(variable_value(S(*PRINT-READABLY*)))){ fprintf(out,"#:"); } }
         else if(sep!=0){
             print_name_escaped(pkgname,out);
             fprintf(out, sep==1 ? ":" : "::"); }
