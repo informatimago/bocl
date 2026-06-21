@@ -89,6 +89,74 @@ static void circle_scan(Ref obj,int depth){
     else { uword len=vector_length(obj);
            for(uword i=0;i<len;i++){ circle_scan(obj->slots->array.elements->elements[i],depth+1); } }}
 
+/* --- Symbol-name escaping for *PRINT-ESCAPE* (PRIN1) -----------------------
+   A symbol name must be printed so it reads back to the same symbol.  When the
+   raw name would NOT (it is empty, all dots, looks like a number, or contains a
+   character the reader treats specially or would case-fold), wrap the whole
+   name in vertical bars, backslash-escaping any | or \ inside.  Vertical-bar
+   quoting preserves case and every constituent verbatim, so it is always a
+   correct (if sometimes non-minimal) readable form. */
+
+static bool token_is_number_like(const char* s, uword len){
+    /* Recognises the common decimal numeric tokens the reader accepts at
+       *READ-BASE* 10: integers (optional sign, optional trailing dot), ratios,
+       and floats.  Over-recognition only causes extra (harmless) escaping. */
+    if(len==0){ return false; }
+    uword i=0;
+    if(s[i]=='+'||s[i]=='-'){ i++; }
+    uword digits=0, dots=0, slashes=0, exp=0;
+    for(;i<len;i++){
+        char c=s[i];
+        if(c>='0'&&c<='9'){ digits++; }
+        else if(c=='.'){ dots++; }
+        else if(c=='/'){ slashes++; }
+        else if(c=='e'||c=='E'||c=='d'||c=='D'||c=='f'||c=='F'||
+                c=='s'||c=='S'||c=='l'||c=='L'){
+            exp++;
+            if(i+1<len && (s[i+1]=='+'||s[i+1]=='-')){ i++; } }
+        else{ return false; }              /* a non-numeric constituent */
+    }
+    if(digits==0){ return false; }         /* must contain at least one digit */
+    if(dots==0 && slashes==0 && exp==0){ return true; }   /* integer */
+    if(slashes==1 && dots==0 && exp==0){ return true; }   /* ratio a/b */
+    if(slashes==0 && dots<=1){ return true; }             /* float / decimal */
+    return false;
+}
+
+static bool symbol_name_needs_escape(const char* s, uword len){
+    if(len==0){ return true; }                            /* the empty symbol || */
+    if(s[0]=='#'){ return true; }                         /* leading # dispatches */
+    bool all_dots=true;
+    for(uword i=0;i<len;i++){ if(s[i]!='.'){ all_dots=false; break; } }
+    if(all_dots){ return true; }                          /* "." "..." */
+    for(uword i=0;i<len;i++){
+        unsigned char c=(unsigned char)s[i];
+        if(c<=' ' || c==0x7f){ return true; }             /* whitespace / control */
+        switch(c){
+          case '(': case ')': case '"': case '\'': case '`':
+          case ',': case ';': case '\\': case '|': case ':':
+            return true;
+        }
+        if(c>='a' && c<='z'){ return true; }              /* default :UPCASE folds it */
+    }
+    if(token_is_number_like(s,len)){ return true; }
+    return false;
+}
+
+static void print_name_escaped(Ref name, FILE* out){
+    char* s   = string_cstring(name);
+    uword len = string_length(name);
+    if(!symbol_name_needs_escape(s,len)){
+        fwrite(s,1,(size_t)len,out);
+        return; }
+    fputc('|',out);
+    for(uword i=0;i<len;i++){
+        char c=s[i];
+        if(c=='|' || c=='\\'){ fputc('\\',out); }
+        fputc(c,out); }
+    fputc('|',out);
+}
+
 static Ref prin1_inner(Ref object,Ref stream);
 Ref prin1(Ref object,Ref stream){
     if(g_prin1_depth >= PRIN1_MAX_DEPTH){
@@ -149,20 +217,22 @@ static Ref prin1_inner(Ref object,Ref stream){
 
     if(keywordp(object) ){
         fprintf(out,":");
-        princ(symbol_name(object),stream);
+        print_name_escaped(symbol_name(object),out);
         return object;}
 
     if(symbolp(object)){
         /* prin1 qualifies a symbol by package when it is not accessible as
            itself in *PACKAGE*, so the written form reads back to the same symbol
-           (needed for fasls and readable output across packages). */
+           (needed for fasls and readable output across packages).  Each name
+           component is escaped so a symbol whose name has lowercase, special, or
+           numeric-looking characters reads back unchanged. */
         Ref pkgname; int sep;
         symbol_print_prefix(object,&pkgname,&sep);
         if(sep==3){ fprintf(out,"#:"); }
         else if(sep!=0){
-            princ(pkgname,stream);
+            print_name_escaped(pkgname,out);
             fprintf(out, sep==1 ? ":" : "::"); }
-        princ(symbol_name(object),stream);
+        print_name_escaped(symbol_name(object),out);
         return object;}
 
     if(consp(object)){

@@ -16,6 +16,38 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== FIXED (Slice 55) — readable symbol printing + #: reader (pure logic bugs) ==
+The must-printer F145 SECONDARY correctness bug (and a whole class with it):
+PRIN1 / WRITE :readably / WRITE :escape printed a symbol's name RAW
+(princ(symbol_name)), so any symbol whose name would not read back unchanged was
+emitted unreadably:
+  - a name with #\\ , #\| , whitespace, or other special/terminating chars
+    (e.g. the |\\| symbol printed a bare "\\");
+  - a lowercase or mixed-case name (default :UPCASE would fold it on read-back);
+  - a numeric-looking name ("123", "1/2", "1.5") that would read as a number;
+  - the empty name and all-dots names ("." "...").
+Fix (printer.c): prin1_inner now escapes both the package-prefix and the symbol
+name via print_name_escaped() — symbol_name_needs_escape() decides, and when
+escaping is needed the whole name is wrapped in |...| with internal | and \\
+backslash-escaped (vertical-bar quoting preserves case + every constituent
+verbatim, so it is always a correct readable form).  PRINC is unchanged (still
+raw/aesthetic).  Normal uppercase symbols, keywords, and lists print exactly as
+before (no spurious escaping).
+
+Uncovered + fixed en route (reader.c): the #:NAME (uninterned symbol) reader used
+the coarse constituentp(), which classifies #\# as NON-constituent, so it stopped
+the name at the first '#': "#:FOO#BAR" read back as FOO, not FOO#BAR.  (The normal
+token reader was already correct — it uses the readtable-based token_continues(),
+which continues across non-terminating macro chars like #.)  The #: loop now uses
+token_continues() too, matching parse_token.
+
+Verified: make-symbol round-trips for {"\\","foo","FOO","123","1/2","1.5","",
+"a b","FOO#BAR","#FOO",".","...","nil","Mixed"} all read back to an equal name
+(STRING= name (symbol-name (read-from-string (write-to-string sym :readably t)))).
+The F145 round-trip (symbol whose name is a single #\\) now reads back to a symbol
+named "\\" instead of erroring.  NOTE: the must-printer F145 HANG is the separate,
+still-open deep GC use-after-free below; only its correctness half is fixed here.
+
 == FIXED (Slice 77) ==
   - must-symbol SEGV  -> AREF/AREF-SET on a STRING crashed (VECTOR_Class tested
     before STRING_Class; a string IS a vector, so it went through svref and read

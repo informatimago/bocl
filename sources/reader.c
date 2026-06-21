@@ -915,6 +915,7 @@ static Ref parse_object(parser_state* parser){
                 advance_character(parser);   /* skip ':' */
                 parser->length=0;
                 bool esc=false;   /* | … | or \ used — keep escaped case verbatim */
+                Ref rt=current_readtable();   /* match parse_token's continuation rule */
                 while(!parser->error && !parser->eof){
                     if(parser->ch=='\\'){
                         if(!esc){ for(halfword i=0;i<parser->length;i++){ parser->token[i]=reader_upcase1(parser->token[i]); } esc=true; }
@@ -933,7 +934,10 @@ static Ref parse_object(parser_state* parser){
                             check_token_too_long(parser,"Token");
                             parser->token[parser->length++]=parser->ch;}
                         advance_character(parser);}
-                    else if(constituentp(parser->ch)){
+                    else if(token_continues(rt,parser->ch)){
+                        /* Continues across constituents AND non-terminating macro
+                           chars (e.g. # mid-name), matching parse_token; the old
+                           constituentp() stopped the name at the first #. */
                         check_token_too_long(parser,"Token");
                         parser->token[parser->length++]=esc?reader_upcase1(parser->ch):parser->ch;
                         advance_character(parser);}
