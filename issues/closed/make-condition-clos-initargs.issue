@@ -1,5 +1,30 @@
 MAKE-CONDITION on a built-in condition TYPE drops :FORMAT-CONTROL (no report).
 
+== DONE (Slice 61) ==
+Fixed with the kernel-routing approach.
+  - conditions.c build_condition(): a symbol datum now routes through
+    MAKE-CONDITION instead of MAKE-INSTANCE, and accepts either a kernel
+    CONDITION or a CLOS instance result.  (ERROR / SIGNAL / WARN with a type
+    designator all go through build_condition, so this covers all three.)
+  - prelude MAKE-CONDITION wrapper: the built-in simple-condition family
+    (*%kernel-condition-types* = simple-condition / simple-error / simple-warning
+    / simple-type-error) routes to the kernel constructor (make_simple_condition),
+    which stores FORMAT-CONTROL / FORMAT-ARGUMENTS and reports via the existing
+    (PRINT-OBJECT (condition t)) method; user DEFINE-CONDITION classes still go to
+    MAKE-INSTANCE with their own slots and :REPORT.
+Verified 10/10: (error 'simple-error :format-control "boom ~A" :format-arguments
+'(7)) reports "boom 7"; (make-condition 'simple-error :format-control "hi") princs
+"hi"; simple-condition-format-control/-arguments return the stored values; the
+common (error "msg ~A" 42) path still works; typep classifies the result as
+simple-error / error / simple-condition; (warn 'simple-warning …) reports; and a
+user (define-condition my-err (error) ((code …)) (:report …)) still builds via
+make-instance with its custom slot and report intact.
+Remaining nicety (not blocking): a USER condition that inherits simple-error and
+passes :format-control still uses make-instance (slotless) — give the CLOS
+simple-condition class real slots if that case ever matters.
+
+== Original report ==
+
 Creating a simple condition via a condition TYPE plus :FORMAT-CONTROL /
 :FORMAT-ARGUMENTS initargs does not produce a reporting condition:
 

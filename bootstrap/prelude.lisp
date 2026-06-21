@@ -5242,12 +5242,23 @@ the class object it denotes, so two specializers compare by class identity."
 (defun simple-condition-p (c)
   (and (conditionp c) (typep c 'simple-condition)))
 
-;;; MAKE-CONDITION — prefer CLOS class lookup, fall back to kernel.
+;;; MAKE-CONDITION — user DEFINE-CONDITION classes (with their own slots and
+;;; :REPORT methods) are built with MAKE-INSTANCE, but the built-in SIMPLE
+;;; conditions carry FORMAT-CONTROL / FORMAT-ARGUMENTS that only the kernel
+;;; constructor stores (their CLOS classes are registered slotless), so they must
+;;; route to the kernel MAKE-CONDITION to produce a REPORTING condition.  Without
+;;; this they print as a bare "#<SIMPLE-ERROR>" — see issue
+;;; make-condition-clos-initargs.
+(defparameter *%kernel-condition-types*
+  '(simple-condition simple-error simple-warning simple-type-error))
 (let ((old-make-condition (symbol-function 'make-condition)))
   (set-symbol-function
    (lambda (type &rest initargs)
-     (let ((cls (find-class type nil)))
-       (if (and cls (%is-cls cls))
+     (let* ((cls  (find-class type nil))
+            (name (cond ((symbolp type) type)
+                        ((and cls (%is-cls cls)) (%cls-name cls)))))
+       (if (and cls (%is-cls cls)
+                (not (member name *%kernel-condition-types*)))
            (apply #'make-instance cls initargs)
            (apply old-make-condition type initargs))))
    'make-condition))

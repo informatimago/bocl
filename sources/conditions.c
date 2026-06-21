@@ -118,16 +118,21 @@ static Ref build_condition(Ref default_class, Ref arguments){
         return datum;}
     if(typep(datum, STRING_Class)){
         return make_simple_condition(default_class, datum, rest);}
-    /* Also accept a CLOS class designator (symbol naming a DEFINE-CONDITION class)
-     * followed by initargs: (error 'my-error :msg "oops"). */
+    /* Accept a condition TYPE designator (a symbol naming a class) followed by
+     * initargs: (error 'simple-error :format-control "…") or (error 'my-error
+     * :msg "oops").  Route through MAKE-CONDITION (not MAKE-INSTANCE directly) so
+     * built-in SIMPLE conditions go to the kernel constructor and REPORT (their
+     * CLOS classes are slotless) while user DEFINE-CONDITION classes still get a
+     * MAKE-INSTANCE with their own slots.  The result may be a kernel CONDITION
+     * or a CLOS instance — accept either.  See issue make-condition-clos-initargs. */
     if(symbolp(datum)){
-        /* Try to make a condition instance from the class name + initargs. */
-        Ref lisp_make = symbol_function(symbol_intern_cstring("MAKE-INSTANCE"));
+        Ref lisp_make = symbol_function(symbol_intern_cstring("MAKE-CONDITION"));
         if(lisp_make != NULL && lisp_make != UNBOUND_Object){
             MultipleValues mi_res = {0};
             kernel_apply(lisp_make, cons(datum, rest), &mi_res);
             if(mi_res.count > 0 && mi_res.values[0] != NULL &&
-               clos_instance_p(mi_res.values[0])){
+               (typep(mi_res.values[0], CONDITION_Class) ||
+                clos_instance_p(mi_res.values[0]))){
                 return mi_res.values[0];}}}
     ERROR("Unsupported datum type to ERROR / SIGNAL / WARN: %s",
           string_cstring(prin1_to_string(datum)));}
