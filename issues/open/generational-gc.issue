@@ -154,3 +154,73 @@ during a complex load (file loading / interning) hits dormant unrooted-Ref gaps
 layout-sensitive fixes are a separate fixpoint task; once they land,
 BOCL_GC_YOUNG_KB can default on and the ANSI-test module-load timings can be
 re-measured end-to-end (the original target metric).
+
+
+================================================================================
+FOLLOW-UP (v1.0.9 / v1.0.10): rooting long-tail FIXED, proactive DEFAULTED ON,
+ANSI-test load measured.
+================================================================================
+
+1. ROOTING LONG-TAIL FIXED (Slice 173, v1.0.9).  The BOCL_POISON use-after-free
+   finder, run under periodic major-GC stress over every SACLA must-* file,
+   pinpointed six unrooted-Ref gaps (a fresh Ref held only on the C stack -- which
+   the GC does not scan -- across a call that allocates and may collect):
+     - push_to_rootset (kernel.c): the global environment freed by the cons() that
+       adds it to the rootset -> the subclassp/typep startup SEGV.
+     - DEFMACRO (eval.c): the macro fn freed by putf() mid-plist-build.
+     - read_impl (reader.c): the input stream, held only in the C-stack parser
+       struct across the whole allocating parse (also fixes the intermittent
+       compile-file rt.lsp hang -- see issues/open/deferred-compile-file-rt-gc-
+       corruption: that "SYMBOL vs STRING" use-after-free no longer reproduces,
+       5/5 clean).
+     - registry_add / make_package / kernel_MAKE_PACKAGE (packages.c): the package
+       name / nickname list / (name . pkg) cell freed mid-build -> dangling
+       all_packages entries.
+     - stream_output_string / stream_input_string (kernel.c): the backing string
+       (and the fmemopen buffer) freed by string_stream_new interning STRING-STREAM.
+   Validation: all 15 SACLA must-* files run clean under BOCL_POISON=1 + periodic
+   major stress (zero use-after-free); normal sweep byte-identical to baseline.
+   BOCL_GCSTRESS=1 no longer crashes at startup.
+
+2. PROACTIVE DEFAULTED ON (Slice 174, v1.0.10).  BOCL_GC_YOUNG_KB now defaults to
+   8192 (8 MB minor threshold); BOCL_GC_YOUNG_KB=0 restores legacy collect-when-
+   full.  Full SACLA sweep under the default: all 15 files pass, counts identical
+   to baseline.
+
+3. ANSI-TEST LOAD -- the original target metric.  STATUS: the ANSI-test suite
+   cannot be FUNCTIONALLY loaded by bocl yet, but NOT for any GC reason -- the
+   harness needs CL features bocl has not implemented (HANDLER-CASE, ratios,
+   DEFNOTE, the universe.lsp data vars, and some pathname/*load-pathname*
+   machinery); the loader simply skips every form that hits a missing feature.
+   The one blocker that WAS a GC bug -- compile-file of rt.lsp (gclload1's
+   COMPILE-AND-LOAD "rt.lsp") hanging / SYMBOL-vs-STRING -- is fixed by item 1.
+   So the GC is no longer what blocks the ANSI harness; CL-completeness is.
+
+   GC comparison on the large loads bocl DOES execute (legacy = BOCL_GC_YOUNG_KB=0
+   vs proactive default; wall-time, peak heap from BOCL_GCLOG):
+
+     workload         legacy            proactive (8 MB)     effect
+     must-reader      122.7 s / 1407 MB  30.8 s / 127 MB     3.8x faster, 11x less mem
+     must-loop         45.0 s / 1279 MB  49.9 s / 191 MB     ~same time, 6.7x less mem
+     must-sequence     27.5 s /   63 MB  18.4 s / 191 MB     1.5x faster
+     garbage-churn     55.2 s /  639 MB 177.7 s / 319 MB     3.2x SLOWER, 1/2 mem
+
+   Where the legacy collector balloons (must-reader/-loop: it collects almost
+   never, so the heap grows to >1 GB and per-alloc work goes super-linear),
+   proactive is a large win in BOTH time and memory -- exactly the issue's goal.
+
+   TRADEOFF found: a pure high-churn allocation loop (1.5M short-lived conses) is
+   ~3x SLOWER under proactive.  Legacy bump-allocates into fresh zones and never
+   collects; once proactive collects, allocation comes from fragmented first-fit
+   free lists, whose walk cost grows with heap size.  A threshold sweep confirms
+   8 MB is the best proactive setting here (larger thresholds are worse -- 32 MB+
+   time out on this loop), so the chosen default minimises the worst case while
+   keeping the ballooning loads fast.  Real workloads (the full SACLA sweep) are
+   unaffected; the regression is specific to synthetic allocation churn, and
+   BOCL_GC_YOUNG_KB=0 restores legacy bump-allocation speed for such code.
+
+   FUTURE WORK (not GC-rooting): the first-fit free-list allocator's super-linear
+   walk on large fragmented heaps is the remaining scalability limit; a segregated
+   / size-class free list (or reviving bump allocation within a zone) would remove
+   the churn regression.  ANSI-test end-to-end still needs the CL-completeness
+   features above before per-module timings can be taken on the real suite.
