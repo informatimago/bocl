@@ -6618,15 +6618,14 @@ or displaced strings, so absence of a fill pointer is the only distinction)."
 
 ;;; ---- WRITE-TO-STRING with :base ------------------------------------------
 
-(defun write-to-string (object &rest keys &key (base *print-base*) &allow-other-keys)
+(defun write-to-string (object &rest keys &key &allow-other-keys)
   "Produce a string representation of OBJECT, honouring the print keywords
-(:CIRCLE/:LENGTH/:LEVEL/:ESCAPE/… via WRITE) — needed so e.g. circular structure
-prints with #n= labels instead of looping forever."
-  (if (and (integerp object) base (/= base 10))
-      ;; Non-decimal integer shortcut.
-      (number-to-string object base)
-      (with-output-to-string (s)
-        (apply #'write object :stream s keys))))
+(:BASE/:RADIX/:CIRCLE/:LENGTH/:LEVEL/:ESCAPE/… via WRITE).  All numeric radix
+formatting (including the #b/#o/#x/#NNr prefixes and the base-10 trailing dot for
+*PRINT-RADIX*) is done by the kernel printer, so everything routes through WRITE,
+which binds *PRINT-BASE*/*PRINT-RADIX* from the keywords around the print."
+  (with-output-to-string (s)
+    (apply #'write object :stream s keys)))
 
 (defun princ-to-string (obj)
   "Produce a PRINC string representation of OBJ."

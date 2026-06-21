@@ -16,6 +16,31 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== FIXED (Slice 56) — *PRINT-BASE* / *PRINT-RADIX* radix printing (~80 forms) ==
+The kernel printer ignored *PRINT-BASE* and *PRINT-RADIX*: integers, bignums, and
+ratios always printed in decimal with no radix prefix (must-printer F51-F125,
+F89-F125 and the F85 base-2..36 loop).  PRIN1 and PRINC now honour both, at every
+integer/ratio LEAF (so nested numbers in lists/vectors get the radix too):
+  - printer.c: print_integer_radix() / print_ratio_radix() consult *PRINT-BASE*
+    (2..36) and *PRINT-RADIX*, emit the prefix (#b/#o/#x, or #NNr for other
+    bases), the digits (uppercase A-Z), and — for an INTEGER in base 10 with
+    *PRINT-RADIX* — the trailing "." marker (a ratio in base 10 uses "#10r"
+    instead).  fmt_write_integer handles fixnums; bignums go through ...
+  - kernel.c: print_bignum_radix() — radix conversion of the base-10^9 magnitude
+    limbs by repeated short division by BASE (remainder*10^9+limb fits a uword
+    for BASE<=36).  Base 10 still uses the faster print_bignum.
+  - prelude write-to-string lost its non-decimal "number-to-string" shortcut
+    (which bypassed the kernel printer and dropped the radix prefix); everything
+    now routes through WRITE, which binds *PRINT-BASE*/*PRINT-RADIX*.
+  - Bonus: the ratio branch used integer_value() on numerator/denominator, so a
+    ratio with a BIGNUM part printed garbage; it now uses the bignum-safe path.
+Verified: 27/28 targeted cases pass (base 2/8/10/16/24/36, integer/ratio/bignum,
+radix on/off, nested-in-list, princ path, base-10 bignum trailing dot); FORMAT
+~D/~X/~B and *PRINT-BASE*-vs-~D isolation unaffected.  The 1 remaining is a READER
+gap, not a printer gap: the ratio literal 2/<bignum> truncates its bignum
+denominator to a word on READ (separate bignum-ratio support, deferred-bignum-ops)
+— the printer already handles bignum ratios correctly once one is constructed.
+
 == FIXED (Slice 55) — readable symbol printing + #: reader (pure logic bugs) ==
 The must-printer F145 SECONDARY correctness bug (and a whole class with it):
 PRIN1 / WRITE :readably / WRITE :escape printed a symbol's name RAW

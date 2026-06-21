@@ -928,6 +928,43 @@ void print_bignum(Ref object, FILE* out){
     for(size_t k=n-1; k-->0;){ fprintf(out,"%09llu",(unsigned long long)mag[k]); }
     free(mag); }
 
+/* Radix-aware BIGNUM printer (BASE 2..36) for *PRINT-BASE* / *PRINT-RADIX*.
+   Converts the base-10^9 magnitude limbs to BASE by repeated short division of
+   the whole magnitude by BASE, collecting remainders (least-significant first),
+   then emits sign + uppercase digits.  BASE==10 still goes through print_bignum
+   (faster); this handles the general case.  remainder*BIGNUM_BASE+limb fits a
+   uword since BASE<=36 and BIGNUM_BASE=10^9. */
+void print_bignum_radix(Ref object, FILE* out, int base){
+    if(base==10){ print_bignum(object,out); return; }
+    if(base<2){ base=2; } if(base>36){ base=36; }
+    Ref sb=bignum_value(object);
+    bool neg=(cons_car(sb)==S(-));
+    Ref d=cons_cdr(sb);
+    size_t n=0;
+    for(Ref p=d; consp(p); p=cons_cdr(p)){ n++; }
+    if(n==0){ fputc('0',out); return; }
+    uword* mag=malloc(n*sizeof(uword));
+    size_t i=0;
+    for(Ref p=d; consp(p); p=cons_cdr(p)){ mag[i++]=(uword)integer_value(cons_car(p)); }
+    n=mag_norm(mag,n);
+    if(n==0){ free(mag); fputc('0',out); return; }
+    /* Collect digits least-significant first. */
+    size_t cap=n*10+8, dlen=0;       /* 10^9 limb ~ up to ~30 base-2 digits */
+    char* digits=malloc(cap);
+    size_t live=n;
+    while(live>0){
+        uword rem=0;
+        for(size_t k=live; k-->0;){
+            uword cur=rem*(uword)BIGNUM_BASE + mag[k];
+            mag[k]=cur/(uword)base;
+            rem=cur%(uword)base; }
+        if(dlen>=cap){ cap*=2; digits=realloc(digits,cap); }
+        digits[dlen++]=(char)(rem<10 ? '0'+(int)rem : 'A'+(int)rem-10);
+        while(live>0 && mag[live-1]==0){ live--; } }
+    if(neg){ fputc('-',out); }
+    for(size_t k=dlen; k-->0;){ fputc((unsigned char)digits[k],out); }
+    free(digits); free(mag); }
+
 static int bn_digit(unsigned char c, int base){
     int d;
     if(c>='0'&&c<='9'){ d=c-'0'; }

@@ -67,6 +67,7 @@ void c_bignum_divmod(Ref a, Ref b, char mode, Ref* q_out, Ref* r_out); /* t/f/c/
 Ref  c_bignum_gcd(Ref a, Ref b);
 Ref  c_bignum_lcm(Ref a, Ref b);
 void print_bignum(Ref object, FILE* out);          /* decimal, straight to OUT */
+void print_bignum_radix(Ref object, FILE* out, int base);  /* BASE 2..36 */
 Ref  parse_bignum_cstring(const char* token, int base);
 
 /* FLOAT */

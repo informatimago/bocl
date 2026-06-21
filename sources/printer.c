@@ -157,6 +157,60 @@ static void print_name_escaped(Ref name, FILE* out){
     fputc('|',out);
 }
 
+/* --- Radix-aware integer / ratio printing (*PRINT-BASE* / *PRINT-RADIX*) ----
+   Both PRIN1 and PRINC honour *PRINT-BASE* (2..36) and *PRINT-RADIX*; the printer
+   is recursive, so the radix applies to every integer/ratio leaf (in lists,
+   vectors, …), not just a top-level number. */
+
+static void fmt_write_integer(FILE* out, word n, int radix, bool atsignp);
+
+static int current_print_base(void){
+    Ref b = variable_value(S(*PRINT-BASE*));
+    int base = integerp(b) ? (int)integer_value(b) : 10;
+    if(base<2){ base=2; }
+    if(base>36){ base=36; }
+    return base;
+}
+
+/* Write integer N (fixnum or bignum), with sign, in BASE, straight to OUT. */
+static void write_integer_in_base(FILE* out, Ref n, int base){
+    if(bignump(n)){ print_bignum_radix(n,out,base); }
+    else          { fmt_write_integer(out,integer_value(n),base,false); }
+}
+
+/* Emit the *PRINT-RADIX* prefix for BASE.  Returns true iff the caller must
+   append a trailing "." — the base-10 INTEGER radix marker (CLHS 22.1.3.1.2);
+   a ratio in base 10 uses a "#10r" prefix instead, never the trailing dot. */
+static bool emit_radix_prefix(FILE* out, int base, bool radix, bool is_ratio){
+    if(!radix){ return false; }
+    if(base==10){
+        if(is_ratio){ fputs("#10r",out); return false; }
+        return true; }
+    switch(base){
+      case 2:  fputs("#b",out); break;
+      case 8:  fputs("#o",out); break;
+      case 16: fputs("#x",out); break;
+      default: fprintf(out,"#%dr",base); break; }
+    return false;
+}
+
+static void print_integer_radix(FILE* out, Ref n){
+    int base=current_print_base();
+    bool radix=!nullp(variable_value(S(*PRINT-RADIX*)));
+    bool dot=emit_radix_prefix(out,base,radix,false);
+    write_integer_in_base(out,n,base);
+    if(dot){ fputc('.',out); }
+}
+
+static void print_ratio_radix(FILE* out, Ref n){
+    int base=current_print_base();
+    bool radix=!nullp(variable_value(S(*PRINT-RADIX*)));
+    emit_radix_prefix(out,base,radix,true);
+    write_integer_in_base(out,ratio_numerator(n),base);
+    fputc('/',out);
+    write_integer_in_base(out,ratio_denominator(n),base);
+}
+
 static Ref prin1_inner(Ref object,Ref stream);
 Ref prin1(Ref object,Ref stream){
     if(g_prin1_depth >= PRIN1_MAX_DEPTH){
@@ -189,18 +243,12 @@ static Ref prin1_inner(Ref object,Ref stream){
         fprintf(out,"%g",float_value(object));
         return object;}
 
-    if(integerp(object)){
-        fprintf(out,"%"WORD_FORMAT,integer_value(object));
-        return object;}
-
-    if(bignump(object)){
-        print_bignum(object,out);   /* C decimal printer (kernel.c) */
+    if(integerp(object) || bignump(object)){
+        print_integer_radix(out,object);
         return object;}
 
     if(ratiop(object)){
-        fprintf(out,"%"WORD_FORMAT"/%"WORD_FORMAT,
-                integer_value(ratio_numerator(object)),
-                integer_value(ratio_denominator(object)));
+        print_ratio_radix(out,object);
         return object;}
 
     if(complexp(object)){
@@ -375,18 +423,12 @@ Ref princ(Ref object,Ref stream){
         fprintf(out,"%f",float_value(object));
         return object;}
 
-    if(integerp(object)){
-        fprintf(out,"%"WORD_FORMAT,integer_value(object));
-        return object;}
-
-    if(bignump(object)){
-        print_bignum(object,out);   /* C decimal printer (kernel.c) */
+    if(integerp(object) || bignump(object)){
+        print_integer_radix(out,object);
         return object;}
 
     if(ratiop(object)){
-        fprintf(out,"%"WORD_FORMAT"/%"WORD_FORMAT,
-                integer_value(ratio_numerator(object)),
-                integer_value(ratio_denominator(object)));
+        print_ratio_radix(out,object);
         return object;}
 
     if(complexp(object)){
