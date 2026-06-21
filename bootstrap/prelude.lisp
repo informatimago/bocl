@@ -1994,6 +1994,9 @@ identity."
 (defvar *print-case*     :upcase)
 (defvar *print-gensym*   t)
 (defvar *print-array*    t)
+(defvar *print-lines*        nil)   ; pretty-printer line cap (CLHS: default NIL)
+(defvar *print-right-margin* nil)   ; pretty-printer right margin (default NIL)
+(defvar *print-miser-width*  nil)   ; pretty-printer miser-mode width (default NIL)
 
 ;; ---- *read-* control variables -----------------------------------------
 

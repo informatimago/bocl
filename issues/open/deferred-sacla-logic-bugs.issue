@@ -16,6 +16,11 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== FIXED (Slice 58) — missing pretty-printer control variables ==
+*PRINT-LINES*, *PRINT-RIGHT-MARGIN*, *PRINT-MISER-WIDTH* were exported from CL
+(cl-exports.lisp) but never DEFVAR'd, so referencing them was an unbound-variable
+error (must-printer F10/F11).  Added the three defvars (default NIL per CLHS).
+
 == FIXED (Slice 57) — *PRINT-CASE* + *PRINT-GENSYM* (symbol printing) ==
   - *PRINT-CASE* (:UPCASE/:DOWNCASE/:CAPITALIZE): print_name_escaped() now folds
     the case of UNESCAPED symbol/keyword/package names (escaped |…| names stay
