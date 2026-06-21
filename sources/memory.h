@@ -16,7 +16,8 @@ void set_gc_poison(bool on);  /* runtime poison-finder toggle (diagnostic)      
 
 bool garbage_collection_is_enabled(void);
 bool set_garbage_collection_enabled(bool on);
-uword garbage_collect(void);
+uword garbage_collect(void);   /* full (major) collection */
+uword minor_collect(void);     /* generational (minor/young-only) collection */
 
 /* Generational write barrier: call AFTER storing a Ref into CONTAINER, where
    CONTAINER is the heap block that physically holds the mutated slot (the

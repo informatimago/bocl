@@ -140,6 +140,12 @@ static bool old_block_p(Block* block){
        a free block must never be reported as old. */
     return block->objcount!=FREE_BLOCK && 0!=(block->objcount&GC_OLD_BIT);}
 
+static void set_old_block(Block* block){
+    block->objcount|=GC_OLD_BIT;}      /* promote: sticky, survives clear_block */
+
+static void clear_old_block(Block* block){
+    block->objcount&=~GC_OLD_BIT;}     /* demote back to young (un-pin, see gc_demote_pinned) */
+
 /* Public, GC-safe replacement for raw `obj->...objcount` reads that mean
    "how many Ref slots does this block have": masks off the mark/old flag bits.
    Used by hash_table.c / structure.c, which read a VectorOfObject's element
@@ -179,6 +185,20 @@ void gc_write_barrier(void* container){
         remset = realloc(remset, nc*sizeof(Block*));
         remset_cap = nc;}
     remset[remset_top++] = b;}
+
+/* ---- Pinned set: live-pool objects kept young across a collection ---------
+   An object under construction is rooted in the live pool across the nested
+   allocations its constructor performs (the existing rooting discipline).  If a
+   collection promoted such a half-built object, its still-pending initializing
+   stores would become un-barriered old->young edges (construction stores carry
+   no write barrier).  So a collection PINS every young object directly held by
+   the live pool — promotes nothing it cannot also keep young — by demoting them
+   back to gen-0 after the sweep.  They are promoted normally once they leave the
+   live pool (their constructor returned, so they are fully built).  Old objects
+   in the live pool (merely rooted, not under construction) are left alone. */
+static Block** pinned     = NULL;
+static uword   pinned_cap = 0;
+static uword   pinned_top = 0;
 
 
 static Zone* zone_allocate(size_t size){
@@ -379,12 +399,21 @@ static void heap_verify(void){
         heap_verify_free_list(z, &z->small_list, "small free-list node corrupt");}
 }
 
+/* minor_collect (memory.h) is defined below; used here by the stress hook. */
+static long gc_minor_stress_n = -1;   /* BOCL_GCMINORSTRESS: force a MINOR GC every N allocs */
+static long gc_minor_stress_c = 0;
+
 void* allocate(size_t size){
     if(gc_stress_n < 0){
         const char* s = getenv("BOCL_GCSTRESS");
         gc_stress_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;}
     if(gc_stress_n > 0 && garbage_collection_is_enabled()){
         if(++gc_stress_c >= gc_stress_n){ gc_stress_c = 0; garbage_collect(); }}
+    if(gc_minor_stress_n < 0){
+        const char* s = getenv("BOCL_GCMINORSTRESS");
+        gc_minor_stress_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;}
+    if(gc_minor_stress_n > 0 && garbage_collection_is_enabled()){
+        if(++gc_minor_stress_c >= gc_minor_stress_n){ gc_minor_stress_c = 0; minor_collect(); }}
     if(heap_check_n < 0){
         const char* s = getenv("BOCL_HEAPCHECK");
         heap_check_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;
@@ -601,12 +630,21 @@ static void promote_largest(FreeBlock* sentinel){
         largest->next        = sentinel->next;
         sentinel->next       = largest;}}
 
-static uword sweep_zone(Zone* zone){
+static uword sweep_zone(Zone* zone, bool minor){
     /* Single O(N) pass: rebuild both free lists from scratch, coalescing
        adjacent dead/free blocks as we scan in address order.
        Each newly freed block is distributed to large_list or small_list
        based on its size.  After the pass, the largest block in each list
-       is promoted to the front for O(1) first-fit allocation.             */
+       is promoted to the front for O(1) first-fit allocation.
+
+       Generations: a survivor (marked block, or — in a MINOR sweep — any old
+       block) is kept.  A MINOR sweep leaves old blocks untouched (it neither
+       traces nor reclaims the old generation) and does NOT promote: its young
+       survivors stay young (re-marked each minor until a major tenures them).
+       A MAJOR sweep traces+reclaims both generations and PROMOTES every
+       survivor to old (set_old_block) — promotion happens only at major GC, so
+       the scaffold/young working set never gets promoted out from under a
+       constructor's still-pending initializing stores (see gc_collect_pinned).*/
     zone->large_list.next     = NULL;
     zone->small_list.next     = NULL;
     zone->before_best_candidate = NULL;
@@ -621,8 +659,11 @@ static uword sweep_zone(Zone* zone){
 
         if(gc_poison_mode && poisoned_block_p(current)){
             tail = NULL;   /* quarantined — never reclaimed, never coalesced */
+        }else if(minor && old_block_p(current)){
+            tail = NULL;   /* old generation survives a minor GC untouched */
         }else if(marked_block_p(current)){
             clear_block(current);
+            if(!minor){ set_old_block(current); }  /* promotion happens at MAJOR GC only */
             tail = NULL;
         }else if(gc_poison_mode && !free_block_p(current)){
             total += current->size;
@@ -662,10 +703,10 @@ static uword sweep_zone(Zone* zone){
 
     return total;}
 
-static uword sweep(void){
+static uword sweep(bool minor){
     uword total=0;
     {do_zones(zone){
-            total+=sweep_zone(zone);}}
+            total+=sweep_zone(zone,minor);}}
     return total;}
 
 
@@ -687,33 +728,48 @@ typedef struct RootSet {
 
 static RootSet* rootset;
 
+/* The RootSet and every LivePool are GC scaffold, kept in the YOUNG generation:
+   a minor GC never promotes, and a major GC pins them young (gc_collect_pinned),
+   so they are always traced afresh from the rootset and an orphaned (popped)
+   pool becomes unreachable young and is reclaimed normally.  A LivePool reuses
+   its objcount header field as its live-block fill counter (objcount-1 live
+   blocks at blocks[0..objcount-2]); these helpers read it masked and write it
+   back preserving the mark/old flag bits, so the dual use is robust even if a
+   pool ever carried a flag bit. */
+static uword live_pool_count(LivePool* p){
+    return block_objcount((Block*)p);}
+static void live_pool_set_count(LivePool* p, uword n){
+    p->objcount = (p->objcount & ~GC_COUNT_MASK) | ((halfword)n & GC_COUNT_MASK);}
+
 void set_rootset(Block* block){
     rootset->kernel_rootset=block;}
 
 uword open_live_pool(void){
-    return rootset->live_pool->offset+rootset->live_pool->objcount;}
+    return rootset->live_pool->offset+live_pool_count(rootset->live_pool);}
 
 void add_to_live_pool(Ref object){
     LivePool* pool=rootset->live_pool;
-    /* 1- save the object the the pool */
-    pool->blocks[pool->objcount-1]=(Block*)object;
-    pool->objcount++;
+    uword count=live_pool_count(pool);
+    /* 1- save the object in the pool */
+    pool->blocks[count-1]=(Block*)object;
+    live_pool_set_count(pool,count+1);
+    count++;
     /* 2- if the pool is full, add some space with gc disabled: */
-    if(LivePool_MaxSize+1<=pool->objcount){
+    if(LivePool_MaxSize+1<=count){
         bool saved=garbage_collection_enabled;
         garbage_collection_enabled=false;
         LivePool* new=(LivePool*)allocate_internal(sizeof(LivePool));
         garbage_collection_enabled=saved;
         new->objcount=1;
         new->next=pool;
-        new->offset=pool->offset+pool->objcount;
+        new->offset=pool->offset+count;
         rootset->live_pool=new;}}
 
 void close_live_pool(uword objcount){
     while(objcount < rootset->live_pool->offset){
         rootset->live_pool=rootset->live_pool->next;}
     if(objcount < rootset->live_pool->offset+LivePool_MaxSize+1){
-        rootset->live_pool->objcount = (halfword)(objcount - rootset->live_pool->offset);}}
+        live_pool_set_count(rootset->live_pool, objcount - rootset->live_pool->offset);}}
 
 /* Debug aid (BOCL_GCCHECK): after marking, every SURVIVING object's reference
    slots must point to objects that also survive.  A survivor that references a
@@ -737,6 +793,61 @@ static void verify_no_dangling(void){
                         fprintf(stderr,
                             "GCCHECK: survivor %p (objcount=%lu size=%lu) slot %lu -> DOOMED %p (objcount=%lu size=%lu)\n",
                             (void*)b, (unsigned long)block_objcount(b), (unsigned long)b->size,
+                            (unsigned long)i, (void*)child,
+                            (unsigned long)block_objcount(child), (unsigned long)child->size);
+                        fflush(stderr);}}}
+            b = nxt;}}}
+
+/* ---- Minor (generational) mark ------------------------------------------
+   A minor mark traces ONLY the young (gen-0) generation: it stops at every old
+   block (does not trace it) and marks every reachable young block.  This is
+   sound only because the write barrier guarantees that every old->young edge
+   is recorded in the remembered set — so a young object reachable solely
+   through an old object is reached via that old block's slots (scanned as a
+   root in minor_collect), not by tracing the old block here.  Reuses the major
+   collector's mark_wstack. */
+static void minor_push_if_young(Block* b){
+    if(b && valid_block_start_p(b) && !(gc_poison_mode && poisoned_block_p(b))
+       && !old_block_p(b) && !marked_block_p(b)){
+        mark_wstack_push(b);}}
+
+static void minor_drain(void){
+    while(mark_wstack_top > 0){
+        Block* b = mark_wstack[--mark_wstack_top];
+        if(!b || !valid_block_start_p(b) || (gc_poison_mode && poisoned_block_p(b))
+           || old_block_p(b) || marked_block_p(b)) continue;
+        mark_block(b);
+        uword cnt = block_objcount(b);
+        uword max = block_physical_slot_count(b);
+        if(cnt > max) cnt = max;
+        for(uword i = 0; i < cnt; i++){ minor_push_if_young(b->blocks[i]); }}}
+
+/* BOCL_GCCHECK for minor GC: after the minor mark, every SURVIVOR (an old block
+   or a marked young block) that references a young block must reference a MARKED
+   young block — an unmarked young child of a survivor is about to be swept while
+   still reachable, i.e. a missing write barrier (an old->young edge that never
+   made it into the remembered set).  This is the primary correctness probe for
+   step 2/3; run under BOCL_GCMINORSTRESS to exercise it hard. */
+static void verify_no_dangling_minor(void){
+    do_zones(zone){
+        Block* end = end_block(zone);
+        Block* b   = first_block(zone);
+        while(b < end){
+            Block* nxt = next_block(b);
+            bool survivor = !free_block_p(b) && (old_block_p(b) || marked_block_p(b));
+            if(survivor){
+                uword cnt = block_objcount(b);
+                uword max = block_physical_slot_count(b);
+                if(cnt > max){ cnt = max; }
+                for(uword i = 0; i < cnt; i++){
+                    Block* child = b->blocks[i];
+                    if(child && valid_block_start_p(child) && !free_block_p(child)
+                       && !old_block_p(child) && !marked_block_p(child)){
+                        fprintf(stderr,
+                            "GCCHECK(minor): survivor %p (%s objcount=%lu size=%lu) slot %lu"
+                            " -> DOOMED YOUNG %p (objcount=%lu size=%lu)\n",
+                            (void*)b, old_block_p(b)?"old":"marked",
+                            (unsigned long)block_objcount(b), (unsigned long)b->size,
                             (unsigned long)i, (void*)child,
                             (unsigned long)block_objcount(child), (unsigned long)child->size);
                         fflush(stderr);}}}
@@ -770,6 +881,90 @@ static void gc_log(const char* kind, uword freed){
         (unsigned long)gc_minor_count,(unsigned long)gc_major_count);
     fflush(stderr);}
 
+static void pinned_push(Block* b){
+    if(pinned_top >= pinned_cap){
+        uword nc = pinned_cap ? pinned_cap*2 : 4096;
+        pinned = realloc(pinned, nc*sizeof(Block*));
+        pinned_cap = nc;}
+    pinned[pinned_top++] = b;}
+
+/* Snapshot the young objects a major collection must keep young: the GC
+   scaffold (the RootSet and every active LivePool) plus every object directly
+   held by the live pool (the current working set, which includes any object a
+   constructor is still initializing).  Run after the mark, before the sweep —
+   no allocation happens in between, so the snapshot stays valid. */
+static void gc_collect_pinned(void){
+    pinned_top = 0;
+    if(rootset && !old_block_p((Block*)rootset)){ pinned_push((Block*)rootset); }
+    for(LivePool* p = rootset->live_pool; p != NULL; p = p->next){
+        if(!old_block_p((Block*)p)){ pinned_push((Block*)p); }
+        uword count = live_pool_count(p);            /* count-1 live blocks */
+        for(uword i = 0; i + 1 < count; i++){
+            Block* b = p->blocks[i];
+            if(b && valid_block_start_p(b) && !old_block_p(b)){ pinned_push(b); }}}}
+
+/* After the sweep promoted every survivor to old, demote the pinned (live-pool)
+   objects back to young so a constructor still mutating them does so with no
+   barrier.  They survived the sweep (they are live-pool roots), so each is a
+   valid block. */
+static void gc_demote_pinned(void){
+    for(uword i = 0; i < pinned_top; i++){
+        Block* b = pinned[i];
+        if(b && valid_block_start_p(b)){ clear_old_block(b); }}}
+
+/* Rebuild the remembered set to exactly the old blocks that STILL point to a
+   young object after this collection (the remaining old->young edges — those
+   whose young target was pinned, not promoted).  Bounds the set and drops stale
+   entries (blocks freed/reused/demoted).  Replaces a blanket clear: a young
+   target that was pinned rather than promoted must stay reachable via its old
+   parent at the next collection. */
+static bool block_has_young_child(Block* b){
+    uword cnt = block_objcount(b);
+    uword max = block_physical_slot_count(b);
+    if(cnt > max) cnt = max;
+    for(uword i = 0; i < cnt; i++){
+        Block* c = b->blocks[i];
+        if(c && valid_block_start_p(c) && !free_block_p(c) && !old_block_p(c)){
+            return true; }}
+    return false;}
+
+static void remset_add_raw(Block* b){
+    if(remset_top >= remset_cap){
+        uword nc = remset_cap ? remset_cap*2 : 4096;
+        remset = realloc(remset, nc*sizeof(Block*));
+        remset_cap = nc;}
+    remset[remset_top++] = b;}
+
+/* Incremental rebuild (after a MINOR GC): keep the remembered entries that
+   still point at a young object, drop the rest.  A minor GC promotes nothing,
+   so it creates no new old->young edges — filtering the existing set suffices. */
+static void gc_rebuild_remset(void){
+    uword w = 0;
+    for(uword r = 0; r < remset_top; r++){
+        Block* R = remset[r];
+        if(!R || !valid_block_start_p(R) || !old_block_p(R)) continue;
+        if(w && remset[w-1]==R) continue;        /* cheap dedup */
+        if(block_has_young_child(R)){ remset[w++] = R; }}
+    remset_top = w;}
+
+/* Full rebuild (after a MAJOR GC): a major promotes survivors, which can leave
+   an old object pointing at a still-young (pinned) object — most importantly an
+   object's promoted wrapper pointing at its pinned Slots block (the wrapper is
+   trimmed from the live pool by Object_new's close_live_pool, so it promotes,
+   while the slots block lingers pinned).  That construction edge carries no
+   write barrier, so we recover the complete remembered set by scanning every
+   old block for a young child.  O(heap), but only at the infrequent major. */
+static void gc_rebuild_remset_full(void){
+    remset_top = 0;
+    do_zones(zone){
+        Block* end = end_block(zone);
+        Block* b   = first_block(zone);
+        while(b < end){
+            Block* nxt = next_block(b);
+            if(!free_block_p(b) && old_block_p(b) && block_has_young_child(b)){
+                remset_add_raw(b); }
+            b = nxt;}}}
+
 uword garbage_collect(void){
     if(!garbage_collection_enabled){
         return 0;}
@@ -777,8 +972,50 @@ uword garbage_collect(void){
     gc_major_count++;
     mark((Block*)rootset);
     if(getenv("BOCL_GCCHECK")){ verify_no_dangling(); }
-    uword freed = sweep();
+    /* Major sweep traces and reclaims BOTH generations and promotes every
+       survivor to old, then we re-pin the live-pool (under-construction)
+       objects young and rebuild the remembered set from what actually remains
+       old->young.  This keeps the major collection sound after arbitrary
+       mutation while re-aging the persistent set to the old generation. */
+    gc_collect_pinned();
+    uword freed = sweep(false);
+    gc_demote_pinned();
+    gc_rebuild_remset_full();   /* full scan: recover old->young edges created by promotion */
     if(gc_log_enabled){ gc_log("major", freed); }
+    return freed;}
+
+/* Minor (generational) collection: reclaim only young garbage without
+   re-marking the old generation, and WITHOUT promoting (promotion is a
+   major-GC job).  Because nothing is promoted, a minor GC never creates an
+   old->young edge and needs no pinning: the young scaffold/working set simply
+   stays young.  Roots are (a) the rootset, traced normally — it and the active
+   LivePool chain are young, so the young-only mark walks them and every live
+   object, stopping at the old persistent set (kernel_rootset etc.); and (b) the
+   remembered set: the direct slots of every old block holding an old->young
+   edge.  An orphaned (popped) LivePool is unreachable from the rootset, so it
+   is left young-and-unmarked and reclaimed like any other dead young block. */
+uword minor_collect(void){
+    if(!garbage_collection_enabled){
+        return 0;}
+    if(gc_log_enabled < 0){ gc_log_enabled = getenv("BOCL_GCLOG")?1:0; }
+    gc_minor_count++;
+    mark_wstack_top = 0;
+    /* (a) rootset (young scaffold) — traces the active pool chain + live objects */
+    minor_push_if_young((Block*)rootset);
+    /* (b) remembered-set roots: scan the direct slots of each remembered old
+       block (the recorded old->young edges). */
+    for(uword r = 0; r < remset_top; r++){
+        Block* R = remset[r];
+        if(!R || !valid_block_start_p(R) || !old_block_p(R)) continue;
+        uword cnt = block_objcount(R);
+        uword max = block_physical_slot_count(R);
+        if(cnt > max) cnt = max;
+        for(uword i = 0; i < cnt; i++){ minor_push_if_young(R->blocks[i]); }}
+    minor_drain();
+    if(getenv("BOCL_GCCHECK")){ verify_no_dangling_minor(); }
+    uword freed = sweep(true);     /* young-only: skips old, reclaims young dead, no promote */
+    gc_rebuild_remset();
+    if(gc_log_enabled){ gc_log("minor", freed); }
     return freed;}
 
 
