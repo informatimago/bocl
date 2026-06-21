@@ -33,7 +33,15 @@ static Package* Package_slots(Ref name, Ref nicknames){
     return that;}
 
 static Ref make_package(Ref name, Ref nicknames){
-    return Object_new(PACKAGE_Class, (Slots*)Package_slots(name, nicknames));}
+    /* Package_slots/Object_new allocate (the struct, two obarrays, the wrapper)
+       while NAME and NICKNAMES are only C arguments — unrooted, so a GC during
+       those allocations would free them before they are linked into the package.
+       Root them across the build. */
+    uword pool = open_live_pool();
+    add_to_live_pool(name); add_to_live_pool(nicknames);
+    Ref r = Object_new(PACKAGE_Class, (Slots*)Package_slots(name, nicknames));
+    close_live_pool(pool);
+    return r;}
 
 /* Prepend a (name . pkg) entry to the package registry.  all_packages is a
    permanent sentinel cons (see kernel_initialize_packages): its identity never
@@ -42,8 +50,16 @@ static Ref make_package(Ref name, Ref nicknames){
    alive through GC — without it, FIND-PACKAGE / LIST-ALL-PACKAGES lose every
    package the first time the collector runs. */
 static void registry_add(Ref name, Ref pkg){
+    /* cons() does not root its arguments (it is too hot), so protect NAME/PKG
+       across the first cons and the fresh PAIR across the second — otherwise a GC
+       fired by either allocation frees the not-yet-linked cell, leaving a dangling
+       (name . pkg) entry in all_packages that FIND-PACKAGE later dereferences. */
+    uword pool = open_live_pool();
+    add_to_live_pool(name); add_to_live_pool(pkg);
     Ref pair = cons(name, pkg);
-    rplacd(all_packages, cons(pair, cons_cdr(all_packages)));}
+    add_to_live_pool(pair);
+    rplacd(all_packages, cons(pair, cons_cdr(all_packages)));
+    close_live_pool(pool);}
 
 Ref package_new(const char* name, const char* const* nicknames){
     Ref nn = NIL_Symbol;
@@ -258,7 +274,12 @@ static void kernel_MAKE_PACKAGE(Ref function, Ref arguments, MultipleValues* res
         push(string_designator_name(cons_car(it)), &clean_nn);
         it = cons_cdr(it);}
     clean_nn = nreverse(clean_nn);
+    /* NAME and the freshly-built CLEAN_NN list must survive make_package and the
+       registry_add loop below, all of which allocate; neither is reachable from a
+       root otherwise (CLEAN_NN is fresh; NAME may be a fresh coerced string). */
+    add_to_live_pool(name); add_to_live_pool(clean_nn);
     Ref pkg = make_package(name, clean_nn);
+    add_to_live_pool(pkg);
     registry_add(name, pkg);
     it = clean_nn;
     while(consp(it)){

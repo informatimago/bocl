@@ -2264,6 +2264,9 @@ Ref string_stream_new(FILE* memstream){
                       (Slots*)slots);}
 
 Ref stream_input_string(Ref string,Ref start,Ref end){
+    uword pool  = open_live_pool();
+    add_to_live_pool(string);   /* string_stream_new below allocates and may GC;
+        STRING (and the octet BUFFER fmemopen reads from) must stay live. */
     uword len   = string_length(string);
     word slen   = CHECK_UWORD_TO_WORD(len);
     word istart = (nullp(start)) ?0 : integer_value(start);
@@ -2290,11 +2293,16 @@ Ref stream_input_string(Ref string,Ref start,Ref end){
     stream->slots->file_stream.string=string;
     stream->slots->file_stream.buffer=(octet*)buffer;
     stream->slots->file_stream.buffer_size=size;
+    close_live_pool(pool);
     return stream;}
 
 Ref stream_output_string(unused Ref element_type){
     /* Element type is not that useful (our BASE-CHAR = CHARACTER), but it's in the API. */
+    uword pool=open_live_pool();
     Ref string=string_new(STRING_STREAM_BUFFER_SIZE);
+    add_to_live_pool(string);   /* string_stream_new below allocates (interns
+        "STRING-STREAM", builds the wrapper) and may GC; without this it frees the
+        fresh STRING — and the BUFFER fmemopen writes into is its octet block. */
     char* buffer = (char*)string_octets(string);
     size_t size = STRING_STREAM_BUFFER_SIZE;
     FILE* memstream=fmemopen(buffer,size,"w");
@@ -2305,6 +2313,7 @@ Ref stream_output_string(unused Ref element_type){
     stream->slots->file_stream.string=string;
     stream->slots->file_stream.buffer=(octet*)buffer;
     string->slots->octet_array.dimensions[0]=CHECK_SIZE_TO_UWORD(size);
+    close_live_pool(pool);
     return stream;}
 
 Ref string_output_stream_get_string(Ref string_output_stream){
@@ -2579,8 +2588,16 @@ Ref kernel_rootset(void){
    as heap-dependent corruption: the global env collected and its memory reused
    (e.g. environment_find_function dereferencing a string). */
 void push_to_rootset(Ref object){
+    /* `object` arrives unrooted (it lives only on the C stack, which the GC does
+       not scan).  cons() below allocates and may trigger a GC that would free
+       `object` before it lands in the rootset — leaving a dangling pointer there
+       (observed: the global environment freed mid-push, then dereferenced by
+       environment_find_function).  Hold it in a live pool across the cons. */
+    uword pool=open_live_pool();
+    add_to_live_pool(object);
     rootset=cons(object,rootset);
-    set_rootset((Block*)rootset);}
+    set_rootset((Block*)rootset);
+    close_live_pool(pool);}
 
 void delete_from_rootset(Ref object){
     rootset=delete(object,rootset);
