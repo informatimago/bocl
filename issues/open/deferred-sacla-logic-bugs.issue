@@ -16,6 +16,22 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== FIXED (Slice 63) — must-symbol SYMBOL-VALUE of NIL/T + REMPROP first-only ==
+Drove all 113 must-symbol forms with the GC off: 6 fails -> 1.
+  - SYMBOL-VALUE of the self-valued constants NIL / T (and keywords) returned the
+    kernel #:UNBOUND marker; now returns the symbol itself (prelude wrapper over
+    the kernel SYMBOL-VALUE).  (F93/F94/F95)
+  - REMPROP removed EVERY matching indicator; CLHS removes only the FIRST.  On a
+    plist with a duplicate key (a 1 … a 9), (remprop sym 'a) now leaves the second
+    pair so (get sym 'a) => 9.  (F102/F103)
+STILL OPEN — F98: (setf (get sym ind (setq tmp 1)) tmp).  bocl's SETF evaluates
+the NEW-VALUE before the place subforms — `(let ((g ,value)) ,(store) g)` — so the
+value (tmp) is captured (NIL) before the default subform (setq tmp 1) runs; CLHS
+requires place subforms first.  A correct fix needs the full GET-SETF-EXPANSION
+protocol (binding subforms to temps naively breaks recursive places like GETF/LDB
+whose subform is itself a place), so it is deferred as a general SETF-eval-order
+limitation, not a GET bug.
+
 == FIXED (Slice 62) — must-cons :TEST-NOT on ASSOC/RASSOC ==
 Drove all 728 must-cons forms with the GC off.  Real failures: ASSOC and RASSOC
 with :TEST-NOT signalled PROGRAM-ERROR (unknown keyword — they only accepted

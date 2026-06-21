@@ -1254,6 +1254,17 @@ identity."
 ;;  Property lists (slice 12).                                           ;;
 ;; -------------------------------------------------------------------- ;;
 
+;; SYMBOL-VALUE of the self-valued constants NIL, T, and keywords returns the
+;; symbol itself — the kernel value cell of NIL/T holds the unbound marker.
+(let ((kernel-symbol-value (symbol-function 'symbol-value)))
+  (set-symbol-function
+   (lambda (symbol)
+     (cond ((null symbol)      nil)
+           ((eq symbol t)      t)
+           ((keywordp symbol)  symbol)
+           (t (funcall kernel-symbol-value symbol))))
+   'symbol-value))
+
 (defun get (symbol indicator &optional default)
   "Return the value for INDICATOR on SYMBOL's property list, or DEFAULT."
   (getf (symbol-plist symbol) indicator default))
@@ -1278,26 +1289,21 @@ identity."
        (cdr ,g))))
 
 (defun remprop (symbol indicator)
-  "Remove INDICATOR and its value from SYMBOL's property list.
-   Returns T if the indicator was present, NIL otherwise."
-  ;; Build a fresh plist, skipping any (indicator value) pair found.
-  ;; We avoid the kernel REMF because its destructive in-place mutation
-  ;; doesn't update the symbol's plist pointer for single-pair plists.
-  (let ((found nil)
-        (acc   nil)
-        (pl    (symbol-plist symbol)))
-    (do ()
-        ((null pl))
-      (if (eq (car pl) indicator)
-          (setq found t
-                pl    (cddr pl))
-          (progn
-            (push (car  pl) acc)
-            (push (cadr pl) acc)
-            (setq pl (cddr pl)))))
-    (when found
-      (set-symbol-plist (nreverse acc) symbol))
-    found))
+  "Remove the FIRST INDICATOR/value pair from SYMBOL's property list (CLHS:
+   only the first such property is removed).  Returns T if present, else NIL."
+  ;; Removing only the first occurrence matters when the plist has duplicate
+  ;; indicators: (remprop sym 'a) on (a 1 b 2 a 9) must leave (b 2 a 9), so a
+  ;; subsequent (get sym 'a) sees 9.  The head case updates the symbol's plist
+  ;; pointer; an interior pair is spliced out in place.
+  (let ((pl (symbol-plist symbol)))
+    (cond ((null pl) nil)
+          ((eq (car pl) indicator)
+           (set-symbol-plist (cddr pl) symbol) t)
+          (t (do ((prev pl (cddr prev)))
+                 ((null (cddr prev)) nil)
+               (when (eq (caddr prev) indicator)
+                 (rplacd (cdr prev) (cddddr prev))
+                 (return t)))))))
 
 ;; (SETF (GET sym ind) val) — bocl simple-expander style.
 ;; Note: kernel SET-SYMBOL-PLIST arg order is (new-plist symbol).
