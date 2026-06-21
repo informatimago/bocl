@@ -34,6 +34,26 @@ Ref print(Ref object,Ref stream){
    the formatted report instead of "#<SIMPLE-ERROR 0x…>".  Returns true if it
    handled OBJECT.  A static guard prevents unbounded re-entry when a condition's
    report itself references another condition. */
+/* %md-array (multidimensional / adjustable / displaced arrays) are Lisp structs
+   the kernel printer cannot introspect, so it asks the prelude helper
+   %MD-ARRAY-PRINT-STRING for the aggregate #nA(…) / #(…) string.  A NIL/non-string
+   return means "not handled" (not a %md-array, or *PRINT-ARRAY* is NIL) → the
+   kernel falls back to #<…>.  Returns true iff it printed OBJECT. */
+static bool print_md_array(Ref object,FILE* out,bool escape){
+    if(!structurep(object)){ return false; }
+    Ref fn=S(%MD-ARRAY-PRINT-STRING);
+    if(!symbol_fboundp(fn)){ return false; }
+    uword pool=open_live_pool();
+    add_to_live_pool(object);
+    MultipleValues mv; mv.count=0;
+    kernel_apply(symbol_function(fn), list(object, escape?T_Symbol:NIL_Symbol, NULL), &mv);
+    close_live_pool(pool);
+    if(mv.count>0 && stringp(mv.values[0])){
+        fputs(string_cstring(mv.values[0]),out);
+        return true; }
+    return false;
+}
+
 static bool g_in_condition_print = false;
 static bool print_condition_via_print_object(Ref object,Ref stream,bool escape){
     if(g_in_condition_print){ return false; }
@@ -406,6 +426,9 @@ static Ref prin1_inner(Ref object,Ref stream){
         prin1(namestring(object),stream);   /* prints the namestring as "…" */
         return object;}
 
+    /* Multidimensional / adjustable / displaced arrays print as #nA(…) / #(…). */
+    if(print_md_array(object,out,true)){ return object; }
+
     /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
     if(print_condition_via_print_object(object,stream,true)){ return object; }
 
@@ -527,6 +550,9 @@ Ref princ(Ref object,Ref stream){
     if(typep(object,PATHNAME_Class)){
         princ(namestring(object),stream);
         return object;}
+
+    /* Multidimensional / adjustable / displaced arrays print as #nA(…) / #(…). */
+    if(print_md_array(object,out,false)){ return object; }
 
     /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
     if(print_condition_via_print_object(object,stream,false)){ return object; }

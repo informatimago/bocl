@@ -16,6 +16,24 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== FIXED (Slice 59) — aggregate #nA(...) array printing ==
+Multidimensional / adjustable / displaced arrays (%md-array structs) printed as
+the opaque #<%MD-ARRAY 0x…> instead of a readable aggregate.  Now:
+  - prelude %MD-ARRAY-PRINT-STRING builds the #nA(...) form (rank>=2), #(...) for
+    rank 1, #0A<elem> for rank 0, recursing row-major and printing each element
+    with PRIN1 (escape) or PRINC; a CHARACTER %md-array prints as a string of its
+    active elements.  Honours *PRINT-ARRAY* (NIL => return NIL => kernel prints
+    #<…>) and, via PRIN1/PRINC, *PRINT-BASE*/*PRINT-ESCAPE*/*PRINT-CASE* on leaves.
+  - printer.c print_md_array() (gated by structurep) calls it from both PRIN1 and
+    PRINC just before the condition/CLOS fallback.
+Verified: #2A/#3A nested, #0A scalar, *print-array* nil -> #<, base-2 element
+formatting inside an array, all correct; no regression to list/vector/string/
+bit-vector/ratio/symbol printing.
+STILL OPEN for arrays: *PRINT-LEVEL*/*PRINT-LENGTH* truncation (# / ...) and
+*PRINT-CIRCLE* (#n=/#n#) inside arrays (must-printer F370/F371 use :level/:length,
+F389-394 use :circle) — and the F45 fill-pointer KERNEL-STRING (not a %md-array)
+still prints all elements.
+
 == FIXED (Slice 58) — missing pretty-printer control variables ==
 *PRINT-LINES*, *PRINT-RIGHT-MARGIN*, *PRINT-MISER-WIDTH* were exported from CL
 (cl-exports.lisp) but never DEFVAR'd, so referencing them was an unbound-variable

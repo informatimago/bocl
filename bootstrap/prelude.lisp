@@ -8914,6 +8914,52 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
         ((bit-vector-p array)  (bit-set array index value) value)
         (t                     (setf (svref array index) value) value)))
 
+;; ---- Aggregate #nA(...) printing for multidimensional / adjustable / displaced
+;;      arrays (a %md-array is opaque to the kernel printer, which otherwise emits
+;;      #<%MD-ARRAY …>).  The kernel printer (printer.c) calls this via
+;;      %MD-ARRAY-PRINT-STRING and prints the returned string; a NIL return means
+;;      "use the #<…> fallback" — i.e. *PRINT-ARRAY* is NIL or A is not a
+;;      %md-array.  ESCAPE selects PRIN1 (T) vs PRINC (NIL) for each element.
+(defun %md-array-print-string (a escape)
+  (when (and (%md-array-p a) *print-array*)
+    (let* ((dims (%md-array-dimensions a))
+           (rank (length dims)))
+      (cond
+        ;; A CHARACTER array (adjustable/displaced/fill-pointer string) prints as
+        ;; a string of its active (fill-pointer-bounded) elements.
+        ((eq (%md-array-element-type a) 'character)
+         (let* ((fp  (%md-array-fill-pointer a))
+                (n   (or fp (reduce #'* dims :initial-value 1)))
+                (str (make-string n)))
+           (dotimes (i n) (setf (char str i) (row-major-aref a i)))
+           (with-output-to-string (s) (if escape (prin1 str s) (princ str s)))))
+        (t
+         (let ((idx 0))
+           (with-output-to-string (s)
+             (labels ((leaf ()
+                        (if escape
+                            (prin1 (row-major-aref a idx) s)
+                            (princ (row-major-aref a idx) s))
+                        (incf idx))
+                      (rec (ds)
+                        (if (null ds)
+                            (leaf)                         ; rank-0 scalar element
+                            (progn
+                              (write-char #\( s)
+                              (dotimes (k (car ds))
+                                (when (plusp k) (write-char #\Space s))
+                                (rec (cdr ds)))
+                              (write-char #\) s)))))
+               (cond
+                 ((= rank 1)                               ; #(...) vector syntax
+                  (write-string "#(" s)
+                  (dotimes (k (car dims))
+                    (when (plusp k) (write-char #\Space s))
+                    (leaf))
+                  (write-char #\) s))
+                 (t (format s "#~DA" rank)                 ; #nA(...) for rank >= 0
+                    (rec dims)))))))))))
+
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
 
