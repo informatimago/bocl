@@ -8,3 +8,4 @@ deferred-gc-rooting-longtail.issue
 deferred-sacla-logic-bugs.issue
 deferred-signal-hooks.issue
 ansi-test.issue
+make-condition-clos-initargs.issue

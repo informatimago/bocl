@@ -1,0 +1,47 @@
+MAKE-CONDITION on a built-in condition TYPE drops :FORMAT-CONTROL (no report).
+
+Creating a simple condition via a condition TYPE plus :FORMAT-CONTROL /
+:FORMAT-ARGUMENTS initargs does not produce a reporting condition:
+
+    (error 'simple-error :format-control "boom ~A" :format-arguments '(7))
+       => prints "#<SIMPLE-ERROR>"   (should report "boom 7")
+    (princ-to-string (make-condition 'simple-error :format-control "hi"))
+       => "#<SIMPLE-ERROR>"          (should be "hi")
+    (simple-condition-format-control
+       (make-condition 'simple-error :format-control "boom"))
+       => a #<%CLS …> object         (should be "boom")
+
+The common format-style path is FINE:
+    (handler-case (error "msg ~A" 42) (error (c) (princ-to-string c))) => "msg 42"
+
+== Root cause ==
+bocl has TWO condition representations:
+  - kernel conditions (conditions.c): a CONDITION_Class object with
+    format_control / format_arguments slots; make_simple_condition() builds them,
+    the (PRINT-OBJECT (condition t)) method (prelude ~4703) reports them, and the
+    kernel MAKE-CONDITION (conditions.c kernel_MAKE_CONDITION) already honours
+    :FORMAT-CONTROL / :FORMAT-ARGUMENTS.  This is what (error "string" …) uses.
+  - CLOS conditions: the standard hierarchy is ALSO registered as CLOS classes
+    via ensure-clos-class (prelude ~4723) WITH NO SLOTS, so a simple-error made
+    by MAKE-INSTANCE has no format-control slot and prints via the
+    (PRINT-OBJECT (standard-object t)) method => "#<SIMPLE-ERROR>".
+
+The prelude MAKE-CONDITION wrapper (prelude ~5246) routes ANY type whose
+FIND-CLASS is a %cls to MAKE-INSTANCE — including the built-in simple conditions —
+so the slotless CLOS path wins over the working kernel path.
+
+== Fix sketch (conditions core — handle with care) ==
+Discriminate kernel-known condition types from user DEFINE-CONDITION types in the
+MAKE-CONDITION wrapper: for a built-in condition class the kernel can construct,
+call the saved kernel make-condition (old-make-condition, which already does
+:FORMAT-CONTROL/:FORMAT-ARGUMENTS via make_simple_condition); only fall back to
+MAKE-INSTANCE for user CLOS conditions that the kernel does not know.  ERROR /
+SIGNAL with a type designator route through MAKE-CONDITION, so fixing the wrapper
+fixes all three.  Alternatively give the CLOS simple-condition class real
+format-control/format-arguments slots + a reporting PRINT-OBJECT method, but the
+kernel-routing approach reuses the already-correct kernel reporting and is less
+likely to diverge.  Either way, do NOT disturb the working (error "string" …)
+kernel path; verify HANDLER-CASE/SIGNAL/report all still work.
+
+Found 2026-06-21 while regression-testing the printer work (deferred-sacla-logic-bugs);
+it also explains must-printer F234/F235 erroring under (error 'simple-error …).
