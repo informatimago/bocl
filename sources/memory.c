@@ -411,11 +411,12 @@ static long gc_minor_stress_c = 0;
    of allocation (keeping the heap small without re-marking the old generation)
    and promotes the survivors with a MAJOR GC every BOCL_GC_MAJOR_EVERY minors.
 
-   OFF BY DEFAULT (BOCL_GC_YOUNG_KB unset/0): normal operation is byte-identical
-   to the legacy collector.  Proactive collection is opt-in because firing the
-   collector frequently during a load also exercises the pre-existing GC rooting
-   long-tail (issues/open/deferred-gc-rooting-longtail) — those fixes are a
-   separate, layout-sensitive fixpoint task and are not part of this branch. */
+   ON BY DEFAULT (v1.0.10): the rooting long-tail that previously made frequent
+   collection unsafe is fixed (Slice 173 — see issues/open/generational-gc.issue),
+   so the proactive policy now defaults on with a BOCL_GC_YOUNG_KB_DEFAULT-KB young
+   threshold.  Set BOCL_GC_YOUNG_KB=0 to force the legacy "collect only when full"
+   behaviour; any positive BOCL_GC_YOUNG_KB overrides the default threshold. */
+#define BOCL_GC_YOUNG_KB_DEFAULT 8192   /* minor GC every 8 MB of allocation */
 static long  gc_policy_young_kb     = -1;   /* -1 unchecked, 0 off, >0 = KB threshold */
 static long  gc_policy_major_every  = 16;
 static uword gc_policy_young_bytes  = 0;
@@ -434,7 +435,7 @@ void* allocate(size_t size){
         if(++gc_minor_stress_c >= gc_minor_stress_n){ gc_minor_stress_c = 0; minor_collect(); }}
     if(gc_policy_young_kb < 0){
         const char* s = getenv("BOCL_GC_YOUNG_KB");
-        gc_policy_young_kb = s ? (atol(s) < 0 ? 0 : atol(s)) : 0;
+        gc_policy_young_kb = s ? (atol(s) < 0 ? 0 : atol(s)) : BOCL_GC_YOUNG_KB_DEFAULT;
         const char* m = getenv("BOCL_GC_MAJOR_EVERY");
         if(m){ gc_policy_major_every = atol(m); }}
     if(gc_policy_young_kb > 0 && garbage_collection_is_enabled()){
