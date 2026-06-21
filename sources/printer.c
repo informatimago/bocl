@@ -160,28 +160,47 @@ static bool token_is_number_like(const char* s, uword len){
     return false;
 }
 
-static bool symbol_name_needs_escape(const char* s, uword len){
-    if(len==0){ return true; }                            /* the empty symbol || */
-    if(s[0]=='#'){ return true; }                         /* leading # dispatches */
+/* readtable-case of *READTABLE*: 0=:UPCASE 1=:DOWNCASE 2=:PRESERVE 3=:INVERT. */
+static int current_readtable_case(void){
+    Ref rt = variable_value(S(*READTABLE*));
+    if(!typep(rt, READTABLE_Class)){ return 0; }
+    Ref rc = rt->slots->readtable.readcase;
+    if(symbolp(rc)){
+        char* nm = string_cstring(symbol_name(rc));
+        if(strcmp(nm,"DOWNCASE")==0){ return 1; }
+        if(strcmp(nm,"PRESERVE")==0){ return 2; }
+        if(strcmp(nm,"INVERT")==0){ return 3; }
+    }
+    return 0;
+}
+
+/* A name needs |…| escaping (under *PRINT-ESCAPE*) when it would not read back as
+   the same symbol: empty, leading #, all dots, a special/whitespace char, a
+   numeric-looking token, or a LETTER the readtable case would fold differently —
+   a lowercase letter under :UPCASE, an uppercase one under :DOWNCASE.  :PRESERVE
+   and :INVERT round-trip without case escaping. */
+static bool symbol_name_needs_escape(const char* s, uword len, int rcase){
+    if(len==0){ return true; }
+    if(s[0]=='#'){ return true; }
     bool all_dots=true;
     for(uword i=0;i<len;i++){ if(s[i]!='.'){ all_dots=false; break; } }
-    if(all_dots){ return true; }                          /* "." "..." */
+    if(all_dots){ return true; }
     for(uword i=0;i<len;i++){
         unsigned char c=(unsigned char)s[i];
-        if(c<=' ' || c==0x7f){ return true; }             /* whitespace / control */
+        if(c<=' ' || c==0x7f){ return true; }
         switch(c){
           case '(': case ')': case '"': case '\'': case '`':
           case ',': case ';': case '\\': case '|': case ':':
             return true;
         }
-        if(c>='a' && c<='z'){ return true; }              /* default :UPCASE folds it */
+        if(rcase==0 && c>='a' && c<='z'){ return true; }
+        if(rcase==1 && c>='A' && c<='Z'){ return true; }
     }
     if(token_is_number_like(s,len)){ return true; }
     return false;
 }
 
-/* *PRINT-CASE*: 0 = :UPCASE (verbatim, the default), 1 = :DOWNCASE, 2 =
-   :CAPITALIZE.  Compared by name so we need no keyword Refs in C. */
+/* *PRINT-CASE*: 0 = :UPCASE (the default), 1 = :DOWNCASE, 2 = :CAPITALIZE. */
 static int current_print_case(void){
     Ref c = variable_value(S(*PRINT-CASE*));
     if(symbolp(c)){
@@ -192,38 +211,56 @@ static int current_print_case(void){
     return 0;
 }
 
-/* Write a symbol/package name to OUT.  Unescaped names are restyled by
-   *PRINT-CASE* (which, per CLHS 22.1.3.3.1, applies only when vertical-bar
-   syntax is NOT used — escaped names keep every char verbatim).  We assume the
-   standard readtable-case :UPCASE, so the stored uppercase letters are the ones
-   *PRINT-CASE* may fold; this is a no-op for the default :UPCASE. */
-static void print_name_escaped(Ref name, FILE* out){
+/* Apply *PRINT-CASE* PCASE to a foldable letter C (WORD_START = first char of a
+   word, for :CAPITALIZE). */
+static unsigned char fold_char(unsigned char c, int pcase, bool word_start){
+    if(pcase==0){ return (c>='a'&&c<='z') ? (unsigned char)(c-32) : c; }   /* :UPCASE */
+    if(pcase==1){ return (c>='A'&&c<='Z') ? (unsigned char)(c+32) : c; }   /* :DOWNCASE */
+    if(word_start){ return (c>='a'&&c<='z') ? (unsigned char)(c-32) : c; } /* :CAPITALIZE */
+    return (c>='A'&&c<='Z') ? (unsigned char)(c+32) : c;
+}
+
+/* Write a symbol/package name to OUT honouring READTABLE-CASE and *PRINT-CASE*
+   (CLHS 22.1.3.3.2).  ESCAPE selects the *PRINT-ESCAPE* behaviour: when true and
+   the name would not read back, wrap it in |…| (verbatim — a correct readable
+   form under any readtable case); otherwise emit the case-folded name. */
+static void print_name_escaped(Ref name, FILE* out, bool escape){
     char* s   = string_cstring(name);
     uword len = string_length(name);
-    if(!symbol_name_needs_escape(s,len)){
-        int pcase=current_print_case();
-        if(pcase==0){ fwrite(s,1,(size_t)len,out); return; }
-        bool word_start=true;
+    int rcase = current_readtable_case();
+    if(escape && symbol_name_needs_escape(s,len,rcase)){
+        fputc('|',out);
+        for(uword i=0;i<len;i++){
+            char c=s[i];
+            if(c=='|' || c=='\\'){ fputc('\\',out); }
+            fputc(c,out); }
+        fputc('|',out);
+        return; }
+    if(rcase==2){ fwrite(s,1,(size_t)len,out); return; }   /* :PRESERVE — verbatim */
+    if(rcase==3){                                           /* :INVERT — flip a uniform-case name */
+        bool up=false, lo=false;
         for(uword i=0;i<len;i++){
             unsigned char c=(unsigned char)s[i];
-            bool alpha=(c>='A'&&c<='Z')||(c>='a'&&c<='z');
-            bool alnum=alpha||(c>='0'&&c<='9');
-            unsigned char o=c;
-            if(pcase==1){ if(c>='A'&&c<='Z'){ o=(unsigned char)(c+32); } }
-            else { /* :CAPITALIZE — first alpha of each word up, the rest down */
-                if(alpha){
-                    if(word_start){ if(c>='a'&&c<='z'){ o=(unsigned char)(c-32); } }
-                    else          { if(c>='A'&&c<='Z'){ o=(unsigned char)(c+32); } } } }
-            fputc(o,out);
-            word_start = !alnum;
-        }
+            if(c>='A'&&c<='Z'){ up=true; } else if(c>='a'&&c<='z'){ lo=true; } }
+        bool uniform=(up!=lo);
+        for(uword i=0;i<len;i++){
+            unsigned char c=(unsigned char)s[i];
+            if(uniform){
+                if(c>='A'&&c<='Z'){ c=(unsigned char)(c+32); }
+                else if(c>='a'&&c<='z'){ c=(unsigned char)(c-32); } }
+            fputc(c,out); }
         return; }
-    fputc('|',out);
+    /* :UPCASE / :DOWNCASE — fold the foldable letters (uppercase under :UPCASE,
+       lowercase under :DOWNCASE) per *PRINT-CASE*; emit the rest verbatim. */
+    int pcase=current_print_case();
+    bool word_start=true;
     for(uword i=0;i<len;i++){
-        char c=s[i];
-        if(c=='|' || c=='\\'){ fputc('\\',out); }
-        fputc(c,out); }
-    fputc('|',out);
+        unsigned char c=(unsigned char)s[i];
+        bool alnum=(c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9');
+        bool foldable = (rcase==0) ? (c>='A'&&c<='Z') : (c>='a'&&c<='z');
+        fputc(foldable ? fold_char(c,pcase,word_start) : c, out);
+        word_start = !alnum;
+    }
 }
 
 /* --- Radix-aware integer / ratio printing (*PRINT-BASE* / *PRINT-RADIX*) ----
@@ -335,7 +372,7 @@ static Ref prin1_inner(Ref object,Ref stream){
 
     if(keywordp(object) ){
         fprintf(out,":");
-        print_name_escaped(symbol_name(object),out);
+        print_name_escaped(symbol_name(object),out,true);
         return object;}
 
     if(symbolp(object)){
@@ -351,9 +388,9 @@ static Ref prin1_inner(Ref object,Ref stream){
         if(sep==3){ if(!nullp(variable_value(S(*PRINT-GENSYM*))) ||
                        !nullp(variable_value(S(*PRINT-READABLY*)))){ fprintf(out,"#:"); } }
         else if(sep!=0){
-            print_name_escaped(pkgname,out);
+            print_name_escaped(pkgname,out,true);
             fprintf(out, sep==1 ? ":" : "::"); }
-        print_name_escaped(symbol_name(object),out);
+        print_name_escaped(symbol_name(object),out,true);
         return object;}
 
     if(consp(object)){
@@ -539,13 +576,15 @@ Ref princ(Ref object,Ref stream){
     /*     fprintf(out,"NIL"); */
     /*     return object;} */
 
+    /* PRINC (*PRINT-ESCAPE* nil): only the symbol NAME is printed — no package
+       prefix and no keyword colon (CLHS 22.1.3.3) — case-folded per READTABLE-CASE
+       and *PRINT-CASE*. */
     if(keywordp(object)){
-        fputc(':',out);
-        princ(symbol_name(object),stream);
+        print_name_escaped(symbol_name(object),out,false);
         return object;}
 
     if(symbolp(object)){
-        princ(symbol_name(object),stream);
+        print_name_escaped(symbol_name(object),out,false);
         return object;}
 
     if(stringp(object)){
