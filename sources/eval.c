@@ -481,8 +481,13 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             if(!symbolp(name)){
                 ERROR("DEFMACRO: %s is not a symbol",string_cstring(prin1_to_string(name)));}
             Ref fn=function_new(name,params,body);
+            add_to_live_pool(fn);   /* function_new leaves fn unrooted; putf() below
+                conses (may GC) while fn is not yet on the plist — without this it is
+                freed mid-store, leaving a dangling $MACRO value that a later
+                expansion dereferences via functionp(macro_fn). */
             Ref plist=symbol_plist(name);
             plist=putf(plist,S($MACRO),fn);
+            add_to_live_pool(plist);   /* protect the rebuilt plist before it is stored */
             set_symbol_plist(name,plist);
             VALUES1(name);}
 

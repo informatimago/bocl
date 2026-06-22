@@ -1033,7 +1033,7 @@ Ref kernel_peek_char(Ref peek_type,Ref input_stream,Ref eof_error_p,Ref eof_valu
         TYPE_ERROR(peek_type,CHARACTER_Class);}}
 
 
-static Ref read_impl(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p,bool preserve){
+static Ref read_impl_unrooted(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p,bool preserve){
     /* #n= / #n# labels are scoped to one top-level read: clear the label table
        at the start of a non-recursive read (a recursive read — e.g. (read
        stream) inside a reader macro — keeps the labels currently in scope). */
@@ -1087,6 +1087,18 @@ static Ref read_impl(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursiv
         ungetc((int)parser.ch, stream_cstream(input_stream));}
     return object;}
 
+/* The reader keeps INPUT_STREAM only in a C-stack parser_state struct, which the
+   GC does not scan, while parse_object() below allocates heavily (and may collect)
+   for the whole read.  Root it in a live pool across the parse so a GC mid-read
+   cannot free the stream out from under read_octet/stream_cstream.  One root here
+   covers every reader caller (READ, the REPL, recursive reader-macro reads). */
+static Ref read_impl(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p,bool preserve){
+    uword pool=open_live_pool();
+    add_to_live_pool(input_stream);
+    Ref result=read_impl_unrooted(input_stream,eof_error_p,eof_value,recursive_p,preserve);
+    close_live_pool(pool);
+    return result;}
+
 Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p){
     return read_impl(input_stream,eof_error_p,eof_value,recursive_p,false);}
 
@@ -1136,7 +1148,8 @@ extern Ref Object_new(Ref class, Slots* slots);
    (user) function in the macros vector is invoked as a reader macro. */
 
 static Ref rtv_get(Ref vec,int i){ return vec->slots->array.elements->elements[i]; }
-static void rtv_set(Ref vec,int i,Ref v){ vec->slots->array.elements->elements[i]=v; }
+static void rtv_set(Ref vec,int i,Ref v){ vec->slots->array.elements->elements[i]=v;
+    gc_write_barrier(vec->slots->array.elements); }
 static Ref make_rt_vector(Ref fill){
     Ref lst=NIL_Symbol;
     for(int i=0;i<128;i++){ lst=cons(fill,lst); }
@@ -1344,6 +1357,7 @@ static void k_SET_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* re
         ERROR("(SETF READTABLE-CASE): invalid mode %s",
               string_cstring(prin1_to_string(mode)));}
     rt->slots->readtable.readcase=mode;
+    gc_write_barrier(rt->slots);
     results->count=1; results->values[0]=mode;
     close_live_pool(pool);}
 

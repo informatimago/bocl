@@ -81,3 +81,15 @@ and process the remaining ANSI conformance failures (and bignums).
 ;; Until fixed, the bignum integration (kernel.c BIGNUM type, arithmetic.c
 ;; num_combine dispatch, reader/printer hooks, bootstrap/bignum-integration.lisp)
 ;; must stay gated / unmerged, since enabling it makes the default build unbootable.
+
+
+================================================================================
+RESOLVED (Slice 173, v1.0.9 -- on the new-gc branch).
+================================================================================
+Root cause was the reader's input stream being held only in the C-stack parser
+struct across the whole allocating parse (read_impl): a GC mid-read freed it,
+and compile-file's longer read amplified the window -- hence the heap-layout-
+dependent hang vs SYMBOL-as-STRING faces.  Fixed by rooting the stream once at
+the reader entry (part of the rooting long-tail fix, see generational-gc.issue
+FOLLOW-UP).  compile-file of rt.lsp is now 5/5 deterministically clean
+(prints COMPILE-OK).

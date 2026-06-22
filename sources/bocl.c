@@ -1,7 +1,8 @@
 /* realpath() (used below for *LOAD-TRUENAME*) is gated behind _XOPEN_SOURCE on
    musl — not _POSIX_C_SOURCE — so without this it is only implicitly declared
-   there, and an implicit int return truncates its char* on LP64. Must precede
-   every include. */
+   there, and an implicit int return truncates its char* on LP64. glibc under
+   -std=c17 hides it the same way (__STRICT_ANSI__), and gcc 14 promotes the
+   implicit declaration to a hard error. Must precede every include. */
 #ifndef _XOPEN_SOURCE
 #  define _XOPEN_SOURCE 700
 #endif

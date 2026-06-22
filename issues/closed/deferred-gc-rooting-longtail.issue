@@ -138,3 +138,16 @@ Tooling note: BOCL_POISON+GCSTRESS=1 is too slow (a backtrace per freed block) t
 COMPLETE a full post-prelude workload, so deep paths are verified under normal GC
 (multiple clean-slate runs) rather than exhaustively under the finder; (%gc-stress)
 narrows that gap for targeted files.
+
+
+================================================================================
+RESOLVED (Slice 173, v1.0.9 -- on the new-gc branch).
+================================================================================
+The poison finder, run under periodic major-GC stress over every SACLA must-*
+file, pinpointed and we fixed six unrooted-Ref gaps -- including the startup
+subclassp/typep SEGV named above (root cause: push_to_rootset conses while the
+global environment is still unrooted on the C stack).  Full list and validation
+in issues/open/generational-gc.issue (FOLLOW-UP section).  All 15 must-* files
+now run clean under BOCL_POISON=1 + major stress (zero use-after-free), and
+BOCL_GCSTRESS=1 no longer crashes at startup.  The remaining must-* failures are
+GC-independent logic bugs (issues/open/deferred-sacla-logic-bugs).

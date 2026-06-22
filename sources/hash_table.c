@@ -152,8 +152,14 @@ static Ref make_bucket_vector(halfword n){
    mid-rehash.  bocl's GC is non-moving, so the returned pointer stays valid. */
 static Ref* ht_storage(Ref vec, halfword* n_out){
     VectorOfObject* vo = vec->slots->array.elements;
-    *n_out = (halfword)vo->objcount;
+    *n_out = (halfword)object_slot_count(vo);   /* mask off GC flag bits (old/mark) */
     return vo->elements;}
+
+/* Write-barrier the bucket VectorOfObject behind ENTRIES.  A raw st[bi]=node
+   store puts a (possibly young) cons into the bucket vector's element storage,
+   which is a block separate from the hash-table slots block. */
+static void ht_remember_buckets(Ref entries){
+    gc_write_barrier(entries->slots->array.elements);}
 
 static halfword ht_nbuckets(HashTable* slots){
     halfword n; ht_storage(slots->entries, &n); return n;}
@@ -177,7 +183,8 @@ static void ht_resize(HashTable* slots){
             cons_rplacd(node, new_st[idx]);
             new_st[idx] = node;
             node = next;}}
-    slots->entries = new_vec;}
+    slots->entries = new_vec;
+    gc_write_barrier(slots);}   /* entries lives in the hash-table slots block */
 
 /* Returns the matching (key . value) cons in KEY's bucket, or NIL if absent. */
 static Ref find_entry(HashTable* slots, Ref key){
@@ -317,7 +324,9 @@ static void kernel_SETHASH(Ref function, Ref arguments, MultipleValues* results)
         uword bi = object_hash(key, 6) % (uword)n;
         Ref node = cons(newpair, st[bi]);   /* newpair rooted; st stable (non-moving) */
         st[bi] = node;                       /* st still valid — GC does not move it */
+        ht_remember_buckets(slots->entries); /* young node stored into bucket vector */
         slots->count = integer_from_word(integer_value(slots->count) + 1);
+        gc_write_barrier(slots);             /* entries + count live in the slots block */
         if((uword)integer_value(slots->count) > (uword)n * HT_LOAD_FACTOR){
             ht_resize(slots);}
     } else {
@@ -349,9 +358,11 @@ static void kernel_REMHASH(Ref function, Ref arguments, MultipleValues* results)
         if(cmp(cons_car(pair), key)){
             if(nullp(prev)){
                 st[bi] = cons_cdr(node);
+                ht_remember_buckets(slots->entries);
             } else {
                 cons_rplacd(prev, cons_cdr(node));}
             slots->count = integer_from_word(integer_value(slots->count) - 1);
+            gc_write_barrier(slots);
             results->values[0] = T_Symbol;
             close_live_pool(pool);
             return;}
@@ -368,6 +379,7 @@ static void kernel_CLRHASH(Ref function, Ref arguments, MultipleValues* results)
     HashTable* slots = check_ht(ht);
     slots->entries = NIL_Symbol;
     slots->count = I(0);
+    gc_write_barrier(slots);
     results->count = 1;
     results->values[0] = ht;
     close_live_pool(pool);}

@@ -62,6 +62,7 @@ Ref structure_class_instance_slots(Ref structure_class){
     Ref result=nconc(copy_list(structure_class_instance_slots(superclass)),
                      structure_class_instance_direct_slots(structure_class));
     structure_class->slots->structure_class.cached_slots=result;
+    gc_write_barrier(structure_class->slots);   /* cached_slots lives in the class slots block */
     close_live_pool(pool);   /* result now rooted via the class's cached_slots */
     return result;}
 
@@ -81,7 +82,7 @@ static uword structure_index(Ref structure_instance,Ref index){
     else{
         check_class(index,INTEGER_Class);}
     uword i=CHECK_WORD_TO_UWORD(integer_value(index));
-    if(structure_instance->slots->vector_of_object.objcount<=i){
+    if(object_slot_count(structure_instance->slots)<=i){
         OUT_OF_BOUNDS(structure_instance,
                       structure_class_instance_size(structure_instance),
                       index);}
@@ -114,6 +115,8 @@ Ref structure_set(Ref new_value,Ref structure_instance,Ref index){
     May signal an out-of-bound error.
     */
     structure_instance->slots->vector_of_object.elements[structure_index(structure_instance,index)]=new_value;
+    /* The slot storage IS the instance's slots block (a VectorOfObject). */
+    gc_write_barrier(structure_instance->slots);
     close_live_pool(pool);
     return new_value;}
 
