@@ -57,6 +57,30 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 70) — #nA array printing honors *PRINT-LEVEL*/*PRINT-LENGTH* + readably ==
+The aggregate #nA(...) / #(...) array printer (prelude %MD-EMIT) ignored both
+*PRINT-LEVEL* and *PRINT-LENGTH* entirely — multi-dimensional arrays always printed
+in full (must-printer F361-370, F398-426), and bit-vectors with *PRINT-ARRAY* NIL
+printed the unreadable #<BIT-VECTOR ...> form even under :READABLY (F242-247).
+(a) ARRAY LEVEL/LENGTH — %MD-EMIT now tracks the print level: each array dimension is
+    one level beyond the array's own (the kernel printer passes that base depth as a
+    new BASE arg to %MD-ARRAY-PRINT-STRING).  A slice/composite element at level >=
+    *PRINT-LEVEL* abbreviates to "#"; *PRINT-LENGTH* truncates each dimension with
+    " ...".  Non-array elements still delegate to the kernel PRIN1/PRINC, so the Lisp
+    printer first syncs the kernel depth counter to the element's level via a new
+    %SET-PRINT-LEVEL-DEPTH primitive (printer_set_level_depth) — a nested list/vector
+    element thus abbreviates at the correct depth — and restores it afterwards.
+(b) READABLY — *PRINT-READABLY* true now forces *PRINT-LEVEL*/*PRINT-LENGTH* to be
+    ignored and *PRINT-ARRAY* to be treated true (CLHS 22.1.3.11): current_print_level/
+    current_print_length and print_array_off short-circuit on it, and %MD-EMIT masks
+    its own plevel/plen.  This also fixed the list/vector readback cases F427/F428.
+Verified: F361/F398/F399/F404/F423 etc. match CLHS output exactly; #2A round-trips
+under :READABLY :LEVEL 0 :LENGTH 0.  must-printer 67->30 (38 forms fixed: F242-247,
+F361-370, F398-428), 0 regressions; must-symbol unchanged (lone F98 = SETF eval-order
+limitation); must-cons 0/0.  Remaining must-printer fails are out of this cluster:
+bignum-ratio radix printing (F91-125), array :CIRCLE gensym sharing (F382-395), F9/
+F45/F207/F229/F260/F315.
+
 == FIXED (Slice 69) — readtable-case folding in escaped tokens + :INVERT round-trip ==
 The two readtable-case interactions left open at Slice 68 (must-printer F205/F233):
 (a) READER — parse_token's escaped path folded the UNESCAPED characters of a token

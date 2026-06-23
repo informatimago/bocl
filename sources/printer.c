@@ -34,6 +34,10 @@ Ref print(Ref object,Ref stream){
    the formatted report instead of "#<SIMPLE-ERROR 0x…>".  Returns true if it
    handled OBJECT.  A static guard prevents unbounded re-entry when a condition's
    report itself references another condition. */
+/* Defined below; the array printer passes the current *PRINT-LEVEL* depth to the
+   prelude so each array dimension can add a further level. */
+static int g_print_level_depth;
+
 /* %md-array (multidimensional / adjustable / displaced arrays) are Lisp structs
    the kernel printer cannot introspect, so it asks the prelude helper
    %MD-ARRAY-PRINT-STRING for the aggregate #nA(…) / #(…) string.  A NIL/non-string
@@ -46,7 +50,11 @@ static bool print_md_array(Ref object,FILE* out,bool escape){
     uword pool=open_live_pool();
     add_to_live_pool(object);
     MultipleValues mv; mv.count=0;
-    kernel_apply(symbol_function(fn), list(object, escape?T_Symbol:NIL_Symbol, NULL), &mv);
+    /* Pass the current *PRINT-LEVEL* depth as BASE so the Lisp printer knows the
+       array's own nesting level (its dimensions add further levels on top). */
+    kernel_apply(symbol_function(fn),
+                 list(object, escape?T_Symbol:NIL_Symbol,
+                      integer_from_word((word)g_print_level_depth), NULL), &mv);
     close_live_pool(pool);
     if(mv.count>0 && stringp(mv.values[0])){
         fputs(string_cstring(mv.values[0]),out);
@@ -88,18 +96,34 @@ static int g_prin1_depth = 0;
    vector / array) entered.  When a composite would print at depth >= *PRINT-LEVEL*
    it prints "#" instead (CLHS 22.1.3.4). */
 static int g_print_level_depth = 0;
+/* *PRINT-READABLY* true forces *PRINT-LEVEL* / *PRINT-LENGTH* to be ignored
+   (treated as NIL), so abbreviation never breaks read/print consistency
+   (CLHS 22.1.3.11). */
 static word current_print_level(void){
+    if(!nullp(variable_value(S(*PRINT-READABLY*)))){ return -1; }
     Ref lv = variable_value(S(*PRINT-LEVEL*));
     return integerp(lv) ? integer_value(lv) : -1;   /* -1 => unlimited */
 }
 static word current_print_length(void){
+    if(!nullp(variable_value(S(*PRINT-READABLY*)))){ return -1; }
     Ref ln = variable_value(S(*PRINT-LENGTH*));
     return integerp(ln) ? integer_value(ln) : -1;   /* -1 => unlimited */
 }
-/* True when *PRINT-ARRAY* is NIL — vectors/bit-vectors/arrays then print #<…>. */
+/* True when *PRINT-ARRAY* is NIL — vectors/bit-vectors/arrays then print #<…>.
+   *PRINT-READABLY* overrides *PRINT-ARRAY*: readable output cannot use the #<…>
+   form, so under *PRINT-READABLY* every array (incl. bit-vectors) prints in full
+   (CLHS 22.1.3.4 / 22.1.3.11). */
 static bool print_array_off(void){
+    if(!nullp(variable_value(S(*PRINT-READABLY*)))){ return false; }
     return nullp(variable_value(S(*PRINT-ARRAY*)));
 }
+
+/* Set the *PRINT-LEVEL* depth counter from Lisp.  The aggregate #nA(…) array
+   printer (%MD-EMIT, in the prelude) delegates each element to the kernel
+   PRIN1/PRINC, which read this counter to decide *PRINT-LEVEL* abbreviation;
+   the Lisp printer syncs the counter to the element's true nesting depth first
+   so a list/vector element abbreviates ("#") at the correct level. */
+void printer_set_level_depth(word d){ g_print_level_depth = (int)d; }
 
 typedef struct { Ref obj; int label; } CircleEntry;  /* label: 0 once, -1 shared, >0 assigned */
 static CircleEntry* g_circle = NULL;

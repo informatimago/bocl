@@ -18,4 +18,8 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
 /* Registered built-in: kernel-format-run stream ctrl start end args */
 void kernel_FORMAT_RUN(Ref function, Ref arguments, MultipleValues* results);
 
+/* Set the *PRINT-LEVEL* depth counter (used by the prelude array printer to sync
+   element nesting depth before delegating to PRIN1/PRINC). */
+void printer_set_level_depth(word d);
+
 #endif

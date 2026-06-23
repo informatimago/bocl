@@ -2518,10 +2518,26 @@ void kernel_ENV_SPECIAL_VARIABLE_P(Ref function,Ref arguments,MultipleValues* re
 }
 
 
+void kernel_SET_PRINT_LEVEL_DEPTH(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_depth = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    printer_set_level_depth(integer_value(par_depth));
+    results->count=1;
+    results->values[0] = par_depth;
+    close_live_pool(pool);
+}
+
 void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(KERNEL-ROOTSET);
         Ref lambda_list=S(NIL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_KERNEL_ROOTSET));}
+    {   Ref fname=S(%SET-PRINT-LEVEL-DEPTH);
+        Ref lambda_list=list(S(DEPTH),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SET_PRINT_LEVEL_DEPTH));}
     {   Ref fname=S(GET-EVAL-COUNTERS);
         Ref lambda_list=S(NIL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_EVAL_COUNTERS));}

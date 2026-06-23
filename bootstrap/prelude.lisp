@@ -8945,17 +8945,32 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
 ;;      %MD-ARRAY-PRINT-STRING and prints the returned string; a NIL return means
 ;;      "use the #<…> fallback" — i.e. *PRINT-ARRAY* is NIL or A is not a
 ;;      %md-array.  ESCAPE selects PRIN1 (T) vs PRINC (NIL) for each element.
-(defun %md-array-print-string (a escape)
+(defun %md-array-print-string (a escape base)
+  ;; BASE is the *PRINT-LEVEL* depth the kernel printer held when it reached A
+  ;; (A's own nesting level).  When that already meets the *PRINT-LEVEL* limit the
+  ;; whole array abbreviates to "#" (like any too-deep composite); otherwise emit
+  ;; the aggregate form, then restore the kernel depth counter to BASE so callers
+  ;; that keep printing around A (e.g. a list element after A) are unaffected.
   (when (and (%md-array-p a) *print-array*)
-    (with-output-to-string (s)
-      (%md-emit a escape s (list a)))))
+    ;; *PRINT-READABLY* forces *PRINT-LEVEL* to be ignored (CLHS 22.1.3.11).
+    (let ((pl (and (not *print-readably*) *print-level*)))
+      (if (and pl (>= base pl))
+          "#"
+          (prog1 (with-output-to-string (s)
+                   (%md-emit a escape s (list a) base))
+            (%set-print-level-depth base))))))
 
-(defun %md-emit (a escape s seen)
-  ;; Emit the aggregate printed form of %md-array A to stream S.  SEEN is the
-  ;; stack of arrays currently being printed (a lexical cycle guard — bocl has no
-  ;; #n=/#n# array-circle printing yet, and a circular array like #1=#2A((..)(..
-  ;; #1#)) would otherwise recurse forever).  Nested %md-array elements recurse
-  ;; here (staying in Lisp); other elements print with PRIN1 (escape) / PRINC.
+(defun %md-emit (a escape s seen base)
+  ;; Emit the aggregate printed form of %md-array A to stream S.  Each dimension
+  ;; is one *PRINT-LEVEL* level beyond BASE: A's first-dimension slices print at
+  ;; level BASE+1 and the innermost scalar elements at level BASE+RANK.  A
+  ;; slice/composite-element at level >= *PRINT-LEVEL* abbreviates to "#";
+  ;; *PRINT-LENGTH* truncates each dimension after that many items with " ...".
+  ;; SEEN is the stack of arrays currently being printed (a lexical cycle guard —
+  ;; bocl has no #n=/#n# array-circle printing yet).  Nested %md-array elements
+  ;; recurse here; every other element delegates to the kernel PRIN1 (escape) /
+  ;; PRINC, after syncing the kernel depth counter to the element's level so a
+  ;; list/vector element abbreviates at the correct depth.
   (let ((dims (%md-array-dimensions a))
         (et   (%md-array-element-type a)))
     (cond
@@ -8968,34 +8983,52 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
          (dotimes (i n) (setf (char str i) (row-major-aref a i)))
          (if escape (prin1 str s) (princ str s))))
       (t
-       (let ((idx 0) (rank (length dims)))
-         (labels ((emit-elt ()
+       ;; *PRINT-READABLY* forces *PRINT-LEVEL*/*PRINT-LENGTH* off (CLHS 22.1.3.11).
+       (let ((idx 0) (rank (length dims))
+             (plevel (and (not *print-readably*) *print-level*))
+             (plen   (and (not *print-readably*) *print-length*)))
+         (labels ((stride (ds) (if (null ds) 1 (reduce #'* ds :initial-value 1)))
+                  (emit-scalar (level)
                     (let ((e (row-major-aref a idx)))
                       (incf idx)
                       (cond ((and (%md-array-p e) (member e seen :test #'eq))
                              (write-string "#<circular-array>" s))
                             ((%md-array-p e)
-                             (%md-emit e escape s (cons e seen)))
-                            (escape (prin1 e s))
-                            (t (princ e s)))))
-                  (rec (ds)
-                    (if (null ds)
-                        (emit-elt)                         ; rank-0 scalar element
-                        (progn
-                          (write-char #\( s)
-                          (dotimes (k (car ds))
-                            (when (plusp k) (write-char #\Space s))
-                            (rec (cdr ds)))
-                          (write-char #\) s)))))
+                             (if (and plevel (>= level plevel))
+                                 (write-char #\# s)
+                                 (%md-emit e escape s (cons e seen) level)))
+                            (t
+                             (%set-print-level-depth level)
+                             (if escape (prin1 e s) (princ e s))))))
+                  (rec (ds level)
+                    ;; emit one bracketed group; its direct children are at LEVEL.
+                    (write-char #\( s)
+                    (let* ((n    (car ds))
+                           (rest (cdr ds))
+                           (st   (stride rest)))
+                      (dotimes (k n)
+                        (cond
+                          ((and plen (>= k plen))
+                           (write-string (if (plusp k) " ..." "...") s)
+                           (incf idx (* (- n k) st))   ; skip rest of this dimension
+                           (return))
+                          (t
+                           (when (plusp k) (write-char #\Space s))
+                           (if (null rest)
+                               (emit-scalar level)
+                               (if (and plevel (>= level plevel))
+                                   (progn (write-char #\# s) (incf idx st))
+                                   (rec rest (1+ level))))))))
+                    (write-char #\) s)))
            (cond
+             ((= rank 0)                                   ; #0A scalar (no dims)
+              (write-string "#0A" s)
+              (emit-scalar (1+ base)))
              ((= rank 1)                                   ; #(...) vector syntax
-              (write-string "#(" s)
-              (dotimes (k (car dims))
-                (when (plusp k) (write-char #\Space s))
-                (emit-elt))
-              (write-char #\) s))
-             (t (format s "#~DA" rank)                     ; #nA(...) for rank >= 0
-                (rec dims)))))))))
+              (write-string "#" s)
+              (rec dims (1+ base)))
+             (t (format s "#~DA" rank)                     ; #nA(...) for rank >= 2
+                (rec dims (1+ base))))))))))
 
 (defun array-row-major-index (array &rest subscripts)
   (%md-row-major-index (array-dimensions array) subscripts))
