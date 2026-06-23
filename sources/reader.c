@@ -641,36 +641,70 @@ static octet reader_upcase1(octet c){
     if(((97<=c)&&(c<=122)) || ((224<=c)&&(c<=254)&&(c!=247))){ return (octet)(c-32); }
     return c;}
 
+/* CL downcase of a single octet (mirror of reader_upcase1; matches octet_downcase). */
+static octet reader_downcase1(octet c){
+    if(((65<=c)&&(c<=90)) || ((192<=c)&&(c<=222)&&(c!=215))){ return (octet)(c+32); }
+    return c;}
+
+/* Apply the current readtable's READTABLE-CASE to the UNESCAPED characters of an
+   already-tokenized symbol name: a character is folded only when esc[i] is false;
+   escaped characters (esc[i] true) keep their literal case.  This is the
+   escape-aware twin of apply_readtable_case (used by the non-escaped path): under
+   :UPCASE/:DOWNCASE each unescaped letter folds individually; :PRESERVE leaves the
+   name verbatim; :INVERT inverts the unescaped letters only when they are uniformly
+   one case (mixed or none → preserved), considering ASCII letters as the printer
+   does.  Package-marker colons are unescaped non-letters, so they pass through. */
+static void reader_case_unescaped(octet* token, halfword len, const bool* esc){
+    Ref rc = current_readtable()->slots->readtable.readcase;
+    if(rc == K(PRESERVE)){ return; }
+    if(rc == K(INVERT)){
+        bool up=false, lo=false;
+        for(halfword i=0;i<len;i++){
+            if(esc[i]){ continue; }
+            octet c=token[i];
+            if(c>='A'&&c<='Z'){ up=true; }
+            else if(c>='a'&&c<='z'){ lo=true; }}
+        if(up==lo){ return; }                 /* mixed-case or no letters → preserve */
+        for(halfword i=0;i<len;i++){
+            if(esc[i]){ continue; }
+            octet c=token[i];
+            if(c>='A'&&c<='Z'){ token[i]=(octet)(c+32); }
+            else if(c>='a'&&c<='z'){ token[i]=(octet)(c-32); }}
+        return;}
+    bool down = (rc == K(DOWNCASE));
+    for(halfword i=0;i<len;i++){
+        if(esc[i]){ continue; }
+        token[i] = down ? reader_downcase1(token[i]) : reader_upcase1(token[i]);}
+}
+
 static Ref parse_token(parser_state* parser){
     Ref rt=current_readtable();
     parser->length=0;
     /* `escaped` becomes true at the first single-escape (\) or multi-escape (|…|)
-       in the token: such a token is unconditionally a SYMBOL whose name keeps the
-       case of escaped characters (unescaped ones still get readtable case).  We
-       fold case inline once escaping starts (retro-folding the unescaped prefix),
-       so the finished name can be interned verbatim. */
+       in the token: such a token is unconditionally a SYMBOL.  Escaped characters
+       keep their literal case; unescaped ones still take the readtable case.  We
+       store every character verbatim, recording in esc[] which positions came from
+       an escape, then fold the unescaped characters per READTABLE-CASE in one pass
+       once the whole token is in hand (reader_case_unescaped) — :INVERT needs the
+       full token to decide case uniformity, so we cannot fold a character early. */
     bool escaped=false;
+    bool esc[ARRAY_TOTAL_SIZE_LIMIT+1];   /* esc[i] = token[i] came from an escape */
     /* Positions of the first (and immediately-following second) UNESCAPED colon:
        these are package markers even in an escaped token, so :|a| is the keyword
        |a|, not a symbol named ":a". -1 = none seen. */
     int colon1=-1, colon2=-1;
     while(!parser->error && !parser->eof){
         if(parser->ch=='\\'){
-            if(!escaped){
-                for(halfword i=0;i<parser->length;i++){
-                    parser->token[i]=reader_upcase1(parser->token[i]);}
-                escaped=true;}
+            escaped=true;
             advance_character(parser);
             if(parser->eof){
                 READER_ERROR(parser->input_stream,"Single escape \\ at end of input%s","");}
             check_token_too_long(parser,"Token");
+            esc[parser->length]=true;
             parser->token[parser->length++]=parser->ch;   /* escaped: verbatim */
             advance_character(parser);}
         else if(parser->ch=='|'){
-            if(!escaped){
-                for(halfword i=0;i<parser->length;i++){
-                    parser->token[i]=reader_upcase1(parser->token[i]);}
-                escaped=true;}
+            escaped=true;
             for(;;){
                 advance_character(parser);
                 if(parser->eof){
@@ -681,6 +715,7 @@ static Ref parse_token(parser_state* parser){
                         READER_ERROR(parser->input_stream,"Unterminated |...| symbol%s","");}}
                 else if(parser->ch=='|'){ break; }
                 check_token_too_long(parser,"Token");
+                esc[parser->length]=true;
                 parser->token[parser->length++]=parser->ch;}
             advance_character(parser);}           /* past the closing | */
         else if(token_continues(rt,parser->ch)){
@@ -688,7 +723,8 @@ static Ref parse_token(parser_state* parser){
             if(parser->ch==':'){
                 if(colon1<0){ colon1=(int)parser->length; }
                 else if(colon2<0 && (int)parser->length==colon1+1){ colon2=(int)parser->length; }}
-            parser->token[parser->length++]=escaped?reader_upcase1(parser->ch):parser->ch;
+            esc[parser->length]=false;
+            parser->token[parser->length++]=parser->ch;   /* unescaped: case-folded below */
             advance_character(parser);}
         else{ break; }}
     /* A token terminated by end-of-file is still a complete token: clear the EOF
@@ -699,10 +735,12 @@ static Ref parse_token(parser_state* parser){
     check_parser_error(parser);
     parser->token[parser->length]='\0';
     if(escaped){
-        /* Escaped tokens are always symbols; the name is already correctly cased,
-           so no number scan or further case folding.  An UNESCAPED colon is still
-           a package marker (so :|a| is the keyword |a|, foo:|bar| qualifies in
-           FOO), while an escaped colon is just a name character. */
+        /* Escaped tokens are always symbols.  Fold the unescaped characters per
+           READTABLE-CASE (escaped ones stay verbatim); after this the name is
+           correctly cased, so no number scan or further folding.  An UNESCAPED
+           colon is still a package marker (so :|a| is the keyword |a|, foo:|bar|
+           qualifies in FOO), while an escaped colon is just a name character. */
+        reader_case_unescaped(parser->token,(halfword)parser->length,esc);
         parser->eof=false;
         const char* tok=(const char*)parser->token;
         if(colon1<0){

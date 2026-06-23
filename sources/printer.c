@@ -220,11 +220,29 @@ static unsigned char fold_char(unsigned char c, int pcase, bool word_start){
     return (c>='A'&&c<='Z') ? (unsigned char)(c+32) : c;
 }
 
+/* Add NAME's ASCII letter-case presence to *UP / *LO, but only if NAME would be
+   printed unescaped under READTABLE-CASE RCASE — an escaped |…| component prints
+   verbatim and so contributes no readtable-foldable letters.  Used to decide
+   :INVERT over a whole "pkg::name" token rather than each component in isolation
+   (a uniform-case token inverts on read; a mixed one is preserved). */
+static void invert_scan(Ref name, int rcase, bool* up, bool* lo){
+    char* s   = string_cstring(name);
+    uword len = string_length(name);
+    if(symbol_name_needs_escape(s,len,rcase)){ return; }
+    for(uword i=0;i<len;i++){
+        unsigned char c=(unsigned char)s[i];
+        if(c>='A'&&c<='Z'){ *up=true; } else if(c>='a'&&c<='z'){ *lo=true; }
+    }
+}
+
 /* Write a symbol/package name to OUT honouring READTABLE-CASE and *PRINT-CASE*
    (CLHS 22.1.3.3.2).  ESCAPE selects the *PRINT-ESCAPE* behaviour: when true and
    the name would not read back, wrap it in |…| (verbatim — a correct readable
-   form under any readtable case); otherwise emit the case-folded name. */
-static void print_name_escaped(Ref name, FILE* out, bool escape){
+   form under any readtable case); otherwise emit the case-folded name.  INV drives
+   the :INVERT decision: -1 = decide from this name alone (the default); 0 = do not
+   invert; 1 = invert — so a caller can force a consistent decision across the
+   package prefix and the symbol name of one printed token. */
+static void print_name_escaped(Ref name, FILE* out, bool escape, int inv){
     char* s   = string_cstring(name);
     uword len = string_length(name);
     int rcase = current_readtable_case();
@@ -237,12 +255,15 @@ static void print_name_escaped(Ref name, FILE* out, bool escape){
         fputc('|',out);
         return; }
     if(rcase==2){ fwrite(s,1,(size_t)len,out); return; }   /* :PRESERVE — verbatim */
-    if(rcase==3){                                           /* :INVERT — flip a uniform-case name */
-        bool up=false, lo=false;
-        for(uword i=0;i<len;i++){
-            unsigned char c=(unsigned char)s[i];
-            if(c>='A'&&c<='Z'){ up=true; } else if(c>='a'&&c<='z'){ lo=true; } }
-        bool uniform=(up!=lo);
+    if(rcase==3){                                           /* :INVERT — flip a uniform-case token */
+        bool uniform;
+        if(inv>=0){ uniform=(inv==1); }
+        else{
+            bool up=false, lo=false;
+            for(uword i=0;i<len;i++){
+                unsigned char c=(unsigned char)s[i];
+                if(c>='A'&&c<='Z'){ up=true; } else if(c>='a'&&c<='z'){ lo=true; } }
+            uniform=(up!=lo); }
         for(uword i=0;i<len;i++){
             unsigned char c=(unsigned char)s[i];
             if(uniform){
@@ -372,7 +393,7 @@ static Ref prin1_inner(Ref object,Ref stream){
 
     if(keywordp(object) ){
         fprintf(out,":");
-        print_name_escaped(symbol_name(object),out,true);
+        print_name_escaped(symbol_name(object),out,true,-1);
         return object;}
 
     if(symbolp(object)){
@@ -383,14 +404,25 @@ static Ref prin1_inner(Ref object,Ref stream){
            numeric-looking characters reads back unchanged. */
         Ref pkgname; int sep;
         symbol_print_prefix(object,&pkgname,&sep);
+        /* Under :INVERT the reader treats "pkg::name" as one extended token and
+           inverts only when ALL its unescaped letters share a case.  So decide the
+           inversion over the package prefix and symbol name TOGETHER and force the
+           same choice on both components — inverting each in isolation could emit a
+           mixed-case token (e.g. tpkg::ZEBRA) that no longer reads back. */
+        int inv = -1;
+        if(current_readtable_case()==3 && (sep==1 || sep==2)){
+            bool up=false, lo=false;
+            invert_scan(pkgname, 3, &up, &lo);
+            invert_scan(symbol_name(object), 3, &up, &lo);
+            inv = (up!=lo) ? 1 : 0; }
         /* #: prefix for an uninterned symbol when *PRINT-GENSYM* is true, or
            always when *PRINT-READABLY* (an uninterned symbol must read back). */
         if(sep==3){ if(!nullp(variable_value(S(*PRINT-GENSYM*))) ||
                        !nullp(variable_value(S(*PRINT-READABLY*)))){ fprintf(out,"#:"); } }
         else if(sep!=0){
-            print_name_escaped(pkgname,out,true);
+            print_name_escaped(pkgname,out,true,inv);
             fprintf(out, sep==1 ? ":" : "::"); }
-        print_name_escaped(symbol_name(object),out,true);
+        print_name_escaped(symbol_name(object),out,true,inv);
         return object;}
 
     if(consp(object)){
@@ -580,11 +612,11 @@ Ref princ(Ref object,Ref stream){
        prefix and no keyword colon (CLHS 22.1.3.3) — case-folded per READTABLE-CASE
        and *PRINT-CASE*. */
     if(keywordp(object)){
-        print_name_escaped(symbol_name(object),out,false);
+        print_name_escaped(symbol_name(object),out,false,-1);
         return object;}
 
     if(symbolp(object)){
-        print_name_escaped(symbol_name(object),out,false);
+        print_name_escaped(symbol_name(object),out,false,-1);
         return object;}
 
     if(stringp(object)){

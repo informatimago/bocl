@@ -56,12 +56,31 @@ Verified the user's example reads + runs:
 and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
-STILL OPEN for F205/F233: two readtable-case interactions, NOT the prefix parse —
-(a) parse_token's escaped path folds unescaped chars with UPCASE (reader_upcase1)
-instead of the readtable case, so |TPKG|::ZEBRA under :DOWNCASE reads NAME "ZEBRA"
-rather than "zebra"; (b) under :INVERT a package-qualified symbol prints as
-tpkg::ZEBRA (each component inverted) but the reader sees the combined token as
-mixed-case and preserves it, so it does not round-trip.
+
+== FIXED (Slice 69) — readtable-case folding in escaped tokens + :INVERT round-trip ==
+The two readtable-case interactions left open at Slice 68 (must-printer F205/F233):
+(a) READER — parse_token's escaped path folded the UNESCAPED characters of a token
+    with hardcoded UPCASE (reader_upcase1) instead of the readtable case, so e.g.
+    |TPKG|::ZEBRA under :DOWNCASE read NAME "ZEBRA" rather than "zebra".  Rewrote the
+    escaped path to store every character verbatim while recording in a parallel
+    esc[] mask which positions came from an escape, then fold the unescaped chars in
+    one post-pass (new reader_case_unescaped): :UPCASE/:DOWNCASE fold each unescaped
+    letter; :PRESERVE leaves it; :INVERT inverts the unescaped letters only when they
+    are uniformly one case — which needs the whole token, hence the deferred pass.
+    (The retro-folding of the unescaped prefix is gone; the #: gensym reader keeps its
+    own UPCASE path — untested for readtable-case and in the recursive parse_object
+    frame, so left alone.)
+(b) PRINTER — under :INVERT a package-qualified symbol printed as tpkg::ZEBRA (each
+    component inverted independently); the reader then saw the combined "pkg::name"
+    token as mixed-case and preserved it, breaking round-trip.  The :INVERT decision
+    is now made over the package prefix and symbol name TOGETHER (new invert_scan,
+    skipping any |…|-escaped component) and forced consistently onto both via a new
+    INV argument to print_name_escaped — so TPKG (upper) + zebra (lower) prints the
+    mixed-case token verbatim as TPKG::zebra, which reads back unchanged.
+Verified: f205 round-trips for {ZEBRA,Zebra,zebra} x {:UPCASE,:DOWNCASE,:PRESERVE,
+:INVERT}; the Slice-68 multi-escape example still returns HI.  must-printer 71->66
+(F9, F205, F233, F234, F235 now pass), 0 regressions; must-symbol unchanged (lone
+F98 = SETF eval-order limitation); must-cons 0/0.
 
 == FIXED (Slice 67) — READTABLE-CASE-aware symbol printing (must-printer) ==
 Implemented the full CLHS 22.1.3.3.2 algorithm so symbol/keyword/package names
