@@ -12,6 +12,13 @@ bool eql(Ref a,Ref b){
         if(integerp(b)){
             return integer_value(a)==integer_value(b);}
         return false;}
+    if(bignump(a)){
+        /* EQL of two bignums compares value (they are built fresh, so identity is
+           not enough).  A bignum is never EQL to a fixnum: by construction its
+           magnitude exceeds WORD_MAX, which no fixnum reaches. */
+        if(bignump(b)){
+            return c_bignum_cmp(a,b)==0;}
+        return false;}
     if(floatp(a)){
         if(floatp(b)){
             return float_value(a)==float_value(b);}

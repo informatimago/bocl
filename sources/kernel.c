@@ -796,7 +796,7 @@ Ref c_bignum_mul(Ref a, Ref b){
     free(ma); free(mb);
     return r; }
 
-/* CL '/' on integers: exact quotient, else a ratio (bignum ratios unsupported). */
+/* CL '/' on integers: exact quotient, else a (reduced) ratio. */
 Ref c_bignum_divide(Ref a, Ref b){
     size_t na,nb; bool sa,sb;
     uword* ma=bn_decompose(a,&na,&sa);
@@ -812,7 +812,7 @@ Ref c_bignum_divide(Ref a, Ref b){
         mag_divmod(ma,na,mb,nb,Q,&nq,R,&nr,sc);
         if(nr!=0){
             free(Q); free(R); free(sc); free(ma); free(mb);
-            ARITHMETIC_ERROR("a ratio with a bignum part is not yet supported%s",""); }
+            return ratio_new(a,b); }   /* non-exact: a/b is a reduced ratio */
         r=make_integer_from_limbs(sa!=sb,Q,nq);
         free(Q); free(R); free(sc); }
     free(ma); free(mb);
@@ -1117,22 +1117,12 @@ static word gcd_word(word a, word b){
     while(b){ word t=b; b=a%b; a=t; }
     return a;}
 
-Ref ratio_new(Ref num, Ref den){
-    /* Normalise: denominator always > 0; reduce by GCD; integer if den==1 */
-    word n = integer_value(num);
-    word d = integer_value(den);
-    if(d == 0){ ERROR("Division by zero in ratio%s",""); }
-    if(d < 0){ n = -n; d = -d; }
-    word g = gcd_word(n < 0 ? -n : n, d);
-    if(g > 1){ n /= g; d /= g; }
-    if(d == 1){ return integer_from_word(n); }
-    /* Build the numerator/denominator INTEGER objects BEFORE allocating the
-       Ratio, and root them in the live pool.  Otherwise a GC triggered by the
-       second integer_from_word() would scan the half-built Ratio (objcount=2)
-       and follow the uninitialised num/den slots as if they were Refs. */
-    Ref num_i = integer_from_word(n);
+/* Allocate a normalised (numerator,denominator) pair into a RATIO object.  Both
+   args must already be reduced, with a positive denominator > 1.  They are
+   rooted before the allocation so a GC triggered by allocate() cannot follow the
+   half-built Ratio's uninitialised slots. */
+static Ref ratio_box(Ref num_i, Ref den_i){
     add_to_live_pool(num_i);
-    Ref den_i = integer_from_word(d);
     add_to_live_pool(den_i);
     Ratio* slots = allocate(sizeof(Ratio));
     slots->numerator   = num_i;
@@ -1140,16 +1130,49 @@ Ref ratio_new(Ref num, Ref den){
     slots->objcount    = 2;
     return Object_new(RATIO_Class, (Slots*)slots);}
 
+Ref ratio_new(Ref num, Ref den){
+    /* Normalise: denominator always > 0; reduce by GCD; integer if den==1. */
+    if(integerp(num) && integerp(den)){
+        /* Fast path: both operands are fixnums, use word arithmetic. */
+        word n = integer_value(num);
+        word d = integer_value(den);
+        if(d == 0){ ERROR("Division by zero in ratio%s",""); }
+        if(d < 0){ n = -n; d = -d; }
+        word g = gcd_word(n < 0 ? -n : n, d);
+        if(g > 1){ n /= g; d /= g; }
+        if(d == 1){ return integer_from_word(n); }
+        return ratio_box(integer_from_word(n), integer_from_word(d));}
+    /* General path: at least one operand is a BIGNUM.  Reduce with the C bignum
+       engine.  GC is disabled across the bounded Ref construction so the
+       intermediates (and the operands themselves) need no live-pool rooting;
+       ratio_box() re-roots its two survivors before the final allocate. */
+    Ref zero = integer_from_word(0);
+    if(c_bignum_cmp(den, zero) == 0){ ERROR("Division by zero in ratio%s",""); }
+    bool saved = garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    if(c_bignum_cmp(den, zero) < 0){          /* force denominator positive */
+        num = c_bignum_sub(zero, num);
+        den = c_bignum_sub(zero, den); }
+    Ref g = c_bignum_gcd(num, den);           /* non-negative, >= 1 (den != 0) */
+    if(!(integerp(g) && integer_value(g) == 1)){
+        num = c_bignum_divide(num, g);        /* exact: g divides both          */
+        den = c_bignum_divide(den, g); }
+    Ref result;
+    if(integerp(den) && integer_value(den) == 1){ result = num; }
+    else                                        { result = ratio_box(num, den); }
+    set_garbage_collection_enabled(saved);
+    return result;}
+
 bool ratiop(Ref object){
     return class_of(object) == RATIO_Class;}
 
 Ref ratio_numerator(Ref r){
-    if(integerp(r)) return r;
+    if(integerp(r) || bignump(r)) return r;   /* a bare integer is its own numerator */
     check_class(r, RATIO_Class);
     return r->slots->ratio.numerator;}
 
 Ref ratio_denominator(Ref r){
-    if(integerp(r)) return integer_from_word(1);
+    if(integerp(r) || bignump(r)) return integer_from_word(1);
     check_class(r, RATIO_Class);
     return r->slots->ratio.denominator;}
 

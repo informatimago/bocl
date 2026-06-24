@@ -130,7 +130,7 @@ static Ref num_combine(char op, Ref a, Ref b){
               rd = num_combine('*', ad, bn);
               break;
           default: FATAL("num_combine: unknown op %c",op); rn=I(0); rd=I(1);}
-        if(!integerp(rn) || !integerp(rd))
+        if(!(integerp(rn)||bignump(rn)) || !(integerp(rd)||bignump(rd)))
             return float_from_floating(as_floating(rn)/as_floating(rd));
         return ratio_new(rn, rd);
     }
@@ -235,6 +235,21 @@ void kernel_DIVIDE(Ref function,Ref arguments,MultipleValues* results){
  *  Comparisons: =  /=  <  >  <=  >=                                     *
  * -------------------------------------------------------------------- */
 
+/* Exact three-way compare of two rationals (each an integer, bignum, or ratio):
+   a/b vs c/d  <=>  a*d vs c*b, since denominators are positive after
+   normalisation.  Cross-multiplication keeps bignum ratios exact where a float
+   conversion would lose precision (and would also crash on bignum parts, whose
+   value does not fit a word).  GC is disabled across the bounded Ref
+   construction so the intermediate products need no live-pool rooting. */
+static int rational_cross_cmp(Ref a, Ref b){
+    bool saved=garbage_collection_is_enabled();
+    set_garbage_collection_enabled(false);
+    Ref left =num_combine('*', ratio_numerator(a), ratio_denominator(b));
+    Ref right=num_combine('*', ratio_numerator(b), ratio_denominator(a));
+    int r = bignum_compare(left, right);
+    set_garbage_collection_enabled(saved);
+    return r;}
+
 static bool num_eq(Ref a, Ref b){
     check_number(a); check_number(b);
     /* Complex: equal iff real and imaginary parts are each =.  complex_realpart/
@@ -244,15 +259,19 @@ static bool num_eq(Ref a, Ref b){
     if(complexp(a) || complexp(b)){
         return num_eq(complex_realpart(a), complex_realpart(b))
             && num_eq(complex_imagpart(a), complex_imagpart(b));}
-    if(either_float(a,b) || either_ratio(a,b))
+    if(either_float(a,b))
         return as_floating(a)==as_floating(b);
+    if(either_ratio(a,b))
+        return rational_cross_cmp(a,b)==0;        /* exact: handles bignum parts */
     if(bignump(a)||bignump(b)) return bignum_compare(a,b)==0;
     return integer_value(a)==integer_value(b);}
 
 static bool num_lt(Ref a, Ref b){
     check_number(a); check_number(b);
-    if(either_float(a,b) || either_ratio(a,b))
+    if(either_float(a,b))
         return as_floating(a)<as_floating(b);
+    if(either_ratio(a,b))
+        return rational_cross_cmp(a,b)<0;         /* exact: handles bignum parts */
     if(bignump(a)||bignump(b)) return bignum_compare(a,b)<0;
     return integer_value(a)<integer_value(b);}
 

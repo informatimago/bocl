@@ -479,15 +479,20 @@ static Ref scan_ratio(parser_state* parser){
     while(*q){
         if(digit_in_base((unsigned char)*q,base)<0) return NIL_Symbol;
         q++;}
-    word num_sign = (token[0]=='-') ? -1 : 1;
-    word num=0;
-    p = token + (token[0]=='-'||token[0]=='+' ? 1 : 0);
-    while(p < slash){ num = num*base + digit_in_base((unsigned char)*p,base); p++; }
-    word den=0;
-    q = slash+1;
-    while(*q){ den = den*base + digit_in_base((unsigned char)*q,base); q++; }
-    if(den==0) return NIL_Symbol;
-    return ratio_new(integer_from_word(num_sign*num), integer_from_word(den));}
+    /* Parse each half as a fixnum-or-bignum so ratios whose numerator or
+       denominator overflows a word read back exactly (e.g. 2/123…321).  The
+       numerator substring keeps its optional leading sign; parse_bignum_cstring
+       handles the sign and demotes to a fixnum when the value fits. */
+    size_t num_len = (size_t)(slash - token);
+    char* num_str = malloc(num_len + 1);
+    for(size_t i=0;i<num_len;i++){ num_str[i]=token[i]; }
+    num_str[num_len]='\0';
+    Ref num = parse_bignum_cstring(num_str, base);
+    free(num_str);
+    Ref den = parse_bignum_cstring(slash+1, base);
+    if(nullp(num) || nullp(den)){ return NIL_Symbol; }
+    if(integerp(den) && integer_value(den)==0){ return NIL_Symbol; }  /* x/0: not a ratio */
+    return ratio_new(num, den);}
 
 static Ref scan_integer(parser_state* parser){
     /* [-+]?digits+\.?  in the current radix (*READ-BASE*).  Sign is allowed ONLY

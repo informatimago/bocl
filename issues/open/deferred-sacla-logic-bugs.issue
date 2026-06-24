@@ -57,6 +57,43 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 71) — bignum ratios: reader, normalisation, arithmetic, comparison, EQL ==
+A RATIO whose numerator or denominator overflowed a word was silently truncated, so
+literals like 2/1234567890987654321234567890987654321 read back mod 2^64 and printed
+wrong (must-printer F91/92/93/99-101/108/109/116-118/124/125 — every bignum-ratio radix
+case).  The C bignum engine and bignum INTEGER literals already existed (Slice <=N); the
+gap was that ratios never reached it.  Closed end to end:
+(a) READER — scan_ratio (reader.c) parsed each half into a bare `word`; now it parses
+    the numerator (with sign) and denominator substrings via parse_bignum_cstring, which
+    demotes to a fixnum when it fits, then calls ratio_new.  x/0 still falls through (not
+    a ratio) as before.
+(b) NORMALISE — ratio_new (kernel.c) used integer_value()/gcd_word() (fixnum-only).  It
+    now keeps the fixnum fast path but adds a general path for bignum operands: force the
+    denominator positive, reduce by c_bignum_gcd, divide both by it (exact), demote to an
+    INTEGER when the denominator is 1.  Factored the allocation into ratio_box().
+(c) ACCESSORS — ratio_numerator/ratio_denominator treated a bare BIGNUM as a type error;
+    they now return it / 1 (a bignum is its own numerator), unblocking ratio arithmetic.
+(d) ARITHMETIC — num_combine's ratio path fell back to FLOAT whenever a part was a bignum
+    (the !integerp guard); it now keeps the part as a rational when it is integer-OR-bignum.
+    c_bignum_divide signalled "a ratio with a bignum part is not yet supported" on a
+    non-exact quotient; it now returns the reduced ratio_new(a,b).
+(e) COMPARISON — num_eq/num_lt compared ALL ratios by converting to double (as_floating),
+    which both lost precision and crashed on bignum parts (integer_value on a bignum).
+    Replaced the ratio branch with rational_cross_cmp: a/b vs c/d == a*d vs c*b via the
+    bignum engine (exact; denominators are positive after normalisation).  Float contagion
+    is preserved (the either_float branch still wins).
+(f) EQL — eql (data.c) had no BIGNUM case, so two equal-valued bignums were never EQL
+    (a CLHS violation that also broke bignum-ratio read/print/read round-trips).  Added a
+    c_bignum_cmp value compare; a bignum is never EQL to a fixnum (its magnitude exceeds
+    WORD_MAX by construction).
+Verified: all 13 bignum-ratio must-printer forms pass (must-printer 23->10 fails, 7 errors
+unchanged); (* 2/big big)=2, (/ big n), (+ 1/big 1/2), (- r 1), (= 1/D 11/(11*D)) and a
+write/read/EQL round-trip all correct.  Zero regressions across must-printer/-cons/-symbol/
+-data-and-control/-sequence(3851)/-reader(1560, F688 now passes via exact compare)/-array/
+-character/-do/-eval/-hash-table/-loop/-string (failure SETS identical to Slice 70 baseline).
+Remaining must-printer fails are unrelated: array :CIRCLE gensym sharing (F382-395) and
+F9/F45/F207/F229/F260/F315 (pprint-dispatch, array fill-pointer printing, symbol/radix).
+
 == FIXED (Slice 70) — #nA array printing honors *PRINT-LEVEL*/*PRINT-LENGTH* + readably ==
 The aggregate #nA(...) / #(...) array printer (prelude %MD-EMIT) ignored both
 *PRINT-LEVEL* and *PRINT-LENGTH* entirely — multi-dimensional arrays always printed
