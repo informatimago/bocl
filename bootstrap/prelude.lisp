@@ -8957,7 +8957,14 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
       (if (and pl (>= base pl))
           "#"
           (prog1 (with-output-to-string (s)
-                   (%md-emit a escape s (list a) base))
+                   ;; *PRINT-CIRCLE*: the array itself may be shared (e.g. a
+                   ;; self-referential array).  A positive action is a back-ref
+                   ;; (#n#); a negative one prefixes #n= before the aggregate.
+                   (let ((act (and (%circle-active-p) (%circle-action a))))
+                     (cond
+                       ((and act (plusp act)) (format s "#~D#" act))
+                       (t (when (and act (minusp act)) (format s "#~D=" (- act)))
+                          (%md-emit a escape s (list a) base)))))
             (%set-print-level-depth base))))))
 
 (defun %md-emit (a escape s seen base)
@@ -8991,15 +8998,26 @@ T means \"the whole vector is active\"; an integer is taken verbatim."
                   (emit-scalar (level)
                     (let ((e (row-major-aref a idx)))
                       (incf idx)
-                      (cond ((and (%md-array-p e) (member e seen :test #'eq))
-                             (write-string "#<circular-array>" s))
-                            ((%md-array-p e)
-                             (if (and plevel (>= level plevel))
-                                 (write-char #\# s)
-                                 (%md-emit e escape s (cons e seen) level)))
-                            (t
-                             (%set-print-level-depth level)
-                             (if escape (prin1 e s) (princ e s))))))
+                      (cond
+                        ((%md-array-p e)
+                         (cond
+                           ;; too deep for *PRINT-LEVEL* (nil/ignored under readably)
+                           ((and plevel (>= level plevel)) (write-char #\# s))
+                           (t
+                            ;; *PRINT-CIRCLE*: a shared / self-referential sub-array
+                            ;; prints as #n# (back-ref) or #n=<array> (first visit).
+                            ;; With circle off, fall back to the lexical SEEN guard.
+                            (let ((act (and (%circle-active-p) (%circle-action e))))
+                              (cond
+                                ((and act (plusp act)) (format s "#~D#" act))
+                                (t (when (and act (minusp act)) (format s "#~D=" (- act)))
+                                   (if (and (not (%circle-active-p))
+                                            (member e seen :test #'eq))
+                                       (write-string "#<circular-array>" s)
+                                       (%md-emit e escape s (cons e seen) level))))))))
+                        (t
+                         (%set-print-level-depth level)
+                         (if escape (prin1 e s) (princ e s))))))
                   (rec (ds level)
                     ;; emit one bracketed group; its direct children are at LEVEL.
                     (write-char #\( s)

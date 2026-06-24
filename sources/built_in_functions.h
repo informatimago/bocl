@@ -5,6 +5,8 @@
 
 void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SET_PRINT_LEVEL_DEPTH(Ref function,Ref arguments,MultipleValues* results);
+void kernel_CIRCLE_ACTIVE_P(Ref function,Ref arguments,MultipleValues* results);
+void kernel_CIRCLE_ACTION(Ref function,Ref arguments,MultipleValues* results);
 void kernel_GET_EVAL_COUNTERS(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CLASS_NEW(Ref function,Ref arguments,MultipleValues* results);
 void kernel_CLASSP(Ref function,Ref arguments,MultipleValues* results);

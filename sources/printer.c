@@ -146,10 +146,37 @@ static int circle_index(Ref obj){
     for(int i=0;i<g_circle_count;i++){ if(g_circle[i].obj==obj){ return i; } }
     return -1;}
 
+/* A multidimensional / adjustable / displaced array is a prelude %md-array
+   structure, opaque to C — these helpers reach into it via the prelude. */
+static bool md_array_p(Ref obj){
+    if(!structurep(obj)){ return false; }
+    Ref fn=S(%MD-ARRAY-P);
+    if(!symbol_fboundp(fn)){ return false; }
+    MultipleValues mv; mv.count=0;
+    kernel_apply(symbol_function(fn), list(obj,NULL), &mv);
+    return mv.count>0 && !nullp(mv.values[0]);}
+static uword md_array_total_size(Ref obj){
+    MultipleValues mv; mv.count=0;
+    kernel_apply(symbol_function(S(ARRAY-TOTAL-SIZE)), list(obj,NULL), &mv);
+    return (mv.count>0 && integerp(mv.values[0])) ? (uword)integer_value(mv.values[0]) : 0;}
+static Ref md_array_rmref(Ref obj, uword i){
+    MultipleValues mv; mv.count=0;
+    kernel_apply(symbol_function(S(ROW-MAJOR-AREF)),
+                 list(obj,integer_from_uword(i),NULL), &mv);
+    return mv.count>0 ? mv.values[0] : NIL_Symbol;}
+
+/* A bare uninterned symbol (no home package): the only kind of symbol that
+   *PRINT-CIRCLE* must label, since #:name does not read back EQ on its own. */
+static bool gensym_p(Ref obj){
+    return symbolp(obj) && nullp(symbol_package(obj));}
+
 static void circle_scan(Ref obj,int depth){
     if(depth>PRIN1_MAX_DEPTH){ return; }
-    bool is_cons=consp(obj), is_vec=vectorp(obj);
-    if(!is_cons && !is_vec){ return; }
+    bool is_cons=consp(obj), is_vec=vectorp(obj), is_gensym=gensym_p(obj);
+    bool is_arr=false;
+    if(!is_cons && !is_vec && !is_gensym){
+        is_arr=md_array_p(obj);
+        if(!is_arr){ return; } }
     int idx=circle_index(obj);
     if(idx>=0){ g_circle[idx].label=-1; return; }   /* second visit: shared */
     if(g_circle_count>=g_circle_cap){
@@ -158,9 +185,39 @@ static void circle_scan(Ref obj,int depth){
     g_circle[g_circle_count].obj=obj;
     g_circle[g_circle_count].label=0;
     g_circle_count++;
+    if(is_gensym){ return; }                         /* atom: no children */
     if(is_cons){ circle_scan(car(obj),depth+1); circle_scan(cdr(obj),depth+1); }
-    else { uword len=vector_length(obj);
-           for(uword i=0;i<len;i++){ circle_scan(obj->slots->array.elements->elements[i],depth+1); } }}
+    else if(is_vec){ uword len=vector_length(obj);
+           for(uword i=0;i<len;i++){ circle_scan(obj->slots->array.elements->elements[i],depth+1); } }
+    else { uword n=md_array_total_size(obj);         /* %md-array: row-major children */
+           for(uword i=0;i<n;i++){ circle_scan(md_array_rmref(obj,i),depth+1); } }}
+
+/* Emit the *PRINT-CIRCLE* label for OBJ, shared by the cons/vector/symbol
+   printers.  Returns 1 if a back-reference "#n#" was written (caller must stop);
+   0 otherwise — a "#n=" prefix may have been written and the caller prints OBJ. */
+static int circle_emit_label(Ref obj, FILE* out){
+    if(!g_circle_active){ return 0; }
+    int idx=circle_index(obj);
+    if(idx<0){ return 0; }
+    int lab=g_circle[idx].label;
+    if(lab>0){ fprintf(out,"#%d#",lab); return 1; }
+    if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
+                 fprintf(out,"#%d=",g_circle_next_label); }
+    return 0;}
+
+/* Bridge for the prelude array printer (%MD-EMIT): is circle printing active,
+   and what should be done with OBJ?  printer_circle_action returns a positive N
+   for a back-reference (print "#N#"), a negative -N for a shared first visit
+   (assign N, print "#N=" then OBJ), or 0 for "print OBJ normally". */
+bool printer_circle_active(void){ return g_circle_active; }
+word printer_circle_action(Ref obj){
+    if(!g_circle_active){ return 0; }
+    int idx=circle_index(obj);
+    if(idx<0){ return 0; }
+    int lab=g_circle[idx].label;
+    if(lab>0){ return lab; }
+    if(lab==-1){ g_circle[idx].label = ++g_circle_next_label; return -g_circle[idx].label; }
+    return 0;}
 
 /* --- Symbol-name escaping for *PRINT-ESCAPE* (PRIN1) -----------------------
    A symbol name must be printed so it reads back to the same symbol.  When the
@@ -433,6 +490,9 @@ static Ref prin1_inner(Ref object,Ref stream){
         return object;}
 
     if(symbolp(object)){
+        /* *PRINT-CIRCLE*: a shared uninterned symbol (gensym) is labelled #n=…
+           on first appearance and #n# after, so the repeats read back EQ. */
+        if(circle_emit_label(object,out)){ return object; }
         /* prin1 qualifies a symbol by package when it is not accessible as
            itself in *PACKAGE*, so the written form reads back to the same symbol
            (needed for fasls and readable output across packages).  Each name
@@ -467,13 +527,7 @@ static Ref prin1_inner(Ref object,Ref stream){
         if(plevel >= 0 && g_print_level_depth >= plevel){ fputc('#',out); return object; }
         /* *PRINT-CIRCLE*: emit #n# for an already-printed shared cons, #n= the
            first time. */
-        if(g_circle_active){
-            int idx=circle_index(object);
-            if(idx>=0){
-                int lab=g_circle[idx].label;
-                if(lab>0){ fprintf(out,"#%d#",lab); return object; }
-                if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
-                             fprintf(out,"#%d=",g_circle_next_label); }}}
+        if(circle_emit_label(object,out)){ return object; }
         /* Respect *PRINT-LENGTH* — truncate after this many elements. */
         word print_length = current_print_length();
         if(print_length == 0){ fprintf(out,"(...)"); return object; }
@@ -502,7 +556,10 @@ static Ref prin1_inner(Ref object,Ref stream){
             elem++;
             if(advance_slow){ slow=cdr(slow); }
             advance_slow=!advance_slow;
-            if(current==slow){ fprintf(out," . #<circular>"); current=NIL_Symbol; break; }}
+            /* Floyd cycle backstop only when *PRINT-CIRCLE* is OFF; when ON the
+               #n=/#n# labels already terminate every cycle (and the backstop would
+               otherwise pre-empt a label with an unreadable "#<circular>"). */
+            if(!g_circle_active && current==slow){ fprintf(out," . #<circular>"); current=NIL_Symbol; break; }}
         if(!nullp(current) && !consp(current)){
             fprintf(out," . ");
             prin1(current, stream);}
@@ -545,13 +602,7 @@ static Ref prin1_inner(Ref object,Ref stream){
         if(plevel >= 0 && g_print_level_depth >= plevel){ fputc('#',out); return object; }
         /* A vector prints as #(e1 e2 …). Vectors are
            Array-backed under the hood, so iterate via array.elements. */
-        if(g_circle_active){
-            int idx=circle_index(object);
-            if(idx>=0){
-                int lab=g_circle[idx].label;
-                if(lab>0){ fprintf(out,"#%d#",lab); return object; }
-                if(lab==-1){ g_circle[idx].label = ++g_circle_next_label;
-                             fprintf(out,"#%d=",g_circle_next_label); }}}
+        if(circle_emit_label(object,out)){ return object; }
         word plen = current_print_length();
         if(plen == 0){ fprintf(out,"#(...)"); return object; }
         g_print_level_depth++;

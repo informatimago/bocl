@@ -57,6 +57,38 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 73) — *PRINT-CIRCLE* #n=/#n# for lists, gensyms, and arrays ==
+*PRINT-CIRCLE* output was incomplete (must-printer F382-395 — the whole circle
+cluster): (1) a circular LIST whose cycle spanned >=2 conses printed the
+unreadable " . #<circular>" instead of #n# (the Floyd backstop pre-empted the
+label); (2) a shared uninterned symbol printed (#:G #:G) not (#1=#:G #1#), so the
+repeats no longer read back EQ; (3) multidimensional arrays had NO #n=/#n# support
+at all — a self-referential or shared sub-array printed #<circular-array>.  The
+reader already handled #n=/#n# (incl. on arrays), so only the printer needed work.
+(a) FLOYD — the cons-spine cycle backstop now fires only when *PRINT-CIRCLE* is
+    OFF; when ON the labels terminate every cycle (printer.c).
+(b) GENSYM — circle_scan now also records bare uninterned symbols (gensym_p), and
+    the symbol printer emits their #n=/#n# via the shared circle_emit_label helper
+    (refactored out of the cons/vector branches).
+(c) ARRAYS — circle_scan recurses into %md-array children (via the prelude
+    ARRAY-TOTAL-SIZE / ROW-MAJOR-AREF, since md-arrays are opaque prelude structs),
+    so the array, its sub-arrays, and any gensyms/conses/vectors it holds all enter
+    the one shared label registry.  Two new kernel primitives bridge to the prelude
+    array printer: %CIRCLE-ACTIVE-P and %CIRCLE-ACTION obj (returns +N back-ref /
+    -N shared-first-visit / NIL).  %MD-ARRAY-PRINT-STRING emits the array's own #n=
+    prefix; %MD-EMIT emits #n=/#n# for sub-array elements (scalars still delegate to
+    PRIN1, which labels shared conses/vectors/gensyms in C — one consistent counter).
+    The lexical SEEN guard remains the backstop when *PRINT-CIRCLE* is off.
+Verified all of F382-395 pass (must-printer 7->2 fails, 7->1 errors; 11 forms
+fixed); round-trips checked: circular list #1=(1 2 . #1#), shared gensym in list
+and vector, #0A self-ref, #2A/#3A circular, #3A with shared gensyms.  GC-safe under
+%gc-stress 1 (the residual array-LITERAL-read crash under stress is the pre-existing
+array-reader rooting gap, present in Slice 72 too — parked until new-gc).  0
+regressions across -printer/-cons/-symbol/-data-and-control/-sequence(3851)/-array/
+-reader(1560)/-string/-character.  Remaining must-printer fails are the unrelated
+singletons F9 (*PRINT-PPRINT-DISPATCH* unbound), F207 (char readback), F229
+(symbol named FACE under *PRINT-BASE* 16).
+
 == FIXED (Slice 72) — vector/string/bit-vector printing honors the fill pointer ==
 A vector, string, or bit-vector with a fill pointer printed ALL its physical
 elements instead of the active prefix (must-printer F45/F260/F315): a

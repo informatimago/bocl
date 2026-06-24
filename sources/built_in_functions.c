@@ -2531,6 +2531,33 @@ void kernel_SET_PRINT_LEVEL_DEPTH(Ref function,Ref arguments,MultipleValues* res
     close_live_pool(pool);
 }
 
+/* (%CIRCLE-ACTIVE-P) — T while *PRINT-CIRCLE* labelling is in effect, so the
+   prelude array printer knows whether to use #n=/#n# or its lexical cycle guard. */
+void kernel_CIRCLE_ACTIVE_P(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    check_no_more_arguments(function,arguments);
+    results->count=1;
+    results->values[0] = as_boolean(printer_circle_active());
+    close_live_pool(pool);
+}
+
+/* (%CIRCLE-ACTION obj) — the *PRINT-CIRCLE* label decision for OBJ: a positive
+   integer N for a back-reference (the prelude prints "#N#"), a negative -N for a
+   shared object's first appearance (the prelude prints "#N=" then OBJ), or NIL to
+   print OBJ normally.  Mutates the label registry (assigns N) like the C printer. */
+void kernel_CIRCLE_ACTION(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref obj = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    word act = printer_circle_action(obj);
+    results->count=1;
+    results->values[0] = (act==0) ? NIL_Symbol : integer_from_word(act);
+    close_live_pool(pool);
+}
+
 void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(KERNEL-ROOTSET);
         Ref lambda_list=S(NIL);
@@ -2538,6 +2565,12 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(%SET-PRINT-LEVEL-DEPTH);
         Ref lambda_list=list(S(DEPTH),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SET_PRINT_LEVEL_DEPTH));}
+    {   Ref fname=S(%CIRCLE-ACTIVE-P);
+        Ref lambda_list=S(NIL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CIRCLE_ACTIVE_P));}
+    {   Ref fname=S(%CIRCLE-ACTION);
+        Ref lambda_list=list(S(OBJECT),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CIRCLE_ACTION));}
     {   Ref fname=S(GET-EVAL-COUNTERS);
         Ref lambda_list=S(NIL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_EVAL_COUNTERS));}

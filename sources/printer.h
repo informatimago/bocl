@@ -22,4 +22,11 @@ void kernel_FORMAT_RUN(Ref function, Ref arguments, MultipleValues* results);
    element nesting depth before delegating to PRIN1/PRINC). */
 void printer_set_level_depth(word d);
 
+/* *PRINT-CIRCLE* bridge for the prelude array printer.  printer_circle_active
+   reports whether circle printing is on; printer_circle_action returns a
+   positive N (back-reference, print "#N#"), a negative -N (shared first visit:
+   assign N, print "#N=" then the object), or 0 (print the object normally). */
+bool printer_circle_active(void);
+word printer_circle_action(Ref obj);
+
 #endif
