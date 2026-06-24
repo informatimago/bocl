@@ -57,6 +57,23 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 75) — must-character to 0/0: CHAR/= all-pairs, stable SORT, GRAPHIC-CHAR-P space ==
+First slice after merging onto master's generational-GC line (v1.2.x).  Drove
+must-character to 0/0 (was 7 fails):
+(a) CHAR/= and CHAR-NOT-EQUAL only compared ADJACENT pairs, so (char/= #\a #\b #\a)
+    wrongly returned true.  CLHS requires PAIRWISE distinctness; CHAR/= now checks
+    each char against every later one (CHAR-NOT-EQUAL defers to it on downcased
+    args, so it is fixed too).  (F14/F58/F59/F161/F162)
+(b) STABLE-SORT was not stable: %MERGE took from the RIGHT run on a tie, reversing
+    equal elements.  It now takes from the LEFT run when neither is strictly less,
+    so equal elements keep input order — (stable-sort '(#\b #\A #\B #\a #\c #\C)
+    #'char-lessp) => (#\A #\a #\b #\B #\c #\C).  (Plain SORT is now stable too,
+    which CLHS permits.)  (F32)
+(c) GRAPHIC-CHAR-P excluded #\Space (started at code 33); space is graphic, so the
+    range is now 32..126.  (F284)
+0 regressions across must-printer/-cons/-symbol/-sequence(3851)/-array/-string/
+-data-and-control, all with the new GC enabled.
+
 == FIXED (Slice 74) — must-printer to 0/0: pprint-dispatch default + two symbol-escape gaps ==
 The last three must-printer failures (F9/F207/F229), now all passing — the file
 drives 439 forms with 0 fails / 0 errors.

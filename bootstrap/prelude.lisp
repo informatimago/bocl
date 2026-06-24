@@ -869,13 +869,15 @@
 ;; -------------------------------------------------------------------- ;;
 
 (defun %merge (less a b)
-  ;; Stable merge of two ordered lists. LESS is the comparator.
+  ;; Stable merge of two ordered lists. LESS is the comparator.  On a tie
+  ;; (neither strictly less) take from A, the left run — whose elements precede
+  ;; B's in the original sequence — so equal elements keep their input order.
   (cond ((null a) b)
         ((null b) a)
-        ((funcall less (car a) (car b))
-         (cons (car a) (%merge less (cdr a) b)))
-        (t
-         (cons (car b) (%merge less a (cdr b))))))
+        ((funcall less (car b) (car a))     ; B strictly less than A: take B
+         (cons (car b) (%merge less a (cdr b))))
+        (t                                  ; A <= B: take A (stable on ties)
+         (cons (car a) (%merge less (cdr a) b)))))
 
 (defun %list-split (list)
   ;; Tortoise/hare split. For (a b) returns (values (a) (b)).
@@ -6323,8 +6325,13 @@ FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
            (apply #'char= (cdr chars)))))
 
 (defun char/= (&rest chars)
-  (or (null chars) (null (cdr chars))
-      (and (not (eql (char-code (car chars)) (char-code (cadr chars))))
+  ;; CHAR/= is true iff the characters are PAIRWISE distinct (CLHS) — every
+  ;; character must differ from EVERY other, not merely from its neighbour, so
+  ;; (char/= #\a #\b #\a) is false.  (CHAR-NOT-EQUAL defers here on downcased
+  ;; arguments, so this also gives it the correct all-pairs semantics.)
+  (or (null chars)
+      (and (every (lambda (c) (not (eql (char-code (car chars)) (char-code c))))
+                  (cdr chars))
            (apply #'char/= (cdr chars)))))
 
 (defun char< (&rest chars)
@@ -6379,9 +6386,11 @@ FROM-END the LAST of each set of duplicates is kept; with FROM-END, the FIRST."
         (and (>= c 32) (<= c 126))))) ; space..~
 
 (defun graphic-char-p (char)
-  "Return T if CHAR is a graphic (printable, non-whitespace) character."
+  "Return T if CHAR is a graphic character.  #\\Space is graphic (CLHS); the
+   non-graphic ASCII characters are the controls (< 32), DEL (127), and the
+   #\\Newline bocl stores at code 133."
   (let ((c (char-code char)))
-    (and (>= c 33) (<= c 126))))
+    (and (>= c 32) (<= c 126))))
 
 (defun print-char-p (char)
   "Synonym for GRAPHIC-CHAR-P — visible on a printed page."
