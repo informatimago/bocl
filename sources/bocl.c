@@ -569,11 +569,16 @@ static void kernel_ARRAY_DIMENSIONS(unused Ref function, Ref arguments, Multiple
     results->values[0]=dims;
     close_live_pool(pool);}
 
-/* (ARRAY-ELEMENT-TYPE array) — return T (bocl uses uniform typed arrays). */
+/* (ARRAY-ELEMENT-TYPE array) — the element type the array specialises on.  A
+   STRING holds CHARACTER and a BIT-VECTOR holds BIT; bocl's general arrays are
+   not type-specialised, so they answer T (the upgraded type of "anything"). */
 static void kernel_ARRAY_ELEMENT_TYPE(unused Ref function, Ref arguments, MultipleValues* results){
     add_to_live_pool(arguments);
+    Ref arr = consp(arguments) ? cons_car(arguments) : NIL_Symbol;
     results->count=1;
-    results->values[0]=S(T);}
+    if(stringp(arr))            { results->values[0]=S(CHARACTER); }
+    else if(bit_vector_p(arr))  { results->values[0]=S(BIT); }
+    else                        { results->values[0]=S(T); }}
 
 /* Note: INPUT-STREAM-P, OUTPUT-STREAM-P, OPEN-STREAM-P are already in
    built_in_functions.c — not duplicated here. */

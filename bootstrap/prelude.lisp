@@ -4923,7 +4923,10 @@ the class object it denotes, so two specializers compare by class identity."
     (dotimes (i (- e start) string)
       (let* ((pos (+ start i))
              (c (char string pos)))
-        (cond ((alpha-char-p c)
+        ;; A word is a maximal run of ALPHANUMERIC characters (CLHS), so digits
+        ;; stay inside a word — "foo16c" is one word, not "foo" + "c"; only the
+        ;; first character is upcased (a leading digit upcases to itself).
+        (cond ((alphanumericp c)
                (setf (char string pos)
                      (if in-word (char-downcase c) (char-upcase c)))
                (setq in-word t))
