@@ -1095,7 +1095,10 @@ static Ref read_impl_unrooted(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref
         object = parse_object(&parser);
         if(object != reader_skip_marker){ break; }
         skip_spaces(&parser);
-        if(parser.eof){
+        /* A #+/#- that skipped the LAST form leaves the EOF byte (0xFF) in
+           parser.ch without necessarily setting parser.eof; treat it as EOF so we
+           return the eof-value instead of re-parsing 0xFF into a junk symbol. */
+        if(parser.eof || parser.ch==(octet)EOF){
             if(nullp(eof_error_p)){ return eof_value; }
             END_OF_FILE(input_stream);}}
     if(parser.eof){
