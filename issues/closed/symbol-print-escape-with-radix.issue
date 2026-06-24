@@ -1,0 +1,43 @@
+== FIXED (Slice 76, v1.2.3) — already resolved by the merged symbol-escaping work ==
+This was a behaviour of the pre-merge Release-1.2.0 line, whose history branched
+(at e11aafb) BEFORE the readable symbol-name escaping slices.  Merging the
+printer/reader slice line onto master brought in symbol_name_needs_escape
+(printer.c), which escapes a name that READS AS A NUMBER in the current
+*PRINT-BASE*: token_is_number_like covers base 10 (integers, ratios, floats) and
+token_is_number_in_base covers bases /= 10.  An all-digit name is therefore
+wrapped in |…| and reads back as a symbol.  Verified on v1.2.2:
+  (prin1-to-string '|1234|)                               => "|1234|"
+  (type-of (read-from-string (prin1-to-string '|1234|)))  => SYMBOL
+  (prin1-to-string '|-5|)  => "|-5|"   (prin1-to-string '|3/4|) => "|3/4|"
+The same path also fixed must-printer F229 (FACE under *PRINT-BASE* 16).  No code
+change needed in this slice; closing as resolved by the merge.
+
+----- original report -------------------------------------------------------
+*print-escape* t
+*print-base* 10.
+*print-radix* nil
+==> symbols containing only digits need to be escaped to be readable back as symbols!
+
+
+bocl> *print-escape*
+
+T
+bocl> '|1234|
+
+1234
+bocl> (type-of (read-from-string (prin1-to-string '|1234|)))
+
+(INTEGER -9223372036854775808 9223372036854775807) ; bad
+bocl> (lisp-implementation-type)
+
+"BOCL"
+
+
+cl-user> *print-escape*
+t
+cl-user> '|1234|
+|1234|
+cl-user> (type-of (read-from-string (prin1-to-string '|1234|)))
+symbol  ; good
+cl-user> (lisp-implementation-type)
+"Clozure Common Lisp"
