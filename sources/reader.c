@@ -416,36 +416,63 @@ static Ref parse_list(parser_state* parser){
         return head;}
     return nreverse(result);}
 
-static Ref parse_vector(parser_state* parser){
+static Ref parse_vector(parser_state* parser, word size){
     Ref elements=parse_list(parser);
     if(parser->eof){
         return NIL_Symbol;}
+    /* #n(...) — a vector of length n.  Fewer elements than n is allowed: the LAST
+       element supplied fills the remaining slots (CLHS 2.4.8.3).  More than n, or
+       n>0 with no elements, is an error. */
+    if(size>=0){
+        uword count=0; Ref last=NIL_Symbol;
+        for(Ref p=elements; consp(p); p=cons_cdr(p)){ count++; last=cons_car(p); }
+        if((word)count>size){
+            READER_ERROR(parser->input_stream,"#%ld(...) has more than %ld elements",
+                         (long)size,(long)size); }
+        if((word)count<size){
+            if(count==0){
+                READER_ERROR(parser->input_stream,"#%ld(...) needs at least one element%s",
+                             (long)size,""); }
+            Ref tail=NIL_Symbol;
+            for(word i=(word)count; i<size; i++){ tail=cons(last,tail); }
+            Ref p=elements; while(consp(cons_cdr(p))){ p=cons_cdr(p); }
+            cons_rplacd(p,tail); }}
     return vector_new(elements);}
 
-static Ref parse_bit_vector(parser_state* parser){
+static Ref parse_bit_vector(parser_state* parser, word size){
     parser->length=0;
-    while(true){
+    bool done=false;
+    while(!done){
         advance_character(parser);
         check_parser_error(parser);
         if(parser->eof){
             /* EOF, we're done with the vector, postpone EOF */
             parser->eof=false;
-            return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}
-        switch(parser->ch){
-          case '0':
-          case '1':
-              check_token_too_long(parser,"Bit vector");
-              parser->token[parser->length++]=parser->ch&1;
-              break;
-          default:
-              /* A non-bit character terminates the bit run.  Leave it in
-                 parser->ch as the one-char lookahead — exactly like parse_token —
-                 and do NOT push it back: the caller (parse_list) and the
-                 top-level read already treat parser->ch as the terminating char.
-                 An ungetc here would DUPLICATE the delimiter (it would sit both
-                 in parser->ch and back in the stream), desyncing the next read
-                 and surfacing as a spurious stray ')' on the following form. */
-              return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}}}
+            done=true;
+            break;}
+        if(parser->ch=='0' || parser->ch=='1'){
+            check_token_too_long(parser,"Bit vector");
+            parser->token[parser->length++]=parser->ch&1;}
+        else{
+            /* A non-bit character terminates the bit run.  Leave it in parser->ch
+               as the one-char lookahead (do NOT push it back — the caller already
+               treats parser->ch as the terminating char). */
+            done=true;}}
+    /* #n* — a bit-vector of length n.  Fewer bits than n is allowed: the LAST bit
+       fills the rest (CLHS 2.4.8.4).  More than n, or n>0 with no bits, is an error. */
+    if(size>=0){
+        if((word)parser->length>size){
+            READER_ERROR(parser->input_stream,"#%ld* has more than %ld bits",
+                         (long)size,(long)size); }
+        if((word)parser->length<size){
+            if(parser->length==0){
+                READER_ERROR(parser->input_stream,"#%ld* needs at least one bit to fill%s",
+                             (long)size,""); }
+            octet fill=parser->token[parser->length-1];
+            while((word)parser->length<size){
+                check_token_too_long(parser,"Bit vector");
+                parser->token[parser->length++]=fill; }}}
+    return bit_vector_new_octets(CHECK_SIZE_TO_UWORD(parser->length),parser->token);}
 
 /* The value of a digit character in BASE (2..36), or -1 if it is not a digit. */
 static int digit_in_base(int c,int base){
@@ -876,8 +903,8 @@ static Ref parse_object(parser_state* parser){
                   if(parser->eof){ return NIL_Symbol; }}}
           switch(parser->ch){
             case '\\': return parse_character(parser);
-            case '(':  return parse_vector(parser);
-            case '*':  return parse_bit_vector(parser);
+            case '(':  return parse_vector(parser, disp_arg);
+            case '*':  return parse_bit_vector(parser, disp_arg);
             case 'c': case 'C': {  /* #C(re im) — complex literal */
                 advance_character(parser);   /* skip 'C'/'c' */
                 skip_spaces(parser);
