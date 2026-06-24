@@ -57,6 +57,25 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 72) — vector/string/bit-vector printing honors the fill pointer ==
+A vector, string, or bit-vector with a fill pointer printed ALL its physical
+elements instead of the active prefix (must-printer F45/F260/F315): a
+fill-pointer-3 vector of 0..9 printed #(0 1 2 3 4 5 6 7 8 9) not #(0 1 2); a
+char array "abcdefghij" with FP 3 PRINC'd "abcdefghij" not "abc"; a bit array
+with FP 2 printed #*0101010101 not #*01.  The six PRIN1/PRINC element loops
+(printer.c) iterated over *_length()/string_cstring, which all return
+dimensions[0] (the physical size).  Added printed_length(v,physical): the fill
+pointer (active length) when V has one (array_has_fill_pointer / array_fill_
+pointer), else physical — and routed every loop through it.  The string paths
+also switched from string_cstring (NUL-terminated physical copy) to string_octets
+indexed by printed_length.  Honoring the fill pointer is correct even under
+*PRINT-READABLY* (#(0 1 2) reads back as the active contents).  Verified F45/
+F260/F315 pass; non-fill-pointer strings/vectors/bit-vectors, \" \\ escaping, and
+VECTOR-PUSH'd vectors unchanged.  must-printer 10->7 fails (errors 7 unchanged);
+0 regressions across -printer/-array/-string(same 3)/-sequence(3851)/-cons/-reader.
+Remaining must-printer fails are unrelated: array :CIRCLE gensym sharing
+(F382-395) and F9/F207/F229 (pprint-dispatch, char readback, symbol-in-base-16).
+
 == FIXED (Slice 71) — bignum ratios: reader, normalisation, arithmetic, comparison, EQL ==
 A RATIO whose numerator or denominator overflowed a word was silently truncated, so
 literals like 2/1234567890987654321234567890987654321 read back mod 2^64 and printed

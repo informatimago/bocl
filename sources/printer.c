@@ -118,6 +118,18 @@ static bool print_array_off(void){
     return nullp(variable_value(S(*PRINT-ARRAY*)));
 }
 
+/* The number of elements to print for a vector/string/bit-vector: its fill
+   pointer (active length) when it has one, else PHYSICAL.  Printing a vector
+   prints its elements up to LENGTH, which honors the fill pointer (CLHS:
+   FILL-POINTER makes the active prefix the sequence).  This applies even under
+   *PRINT-READABLY* — #(0 1 2) for a fill-pointer-3 vector reads back faithfully
+   as its active contents. */
+static uword printed_length(Ref v, uword physical){
+    if(array_has_fill_pointer(v)){
+        return (uword)integer_value(array_fill_pointer(v)); }
+    return physical;
+}
+
 /* Set the *PRINT-LEVEL* depth counter from Lisp.  The aggregate #nA(…) array
    printer (%MD-EMIT, in the prelude) delegates each element to the kernel
    PRIN1/PRINC, which read this counter to decide *PRINT-LEVEL* abbreviation;
@@ -499,14 +511,14 @@ static Ref prin1_inner(Ref object,Ref stream){
         return object;}
 
     if(stringp(object)){
-        char* p=string_cstring(object);
+        octet* p=string_octets(object);
+        uword n=printed_length(object,string_length(object));   /* honor fill pointer */
         fprintf(out,"\"");
-        while(*p){
-            switch(*p){
+        for(uword i=0;i<n;i++){
+            switch(p[i]){
               case '\\': fprintf(out,"\\\\"); break;
               case '"': fprintf(out,"\\\""); break;
-              default: fprintf(out,"%c",*p); break;}
-            p++;}
+              default: fprintf(out,"%c",(char)p[i]); break;}}
         fprintf(out,"\"");
         return object;}
 
@@ -516,7 +528,7 @@ static Ref prin1_inner(Ref object,Ref stream){
             fprintf(out,"#<"); prin1(class_name(class_of(object)),stream);
             fprintf(out," %p>",(void*)object); return object; }
         fprintf(out,"#*");
-        uword blen = bit_vector_length(object);
+        uword blen = printed_length(object, bit_vector_length(object));   /* honor fill pointer */
         for(uword i=0; i<blen; i++){
             /* Use the safe bit() accessor which handles all layout details. */
             Ref bval = bit(object, integer_from_word((word)i));
@@ -544,7 +556,7 @@ static Ref prin1_inner(Ref object,Ref stream){
         if(plen == 0){ fprintf(out,"#(...)"); return object; }
         g_print_level_depth++;
         fprintf(out,"#(");
-        uword len = vector_length(object);
+        uword len = printed_length(object, vector_length(object));   /* honor fill pointer */
         for(uword i=0; i<len; i++){
             if(i>0){ fprintf(out," "); }
             if(plen >= 0 && (word)i >= plen){ fprintf(out,"..."); break; }
@@ -644,8 +656,9 @@ Ref princ(Ref object,Ref stream){
         return object;}
 
     if(stringp(object)){
-        char* p=string_cstring(object);
-        fprintf(out,"%s",p);
+        octet* p=string_octets(object);
+        uword n=printed_length(object,string_length(object));   /* honor fill pointer */
+        for(uword i=0;i<n;i++){ fprintf(out,"%c",(char)p[i]); }
         return object;}
 
     if(consp(object)){
@@ -680,7 +693,7 @@ Ref princ(Ref object,Ref stream){
             fprintf(out,"#<"); princ(class_name(class_of(object)),stream);
             fprintf(out," %p>",(void*)object); return object; }
         fprintf(out,"#*");
-        uword blen = bit_vector_length(object);
+        uword blen = printed_length(object, bit_vector_length(object));   /* honor fill pointer */
         for(uword i=0; i<blen; i++){
             fprintf(out,"%ld",(long)integer_value(bit(object,integer_from_word((word)i))));}
         return object;}
@@ -695,7 +708,7 @@ Ref princ(Ref object,Ref stream){
         if(plen == 0){ fprintf(out,"#(...)"); return object; }
         g_print_level_depth++;
         fprintf(out,"#(");
-        uword len = vector_length(object);
+        uword len = printed_length(object, vector_length(object));   /* honor fill pointer */
         for(uword i=0; i<len; i++){
             if(i>0){ fprintf(out," "); }
             if(plen >= 0 && (word)i >= plen){ fprintf(out,"..."); break; }
