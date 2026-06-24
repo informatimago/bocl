@@ -1392,7 +1392,10 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     UWCLEANUP{
                     }}
                 if(frame.parameters.tagbody.target_tag==NULL){
-                    PASS_VALUES();}
+                    /* TAGBODY always returns NIL (CLHS), never the value of its
+                       last evaluated form — so e.g. (do (...) (test) body) with no
+                       result forms yields NIL, not the end-test value. */
+                    VALUES1(NIL_Symbol);}
                 body=assq(frame.parameters.tagbody.target_tag,frame.parameters.tagbody.tags);
                 if(!body){
                     ERROR("No catch for tag %p",(void*)frame.parameters.tagbody.target_tag);}}}

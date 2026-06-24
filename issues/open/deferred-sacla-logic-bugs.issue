@@ -57,6 +57,17 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 78) — TAGBODY returns NIL (must-do to 0/0, -data-and-control 15->11) ==
+TAGBODY (eval.c) returned the value of its LAST evaluated form when it fell off the
+end after a GO, instead of NIL as CLHS mandates — so (tagbody (if t (go end)) end)
+=> T.  This surfaced through DO/DO*: a (do (vars) (end-test) body) with NO result
+forms expands to (block nil (let (...) (tagbody ...))), whose value is the
+tagbody's; bocl returned the end-test value (T) rather than NIL, so every
+(null (do ...)) idiom failed (must-do F62-74).  The normal-exit arm now does
+VALUES1(NIL_Symbol) instead of PASS_VALUES().  must-do 10->0; must-data-and-control
+15->11 (4 do/tagbody-based forms); 0 regressions across must-loop(852)/-sequence
+(3851)/-cons/-printer/-reader/-symbol/-array/-character/-string/-hash-table.
+
 == FIXED (Slice 77) — must-string to 0/0: NSTRING-CAPITALIZE word rule + ARRAY-ELEMENT-TYPE ==
 (a) NSTRING-CAPITALIZE used alpha-char-p to detect word constituents, so a digit
     ended the word and the next letter was re-capitalised: "foo16c" -> "Foo16C",
