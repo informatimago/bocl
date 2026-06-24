@@ -5992,6 +5992,15 @@ SUBTYPEP round-trips)."
   (setf (get symbol '$macro) fn)
   fn)
 
+;;; CLHS defines LAMBDA as a macro: (lambda lambda-list . body) expands to
+;;; (function (lambda lambda-list . body)).  The evaluator handles (lambda ...)
+;;; as a special form directly (eval.c), so this registration does not change
+;;; evaluation — it just makes MACRO-FUNCTION / MACROEXPAND see LAMBDA as the
+;;; macro it is (a bocl macro function receives the form's arguments).
+(set-symbol-macro-function 'lambda
+  (lambda (&rest lambda-list-and-body)
+    (list 'function (cons 'lambda lambda-list-and-body))))
+
 ;;; SPECIAL-OPERATOR-P — kernel special forms.
 (defun special-operator-p (symbol)
   "Return T if SYMBOL names a special operator."

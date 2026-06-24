@@ -57,6 +57,15 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 79) — LAMBDA registered as a macro (must-eval to 0/0) ==
+(macro-function 'lambda) returned NIL, so (functionp (macro-function 'lambda))
+failed (must-eval F3).  CLHS defines LAMBDA as a macro expanding (lambda ll . body)
+to (function (lambda ll . body)).  bocl's evaluator handles (lambda ...) as a
+special form directly, so LAMBDA was never registered as a macro.  Added a macro
+function on LAMBDA's plist (set-symbol-macro-function) that returns that expansion;
+evaluation is unchanged (the special-form path still wins), only MACRO-FUNCTION /
+MACROEXPAND now see LAMBDA as a macro.  must-eval 1->0; 0 regressions.
+
 == FIXED (Slice 78) — TAGBODY returns NIL (must-do to 0/0, -data-and-control 15->11) ==
 TAGBODY (eval.c) returned the value of its LAST evaluated form when it fell off the
 end after a GO, instead of NIL as CLHS mandates — so (tagbody (if t (go end)) end)
