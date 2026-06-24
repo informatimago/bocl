@@ -57,6 +57,23 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 82) — must-data-and-control 26->12: empty PROGN + ECASE/MVB/FDEFINITION ==
+Four independent fixes (data-and-control 11 fails/15 errors -> 4/8):
+(a) empty (PROGN) returned the PREVIOUS evaluation's value instead of NIL (eval.c)
+    — like the TAGBODY bug — so (when test) with no body, and any macro expanding
+    to an empty progn, returned non-NIL.  Now seeds results to NIL.  (F81)
+(b) ECASE / ETYPECASE signalled a plain SIMPLE-ERROR on no match; CLHS requires a
+    TYPE-ERROR.  They now (error 'type-error :datum key :expected-type '(member …))
+    / '(or …).  (F121-123, F157-158, F162)
+(c) MULTIPLE-VALUE-BIND expanded to (lambda (&optional . vars) …), so more values
+    than vars ("too many arguments") or an empty VARS list errored.  Added a
+    trailing &rest to absorb/ignore extra values.  This also fixed MULTIPLE-VALUE-
+    SETQ, which builds on it.  (F166, F169-172, F192, F194)
+(d) (setf (fdefinition name) fn) had no setf-expander; added one.  (F288)
+0 regressions across all 12 other must-* files.  Remaining data-and-control (12)
+are advanced SETF: (setf (values …) …), PSETF, SHIFTF/ROTATEF with (values) places
+and evaluation-order checks — these need the full GET-SETF-EXPANSION protocol.
+
 == FIXED (Slice 81) — FORMAT ~R spelled-out integers (must-hash-table F67) ==
 ~R with no radix prefix printed digits instead of words.  Implemented (printer.c):
 ~R English cardinal ("fifty-seven", "one million two hundred thirty-four thousand

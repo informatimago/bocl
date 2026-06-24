@@ -575,6 +575,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
 
         if(operator==PROGN_Symbol){
             eval_counters.PROGN++;
+            /* An empty (progn) returns NIL (CLHS); seed results so it does not
+               pass through whatever the previous evaluation happened to leave. */
+            results->count=1; results->values[0]=NIL_Symbol;
             {dolist(subform,arguments){
                     evale(subform,environment,results);}}
              PASS_VALUES();}

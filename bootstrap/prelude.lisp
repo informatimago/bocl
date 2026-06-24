@@ -139,6 +139,7 @@
                  `(sethash ,k ,h ,val)))))
 (define-setf-expander symbol-value   (s)            (val) `(set-symbol-value ,val ,s))
 (define-setf-expander symbol-function (s)           (val) `(set-symbol-function ,val ,s))
+(define-setf-expander fdefinition    (name)         (val) `(set-symbol-function ,val ,name))
 (define-setf-expander symbol-plist   (s)            (val) `(set-symbol-plist ,val ,s))
 (define-setf-expander svref          (vec idx)      (val) `(svref-set ,vec ,idx ,val))
 (define-setf-expander bit            (vec idx)      (val) `(bit-set ,vec ,idx ,val))
@@ -360,8 +361,11 @@
             clauses)))))
 
 (defmacro ecase (keyform &rest clauses)
-  ;; Like CASE but signals if no clause matches; no OTHERWISE/T allowed.
-  (let ((tmp (gensym "ECASE-")))
+  ;; Like CASE but signals a TYPE-ERROR if no clause matches; no OTHERWISE/T.
+  (let ((tmp (gensym "ECASE-"))
+        (all-keys (apply #'append
+                         (mapcar (lambda (c) (if (listp (car c)) (car c) (list (car c))))
+                                 clauses))))
     `(let ((,tmp ,keyform))
        (cond
          ,@(mapcar
@@ -373,7 +377,8 @@
                       ,@body)
                     `((eql ,tmp ',keys) ,@body))))
             clauses)
-         (t (error "ECASE: no matching clause"))))))
+         (t (error 'type-error :datum ,tmp
+                   :expected-type '(member ,@all-keys)))))))
 
 (defmacro typecase (keyform &rest clauses)
   (let ((tmp (gensym "TYPECASE-")))
@@ -397,17 +402,24 @@
             (lambda (clause)
               `((typep ,tmp ',(car clause)) ,@(cdr clause)))
             clauses)
-         (t (error "ETYPECASE: no matching type clause"))))))
+         (t (error 'type-error :datum ,tmp
+                   :expected-type '(or ,@(mapcar #'car clauses))))))))
 
 ;; -------------------------------------------------------------------- ;;
 ;;  Multiple values.                                                     ;;
 ;; -------------------------------------------------------------------- ;;
 
 (defmacro multiple-value-bind (vars value-form &body body)
-  ;; (multiple-value-bind (a b c) form body...) — bind a, b, c to the
-  ;; first three values of `form`. Missing values bind to NIL via
-  ;; &optional defaulting.
-  `(multiple-value-call (lambda (&optional ,@vars) ,@body) ,value-form))
+  ;; (multiple-value-bind (a b c) form body...) — bind a, b, c to the first three
+  ;; values of `form`.  Missing values bind to NIL (&optional); EXTRA values are
+  ;; discarded by the trailing &rest (CLHS), so more values than vars is not an
+  ;; error and an empty VARS list is fine.
+  (let ((rest (gensym "MVB-REST-")))
+    `(multiple-value-call
+         (lambda (&optional ,@vars &rest ,rest)
+           (declare (ignore ,rest))
+           ,@body)
+       ,value-form)))
 
 (defmacro multiple-value-list (form)
   `(multiple-value-call #'list ,form))
