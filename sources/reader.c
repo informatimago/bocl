@@ -296,6 +296,11 @@ static Ref backquote_expand(Ref form){
     Ref parts = NIL_Symbol;
     Ref tail = form;
     while(consp(tail)){
+        /* A leading UNQUOTE / UNQUOTE-SPLICING *symbol* in the tail means the
+           source had a dotted `. ,x` (the reader folded `(a . ,x)` into the
+           proper list `(a unquote x)`): stop and treat the rest as the dotted
+           tail.  A normal `,x` element is a CONS (unquote x), not the symbol. */
+        if(car(tail)==S(UNQUOTE) || car(tail)==S(UNQUOTE-SPLICING)){ break; }
         push(backquote_element(car(tail)), &parts);
         tail = cdr(tail);}
     parts = nreverse(parts);
