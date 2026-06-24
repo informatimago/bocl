@@ -7,6 +7,11 @@
 extern Ref Object_new(Ref class, Slots* slots);
 extern Array* Array_slots(Ref element_type, halfword rank, halfword* dimensions);
 
+/* Forward declarations so EQUALP can compare two hash tables (defined below). */
+typedef bool (*test_fn)(Ref, Ref);
+static Ref     canonical_test_symbol(Ref test);
+static test_fn resolve_test(Ref test_symbol);
+
 /* ------------------------------------------------------------------ */
 /*  EQ + EQUALP                                                         */
 /*                                                                       */
@@ -44,14 +49,32 @@ bool equalp(Ref a, Ref b){
     /* Conses: element-wise EQUALP. */
     if(consp(a) && consp(b)){
         return equalp(car(a), car(b)) && equalp(cdr(a), cdr(b));}
+    /* Hash tables: same :TEST, same count, and every entry of A has a key in B
+       (matched under the table's test) whose value is EQUALP (CLHS 3.2.2.3). */
+    if(typep(a, HASH_TABLE_Class) && typep(b, HASH_TABLE_Class)){
+        HashTable* ha = &a->slots->hash_table;
+        HashTable* hb = &b->slots->hash_table;
+        if(canonical_test_symbol(ha->test) != canonical_test_symbol(hb->test)){ return false; }
+        if(integer_value(ha->count) != integer_value(hb->count)){ return false; }
+        test_fn keytest = resolve_test(canonical_test_symbol(ha->test));
+        for(Ref e = ha->entries; consp(e); e = cons_cdr(e)){
+            Ref pair = cons_car(e);
+            Ref key  = cons_car(pair);
+            Ref val  = cons_cdr(pair);
+            bool found = false;
+            for(Ref f = hb->entries; consp(f); f = cons_cdr(f)){
+                Ref bp = cons_car(f);
+                if(keytest(key, cons_car(bp))){
+                    if(!equalp(val, cons_cdr(bp))){ return false; }
+                    found = true; break; }}
+            if(!found){ return false; }}
+        return true;}
     /* Fall back to EQUAL semantics for anything else. */
     return equal(a, b);}
 
 /* ------------------------------------------------------------------ */
 /*  Comparator dispatch                                                  */
 /* ------------------------------------------------------------------ */
-
-typedef bool (*test_fn)(Ref, Ref);
 
 /* Normalise a hash-table :TEST designator to its canonical symbol.  CL allows
    either a symbol (EQ/EQL/EQUAL/EQUALP) or the corresponding function object

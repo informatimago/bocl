@@ -127,7 +127,16 @@
 (define-setf-expander cddr           (cell)         (val) `(rplacd (cdr ,cell) ,val))
 (define-setf-expander caddr          (cell)         (val) `(rplaca (cddr ,cell) ,val))
 (define-setf-expander cadddr         (cell)         (val) `(rplaca (cdddr ,cell) ,val))
-(define-setf-expander gethash        (k h)          (val) `(sethash ,k ,h ,val))
+;; GETHASH may carry an optional DEFAULT in the place: (setf (gethash k h d) v).
+;; SETF appends the new value last, so this expander is called with (k h v) or
+;; (k h default v); a supplied default is evaluated (kept in the expansion for its
+;; side effects / evaluation order) but not stored.
+(sethash 'gethash *setf-expanders*
+         (lambda (k h &rest more)
+           (let ((val (car (last more))))
+             (if (cdr more)
+                 `(sethash ,k ,h (progn ,(car more) ,val))
+                 `(sethash ,k ,h ,val)))))
 (define-setf-expander symbol-value   (s)            (val) `(set-symbol-value ,val ,s))
 (define-setf-expander symbol-function (s)           (val) `(set-symbol-function ,val ,s))
 (define-setf-expander symbol-plist   (s)            (val) `(set-symbol-plist ,val ,s))

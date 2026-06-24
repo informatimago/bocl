@@ -57,6 +57,21 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== PARTIAL (Slice 80) — must-hash-table 5->3: SETF GETHASH default arg + EQUALP hash tables ==
+(a) (setf (gethash k h DEFAULT) v) signalled "too many arguments": the GETHASH
+    setf-expander took only (k h).  SETF appends the value last, so the expander
+    now takes (k h &rest more) — the value is (last more), and a supplied default
+    is kept in the expansion (evaluated for effect, not stored).  (F49)
+(b) EQUALP returned NIL for two hash tables (it fell through to EQUAL = identity).
+    EQUALP (hash_table.c) now compares two hash tables per CLHS 3.2.2.3: same
+    :TEST, same COUNT, and every entry of A has a key in B (matched under the
+    table's test) whose value is EQUALP.  (F94)
+Still open: F53 (SETF GETHASH evaluation order) is blocked on the general
+SETF-eval-order limitation (bocl evaluates the new value before the place
+subforms — same root as must-symbol F98); F58 (WITH-HASH-TABLE-ITERATOR exposing
+its iterator as a local macro visible to MACRO-FUNCTION + &environment); F67
+(FORMAT ~R English cardinals).  must-hash-table 5->3 fails, 2->0 errors.
+
 == FIXED (Slice 79) — LAMBDA registered as a macro (must-eval to 0/0) ==
 (macro-function 'lambda) returned NIL, so (functionp (macro-function 'lambda))
 failed (must-eval F3).  CLHS defines LAMBDA as a macro expanding (lambda ll . body)
