@@ -57,6 +57,15 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 81) — FORMAT ~R spelled-out integers (must-hash-table F67) ==
+~R with no radix prefix printed digits instead of words.  Implemented (printer.c):
+~R English cardinal ("fifty-seven", "one million two hundred thirty-four thousand
+five hundred sixty-seven", "negative forty-two", up to quintillions); ~:R ordinal
+("fifty-seventh", "twenty-first", "fortieth", "first"); ~@R Roman numeral
+(1984 => MCMLXXXIV, 1..3999, else decimal).  ~nR radix output is unchanged.
+must-hash-table 3->2.  Remaining: F53 (SETF eval order) and F58 (iterator macro
++ environment).
+
 == PARTIAL (Slice 80) — must-hash-table 5->3: SETF GETHASH default arg + EQUALP hash tables ==
 (a) (setf (gethash k h DEFAULT) v) signalled "too many arguments": the GETHASH
     setf-expander took only (k h).  SETF appends the value last, so the expander

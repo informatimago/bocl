@@ -887,6 +887,65 @@ static void fmt_write_integer(FILE* out, word n, int radix, bool atsignp){
     else if(atsignp) fputc('+',out);
     for(int i=len-1;i>=0;i--) fputc((unsigned char)tmp[i],out);}
 
+/* --- FORMAT ~R spelled-out integers: English cardinal / ordinal, Roman ------ */
+static const char* const fmt_card_ones[20] = {
+    "zero","one","two","three","four","five","six","seven","eight","nine","ten",
+    "eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen",
+    "eighteen","nineteen"};
+static const char* const fmt_card_tens[10] = {
+    "","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"};
+static const char* const fmt_card_scales[7] = {
+    "","thousand","million","billion","trillion","quadrillion","quintillion"};
+
+/* Spell 1..999 into BUF, no leading/trailing space. */
+static void fmt_spell_group(char* buf, int n){
+    buf[0]='\0';
+    if(n>=100){ strcat(buf,fmt_card_ones[n/100]); strcat(buf," hundred"); n%=100;
+                if(n>0){ strcat(buf," "); } }
+    if(n>0){
+        if(n<20){ strcat(buf,fmt_card_ones[n]); }
+        else { strcat(buf,fmt_card_tens[n/10]);
+               if(n%10){ strcat(buf,"-"); strcat(buf,fmt_card_ones[n%10]); } } }}
+
+/* Spell N as an English cardinal into BUF (>=512), e.g. 57 -> "fifty-seven". */
+static void fmt_spell_cardinal(char* buf, word n){
+    buf[0]='\0';
+    if(n==0){ strcpy(buf,"zero"); return; }
+    bool neg=(n<0);
+    uword u = neg ? (uword)(-(n+1))+1u : (uword)n;   /* |n|, safe at WORD_MIN */
+    int groups[7]; int ng=0;
+    while(u>0 && ng<7){ groups[ng++]=(int)(u%1000); u/=1000; }
+    if(neg){ strcat(buf,"negative "); }
+    bool wrote=false;
+    for(int g=ng-1; g>=0; g--){
+        if(groups[g]==0){ continue; }
+        if(wrote){ strcat(buf," "); }
+        char gb[64]; fmt_spell_group(gb,groups[g]); strcat(buf,gb);
+        if(g>0){ strcat(buf," "); strcat(buf,fmt_card_scales[g]); }
+        wrote=true; }}
+
+/* Convert the cardinal in BUF (>=512) to its English ordinal in place. */
+static void fmt_to_ordinal(char* buf){
+    int len=(int)strlen(buf), s=len;
+    while(s>0 && buf[s-1]!=' ' && buf[s-1]!='-'){ s--; }
+    char* w=buf+s;                                  /* the last word */
+    static const char* const from[]={"one","two","three","five","eight","nine","twelve",NULL};
+    static const char* const to[]  ={"first","second","third","fifth","eighth","ninth","twelfth"};
+    for(int i=0; from[i]; i++){
+        if(strcmp(w,from[i])==0){ strcpy(w,to[i]); return; } }
+    int wl=(int)strlen(w);
+    if(wl>0 && w[wl-1]=='y'){ strcpy(w+wl-1,"ieth"); return; }   /* twenty -> twentieth */
+    strcat(w,"th"); }
+
+/* Spell N (1..3999) as a Roman numeral into BUF; out-of-range falls back to decimal. */
+static void fmt_spell_roman(char* buf, word n){
+    buf[0]='\0';
+    if(n<1 || n>3999){ snprintf(buf,512,"%ld",(long)n); return; }
+    static const int vals[13]={1000,900,500,400,100,90,50,40,10,9,5,4,1};
+    static const char* const syms[13]={"M","CM","D","CD","C","XC","L","XL","X","IX","V","IV","I"};
+    int x=(int)n;
+    for(int i=0;i<13;i++){ while(x>=vals[i]){ strcat(buf,syms[i]); x-=vals[i]; } }}
+
 /* Scan CTRL[POS..END) for the `~}` that closes the `~{` we just entered.
    Returns the index of the `~` in `~}`, or (uword)-1 if not found.
    Handles nesting. */
@@ -1028,10 +1087,22 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               break;}
           case 'R': {
               Ref arg=fmt_pop(args_ptr);
-              int radix=has_pfx ? (int)prefix : 10;
-              if(radix<2) radix=2; if(radix>36) radix=36;
-              if(integerp(arg)) fmt_write_integer(out,integer_value(arg),radix,atsignp);
-              else              princ(arg,stream);
+              if(has_pfx){
+                  /* ~nR — print in radix n. */
+                  int radix=(int)prefix;
+                  if(radix<2) radix=2; if(radix>36) radix=36;
+                  if(integerp(arg)) fmt_write_integer(out,integer_value(arg),radix,atsignp);
+                  else              princ(arg,stream);
+              } else if(integerp(arg)){
+                  /* No radix: ~R cardinal, ~:R ordinal, ~@R Roman (CLHS 22.3.2.1). */
+                  char rb[512];
+                  if(atsignp){ fmt_spell_roman(rb,integer_value(arg)); }
+                  else { fmt_spell_cardinal(rb,integer_value(arg));
+                         if(colonp){ fmt_to_ordinal(rb); } }
+                  fputs(rb,out);
+              } else {
+                  princ(arg,stream);
+              }
               break;}
           case 'C': {
               Ref ch=fmt_pop(args_ptr);
