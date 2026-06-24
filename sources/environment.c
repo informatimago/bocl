@@ -106,6 +106,7 @@ Ref environment_add_variable(Ref variable, Ref environment){
     add_to_live_pool(variable);
     check_class(environment,ENVIRONMENT_Class);
     push(variable,&environment->slots->environment.variables);
+    gc_write_barrier(environment->slots);   /* the var-list head lives in the env slots block */
     close_live_pool(pool);
     return environment;}
 
@@ -115,6 +116,7 @@ Ref environment_add_function(Ref function, Ref environment){
     add_to_live_pool(function);
     check_class(environment,ENVIRONMENT_Class);
     push(function,&environment->slots->environment.functions);
+    gc_write_barrier(environment->slots);
     close_live_pool(pool);
     return environment;}
 
@@ -124,6 +126,7 @@ Ref environment_add_block(Ref name, Ref environment){
     add_to_live_pool(name);
     check_class(environment,ENVIRONMENT_Class);
     push(name,&environment->slots->environment.blocks);
+    gc_write_barrier(environment->slots);
     close_live_pool(pool);
     return environment;}
 
@@ -133,6 +136,7 @@ Ref environment_add_catch(Ref tag, Ref environment){
     add_to_live_pool(tag);
     check_class(environment,ENVIRONMENT_Class);
     push(tag,&environment->slots->environment.catchs);
+    gc_write_barrier(environment->slots);
     close_live_pool(pool);
     return environment;}
 
@@ -142,6 +146,7 @@ Ref environment_add_declaration(Ref declaration, Ref environment){
     add_to_live_pool(declaration);
     check_class(environment,ENVIRONMENT_Class);
     push(declaration,&environment->slots->environment.declarations);
+    gc_write_barrier(environment->slots);
     close_live_pool(pool);
     return environment;}
 

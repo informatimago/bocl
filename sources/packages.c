@@ -33,7 +33,15 @@ static Package* Package_slots(Ref name, Ref nicknames){
     return that;}
 
 static Ref make_package(Ref name, Ref nicknames){
-    return Object_new(PACKAGE_Class, (Slots*)Package_slots(name, nicknames));}
+    /* Package_slots/Object_new allocate (the struct, two obarrays, the wrapper)
+       while NAME and NICKNAMES are only C arguments — unrooted, so a GC during
+       those allocations would free them before they are linked into the package.
+       Root them across the build. */
+    uword pool = open_live_pool();
+    add_to_live_pool(name); add_to_live_pool(nicknames);
+    Ref r = Object_new(PACKAGE_Class, (Slots*)Package_slots(name, nicknames));
+    close_live_pool(pool);
+    return r;}
 
 /* Prepend a (name . pkg) entry to the package registry.  all_packages is a
    permanent sentinel cons (see kernel_initialize_packages): its identity never
@@ -42,8 +50,16 @@ static Ref make_package(Ref name, Ref nicknames){
    alive through GC — without it, FIND-PACKAGE / LIST-ALL-PACKAGES lose every
    package the first time the collector runs. */
 static void registry_add(Ref name, Ref pkg){
+    /* cons() does not root its arguments (it is too hot), so protect NAME/PKG
+       across the first cons and the fresh PAIR across the second — otherwise a GC
+       fired by either allocation frees the not-yet-linked cell, leaving a dangling
+       (name . pkg) entry in all_packages that FIND-PACKAGE later dereferences. */
+    uword pool = open_live_pool();
+    add_to_live_pool(name); add_to_live_pool(pkg);
     Ref pair = cons(name, pkg);
-    rplacd(all_packages, cons(pair, cons_cdr(all_packages)));}
+    add_to_live_pool(pair);
+    rplacd(all_packages, cons(pair, cons_cdr(all_packages)));
+    close_live_pool(pool);}
 
 Ref package_new(const char* name, const char* const* nicknames){
     Ref nn = NIL_Symbol;
@@ -258,7 +274,12 @@ static void kernel_MAKE_PACKAGE(Ref function, Ref arguments, MultipleValues* res
         push(string_designator_name(cons_car(it)), &clean_nn);
         it = cons_cdr(it);}
     clean_nn = nreverse(clean_nn);
+    /* NAME and the freshly-built CLEAN_NN list must survive make_package and the
+       registry_add loop below, all of which allocate; neither is reachable from a
+       root otherwise (CLEAN_NN is fresh; NAME may be a fresh coerced string). */
+    add_to_live_pool(name); add_to_live_pool(clean_nn);
     Ref pkg = make_package(name, clean_nn);
+    add_to_live_pool(pkg);
     registry_add(name, pkg);
     it = clean_nn;
     while(consp(it)){
@@ -271,7 +292,9 @@ static void kernel_MAKE_PACKAGE(Ref function, Ref arguments, MultipleValues* res
         if(nullp(u)){ ERROR("MAKE-PACKAGE: unknown package in :use %s",
                             string_cstring(prin1_to_string(cons_car(it)))); }
         pkg->slots->package.used = cons(u, pkg->slots->package.used);
+        gc_write_barrier(pkg->slots);
         u->slots->package.used_by = cons(pkg, u->slots->package.used_by);
+        gc_write_barrier(u->slots);
         it = cons_cdr(it);}
     results->count = 1;
     results->values[0] = pkg;
@@ -284,7 +307,9 @@ static void use_one_package(Ref to_use_des, Ref in_pkg){
                              string_cstring(prin1_to_string(to_use_des))); }
     if(nullp(memq(to_use, in_pkg->slots->package.used))){
         in_pkg->slots->package.used = cons(to_use, in_pkg->slots->package.used);
-        to_use->slots->package.used_by = cons(in_pkg, to_use->slots->package.used_by);}}
+        gc_write_barrier(in_pkg->slots);
+        to_use->slots->package.used_by = cons(in_pkg, to_use->slots->package.used_by);
+        gc_write_barrier(to_use->slots);}}
 
 static void kernel_USE_PACKAGE(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
@@ -506,6 +531,7 @@ static void kp_PKG_UNINTERN(Ref function, Ref arguments, MultipleValues* results
     bool removed = obarray_remove_symbol(pkg->slots->package.present, sym);
     obarray_remove_symbol(pkg->slots->package.external, sym);
     pkg->slots->package.shadowing = delete(sym, pkg->slots->package.shadowing);
+    gc_write_barrier(pkg->slots);
     results->count=1; results->values[0]=as_boolean(removed); close_live_pool(pool);}
 
 /* (%PKG-UNEXPORT symbol package) — remove symbol from the external table. */
@@ -520,7 +546,8 @@ static void kp_PKG_SHADOW_ADD(Ref function, Ref arguments, MultipleValues* resul
     uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments, sym, pkg; pop_sym_pkg(function,&current,&sym,&pkg);
     if(nullp(memq(sym, pkg->slots->package.shadowing))){
-        pkg->slots->package.shadowing = cons(sym, pkg->slots->package.shadowing);}
+        pkg->slots->package.shadowing = cons(sym, pkg->slots->package.shadowing);
+        gc_write_barrier(pkg->slots);}
     results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
 
 static void kp_PKG_SHADOWING_SYMBOLS(Ref function, Ref arguments, MultipleValues* results){
@@ -548,7 +575,9 @@ static void kp_PKG_UNUSE(Ref function, Ref arguments, MultipleValues* results){
     Ref used=package_find(used_des), pkg=package_find(pkg_des);
     if(nullp(used)||nullp(pkg)){ ERROR("UNUSE-PACKAGE: no such package%s",""); }
     pkg->slots->package.used     = delete(used, pkg->slots->package.used);
+    gc_write_barrier(pkg->slots);
     used->slots->package.used_by = delete(pkg,  used->slots->package.used_by);
+    gc_write_barrier(used->slots);
     results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
 
 /* (%PKG-RENAME package new-name nicknames) — update name + nicknames + registry. */
@@ -569,6 +598,7 @@ static void kp_PKG_RENAME(Ref function, Ref arguments, MultipleValues* results){
     rplacd(all_packages, nreverse(kept));
     pkg->slots->package.name=new_name;
     pkg->slots->package.nicknames=nicknames;
+    gc_write_barrier(pkg->slots);
     registry_add(new_name, pkg);
     it=nicknames; while(consp(it)){ Ref n=cons_car(it);
         if(symbolp(n)){ n=symbol_name(n); } registry_add(n,pkg); it=cons_cdr(it); }
@@ -585,13 +615,15 @@ static void kp_PKG_DELETE(Ref function, Ref arguments, MultipleValues* results){
     /* Drop this package from every package it uses (their used-by lists). */
     Ref u=pkg->slots->package.used;
     while(consp(u)){ Ref used=cons_car(u);
-        used->slots->package.used_by=delete(pkg,used->slots->package.used_by); u=cons_cdr(u); }
+        used->slots->package.used_by=delete(pkg,used->slots->package.used_by);
+        gc_write_barrier(used->slots); u=cons_cdr(u); }
     pkg->slots->package.present=make_obarray();
     pkg->slots->package.external=make_obarray();
     pkg->slots->package.shadowing=NIL_Symbol;
     pkg->slots->package.used=NIL_Symbol;
     pkg->slots->package.used_by=NIL_Symbol;
     pkg->slots->package.name=NIL_Symbol;     /* deleted package: name is NIL */
+    gc_write_barrier(pkg->slots);
     results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
 
 static void register_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
@@ -617,19 +649,24 @@ void kernel_initialize_packages(void){
        tables both ARE that obarray. */
     {   extern Ref KERNEL_obarray; extern Ref KEYWORD_obarray;
         COMMON_LISP_Package->slots->package.present = KERNEL_obarray;
+        gc_write_barrier(COMMON_LISP_Package->slots);
         KEYWORD_Package->slots->package.present  = KEYWORD_obarray;
-        KEYWORD_Package->slots->package.external = KEYWORD_obarray;}
+        KEYWORD_Package->slots->package.external = KEYWORD_obarray;
+        gc_write_barrier(KEYWORD_Package->slots);}
 
     /* CL-USER uses CL (and is used-by recorded on CL). */
     COMMON_LISP_USER_Package->slots->package.used =
         cons(COMMON_LISP_Package, COMMON_LISP_USER_Package->slots->package.used);
+    gc_write_barrier(COMMON_LISP_USER_Package->slots);
     COMMON_LISP_Package->slots->package.used_by =
         cons(COMMON_LISP_USER_Package, COMMON_LISP_Package->slots->package.used_by);
     /* BOCL (the implementation-extensions package) uses CL too. */
     BOCL_Package->slots->package.used =
         cons(COMMON_LISP_Package, BOCL_Package->slots->package.used);
+    gc_write_barrier(BOCL_Package->slots);
     COMMON_LISP_Package->slots->package.used_by =
         cons(BOCL_Package, COMMON_LISP_Package->slots->package.used_by);
+    gc_write_barrier(COMMON_LISP_Package->slots);
 
     /* *PACKAGE* defaults to CL-USER. */
     define_parameter(S(*PACKAGE*), COMMON_LISP_USER_Package);
@@ -668,7 +705,9 @@ void kernel_initialize_packages(void){
        get the right home package from symbol_intern_obarray directly.) */
     {   extern Ref KERNEL_obarray, KEYWORD_obarray;
         Ref it=cons_cdr(KERNEL_obarray);
-        while(consp(it)){ cons_car(it)->slots->symbol.package=COMMON_LISP_Package; it=cons_cdr(it); }
+        while(consp(it)){ Ref s=cons_car(it); s->slots->symbol.package=COMMON_LISP_Package;
+            gc_write_barrier(s->slots); it=cons_cdr(it); }
         it=cons_cdr(KEYWORD_obarray);
-        while(consp(it)){ cons_car(it)->slots->symbol.package=KEYWORD_Package; it=cons_cdr(it); }}
+        while(consp(it)){ Ref s=cons_car(it); s->slots->symbol.package=KEYWORD_Package;
+            gc_write_barrier(s->slots); it=cons_cdr(it); }}
 }

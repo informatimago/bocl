@@ -1,0 +1,226 @@
+Generational (nursery) garbage collector
+=========================================
+
+Goal: make ANSI-test / large loads fast by not re-marking the large
+persistent live set on every collection. Tracked on the `new-gc` branch
+(forked from v1.0.0).
+
+
+WHY (the diagnosis behind this branch)
+--------------------------------------
+
+bocl's collector (sources/memory.c) is a non-moving mark-and-sweep with
+a flat, per-zone first-fit free list. Loading the ansi-test suite is
+super-linear. Measured root causes, in order of discovery:
+
+1. Hash tables were O(n) (alist-backed)        -> fixed pre-1.0 (Slice 166, O(1) buckets).
+2. large_list accumulated sub-128B split        -> fixed pre-1.0 (Slice 167, re-file to small_list).
+   remainders, so allocation first-fit-walked
+   past them (~80% CPU in before_best_free_block).
+3. THE REMAINING ISSUE (this branch):
+   * The load is ~99% garbage: one collection freed 189 of 191 MB
+     (instrument garbage_collect by summing zone sizes; `live` ~ 2 MB).
+   * But GC only fires when EVERY zone is full (allocate_in_zones == 0),
+     so the heap balloons to ~5 GB / ~72 zones before anything is
+     reclaimed; the per-allocation zone walk then scales with the zone
+     count -> super-linear load (~24 min, peak RSS ~5 GB).
+   * Forcing collection proactively (every ~96 MB) keeps the heap small
+     (~196 MB) BUT is ~70x slower (data-and-control-flow module: 215 s
+     vs 3 s) -- because the collector is NON-GENERATIONAL, so every
+     collection re-marks the large persistent live set (the ~8500-line
+     prelude + the ansi-test harness/`*universe*`). Frequent GC == constant
+     re-marking of the old generation.
+
+So there is a fundamental tension with the current design:
+  rare GC  -> heap balloons -> slow allocation walk;
+  frequent GC -> re-marks the persistent set -> slow.
+The fix is to stop re-marking the old generation on every collection.
+
+
+DESIGN (non-moving generational mark-sweep, "sticky mark bits")
+---------------------------------------------------------------
+
+bocl is non-moving, so we keep objects in place and track a per-object
+generation rather than copying survivors out of a nursery region.
+
+Two generations: 0 = young (nursery), 1 = old.
+  * New allocations are gen-0.
+  * A MINOR collection marks only gen-0 objects reachable from the roots
+    AND from the remembered set; it sweeps only gen-0 garbage. gen-1
+    objects are neither traced nor reclaimed -> the persistent set is not
+    re-marked. Surviving gen-0 objects are promoted to gen-1 in place.
+  * A MAJOR collection is the current full mark+sweep (clear all marks,
+    trace everything, sweep all). Run it occasionally (e.g. when the old
+    generation has grown by some factor, or every N minor GCs) to reclaim
+    dead old objects and cycles between old objects.
+
+Remembered set / write barrier (the crux):
+  A gen-0 object reachable only through a gen-1 object would be missed by
+  a minor GC that does not trace gen-1. So every store of a Ref into an
+  ALREADY-OLD object must be recorded. Options, simplest first:
+    (a) Card marking: a byte table, one entry per ~512 B card. The barrier
+        marks the card of the mutated slot dirty. Minor GC scans dirty
+        cards for old->young pointers. Cheap, coarse, no per-object set.
+    (b) Explicit remembered set: a growable array of old objects (or slots)
+        that hold young refs; barrier appends, minor GC scans + clears.
+  Card marking (a) is recommended -- fewer moving parts, bounded size.
+
+Where the barrier must live: every Ref store into a heap object --
+cons_rplaca/rplacd, svref_set, structure/instance slot set, symbol
+value/function/plist set, the hash-table bucket writes (hash_table.c),
+vector-push, (setf gethash), array (setf aref), etc. Audit for a
+chokepoint; if none exists, introduce one (a STORE_REF(obj, slot, val)
+macro) and route mutations through it. This audit is step 1 and is the
+main risk surface.
+
+
+IMPLEMENTATION PLAN (incremental, each step validated)
+------------------------------------------------------
+
+0. Instrumentation first: land the BOCL_GCLOG hook (freed / heap / zones
+   / live per collection) used in the diagnosis, plus minor/major counts.
+1. Generation bit: reserve a bit in Block.objcount (currently high bit =
+   mark, FREE_BLOCK = all-ones). Pick the next bit down for `old`; adjust
+   mark/clear/free/objcount accessors and verify the FREE_BLOCK and
+   marked_block_p invariants still hold (these are subtle -- see the
+   comments in marked_block_p). Validate with BOCL_HEAPCHECK.
+2. Write-barrier chokepoint: route every Ref-into-heap store through one
+   macro; card table + dirty-card marking in that macro.
+3. Minor collection: mark from roots + dirty cards into gen-0 only; sweep
+   gen-0; promote survivors to gen-1; clear dirty cards.
+4. Major collection: keep current full GC; trigger heuristically.
+5. Collection policy in allocate_internal: minor GC on a young-allocation
+   threshold (keeps the heap small) + major GC occasionally. Re-measure
+   the ansi-test module load (target: small heap AND fast).
+
+VALIDATION (every step)
+-----------------------
+* Full SACLA must-* sweep (15 files) must stay crash/hang-free and
+  byte-identical to v1.0.0 (errs/fails per file unchanged).
+* BOCL_GCSTRESS=N (force GC every N allocs) + BOCL_GCCHECK (survivor ->
+  doomed ref check) + BOCL_HEAPCHECK (block/free-list walk) -- a
+  generational barrier bug shows up here as a survivor referencing a
+  swept young object. See memory note bocl-gc-rooting.
+* ansi-test per-module load timing (the /tmp/modtime.lisp driver): the
+  late modules (types-and-classes, strings) must drop from minutes to
+  seconds while peak RSS stays bounded.
+
+RISK: this touches the core collector + every mutation site. A missed
+write barrier = a live young object swept = use-after-free, heap-state
+dependent (the exact class documented in bocl-gc-rooting). Go slow; lean
+on GCSTRESS/GCCHECK/HEAPCHECK after every step.
+
+
+IMPLEMENTATION STATUS (v1.0.2 .. v1.0.7 on new-gc)
+--------------------------------------------------
+All six steps landed; correctness validated, perf goal demonstrated.
+
+  v1.0.2  build: realpath decl + libm link order (Linux/gcc-14 prereq).
+  Step 0  v1.0.3  BOCL_GCLOG (freed/live/free/heap/zones + minor/major counts).
+  Step 1  v1.0.4  GC_OLD_BIT (objcount bit 30); block_objcount masks it off;
+                  clear_block keeps it (sticky mark).  Byte-identical.
+  Step 2  v1.0.5  Write barrier + remembered set.  gc_write_barrier(container)
+                  records an OLD block on any Ref store; the target is the block
+                  that PHYSICALLY holds the slot (cons cell / obj->slots Slots
+                  block / vector's inner VectorOfObject).  Routed through the C
+                  primitive mutators (cons_rplaca/d, svref_set, structure_set,
+                  set_symbol_*) — covering all their callers — plus the direct
+                  field-write bypass sites (hash table, packages, class
+                  superclasses, structure cached_slots, environment push-lists,
+                  reader vectors).  object_slot_count() replaces raw element-count
+                  reads of objcount.  Inert until promotion exists => byte-identical.
+  Step 3  v1.0.6  Minor collection + promotion model.  Promotion happens ONLY at
+                  a MAJOR GC; a minor marks young (rootset + remset), reclaims
+                  young garbage, promotes nothing.  Scaffold (RootSet + LivePool
+                  chain) kept young; a major PINS the live-pool working set young
+                  (gc_collect_pinned/demote_pinned) so a constructor mid-build is
+                  never promoted out from under its initializing stores; a major
+                  then rebuilds the remset by a full-heap scan (recovers the
+                  promoted-wrapper -> pinned-slots edge Object_new creates).
+                  Validated: SACLA byte-identical; ZERO GCCHECK(minor) dangling
+                  reports under interleaved major+minor stress across must-cons /
+                  -array / -hash-table / -data-and-control / -package / -symbol.
+  Steps 4+5 v1.0.7  Proactive policy (opt-in: BOCL_GC_YOUNG_KB / _MAJOR_EVERY).
+                  Minor GC every N KB of allocation, major every M minors.
+                  Measured (120k function-call garbage, ~12 MB live):
+                    legacy OFF: 74.1 s, 134 MB / 2 zones, 60 majors.
+                    proactive : 26.5 s, 67 MB / 1 zone, 471 minor + 31 major.
+                  ~2.8x faster AND half the peak heap.
+
+REMAINING (blocks proactive-by-default): the pre-existing GC rooting long-tail
+(issues/open/deferred-gc-rooting-longtail).  Firing the collector frequently
+during a complex load (file loading / interning) hits dormant unrooted-Ref gaps
+(e.g. BOCL_GCSTRESS=1 still SEGVs at startup via subclassp/typep).  Those
+layout-sensitive fixes are a separate fixpoint task; once they land,
+BOCL_GC_YOUNG_KB can default on and the ANSI-test module-load timings can be
+re-measured end-to-end (the original target metric).
+
+
+================================================================================
+FOLLOW-UP (v1.0.9 / v1.0.10): rooting long-tail FIXED, proactive DEFAULTED ON,
+ANSI-test load measured.
+================================================================================
+
+1. ROOTING LONG-TAIL FIXED (Slice 173, v1.0.9).  The BOCL_POISON use-after-free
+   finder, run under periodic major-GC stress over every SACLA must-* file,
+   pinpointed six unrooted-Ref gaps (a fresh Ref held only on the C stack -- which
+   the GC does not scan -- across a call that allocates and may collect):
+     - push_to_rootset (kernel.c): the global environment freed by the cons() that
+       adds it to the rootset -> the subclassp/typep startup SEGV.
+     - DEFMACRO (eval.c): the macro fn freed by putf() mid-plist-build.
+     - read_impl (reader.c): the input stream, held only in the C-stack parser
+       struct across the whole allocating parse (also fixes the intermittent
+       compile-file rt.lsp hang -- see issues/open/deferred-compile-file-rt-gc-
+       corruption: that "SYMBOL vs STRING" use-after-free no longer reproduces,
+       5/5 clean).
+     - registry_add / make_package / kernel_MAKE_PACKAGE (packages.c): the package
+       name / nickname list / (name . pkg) cell freed mid-build -> dangling
+       all_packages entries.
+     - stream_output_string / stream_input_string (kernel.c): the backing string
+       (and the fmemopen buffer) freed by string_stream_new interning STRING-STREAM.
+   Validation: all 15 SACLA must-* files run clean under BOCL_POISON=1 + periodic
+   major stress (zero use-after-free); normal sweep byte-identical to baseline.
+   BOCL_GCSTRESS=1 no longer crashes at startup.
+
+2. PROACTIVE DEFAULTED ON (Slice 174, v1.0.10).  BOCL_GC_YOUNG_KB now defaults to
+   8192 (8 MB minor threshold); BOCL_GC_YOUNG_KB=0 restores legacy collect-when-
+   full.  Full SACLA sweep under the default: all 15 files pass, counts identical
+   to baseline.
+
+3. ANSI-TEST LOAD -- the original target metric.  STATUS: the ANSI-test suite
+   cannot be FUNCTIONALLY loaded by bocl yet, but NOT for any GC reason -- the
+   harness needs CL features bocl has not implemented (HANDLER-CASE, ratios,
+   DEFNOTE, the universe.lsp data vars, and some pathname/*load-pathname*
+   machinery); the loader simply skips every form that hits a missing feature.
+   The one blocker that WAS a GC bug -- compile-file of rt.lsp (gclload1's
+   COMPILE-AND-LOAD "rt.lsp") hanging / SYMBOL-vs-STRING -- is fixed by item 1.
+   So the GC is no longer what blocks the ANSI harness; CL-completeness is.
+
+   GC comparison on the large loads bocl DOES execute (legacy = BOCL_GC_YOUNG_KB=0
+   vs proactive default; wall-time, peak heap from BOCL_GCLOG):
+
+     workload         legacy            proactive (8 MB)     effect
+     must-reader      122.7 s / 1407 MB  30.8 s / 127 MB     3.8x faster, 11x less mem
+     must-loop         45.0 s / 1279 MB  49.9 s / 191 MB     ~same time, 6.7x less mem
+     must-sequence     27.5 s /   63 MB  18.4 s / 191 MB     1.5x faster
+     garbage-churn     55.2 s /  639 MB 177.7 s / 319 MB     3.2x SLOWER, 1/2 mem
+
+   Where the legacy collector balloons (must-reader/-loop: it collects almost
+   never, so the heap grows to >1 GB and per-alloc work goes super-linear),
+   proactive is a large win in BOTH time and memory -- exactly the issue's goal.
+
+   TRADEOFF found: a pure high-churn allocation loop (1.5M short-lived conses) is
+   ~3x SLOWER under proactive.  Legacy bump-allocates into fresh zones and never
+   collects; once proactive collects, allocation comes from fragmented first-fit
+   free lists, whose walk cost grows with heap size.  A threshold sweep confirms
+   8 MB is the best proactive setting here (larger thresholds are worse -- 32 MB+
+   time out on this loop), so the chosen default minimises the worst case while
+   keeping the ballooning loads fast.  Real workloads (the full SACLA sweep) are
+   unaffected; the regression is specific to synthetic allocation churn, and
+   BOCL_GC_YOUNG_KB=0 restores legacy bump-allocation speed for such code.
+
+   FUTURE WORK (not GC-rooting): the first-fit free-list allocator's super-linear
+   walk on large fragmented heaps is the remaining scalability limit; a segregated
+   / size-class free list (or reviving bump allocation within a zone) would remove
+   the churn regression.  ANSI-test end-to-end still needs the CL-completeness
+   features above before per-module timings can be taken on the real suite.
