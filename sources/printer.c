@@ -227,6 +227,37 @@ word printer_circle_action(Ref obj){
    quoting preserves case and every constituent verbatim, so it is always a
    correct (if sometimes non-minimal) readable form. */
 
+static int current_print_base(void);   /* defined below */
+
+/* Whether C is a digit in BASE (2..36): 0-9 then A-Z / a-z. */
+static bool digit_valid_in_base(unsigned char c, int base){
+    int d;
+    if(c>='0'&&c<='9'){ d=c-'0'; }
+    else if(c>='a'&&c<='z'){ d=c-'a'+10; }
+    else if(c>='A'&&c<='Z'){ d=c-'A'+10; }
+    else { return false; }
+    return d<base;
+}
+
+/* Whether token S is an integer or ratio in BASE (optional sign).  Used to escape
+   a symbol whose name would read back as a number in the current *PRINT-BASE* —
+   e.g. FACE is the integer #xFACE when *PRINT-BASE* (and *READ-BASE*) is 16, so it
+   must print as |FACE| to read back as the symbol (CLHS 22.1.3.3.1). */
+static bool token_is_number_in_base(const char* s, uword len, int base){
+    if(len==0){ return false; }
+    uword i=0;
+    if(s[i]=='+'||s[i]=='-'){ i++; }
+    uword digits=0, slashes=0, denom_digits=0;
+    for(; i<len; i++){
+        unsigned char c=(unsigned char)s[i];
+        if(c=='/'){ if(++slashes>1){ return false; } continue; }
+        if(!digit_valid_in_base(c,base)){ return false; }
+        if(slashes==0){ digits++; } else { denom_digits++; }
+    }
+    if(slashes==0){ return digits>0; }            /* integer */
+    return digits>0 && denom_digits>0;            /* ratio a/b */
+}
+
 static bool token_is_number_like(const char* s, uword len){
     /* Recognises the common decimal numeric tokens the reader accepts at
        *READ-BASE* 10: integers (optional sign, optional trailing dot), ratios,
@@ -280,7 +311,9 @@ static bool symbol_name_needs_escape(const char* s, uword len, int rcase){
     if(all_dots){ return true; }
     for(uword i=0;i<len;i++){
         unsigned char c=(unsigned char)s[i];
-        if(c<=' ' || c==0x7f){ return true; }
+        /* whitespacep also catches NEL (0x85), bocl's #\Newline, which c<=' '
+           misses; an unescaped newline in a name reads back as a token break. */
+        if(c<=' ' || c==0x7f || whitespacep(c)){ return true; }
         switch(c){
           case '(': case ')': case '"': case '\'': case '`':
           case ',': case ';': case '\\': case '|': case ':':
@@ -290,6 +323,10 @@ static bool symbol_name_needs_escape(const char* s, uword len, int rcase){
         if(rcase==1 && c>='A' && c<='Z'){ return true; }
     }
     if(token_is_number_like(s,len)){ return true; }
+    /* A name that reads as a number in the current *PRINT-BASE* (e.g. FACE in
+       base 16) must be escaped so it reads back as a symbol, not an integer. */
+    {   int pbase=current_print_base();
+        if(pbase!=10 && token_is_number_in_base(s,len,pbase)){ return true; } }
     return false;
 }
 

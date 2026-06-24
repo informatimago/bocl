@@ -6139,16 +6139,22 @@ places share structure."
 
 ;;; ---- *PRINT-PPRINT-DISPATCH* ---------------------------------------------
 
-(defvar *print-pprint-dispatch* nil
-  "The current pprint dispatch table.  In bocl: NIL (no pretty printer).")
+;; bocl has no pretty printer, but CLHS requires *PRINT-PPRINT-DISPATCH* to hold a
+;; pprint dispatch table object (not NIL).  This opaque empty-table struct is that
+;; non-NIL placeholder; the dispatch stubs below ignore its contents.
+(defstruct (%pprint-dispatch-table (:copier nil)))
+
+(defvar *print-pprint-dispatch* (make-%pprint-dispatch-table)
+  "The current pprint dispatch table.  In bocl: an opaque empty table (no pretty
+   printer), but non-NIL as CLHS requires.")
 
 (defun set-pprint-dispatch (type-specifier function &optional priority table)
   "Install FUNCTION as the pprint dispatch for TYPE-SPECIFIER.  Stub."
   (declare (ignore type-specifier function priority table)) nil)
 
 (defun copy-pprint-dispatch (&optional table)
-  "Return a copy of the pprint dispatch table.  Stub: returns NIL."
-  (declare (ignore table)) nil)
+  "Return a copy of the pprint dispatch table.  Stub: a fresh empty table."
+  (declare (ignore table)) (make-%pprint-dispatch-table))
 
 ;;; ---- MAKE-BROADCAST-STREAM etc. stubs ------------------------------------
 ;;; Broadcast, concatenated, synonym, echo, two-way streams are already

@@ -57,6 +57,31 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== FIXED (Slice 74) — must-printer to 0/0: pprint-dispatch default + two symbol-escape gaps ==
+The last three must-printer failures (F9/F207/F229), now all passing — the file
+drives 439 forms with 0 fails / 0 errors.
+(a) F9 — *PRINT-PPRINT-DISPATCH* was DEFVAR'd to NIL; the form `*print-pprint-
+    dispatch*` (which "must" return non-NIL) failed.  CLHS requires the value to be
+    a pprint dispatch TABLE, never NIL.  Added an opaque empty %pprint-dispatch-
+    table struct and made that the default (COPY-PPRINT-DISPATCH now returns a
+    fresh one too).  bocl still has no pretty printer; this is just the non-NIL
+    table object the standard mandates.
+(b) F207 — a symbol whose name is #\Newline (code 133 / NEL, bocl's newline) wrote
+    readably as the raw byte, which the reader treats as WHITESPACE, so it read
+    back as END-OF-FILE rather than the symbol.  symbol_name_needs_escape checked
+    c<=' '||c==0x7f, which misses 0x85; it now also escapes via whitespacep (the
+    reader's own whitespace authority), so the name prints as |<newline>|.
+(c) F229 — a symbol whose name reads as a number in the current *PRINT-BASE* (e.g.
+    FACE = #xFACE under base 16) printed unescaped, so with *READ-BASE* 16 it read
+    back as the integer 64206, not the symbol.  symbol_name_needs_escape now also
+    escapes when (token_is_number_in_base name *print-base*) and *print-base* != 10
+    — FACE prints |FACE| and reads back as the symbol.  (Base 10 keeps the existing
+    token_is_number_like path, which also covers floats/decimals.)
+Verified F9/F207/F229 pass and FACE writes |FACE| under base 16; 0 regressions —
+failure sets identical to Slice 73 across must-reader(1560)/-symbol/-cons/-string/
+-data-and-control/-sequence(3851)/-array/-character.  *** must-printer is now fully
+green (0/0). ***
+
 == FIXED (Slice 73) — *PRINT-CIRCLE* #n=/#n# for lists, gensyms, and arrays ==
 *PRINT-CIRCLE* output was incomplete (must-printer F382-395 — the whole circle
 cluster): (1) a circular LIST whose cycle spanned >=2 conses printed the
