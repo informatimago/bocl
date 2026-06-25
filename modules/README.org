@@ -1,0 +1,49 @@
+# -*- mode:org;coding:utf-8 -*-
+#+TITLE: BOCL system modules
+
+This directory holds "system" modules that =make install= places under
+=$PREFIX/libexec/bocl/modules/=, where bocl discovers them at boot and loads them
+on demand with =(require "NAME")= / =(require :name)= (see BOCL:*MODULE-LIST* and
+the module system in =bootstrap/prelude.lisp=).
+
+* Layout and the manifest
+
+Each *install-ready* module is a sub-directory here that contains its loadable
+=.lisp= file(s) and a =module.manifest=:
+
+: (:name "NAME"
+:  :files ("file1.lisp" "sub/file2.lisp" ...))
+
+- =:name= — the module name a user passes to =REQUIRE= (a string designator;
+  matched case-insensitively).  It is independent of the directory name, so
+  =modules/asdf3/= may provide module ="ASDF"=.
+- =:files= — loadable files, RELATIVE to the module directory.  At boot bocl merges
+  each with the installed module directory to an absolute namestring and records it
+  on BOCL:*MODULE-LIST*; =REQUIRE= then LOADs them in order.  A loaded file
+  conventionally ends with a =(provide "NAME")= form.
+
+=make install= copies, for every =modules/<name>/module.manifest=, that manifest and
+the =*.lisp= files in the directory into =$PREFIX/libexec/bocl/modules/<name>/=.
+
+* Modules that need building (ASDF)
+
+A module whose source must be built first (e.g. ASDF) is added as a git submodule of
+its SOURCE here, and the =modules/= build stages its built, loadable single file into
+a separate install-ready directory with a generated manifest.  The intended wiring:
+
+- Submodule (SOURCE), release branch:
+  : git submodule add -b release https://gitlab.common-lisp.net/asdf/asdf.git modules/asdf-src
+- =make modules= (run by the top-level =build=) builds ASDF's single-file release
+  (=modules/asdf-src/build/asdf.lisp=, per ASDF's own Makefile, with a host CL) and
+  stages it as the install-ready module:
+  : modules/asdf/asdf.lisp           <- copy of build/asdf.lisp
+  : modules/asdf/module.manifest     <- (:name "asdf" :files ("asdf.lisp"))
+- =make install= then installs =modules/asdf/= to =libexec/bocl/modules/asdf/=, so
+  =(require :asdf)= loads it.
+
+See =modules/Makefile= for the (guarded) build/stage rules.
+
+NOTE: the ASDF submodule was not added automatically — fetching/building external
+source code requires explicit authorization.  Add the submodule with the command
+above, then =make modules && make install=.  (Whether ASDF runs unmodified on bocl's
+current Common Lisp surface is a separate compatibility question.)

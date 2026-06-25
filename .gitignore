@@ -60,3 +60,7 @@ tests/test_clos
 
 *-Listing.xml
 *-Results.xml
+
+# generated module build artifacts
+modules/asdf/
+modules/asdf-src/build/

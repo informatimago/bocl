@@ -139,6 +139,12 @@ DOC_ORG = ../README.org ../documentation/documentation.org \
 DOC_PDF = $(wildcard ../documentation/documentation.pdf \
 	../specifications/specifications.pdf ../specifications/debugger-specifications.pdf)
 
+# Installable "system" modules: each ../modules/<name>/ that carries a
+# module.manifest is install-ready (its loadable *.lisp + the manifest).  Modules
+# that need building (e.g. ASDF, a submodule) stage their built file + manifest into
+# such a directory via the root `modules` target before install.
+MODULE_MANIFESTS = $(wildcard ../modules/*/module.manifest)
+
 .PHONY: install install-strip uninstall dist pkgconfig info
 
 # (Re)build the Texinfo info manual.  Needs makeinfo (texinfo); best-effort.
@@ -180,6 +186,15 @@ install: build bocl.pc
 	@ printf "#   libexec/bocl/ system Lisp files\n"
 	$(VERBOSE) for f in $(SYSTEM_LISP) ; do \
 	    $(INSTALL) -m 644 $$f $(DESTDIR)$(bocllibexecdir)/ ; done
+	@ printf "#   libexec/bocl/modules/ (installed modules)\n"
+	$(VERBOSE) for mf in $(MODULE_MANIFESTS) ; do \
+	    md=`dirname $$mf` ; name=`basename $$md` ; \
+	    $(INSTALL) -d $(DESTDIR)$(bocllibexecdir)/modules/$$name ; \
+	    $(INSTALL) -m 644 $$mf $(DESTDIR)$(bocllibexecdir)/modules/$$name/module.manifest ; \
+	    for lf in $$md/*.lisp ; do \
+	        [ -f "$$lf" ] && $(INSTALL) -m 644 $$lf $(DESTDIR)$(bocllibexecdir)/modules/$$name/ ; \
+	    done ; \
+	done
 	@ printf "#   share/man/man1/bocl.1\n"
 	$(VERBOSE) $(INSTALL) -m 644 $(MAN_PAGE) $(DESTDIR)$(man1dir)/bocl.1
 	@ printf "#   share/info/bocl.info\n"

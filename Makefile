@@ -1,17 +1,20 @@
 # project Makefile (used by gitlab CI).
 
-SUBDIRS   = specifications design sources tests documentation
+SUBDIRS   = specifications design sources tests documentation modules
 DOCTARGET = pdfs
 
 all:       		 documents build test
 documents: 		 specifications design documentation
 .PHONY:    		 documents bocl clean clean-backups regenerate                  \
-		 test tests specifications design documentation                  \
+		 test tests specifications design documentation modules          \
 		 install install-strip uninstall info dist check-lib
 
 specifications:  ; @cd specifications && $(MAKE) $(MFLAGS) $(DOCTARGET)
 design:          ; @cd design         && $(MAKE) $(MFLAGS) $(DOCTARGET)
-build:           ; @for dir in sources tests ; do  $(MAKE) -C $$dir $(MFLAGS) build ; done
+# Build the C/Lisp core, then the system modules (asdf etc.; a no-op until their
+# source submodules are present — see modules/README.org).
+build:           ; @for dir in sources tests modules ; do  $(MAKE) -C $$dir $(MFLAGS) build ; done
+modules:         ; @$(MAKE) -C modules $(MFLAGS)
 test tests:      ; @cd tests          && $(MAKE) $(MFLAGS) test
 documentation:   ; @cd documentation  && $(MAKE) $(MFLAGS) $(DOCTARGET)
 
