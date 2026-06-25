@@ -1,0 +1,21 @@
+21:31[pjb@thalassa org.xquartz:0 bocl-master 22Gi]$ bocl
+
+Welcome to BOCL Version 1.3.6
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+
+Welcome to BOCL
+
+
+Have fun!
+
+bocl> (let ((l nil)) (do-symbols (s "CL") (push s l)) (sort l (function string<)))
+Segmentation fault: 11
+
+
+21:36[pjb@thalassa org.xquartz:0 bocl-master 22Gi]$ bocl --no-init -q -x '(let ((l nil)) (do-symbols (s "CL") (push s l)) (sort l (function string<)))'
+Segmentation fault: 11
+
