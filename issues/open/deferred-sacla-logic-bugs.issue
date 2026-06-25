@@ -57,6 +57,27 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== PROGRESS (Slices 95-101, v1.2.22-1.2.28) — must-reader 33->2 ==
+Backquoted vectors `#(...) and the prelude-load crash they caused (vectorp is true
+for strings/bit-vectors, whose OctetArray layout differs) (95); *READ-SUPPRESS* and
+the NIL/T input-stream designator for READ (96); #C float contagion, #. honouring
+*READ-EVAL*, COPY-READTABLE to-readtable arg, READTABLE-CASE type-error (97); comma
+outside a backquote is a reader-error (backquote-depth tracking) (98);
+SET-SYNTAX-FROM-CHAR implemented (99); ARRAY-RANK-LIMIT raised to 64 so #10A reads
+(100); SET-SYNTAX-FROM-CHAR transfers ( and ' behaviour via installed reader-macro
+functions (101).
+
+STILL OPEN in must-reader (2), neither a core reader bug:
+  * F1312: (read-from-string "#+test1 a") with the feature absent skips to EOF and
+    signals END-OF-FILE (eof-error-p defaults to T) — correct CL, but the test
+    wants a NIL return; impl-specific / arguably non-conformant.
+  * F1553: surfaces a LOOP bug — `for v = init then step` stages STEP at the loop
+    BOTTOM, so a REPEAT/UNTIL terminator forces one extra step (e.g. (car kernel)).
+    Moving STEP to the loop top fixes it but breaks AND-parallel stepping
+    (FOR a FROM 1 AND x = 0 THEN a), which needs the grouped steppers to fire
+    together at the bottom on OLD values.  The correct fix moves ALL loop stepping
+    to the top with parallel semantics — a focused LOOP refactor.
+
 == PROGRESS (Slices 83-93, v1.2.10-1.2.20) — must-reader 117->33, -data-and-control 12->1 ==
 Reader (must-reader 117->33): #+/#- that skips the last form returns EOF not a junk
 symbol (83); #n(...) sized vectors and #n* sized bit-vectors (84); backquote with a
