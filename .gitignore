@@ -4,7 +4,9 @@
 *.sse2f
 *.[dao]
 *.so
+*.so.*
 *.dylib
+bocl.pc
 *.bak
 *.[ld]x64fsl
 *.[ld]x32fsl
