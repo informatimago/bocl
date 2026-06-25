@@ -1,0 +1,4 @@
+[submodule "modules/asdf-src"]
+	path = modules/asdf-src
+	url = https://gitlab.common-lisp.net/asdf/asdf.git
+	branch = release
