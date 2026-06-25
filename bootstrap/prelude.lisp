@@ -94,13 +94,25 @@
                  ((consp place)
                   (let ((expander (gethash (car place) *setf-expanders*)))
                     (cond
-                      (expander
-                       ;; SETF must return the newly-stored value, but the kernel
-                       ;; setters (RPLACA/RPLACD/...) return the cons.  Bind the
-                       ;; value to a gensym, run the setter on it, then yield it.
+                      ;; GETF is place-recursive — its expander re-SETFs its first
+                      ;; subform, so binding that subform to a temp would write the
+                      ;; temp, not the place.  Keep the (value-first) expansion.
+                      ((eq (car place) 'getf)
                        (let ((g (gensym "SETF-V")))
                          `(let ((,g ,value))
                             ,(apply expander (append (cdr place) (list g)))
+                            ,g)))
+                      ;; A simple place: evaluate the place's subforms left-to-right,
+                      ;; THEN the value, THEN store (CLHS 5.1.1.1).  Subforms are
+                      ;; bound to temps so they are evaluated exactly once and before
+                      ;; the value (the kernel setters return the cons / object, so
+                      ;; SETF yields the saved value G itself).
+                      (expander
+                       (let* ((args  (cdr place))
+                              (temps (mapcar (lambda (a) a (gensym "SETF-T-")) args))
+                              (g     (gensym "SETF-V")))
+                         `(let* (,@(mapcar #'list temps args) (,g ,value))
+                            ,(apply expander (append temps (list g)))
                             ,g)))
                       ;; No expander, but FOO has a (SETF FOO) function:
                       ;; (setf (foo a b) v) -> (funcall #'(setf foo) v a b).
