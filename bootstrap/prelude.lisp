@@ -3753,15 +3753,28 @@ SETQ/INCF/DECF is left in place (sequential)."
 
 (defmacro rotatef (&rest places)
   ;; (rotatef p1 p2 ... pn) — rotate values left: p1←p2, ..., pn←old-p1.
-  ;; With 0 or 1 places: no-op.  Returns NIL.
+  ;; With 0 or 1 places: no-op.  Returns NIL.  Uses GET-SETF-EXPANSION so each
+  ;; place's subforms are evaluated exactly once, in order, before any store
+  ;; (correct even when places share structure).
   (if (< (length places) 2)
       nil
-      (let ((temps (mapcar (lambda (p) p (gensym "ROT-")) places)))
-        `(let ,(mapcar #'list temps places)
-           ,@(mapcar (lambda (place temp) `(setf ,place ,temp))
-                     places
-                     (append (cdr temps) (list (car temps))))
-           nil))))
+      (let ((sub-binds nil) (olds nil) (old-binds nil) (svars nil) (sforms nil))
+        (dolist (p places)
+          (multiple-value-bind (vars vals stores store-form access-form)
+              (get-setf-expansion p)
+            (setq sub-binds (append sub-binds (mapcar #'list vars vals)))
+            (let ((og (gensym "ROT-OLD-")))
+              (setq olds      (append olds (list og)))
+              (setq old-binds (append old-binds (list (list og access-form)))))
+            (setq svars  (append svars  (list stores)))
+            (setq sforms (append sforms (list store-form)))))
+        ;; place_i receives old_{i+1}; the last place receives old_1.
+        (let ((newvals (append (cdr olds) (list (car olds)))))
+          `(let* (,@sub-binds            ; capture every place subform once, in order
+                  ,@old-binds)           ; read every old value before any store
+             ,@(mapcar (lambda (sv val sf) `(multiple-value-bind ,sv ,val ,sf))
+                       svars newvals sforms)
+             nil)))))
 
 (defmacro pushnew (item place &rest keys)
   ;; (pushnew item place keys...) == (setf place (adjoin item place keys...)).
@@ -3813,15 +3826,26 @@ SETQ/INCF/DECF is left in place (sequential)."
          nil))))
 
 (defmacro psetf (&rest pairs)
-  ;; (psetf place1 val1 place2 val2 ...) — like PSETQ but for places (SETF).
-  ;; Evaluates every value first, then stores in parallel.  Returns NIL.
+  ;; (psetf place1 val1 place2 val2 ...) — like PSETQ but for places.  Uses
+  ;; GET-SETF-EXPANSION so each place's subforms are captured once (in order),
+  ;; then every value is evaluated, then the stores run in parallel.  Returns NIL.
   (let ((places nil) (vals nil) (p pairs))
     (loop (when (null p) (return))
           (push (car p) places) (push (cadr p) vals) (setq p (cddr p)))
     (setq places (nreverse places) vals (nreverse vals))
-    (let ((temps (mapcar (lambda (v) v (gensym "PSETF-")) places)))
-      `(let ,(mapcar #'list temps vals)
-         ,@(mapcar (lambda (place tmp) `(setf ,place ,tmp)) places temps)
+    (let ((binds nil) (sforms nil))
+      ;; Interleave per PAIR (CLHS left-to-right): place1 subforms, val1, place2
+      ;; subforms, val2, ...  The store-form (run after all binds) refers only to
+      ;; the captured temps, so the assignments are still parallel.
+      (loop for place in places for val in vals do
+        (multiple-value-bind (vars vs stores store-form access-form)
+            (get-setf-expansion place)
+          access-form
+          (setq binds  (append binds (mapcar #'list vars vs)
+                                     (list (list (car stores) val))))
+          (setq sforms (append sforms (list store-form)))))
+      `(let* (,@binds)
+         ,@sforms
          nil))))
 
 (defmacro shiftf (&rest args)
