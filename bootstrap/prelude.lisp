@@ -2734,7 +2734,8 @@ SETQ/INCF/DECF is left in place (sequential)."
              ;; in PARALLEL (CLHS 6.1.2.2) — each AND-clause's stepper sees the
              ;; others' values from the start of the iteration.  Process each
              ;; variable, then (if AND was used) fuse this group's steps.
-             (let ((%old-steps steps) (%old-letb letb) (%nvars 0))
+             (let ((%old-steps steps) (%old-letb letb) (%nvars 0)
+                   (%eq-then-info nil))   ; (var step-form) of a lone `= init then step`
               (flet ((%one-for ()
                (setq %nvars (+ %nvars 1))
                (let* ((fvar  (pop!))
@@ -2846,8 +2847,13 @@ SETQ/INCF/DECF is left in place (sequential)."
                   (let ((init (pop!)))
                     (if (%lkw (pk) "THEN")
                         (progn (pop!)
-                               (push (list v init) letb)
-                               (push `(setq ,v ,(pop!)) steps))
+                               (let ((stepform (pop!)))
+                                 (push (list v init) letb)
+                                 ;; Push the step at the bottom (so an AND group can
+                                 ;; fuse it); also record it so a STANDALONE `= then`
+                                 ;; can be hoisted to the loop top afterwards.
+                                 (push `(setq ,v ,stepform) steps)
+                                 (setq %eq-then-info (list v stepform))))
                         (progn
                           (push (list v nil) letb)
                           (push `(setq ,v ,init) setups)))))
@@ -2965,7 +2971,20 @@ SETQ/INCF/DECF is left in place (sequential)."
              ;; AND joined >1 variable: fuse this group's steps into one parallel
              ;; assignment (the new steps are at the front of STEPS, before
              ;; %OLD-STEPS) so each stepper sees the others' old values.
-             (when (> %nvars 1)
+             (cond
+              ;; A STANDALONE `for v = init then step` (no AND): hoist its step from
+              ;; the loop BOTTOM to the TOP — evaluated after the exit test and
+              ;; skipped on the first iteration — so a REPEAT/UNTIL terminator does
+              ;; not force one extra step (CLHS 6.1.2.1.2).  (An AND-grouped `= then`
+              ;; keeps its fused bottom-of-loop step, below, for parallel old-value
+              ;; semantics.)
+              ((and (= %nvars 1) %eq-then-info)
+               (do () ((eq steps %old-steps)) (pop steps))   ; drop the bottom step
+               (let ((vv (first %eq-then-info)) (sf (second %eq-then-info))
+                     (ff (gensym "LOOP-FIRST-")))
+                 (push (list ff t) letb)
+                 (push `(if ,ff (setq ,ff nil) (setq ,vv ,sf)) setups)))
+              ((> %nvars 1)
                (let ((%new nil))
                  (do () ((eq steps %old-steps)) (push (pop steps) %new))
                  (push (%loop-parallel-steps (nreverse %new)) steps))
@@ -2984,7 +3003,7 @@ SETQ/INCF/DECF is left in place (sequential)."
                          (push b vars)
                          (push b auxs)))
                    (dolist (b (nreverse auxs)) (push b letb))
-                   (dolist (b (nreverse vars)) (push b letb)))))))
+                   (dolist (b (nreverse vars)) (push b letb))))))))
             ;; REPEAT n
             ((%lkw kw "REPEAT")
              (let ((rv (gensym "R-")))

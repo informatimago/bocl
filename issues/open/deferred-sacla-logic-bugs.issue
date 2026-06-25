@@ -109,17 +109,22 @@ NOT A BUG (conforming / impl-specific):
     EOF and signals END-OF-FILE (eof-error-p defaults to T) — correct CL; the test
     wants a NIL return.
 
-STILL OPEN — deep subsystem work, each a focused effort (one form each):
-  * F58 (hash): WITH-HASH-TABLE-ITERATOR must expose its iterator as a local macro
-    that MACRO-FUNCTION sees via &ENVIRONMENT.  macro-function finds GLOBAL macros
-    but not local ones (macrolet/whti) — needs lexical macro environments threaded
-    through &environment and consulted by MACRO-FUNCTION.
-  * F1553 (reader test, really LOOP): `for v = init then step` stages STEP at the
-    loop bottom, so a REPEAT/UNTIL terminator forces one extra step.  Moving STEP
-    to the loop top fixes it but breaks AND-parallel stepping (FOR a FROM 1 AND
-    x = 0 THEN a); the fix must move only the STANDALONE (non-AND) `= then` step to
-    the top while AND-grouped steppers keep their fused bottom-of-loop old-value
-    capture.
+FIXED — Slice 105 (v1.2.32): F58 — MACRO-FUNCTION now sees local macros via
+&ENVIRONMENT.  The eval loop records the macro-call environment in a global, and
+&ENVIRONMENT binds the lambda parameter to it; a new %FIND-LOCAL-MACRO primitive
+(built_in_functions.c) walks the environment for a local macro and rebuilds it as
+a function, which MACRO-FUNCTION consults before the $macro plist.
+WITH-HASH-TABLE-ITERATOR re-expressed via MACROLET.  must-hash-table now 0/0.
+
+FIXED — Slice 106 (v1.2.33): F1553 — a STANDALONE `for v = init then step` now
+hoists its STEP from the loop bottom to the top (after the exit test, skipped on
+the first iteration via a fresh first-flag), so a REPEAT/UNTIL/WHILE terminator no
+longer forces one extra step ((loop repeat 3 for x = '(a b c) then (cdr x) finally
+(return x)) => (C), was NIL).  AND-grouped `= then` clauses (>1 var in the FOR
+group) keep their fused bottom-of-loop old-value capture unchanged, so parallel
+stepping (FOR a = 1 THEN (+ a b) AND b = 1 THEN a) is preserved.  The FOR handler
+records the lone `= then` (var step) in %eq-then-info and a final cond chooses
+hoist-to-top (1 var) vs fuse-at-bottom (>1 var).  must-loop 852/0/0, no regressions.
 
 == FIXED (Slice 82) — must-data-and-control 26->12: empty PROGN + ECASE/MVB/FDEFINITION ==
 Four independent fixes (data-and-control 11 fails/15 errors -> 4/8):
