@@ -26,6 +26,7 @@
 #include <string.h>
 #include <sys/socket.h>   /* AF_UNSPEC for LONG-SITE-NAME getaddrinfo */
 #include <netdb.h>        /* getaddrinfo / AI_CANONNAME (FQDN) */
+#include <dirent.h>       /* opendir/readdir for %LIST-DIRECTORY */
 
 
 Ref bocl_eval(Ref sexp){
@@ -281,6 +282,39 @@ static void kernel_LOAD(unused Ref function, Ref arguments, MultipleValues* resu
     free(path);
     results->count=1;
     results->values[0]=result;
+    close_live_pool(pool);}
+
+/* (%LIST-DIRECTORY path) → list of the entry NAMES (strings) directly in the
+   directory PATH (a string / pathname namestring), excluding "." and "..".
+   Returns NIL if PATH cannot be opened.  Names only — the caller joins them with
+   PATH as needed.  Used by the module loader to scan libexec/bocl/modules/. */
+static void kernel_LIST_DIRECTORY(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref dirspec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    char* path;
+    if(typep(dirspec,STRING_Class)){
+        path=string_cstring(dirspec);
+    } else if(typep(dirspec,PHYSICAL_PATHNAME_Class)){
+        path=string_cstring(namestring(dirspec));
+    } else {
+        TYPE_ERROR(dirspec,STRING_Class);}
+    Ref out=NIL_Symbol;
+    DIR* d=opendir(path);
+    if(d){
+        struct dirent* e;
+        while((e=readdir(d))!=NULL){
+            if(strcmp(e->d_name,".")==0 || strcmp(e->d_name,"..")==0){ continue; }
+            Ref name=string_new_cstring(e->d_name);
+            add_to_live_pool(name);
+            push(name,&out);
+            add_to_live_pool(out);}
+        closedir(d);}
+    free(path);
+    results->count=1;
+    results->values[0]=out;
     close_live_pool(pool);}
 
 /* APPEND is needed by backquote-expanded code; the kernel previously only
@@ -939,6 +973,8 @@ static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues*
 void bocl_register_load(void){
     Ref fname=S(LOAD);
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
+    Ref ld=symbol_intern_cstring("%LIST-DIRECTORY");
+    set_symbol_function(ld,built_in_function_new(ld,list(S(PATH),NULL),kernel_LIST_DIRECTORY));
     Ref af=S(APPEND);
     set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
     /* Helper for CLOS: detect C NULL (returned by kernel find-class for unknown names). */

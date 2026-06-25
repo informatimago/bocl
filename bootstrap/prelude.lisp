@@ -10000,6 +10000,89 @@ the rest take :INITIAL-ELEMENT."
           (return-from done (eval form)))
       (abort () :report "Return to the top-level REPL." (return-from done (values))))))
 
+;;; ---- Module system (issue asdf) ------------------------------------------
+;;; Installed "system" modules live under <libexec>/bocl/modules/<dir>/, each with a
+;;; module.manifest plist  (:name "NAME" :files ("rel.lisp" ...)).  At boot we scan
+;;; those manifests, merge each :FILES entry with its module directory to an absolute
+;;; namestring, and push the resulting plist on BOCL:*MODULE-LIST*.  REQUIRE then
+;;; loads a module by name.  The DIRECTORY name is not significant — the :NAME in the
+;;; manifest selects the module (so modules/asdf3/ can provide module "ASDF").
+
+(defvar bocl::*module-list* nil
+  "Module plists (:name string :files (absolute-namestrings...)) discovered at boot
+   under <libexec>/bocl/modules/.")
+
+(define-condition bocl::invalid-module-plist (error)
+  ((object :initarg :object :reader bocl::invalid-module-plist-object)
+   (reason :initarg :reason :reader bocl::invalid-module-plist-reason)))
+
+(define-condition bocl::undefined-module-error (error)
+  ((module-name :initarg :module-name :reader bocl::undefined-module-name)))
+
+(defun bocl::module-name (module-plist)
+  "The :NAME of a module plist (a string), or signal INVALID-MODULE-PLIST."
+  (or (getf module-plist :name)
+      (error 'bocl::invalid-module-plist :object module-plist
+             :reason "Missing :NAME entry")))
+
+(defun bocl::module-files (module-plist)
+  "The :FILES of a module plist (absolute namestrings), or INVALID-MODULE-PLIST."
+  (or (getf module-plist :files)
+      (error 'bocl::invalid-module-plist :object module-plist
+             :reason "Missing :FILES entry")))
+
+(defun bocl::%read-manifest (manifest-path module-dir)
+  "Read the plist in MANIFEST-PATH; return (:name STRING :files (ABS...)) with each
+   :FILES entry merged against MODULE-DIR, or NIL on any error / malformed manifest."
+  (ignore-errors
+    (with-open-file (s manifest-path :direction :input)
+      (let* ((plist (read s nil nil))
+             (name  (getf plist :name))
+             (files (getf plist :files)))
+        (when (and name files)
+          (list :name (string name)
+                :files (mapcar (lambda (f)
+                                 (concatenate 'string module-dir (string f)))
+                               (if (listp files) files (list files)))))))))
+
+(defun bocl::%scan-modules (modules-dir)
+  "Return the module plists found under MODULES-DIR/<dir>/module.manifest."
+  (let ((result '()))
+    (dolist (entry (ignore-errors (common-lisp::%list-directory modules-dir)) result)
+      (let* ((mdir     (concatenate 'string modules-dir entry "/"))
+             (manifest (concatenate 'string mdir "module.manifest")))
+        (when (probe-file manifest)
+          (let ((m (bocl::%read-manifest manifest mdir)))
+            (when m (push m result))))))))
+
+;;; Populate the module list from <prelude-dir>/modules/ at boot (best effort: no
+;;; modules directory in an in-tree run, so this is simply NIL there).
+(let ((here (or *load-truename* *load-pathname*)))
+  (when here
+    (let ((modules-dir (concatenate 'string (directory-namestring here) "modules/")))
+      (setq bocl::*module-list* (bocl::%scan-modules modules-dir)))))
+
+;;; Enhanced REQUIRE (CLHS 24): MODULE-NAME is a string designator.  With no
+;;; PATHNAME-LIST, look the module up by name in BOCL:*MODULE-LIST* and load its
+;;; files; otherwise load the given pathnames.  A loaded file conventionally calls
+;;; PROVIDE; we also record the name so a second REQUIRE is a no-op.
+(defun require (module-name &optional pathname-list)
+  (let ((name (string module-name)))
+    (unless (member name *modules* :test #'string=)
+      (let ((paths
+              (cond
+                (pathname-list
+                 (if (listp pathname-list) pathname-list (list pathname-list)))
+                (t (let ((module (find name bocl::*module-list*
+                                       :key #'bocl::module-name
+                                       :test #'string-equal)))
+                     (if module
+                         (bocl::module-files module)
+                         (error 'bocl::undefined-module-error :module-name name)))))))
+        (dolist (p paths) (load p))
+        (pushnew name *modules* :test #'string=)))
+    module-name))
+
 ;;; ---- BIGNUM support -------------------------------------------------------
 ;;; When the kernel was built with bignum support (the %BIGNUMP primitive is
 ;;; bound), load the arbitrary-precision integer engine (bootstrap/bignum.lisp)
