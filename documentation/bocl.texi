@@ -93,8 +93,11 @@ Quit when argument processing is done (otherwise enter the REPL).
 The @option{--on-error} option (legacy alias @option{-on-error}) selects what bocl
 does when an @emph{unhandled} @code{SERIOUS-CONDITION} reaches the top level --- an
 error your own code did not catch with @code{HANDLER-CASE}, @code{IGNORE-ERRORS}, or
-a restart.  The action is published to Lisp as @code{BOCL:*ON-ERROR*}.  The default
-is @code{exit}.
+a restart.  The action is published to Lisp as @code{BOCL:*ON-ERROR*}.  When
+@option{--on-error} is @emph{not} given, option processing, the init/rc files and
+@option{-l} / @option{-x} forms run under @code{exit} (fail hard, good for batch),
+while the interactive REPL instead defaults to @code{debug}; an explicit
+@option{--on-error} applies to everything that follows it, including the REPL.
 
 @table @code
 @item exit
@@ -119,9 +122,8 @@ form.
 
 So: @code{exit} fails hard; @code{debug} opens the debugger; @code{abort} returns to
 the REPL; and @code{appease} differs from @code{abort} only for @code{LOAD}, where it
-skips bad forms and keeps going.  (The @code{BOCL:*ON-ERROR*} variable itself defaults
-to @code{:DEBUG}, but the launcher overrides it from @option{--on-error} unless
-@option{--no-prelude} is given.)
+skips bad forms and keeps going.  When no @option{--on-error} is given the running
+default is @code{exit} for processing and @code{debug} for the interactive REPL.
 
 @node Files
 @chapter Files

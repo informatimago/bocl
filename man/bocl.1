@@ -1,5 +1,5 @@
 .\" Manpage for bocl - BOCL Bootstrap Common Lisp.
-.TH BOCL 1 "2026-06-25" "bocl 1.3.4" "BOCL Common Lisp"
+.TH BOCL 1 "2026-06-25" "bocl 1.3.5" "BOCL Common Lisp"
 .SH NAME
 bocl \- BOCL Bootstrap Common Lisp interpreter
 .SH SYNOPSIS
@@ -79,7 +79,14 @@ is one of:
 .RS
 .TP
 .B exit
-Report the condition and exit the process (status 1).  The default.
+Report the condition and exit the process (status 1).
+.B
+This is the default while processing options, init/rc files and \-l/\-x forms; the
+interactive REPL instead defaults to
+.BR debug .
+An explicit
+.B \-\-on\-error
+applies to everything that follows it, including the REPL.
 .TP
 .B debug
 Enter the interactive debugger

@@ -45,6 +45,10 @@ static bool do_sigtrap=true;
 static char* on_error_action=NULL;
 typedef enum { on_error_debug, on_error_exit, on_error_abort, on_error_appease } on_error_action_t;
 static on_error_action_t on_error=on_error_exit;
+/* Whether --on-error was given explicitly on the command line.  When it was NOT,
+   option/rc/file processing uses EXIT (fail hard, good for batch) but the
+   interactive REPL uses DEBUG (issue on-error-default-setting). */
+static bool on_error_explicit=false;
 static string_list* initfiles=NULL;
 static string_list* expressions_and_loads=NULL;
 static char* package=NULL;
@@ -312,7 +316,7 @@ static void process_options(int argc,char** argv){
     all_encoding=NULL;
     terminal_encoding=NULL;
     initfile=NULL;
-    on_error_action=strdup("exit");
+    on_error_action=NULL;   /* NULL = not given: EXIT for processing, DEBUG for REPL */
     package=strdup("COMMON-LISP-USER");
     pname=argv[0];
     int i=1;
@@ -358,14 +362,21 @@ static void process_options(int argc,char** argv){
                   break;}}
         i++;}
     /* Some post processing: */
-    if(0==strcmp(on_error_action,"debug")){
-        on_error=on_error_debug;}
-    else if(0==strcmp(on_error_action,"exit")){
-        on_error=on_error_exit;}
-    else if(0==strcmp(on_error_action,"abort")){
-        on_error=on_error_abort;}
-    else if(0==strcmp(on_error_action,"appease")){
-        on_error=on_error_appease;}
+    if(on_error_action==NULL){
+        /* Not given: EXIT for option/rc/file processing; the REPL default (DEBUG)
+           is applied when BOCL:*ON-ERROR* is published, below. */
+        on_error=on_error_exit;
+        on_error_explicit=false;}
+    else{
+        on_error_explicit=true;
+        if(0==strcmp(on_error_action,"debug")){
+            on_error=on_error_debug;}
+        else if(0==strcmp(on_error_action,"exit")){
+            on_error=on_error_exit;}
+        else if(0==strcmp(on_error_action,"abort")){
+            on_error=on_error_abort;}
+        else if(0==strcmp(on_error_action,"appease")){
+            on_error=on_error_appease;}}
     all_encoding=validate_encoding("all",all_encoding);
     terminal_encoding=validate_encoding("terminal",terminal_encoding);
     initfiles=string_list_nreverse(initfiles);
@@ -540,10 +551,14 @@ int main(int argc,char** argv){
        %REPL-EVAL wrapper can decide whether an unhandled error enters the
        debugger (:debug), is reported (:appease/:abort) or exits (:exit). */
     if(!do_noprelude){
-        const char* k = (on_error==on_error_debug)   ? ":DEBUG"
-                      : (on_error==on_error_exit)     ? ":EXIT"
-                      : (on_error==on_error_abort)    ? ":ABORT"
-                      :                                 ":APPEASE";
+        /* When --on-error was NOT given, the interactive REPL defaults to DEBUG
+           (while the option/rc/file processing above ran under EXIT).  When it WAS
+           given, the REPL uses that action too. */
+        const char* k = (!on_error_explicit)            ? ":DEBUG"
+                      : (on_error==on_error_debug)      ? ":DEBUG"
+                      : (on_error==on_error_exit)       ? ":EXIT"
+                      : (on_error==on_error_abort)      ? ":ABORT"
+                      :                                   ":APPEASE";
         char buf[64];
         snprintf(buf,sizeof(buf),"(SETQ BOCL:*ON-ERROR* %s)",k);
         bocl_read_eval_cstring(buf);}

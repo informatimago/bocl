@@ -83,7 +83,10 @@ The ‘--on-error’ option (legacy alias ‘-on-error’) selects what bocl
 does when an _unhandled_ ‘SERIOUS-CONDITION’ reaches the top level -- an
 error your own code did not catch with ‘HANDLER-CASE’, ‘IGNORE-ERRORS’,
 or a restart.  The action is published to Lisp as ‘BOCL:*ON-ERROR*’.
-The default is ‘exit’.
+When ‘--on-error’ is _not_ given, option processing, the init/rc files
+and ‘-l’ / ‘-x’ forms run under ‘exit’ (fail hard, good for batch),
+while the interactive REPL instead defaults to ‘debug’; an explicit
+‘--on-error’ applies to everything that follows it, including the REPL.
 
 ‘exit’
      _At the REPL:_ report the condition and exit the process (status
@@ -110,9 +113,9 @@ The default is ‘exit’.
 
    So: ‘exit’ fails hard; ‘debug’ opens the debugger; ‘abort’ returns to
 the REPL; and ‘appease’ differs from ‘abort’ only for ‘LOAD’, where it
-skips bad forms and keeps going.  (The ‘BOCL:*ON-ERROR*’ variable itself
-defaults to ‘:DEBUG’, but the launcher overrides it from ‘--on-error’
-unless ‘--no-prelude’ is given.)
+skips bad forms and keeps going.  When no ‘--on-error’ is given the
+running default is ‘exit’ for processing and ‘debug’ for the interactive
+REPL.
 
 
 File: bocl.info,  Node: Files,  Next: Debugger,  Prev: Error handling,  Up: Top
@@ -173,9 +176,9 @@ Node: Top329
 Node: Overview852
 Node: Invocation1265
 Node: Error handling2267
-Node: Files4242
-Node: Debugger4952
-Node: Further reading5642
+Node: Files4485
+Node: Debugger5195
+Node: Further reading5885
 
 End Tag Table
 

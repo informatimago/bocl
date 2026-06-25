@@ -52,3 +52,34 @@ The user may add --on-error debug before --repl to get the debugger.
 | --eval '(lib:foo)' \ | exit  (default) |
 | --repl               | debug (default) |
 
+
+----------------------------------------------------------------------
+PROGRESS (slice 118, v1.3.5)
+----------------------------------------------------------------------
+DONE — the default split:
+- --on-error is no longer pre-set to "exit": on_error_action defaults to NULL
+  (sources/main.c).  When --on-error is NOT given, option/rc/file processing runs
+  under EXIT (the C on_error default), and the interactive REPL is published
+  BOCL:*ON-ERROR* = :DEBUG.  When --on-error IS given, that action is used for both
+  the processing and the REPL.  (on_error_explicit tracks this.)
+- This satisfies the common cases:
+    bocl                         -> rc/files EXIT, REPL DEBUG
+    bocl --on-error debug        -> everything DEBUG
+    bocl --init f --load g --repl-> rc/files EXIT, REPL DEBUG
+- Side fix: the spurious "WARNING: argument for --on-error has already been given:
+  exit ; changing it to debug" (from the original debugger issue) is gone, since the
+  default is no longer a pre-set "exit" string.
+- Documented in man/bocl.1, documentation/documentation.org, documentation/bocl.texi.
+
+REMAINING (kept open — larger refactor):
+- Per-option, command-line-ORDER interleaving (the first table in this issue):
+  --on-error currently applies globally to all pre-REPL processing and to the REPL,
+  not per following option.  Honouring "the current --on-error is kept for the
+  following options until the next --on-error" needs the launcher to build ONE
+  ordered action list (interleaving --on-error with -i/-l/-x) instead of the present
+  separate initfiles / expressions_and_loads lists processed in phases.
+- Pre-REPL DEBUG: an error while loading -i/-l (or the rc) under --on-error debug
+  does not yet enter the Lisp debugger — the pre-REPL path uses the C error handler
+  (kernel ERROR), whose invoke_debugger is a stub.  Routing pre-REPL form evaluation
+  through the same *ON-ERROR* / %REPL-EVAL mechanism as the REPL would make debug/
+  abort/appease/exit uniform across processing and the REPL.

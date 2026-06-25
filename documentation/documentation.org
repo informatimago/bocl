@@ -178,8 +178,11 @@ $ (quit)
 The =--on-error= option (legacy alias =-on-error=) selects what bocl does when an
 /unhandled/ =SERIOUS-CONDITION= reaches the top level --- that is, an error your own
 code did not catch with =HANDLER-CASE=, =IGNORE-ERRORS=, or a restart.  The action
-is published to Lisp as =BOCL:*ON-ERROR*=.  There are four actions; the default is
-=exit=.
+is published to Lisp as =BOCL:*ON-ERROR*=.  There are four actions.  When
+=--on-error= is /not/ given, option processing, the init/rc files and =-l= / =-x=
+forms run under =exit= (fail hard, good for batch), while the interactive REPL
+instead defaults to =debug=; an explicit =--on-error= applies to everything that
+follows it, including the REPL.
 
 | Action    | At the REPL (unhandled error in a typed / =-x= form)        | While LOADing a file (rc, =-i=, =-l=, nested loads)              |
 |-----------+-------------------------------------------------------------+-----------------------------------------------------------------|
@@ -205,9 +208,7 @@ The essential distinctions:
   the SACLA / ANSI tests) so they reach their final report instead of dying on the first
   unsupported form.
 
-Note that the =BOCL:*ON-ERROR*= variable defaults to =:DEBUG=, but the launcher
-overrides it from =--on-error= (so the running default is =exit=) unless
-=--no-prelude= is given.  The minimal debugger entered by =debug= is described in
+The minimal debugger entered by =debug= is described in
 =debugger-specifications.org=.
 
 * Implementation-Dependent Features
