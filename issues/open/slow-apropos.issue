@@ -1,0 +1,12 @@
+APROPOS is very slow:
+
+Welcome to BOCL Version 1.3.6
+
+bocl> (time (apropos "MODULE"))
+
+*MODULES* [variable]
+COMMON-LISP::MODULE-NAME
+;; Elapsed: 17.352 s
+
+NIL
+bocl> 
