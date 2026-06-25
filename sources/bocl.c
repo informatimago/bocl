@@ -126,7 +126,7 @@ Ref bocl_read_eval_loop_cstring(const char* text){
 Ref bocl_in_package(Ref package_designator){
     Ref pkg = package_find(package_designator);
     if(nullp(pkg)){
-        ERROR("IN-PACKAGE: no such package %s",
+        PACKAGE_ERROR("IN-PACKAGE: no such package %s",
               string_cstring(prin1_to_string(package_designator)));}
     set_symbol_value(S(*PACKAGE*), pkg);
     return pkg;}

@@ -502,6 +502,10 @@ static void kp_PKG_IMPORT(Ref function, Ref arguments, MultipleValues* results){
     uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments, sym, pkg; pop_sym_pkg(function,&current,&sym,&pkg);
     obarray_add_symbol(pkg->slots->package.present, sym);
+    /* IMPORT: if the symbol has no home package, PACKAGE becomes its home (CLHS). */
+    if(nullp(sym->slots->symbol.package)){
+        sym->slots->symbol.package = pkg;
+        gc_write_barrier(sym->slots);}
     results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
 
 /* (%PKG-MAKE-PRESENT name-string package) — ensure a symbol of NAME is PRESENT
@@ -532,6 +536,10 @@ static void kp_PKG_UNINTERN(Ref function, Ref arguments, MultipleValues* results
     obarray_remove_symbol(pkg->slots->package.external, sym);
     pkg->slots->package.shadowing = delete(sym, pkg->slots->package.shadowing);
     gc_write_barrier(pkg->slots);
+    /* If PKG was the symbol's home package, the home becomes NIL (CLHS UNINTERN). */
+    if(sym->slots->symbol.package == pkg){
+        sym->slots->symbol.package = NIL_Symbol;
+        gc_write_barrier(sym->slots);}
     results->count=1; results->values[0]=as_boolean(removed); close_live_pool(pool);}
 
 /* (%PKG-UNEXPORT symbol package) — remove symbol from the external table. */

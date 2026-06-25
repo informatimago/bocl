@@ -3779,15 +3779,35 @@ SETQ/INCF/DECF is left in place (sequential)."
     `(dolist (,var (package-exported-symbols ,package) ,result)
        ,@body)))
 
+(defun %all-symbols-list ()
+  "Every symbol present in every package (a symbol present in several packages may
+   appear more than once — permitted by CLHS DO-ALL-SYMBOLS)."
+  (let ((acc '()))
+    (dolist (p (list-all-packages) acc)
+      (dolist (s (package-symbols p)) (push s acc)))))
+
 (defmacro do-all-symbols (varspec &body body)
-  ;; (DO-ALL-SYMBOLS (var [result]) body...)
-  ;; Bind VAR to every symbol present in every package.
-  (let ((var    (first  varspec))
-        (result (second varspec))
-        (pkg%   (gensym "PKG-")))
-    `(dolist (,pkg% (list-all-packages) ,result)
-       (dolist (,var (package-symbols ,pkg%))
-         ,@body))))
+  ;; (DO-ALL-SYMBOLS (var [result]) declaration* {tag|form}*)
+  ;; CLHS: an implicit BLOCK NIL surrounds it (RETURN exits), the body is an implicit
+  ;; TAGBODY (GO/tags work), and VAR is bound to NIL when RESULT is evaluated.  We do
+  ;; NOT iterate with DOLIST: its own BLOCK NIL would capture the body's RETURN.
+  (let ((var       (first  varspec))
+        (result    (second varspec))
+        (rest%     (gensym "REST-"))
+        (top%      (gensym "TOP-"))
+        (end%      (gensym "END-"))
+        (real-body (%strip-leading-declares body)))
+    `(block nil
+       (let ((,var nil) (,rest% (%all-symbols-list)))
+         (tagbody
+            ,top%
+            (when (null ,rest%) (go ,end%))
+            (setq ,var (car ,rest%) ,rest% (cdr ,rest%))
+            (tagbody ,@real-body)
+            (go ,top%)
+            ,end%)
+         (setq ,var nil)
+         ,result))))
 
 (defun %make-package-iterator (packages symbol-types)
   "Return a thunk that yields (values found-p symbol accessibility package) for
@@ -8476,9 +8496,28 @@ result array; return that array."
   "Accept a single symbol or a list of symbols; always return a list."
   (if (listp symbols) symbols (list symbols)))
 
+(defun %pkg-err (control &rest args)
+  (error 'package-error :format-control control :format-arguments args))
+
+(defun %pkg-conflict (name pkg except)
+  "If a symbol named NAME is accessible in PKG, is NOT EXCEPT, and is not one of
+   PKG's shadowing symbols, return that conflicting symbol; else NIL."
+  (multiple-value-bind (sym status) (find-symbol name pkg)
+    (when (and status (not (eq sym except))
+               (not (member sym (package-shadowing-symbols pkg))))
+      sym)))
+
 (defun import (symbols &optional (package *package*))
+  ;; CLHS IMPORT: signals a (correctable) PACKAGE-ERROR if a distinct symbol of the
+  ;; same name is already accessible in PACKAGE.
   (let ((pkg (%designated-package package)))
     (dolist (sym (%as-symbol-list symbols) t)
+      ;; A name conflict is any DISTINCT symbol of the same name already accessible
+      ;; (shadowing does not exempt IMPORT — unlike USE-PACKAGE).
+      (multiple-value-bind (existing status) (find-symbol (symbol-name sym) pkg)
+        (when (and status (not (eq existing sym)))
+          (%pkg-err "IMPORT: importing ~S conflicts with ~S already accessible in ~S."
+                    sym existing pkg)))
       (%pkg-import sym pkg))))
 
 (defun shadow (symbols &optional (package *package*))
@@ -8489,17 +8528,40 @@ result array; return that array."
       (%pkg-shadow-add (%pkg-make-present (string name) pkg) pkg))))
 
 (defun shadowing-import (symbols &optional (package *package*))
+  ;; CLHS SHADOWING-IMPORT: like IMPORT but never errors on a name clash — any
+  ;; DISTINCT symbol of the same name that is PRESENT in PKG is first uninterned, so
+  ;; the imported symbol replaces it; the import is then marked shadowing.
   (let ((pkg (%designated-package package)))
     (dolist (sym (%as-symbol-list symbols) t)
+      (multiple-value-bind (old status) (find-symbol (symbol-name sym) pkg)
+        (when (and old (not (eq old sym)) (member status '(:internal :external)))
+          (%pkg-unintern old pkg)))
       (%pkg-import sym pkg)
       (%pkg-shadow-add sym pkg))))
 
 (defun unintern (symbol &optional (package *package*))
-  (%pkg-unintern symbol (%designated-package package)))
+  ;; CLHS UNINTERN: if SYMBOL is a shadowing symbol of PACKAGE that resolves a name
+  ;; conflict among two or more distinct inherited symbols of the same name,
+  ;; uninterning it would expose the conflict — signal a PACKAGE-ERROR.
+  (let ((pkg (%designated-package package)))
+    (when (member symbol (package-shadowing-symbols pkg))
+      (let ((name (symbol-name symbol)) (inherited '()))
+        (dolist (u (package-use-list pkg))
+          (multiple-value-bind (s status) (find-symbol name u)
+            (when (and (eq status :external) (not (member s inherited)))
+              (push s inherited))))
+        (when (> (length inherited) 1)
+          (%pkg-err "UNINTERN: uninterning the shadowing symbol ~S exposes a name conflict among ~S in ~S."
+                    symbol inherited pkg))))
+    (%pkg-unintern symbol pkg)))
 
 (defun unexport (symbols &optional (package *package*))
+  ;; CLHS UNEXPORT: signals a PACKAGE-ERROR if a symbol is not accessible in PACKAGE.
   (let ((pkg (%designated-package package)))
     (dolist (sym (%as-symbol-list symbols) t)
+      (multiple-value-bind (existing status) (find-symbol (symbol-name sym) pkg)
+        (unless (and status (eq existing sym))
+          (%pkg-err "UNEXPORT: ~S is not accessible in ~S." sym pkg)))
       (%pkg-unexport sym pkg))))
 
 (defun unuse-package (packages-to-unuse &optional (package *package*))
@@ -8513,8 +8575,69 @@ result array; return that array."
                (mapcar #'string new-nicknames)))
 
 (defun delete-package (package)
+  ;; CLHS DELETE-PACKAGE: an already-deleted package object (its name is NIL), or a
+  ;; name designator naming no package, returns NIL.  A package still used by others
+  ;; signals a (correctable) PACKAGE-ERROR.
   (let ((pkg (find-package package)))
-    (when pkg (%pkg-delete pkg) t)))
+    (cond
+      ((or (null pkg) (null (package-name pkg))) nil)
+      ((package-used-by-list pkg)
+       (%pkg-err "DELETE-PACKAGE: ~S is used by ~S." pkg (package-used-by-list pkg)))
+      (t (%pkg-delete pkg) t))))
+
+;;; Conformance wrappers over the kernel MAKE-PACKAGE / USE-PACKAGE / EXPORT, adding
+;;; the CLHS name/use/export conflict checks (signalling PACKAGE-ERROR) the bare
+;;; kernel mutators omit.
+(let ((%k-make-package (symbol-function 'make-package)))
+  (set-symbol-function
+   (lambda (name &rest options)
+     (let* ((sname     (string name))
+            (nicknames (getf options :nicknames))
+            (use-raw   (getf options :use '%unset))
+            (use       (if (eq use-raw '%unset) '("COMMON-LISP") use-raw)))
+       ;; Name / nickname must not already name a package.
+       (dolist (n (cons sname (mapcar #'string nicknames)))
+         (when (find-package n)
+           (%pkg-err "MAKE-PACKAGE: ~S already names a package." n)))
+       ;; Build with NO use list, then USE-PACKAGE each (which checks conflicts).
+       (let ((pkg (funcall %k-make-package sname :nicknames nicknames :use nil)))
+         (when use (use-package use pkg))
+         pkg)))
+   'make-package))
+
+(let ((%k-use-package (symbol-function 'use-package)))
+  (set-symbol-function
+   (lambda (packages-to-use &optional (package *package*))
+     (let ((pkg  (%designated-package package))
+           (uses (%as-symbol-list packages-to-use)))
+       ;; Apply each package one at a time so a conflict BETWEEN two newly-used
+       ;; packages (e.g. CL and a package that also exports CAR) is detected.
+       (dolist (u uses t)
+         (let ((up (%designated-package u)))
+           (dolist (s (package-exported-symbols up))
+             (let ((c (%pkg-conflict (symbol-name s) pkg s)))
+               (when c
+                 (%pkg-err "USE-PACKAGE: ~S from ~S conflicts with ~S in ~S."
+                           s up c pkg))))
+           (funcall %k-use-package up pkg)))))
+   'use-package))
+
+(let ((%k-export (symbol-function 'export)))
+  (set-symbol-function
+   (lambda (symbols &optional (package *package*))
+     (let ((pkg (%designated-package package)))
+       (dolist (s (%as-symbol-list symbols))
+         ;; The symbol must be accessible in PKG.
+         (multiple-value-bind (existing status) (find-symbol (symbol-name s) pkg)
+           (unless (and status (eq existing s))
+             (%pkg-err "EXPORT: ~S is not accessible in ~S." s pkg)))
+         ;; Exporting must not create a conflict in any package that uses PKG.
+         (dolist (q (package-used-by-list pkg))
+           (let ((c (%pkg-conflict (symbol-name s) q s)))
+             (when c
+               (%pkg-err "EXPORT: exporting ~S would conflict with ~S in ~S." s c q)))))
+       (funcall %k-export symbols package)))
+   'export))
 
 (defun find-all-symbols (name)
   (let ((sname (string name)) (result '()))
@@ -8522,6 +8645,12 @@ result array; return that array."
       (multiple-value-bind (sym status) (find-symbol sname pkg)
         (when (and status (not (member sym result)))
           (push sym result))))))
+
+(defun %dp-desig (d)
+  ;; A package designator in DEFPACKAGE may already be a PACKAGE object (e.g. built
+  ;; via EVAL/APPEND with a spliced (find-package ...)); keep it as-is, else coerce
+  ;; the string designator (string / symbol / character) to its name string.
+  (if (packagep d) d (string d)))
 
 (defmacro defpackage (name &rest options)
   (let ((sname     (string name))
@@ -8533,25 +8662,26 @@ result array; return that array."
         (let ((k (car opt)) (a (cdr opt)))
           (cond
             ((eq k :nicknames) (setq nicknames (append nicknames (mapcar #'string a))))
-            ((eq k :use)       (setq use (append use (mapcar #'string a)) use-given t))
+            ((eq k :use)       (setq use (append use (mapcar #'%dp-desig a)) use-given t))
             ((eq k :export)    (setq exports (append exports (mapcar #'string a))))
             ((eq k :intern)    (setq interns (append interns (mapcar #'string a))))
             ((eq k :shadow)    (setq shadows (append shadows (mapcar #'string a))))
             ((eq k :import-from)
-             (push (cons (string (car a)) (mapcar #'string (cdr a))) import-froms))
+             (push (cons (%dp-desig (car a)) (mapcar #'string (cdr a))) import-froms))
             ((eq k :shadowing-import-from)
-             (push (cons (string (car a)) (mapcar #'string (cdr a))) shadow-import-froms))
+             (push (cons (%dp-desig (car a)) (mapcar #'string (cdr a))) shadow-import-froms))
             (t nil)))))     ; :documentation, :size, etc. — ignored
     ;; Build the body forms in the order DEFPACKAGE specifies:
-    ;; shadows, shadowing-import-from, import-from, use, intern, export.
+    ;; shadows, shadowing-import-from, import-from, use, intern, export.  Package
+    ;; designators are QUOTED so a spliced PACKAGE object survives to runtime.
     (dolist (n shadows) (push `(shadow ,n pkg) body))
     (dolist (spec shadow-import-froms)
       (let ((from (car spec)))
-        (dolist (n (cdr spec)) (push `(shadowing-import (intern ,n ,from) pkg) body))))
+        (dolist (n (cdr spec)) (push `(shadowing-import (intern ,n ',from) pkg) body))))
     (dolist (spec import-froms)
       (let ((from (car spec)))
-        (dolist (n (cdr spec)) (push `(import (intern ,n ,from) pkg) body))))
-    (dolist (u use) (push `(use-package ,u pkg) body))
+        (dolist (n (cdr spec)) (push `(import (intern ,n ',from) pkg) body))))
+    (dolist (u use) (push `(use-package ',u pkg) body))
     (dolist (n interns) (push `(intern ,n pkg) body))
     (dolist (n exports) (push `(export (intern ,n pkg) pkg) body))
     `(eval-when (:compile-toplevel :load-toplevel :execute)

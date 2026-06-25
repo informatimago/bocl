@@ -16,6 +16,42 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== must-package GREEN (Slice 112, v1.2.40) — 31 package-system conformance bugs fixed ==
+Run via the ansi-tests.lisp harness (deftest/classify-error/notnot in package CL-TEST);
+a bare driver gives bogus results.  Driver: tmp/drivep.lisp (loads ansi-tests, evals
+each form in CL-TEST); per-form tester tmp/tf.lisp; ground truth tmp/cmp/SBCL+CCL.
+bocl fell 31->0; the 22 forms SBCL errors on under bare eval (150,287-306,334 —
+WITH-PACKAGE-ITERATOR with iterator macro named GET) bocl already passes.
+
+The 31 were all missing CLHS conformance in bocl's package system (kernel mutators
+with no conflict checks; thin Lisp wrappers).  Fixes:
+  * PACKAGE-ERROR signalling: added a C `package_error()` helper (boerror.c) +
+    PACKAGE_ERROR macro; IN-PACKAGE of an unknown package now signals PACKAGE-ERROR
+    (was SIMPLE-ERROR).  (226)
+  * Lisp conformance layer (prelude): MAKE-PACKAGE checks name/nickname clashes and
+    uses each :use package incrementally so an inter-:use conflict (CL + a package
+    also exporting CAR) is caught; USE-PACKAGE / EXPORT / IMPORT / UNEXPORT detect
+    name conflicts / inaccessible symbols and signal PACKAGE-ERROR; IMPORT's conflict
+    check ignores shadowing (unlike USE-PACKAGE).  (28,29,30,31,122,123,135,136,
+    177,178,179,180,193,207,208,209)
+  * SHADOWING-IMPORT now uninterns a distinct PRESENT symbol of the same name before
+    importing+shadowing, so the import replaces it.  (160,161,162,163)
+  * kernel %PKG-IMPORT sets a homeless symbol's home package; %PKG-UNINTERN clears
+    the home when PKG was it.  (176,192)
+  * UNINTERN of a shadowing symbol that resolves a conflict among >=2 inherited
+    symbols signals PACKAGE-ERROR (name conflict).  (193)
+  * DELETE-PACKAGE: an already-deleted package (name NIL) -> NIL; a package used by
+    others -> PACKAGE-ERROR.  (218,220)
+  * DEFPACKAGE keeps PACKAGE-object / character designators in :use / :import-from /
+    :shadowing-import-from (no longer (string <package>)); quotes them in expansion.
+    (245,257,258)
+  * DO-ALL-SYMBOLS rebuilt: own BLOCK NIL (RETURN exits the whole loop, not the inner
+    DOLIST), implicit TAGBODY body (GO/tags), and VAR bound NIL for the result form;
+    leading declarations stripped.  (315,318,321)
+Broad regression sweep clean (must-condition 147/0, -loop 852/0, -sequence 3851/0,
+-cons 728/0, -array 330/0, -string 414/0, -symbol 113/0, -character 313/0,
+-data-and-control 310/1, -do 75/0, -eval 9/0; the 1 is the known-conforming F192).
+
 == must-condition opened (Slice 107, v1.2.34) — segfault fixed; 22 logic fails remain ==
 must-condition was a hard SEGFAULT (form 9: (error 'no-such-error!!)).  Root cause:
 kernel MAKE-CONDITION did `find_class(sym)` (returns C NULL, not NIL, for an unknown

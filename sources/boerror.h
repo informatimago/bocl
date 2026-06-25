@@ -23,6 +23,7 @@
 #define READER_ERROR(stream,message_format,...)      error(__FUNCTION__,"READER ERROR: on stream %s " message_format,string_cstring(prin1_to_string(stream)),__VA_ARGS__)
 
 #define PROGRAM_ERROR(message_format,...)            program_error(__FUNCTION__,"PROGRAM ERROR: " message_format,__VA_ARGS__)
+#define PACKAGE_ERROR(message_format,...)            package_error(__FUNCTION__,"PACKAGE ERROR: " message_format,__VA_ARGS__)
 
 #define NOT_IMPLEMENTED_YET()                        error(__FUNCTION__,"NOT IMPLEMENTED YET")
 
@@ -39,6 +40,7 @@
 _Noreturn void fatal(const char* fname,const char* message_format,...);
 _Noreturn void error(const char* fname,const char* message_format,...);
 _Noreturn void program_error(const char* fname,const char* message_format,...);
+_Noreturn void package_error(const char* fname,const char* message_format,...);
 _Noreturn void type_error(const char* fname,Ref object,Ref class);
 
 void*    check_pointer           (const char* fname,void*    pointer);

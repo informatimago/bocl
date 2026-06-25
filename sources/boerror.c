@@ -107,6 +107,38 @@ _Noreturn void program_error(const char* fname,const char* message_format,...){
     exit(EX_DATAERR);}
 
 
+_Noreturn void package_error(const char* fname,const char* message_format,...){
+    /* Like error(), but signals a catchable PACKAGE-ERROR (CLHS 11.x): unknown
+       package designators, name/use conflicts, etc. */
+    char body[1024];
+    va_list ap;
+    va_start(ap,message_format);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+    vsnprintf(body,sizeof(body),message_format,ap);
+#pragma GCC diagnostic pop
+    va_end(ap);
+
+    if(PACKAGE_ERROR_Class->class != NULL){
+        uword pool = open_live_pool();
+        char msg[1100];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+        snprintf(msg,sizeof(msg),"In %s: %s",fname,body);
+#pragma GCC diagnostic pop
+        Ref fmt  = string_new_cstring(msg);
+        add_to_live_pool(fmt);
+        Ref cond = make_simple_condition(PACKAGE_ERROR_Class, fmt, NIL_Symbol);
+        add_to_live_pool(cond);
+        signal_condition(cond, eval_global_environment());
+        /* signal_condition returned — no handler matched; fall through. */
+        close_live_pool(pool);}
+
+    fprintf(stderr,"\nIn %s:\n",fname);
+    fprintf(stderr,"%s\n\n",body);
+    exit(EX_DATAERR);}
+
+
 _Noreturn void type_error(const char* fname,Ref object,Ref class){
     char* got=string_cstring(object->class->slots->class.name->slots->symbol.name);
     char* exp=string_cstring(        class->slots->class.name->slots->symbol.name);
