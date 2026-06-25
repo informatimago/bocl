@@ -108,13 +108,16 @@ static Ref build_condition(Ref default_class, Ref arguments){
     Ref datum = cons_car(arguments);
     Ref rest  = cons_cdr(arguments);
     if(typep(datum, CONDITION_Class)){
+        /* Supplying initargs together with an already-built condition is a
+           type-error (SBCL/CCL signal SIMPLE-TYPE-ERROR here); must-condition
+           form 24 catches it via a (type-error () t) clause. */
         if(consp(rest)){
-            ERROR("Extra arguments after %s","an already-built condition");}
+            TYPE_ERROR(datum, CONDITION_Class);}
         return datum;}
     /* Accept CLOS instances (from DEFINE-CONDITION) as conditions directly. */
     if(clos_instance_p(datum)){
         if(consp(rest)){
-            ERROR("Extra arguments after %s","a CLOS condition instance");}
+            TYPE_ERROR(datum, CONDITION_Class);}
         return datum;}
     if(typep(datum, STRING_Class)){
         return make_simple_condition(default_class, datum, rest);}
@@ -170,6 +173,10 @@ static void kernel_WARN(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref cond = build_condition(SIMPLE_WARNING_Class, arguments);
+    /* CLHS WARN: if the condition is not of type WARNING, signal a TYPE-ERROR and
+       do NOT signal the warning. */
+    if(!typep(cond, WARNING_Class)){
+        TYPE_ERROR(cond, WARNING_Class);}
     Ref ret = signal_condition(cond, eval_global_environment());
     if(nullp(ret)){
         /* No handler — print the warning to *error-output*. */

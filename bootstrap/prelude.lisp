@@ -532,19 +532,36 @@
      (error (ignored-error-cond)
        (values nil ignored-error-cond))))
 
-(defmacro assert (test-form &rest ignored)
-  ;; (assert test [(place...) datum args...]) — minimal version,
-  ;; just checks the test and errors with a default message. The
-  ;; CL spec's optional (places-to-fix datum args...) tail is
-  ;; accepted but ignored.
-  ignored
-  `(unless ,test-form
-     (error "Assertion failed")))
+(defmacro assert (test-form &optional places datum &rest args)
+  ;; (assert test [({place}*) [datum {arg}*]]) — CLHS ASSERT.  When DATUM is given
+  ;; it denotes the condition to signal ((error datum . args)); otherwise a default
+  ;; SIMPLE-ERROR.  A CONTINUE restart allows the caller to retry (PLACES would be
+  ;; re-set interactively; bocl just re-tests TEST-FORM).
+  (declare (ignore places))
+  `(do () (,test-form nil)
+     (restart-case
+         ,(if datum
+              `(error ,datum ,@args)
+              `(error 'simple-error
+                      :format-control "The assertion ~S failed."
+                      :format-arguments (list ',test-form)))
+       (continue () :report "Retry the assertion." nil))))
 
-(defmacro check-type (place type)
-  ;; (check-type place type [type-string])
-  `(unless (typep ,place ',type)
-     (error "Value does not match expected type")))
+(defmacro check-type (place type &optional type-string)
+  ;; (check-type place type [type-string]) — CLHS CHECK-TYPE.  Signals a
+  ;; correctable TYPE-ERROR (a SIMPLE-TYPE-ERROR) with a STORE-VALUE restart that
+  ;; stores a new value into PLACE and re-tests.
+  (declare (ignore type-string))
+  (let ((v (gensym "CT-")))
+    `(do () ((typep ,place ',type) nil)
+       (restart-case
+           (error 'simple-type-error
+                  :format-control "The value ~S is not of type ~S."
+                  :format-arguments (list ,place ',type))
+         (store-value (,v)
+           :report "Supply a new value."
+           :interactive (lambda () (list (eval (read))))
+           (setf ,place ,v))))))
 
 (defmacro return (&optional value)
   `(return-from nil ,value))
@@ -5124,11 +5141,23 @@ the class object it denotes, so two specializers compare by class identity."
   "Signal a warning with a MUFFLE-WARNING restart active (CLHS WARN).  A handler
    may (muffle-warning) to suppress it; otherwise it is printed to *error-output*.
    Overrides the kernel WARN, which did not establish the restart."
+  ;; Supplying initargs together with an already-built condition is a type-error
+  ;; (SBCL/CCL signal SIMPLE-TYPE-ERROR).
+  (when (and (typep datum 'condition) arguments)
+    (error 'simple-type-error
+           :format-control "WARN: initargs supplied with a condition object"
+           :format-arguments nil))
   (let ((condition (cond ((typep datum 'condition) datum)
                          ((symbolp datum) (apply #'make-condition datum arguments))
                          (t (make-condition 'simple-warning
                                             :format-control datum
                                             :format-arguments arguments)))))
+    ;; CLHS WARN: if the condition is not of type WARNING, signal a TYPE-ERROR and
+    ;; do NOT signal the warning.
+    (unless (typep condition 'warning)
+      (error 'simple-type-error
+             :format-control "WARN: ~S is not of type WARNING"
+             :format-arguments (list condition)))
     (restart-case
         (progn
           (signal condition)

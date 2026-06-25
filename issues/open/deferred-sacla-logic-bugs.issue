@@ -32,9 +32,18 @@ so piping forms to the REPL reports bogus "Unhandled SIMPLE-ERROR"; run via `-x 
 (bocl_read_eval_cstring, no %repl-eval) or LOAD instead.  Driver: tmp/drivec.lisp.
 Ground truth (SBCL + CCL agree, all 22 -> T): tmp/cmp.lisp.
 
-The 22 remaining are genuine bocl bugs in three clusters:
-  * WARN type-check (19,20,21,22,24,146): WARN must signal a TYPE-ERROR when its
-    condition is not a WARNING (CLHS warn).
+FIXED — Slice 108 (v1.2.35): WARN type-check + ASSERT/CHECK-TYPE (22 -> 12).
+  * WARN (19,20,21,22,24,146): the prelude WARN now signals a SIMPLE-TYPE-ERROR when
+    its condition is not a WARNING, and when initargs are supplied with an already-
+    built condition (CLHS warn; matches SBCL/CCL).  build_condition's "extra args
+    after a condition" also became a TYPE-ERROR.
+  * ASSERT (133): now (error datum . args) when a datum is given (default SIMPLE-ERROR
+    otherwise), wrapped in a CONTINUE restart — so (assert v (v) 'type-error ...)
+    signals a TYPE-ERROR.
+  * CHECK-TYPE (136,137,138): now signals a correctable SIMPLE-TYPE-ERROR with a
+    STORE-VALUE restart that stores into the place and re-tests.
+
+STILL OPEN in must-condition (12) — HANDLER-BIND ordering + restart system:
   * HANDLER-BIND (25: empty (handler-bind nil) should be NIL; 38,39: multiple
     same-type handlers in one HANDLER-BIND must each run, left-to-right, then the
     enclosing frame, when they decline — signal_condition currently `goto next_frame`
