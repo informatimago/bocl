@@ -81,6 +81,16 @@
                (value (second pairs)))
            (cond ((symbolp place)
                   `(setq ,place ,value))
+                 ((and (consp place) (eq (car place) 'values))
+                  ;; (setf (values p1 p2 ...) form): bind FORM's multiple values to
+                  ;; temporaries, store each into the corresponding place (a place
+                  ;; may itself be (values ...), nesting naturally), and return the
+                  ;; stored values.  Extra values are discarded; missing ones are NIL.
+                  (let* ((places (cdr place))
+                         (temps (mapcar (lambda (p) p (gensym "SETF-VALUES-")) places)))
+                    `(multiple-value-bind ,temps ,value
+                       ,@(mapcar (lambda (p tv) (list 'setf p tv)) places temps)
+                       (values ,@temps))))
                  ((consp place)
                   (let ((expander (gethash (car place) *setf-expanders*)))
                     (cond
