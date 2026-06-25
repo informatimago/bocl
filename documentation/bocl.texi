@@ -38,6 +38,7 @@ runtime-loaded Lisp prelude.
 @menu
 * Overview::            What bocl is.
 * Invocation::          Running bocl from the command line.
+* Error handling::      The @option{--on-error} option.
 * Files::               Installed layout and start-up files.
 * Debugger::            The minimal debugger.
 * Further reading::     Manuals and specifications.
@@ -80,12 +81,47 @@ Do not load @file{~/.boclrc}.
 @item --no-prelude
 Bare kernel only --- do not load the prelude.
 @item --on-error @var{action}
-On an unhandled error reaching the top level, do @var{action}: one of
-@code{debug}, @code{exit}, @code{abort}, @code{appease}.  @code{debug} enters
-the minimal debugger.
+What to do when an unhandled error reaches the top level: one of @code{exit}
+(the default), @code{debug}, @code{abort}, @code{appease}.  @xref{Error handling}.
 @item -quit, --quit
 Quit when argument processing is done (otherwise enter the REPL).
 @end table
+
+@node Error handling
+@chapter Error handling
+
+The @option{--on-error} option (legacy alias @option{-on-error}) selects what bocl
+does when an @emph{unhandled} @code{SERIOUS-CONDITION} reaches the top level --- an
+error your own code did not catch with @code{HANDLER-CASE}, @code{IGNORE-ERRORS}, or
+a restart.  The action is published to Lisp as @code{BOCL:*ON-ERROR*}.  The default
+is @code{exit}.
+
+@table @code
+@item exit
+@emph{At the REPL:} report the condition and exit the process (status 1).
+@emph{While loading a file:} the error aborts the load and the process exits.
+This is the fail-hard mode for batch use, scripts, and CI.
+@item debug
+Enter the interactive debugger (@code{INVOKE-DEBUGGER}): condition banner, backtrace,
+restart menu, and a debug REPL.  If the debugger is continued, control returns to the
+prompt.  The natural choice for interactive development.  @xref{Debugger}.
+@item abort
+Report the condition and return to the top-level REPL --- no debugger, the process
+stays alive.  While loading a file, the failing form aborts the whole load.
+@item appease
+The same as @code{abort} at the REPL.  While loading a file, however, a failing
+top-level form is reported (@samp{;; [load] skipped a form: @dots{}}) and skipped, and
+loading continues to the end (skips are counted in @code{*LOAD-ERROR-COUNT*}).  This
+is meant for loading large or partially-supported suites (e.g.@: the SACLA / ANSI
+tests) so they reach their final report instead of dying on the first unsupported
+form.
+@end table
+
+So: @code{exit} fails hard; @code{debug} opens the debugger; @code{abort} returns to
+the REPL; and @code{appease} differs from @code{abort} only for @code{LOAD}, where it
+skips bad forms and keeps going.  (The @code{BOCL:*ON-ERROR*} variable itself defaults
+to @code{:DEBUG}, but the launcher overrides it from @option{--on-error} unless
+@option{--no-prelude} is given.)
 
 @node Files
 @chapter Files

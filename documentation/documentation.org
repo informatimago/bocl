@@ -173,6 +173,43 @@ ERROR: Division by zero    ; note : no debugger.
 $ (quit)
 #+END_EXAMPLE
 
+** Error handling: the =--on-error= option
+
+The =--on-error= option (legacy alias =-on-error=) selects what bocl does when an
+/unhandled/ =SERIOUS-CONDITION= reaches the top level --- that is, an error your own
+code did not catch with =HANDLER-CASE=, =IGNORE-ERRORS=, or a restart.  The action
+is published to Lisp as =BOCL:*ON-ERROR*=.  There are four actions; the default is
+=exit=.
+
+| Action    | At the REPL (unhandled error in a typed / =-x= form)        | While LOADing a file (rc, =-i=, =-l=, nested loads)              |
+|-----------+-------------------------------------------------------------+-----------------------------------------------------------------|
+| =exit=    | Report the condition and exit the process (status 1).       | The error aborts the load; the process exits.                   |
+| =debug=   | Enter the interactive debugger (=INVOKE-DEBUGGER=): banner,  | The failing form drops into the debugger.                       |
+|           | backtrace, restart menu, debug REPL.                        |                                                                 |
+| =abort=   | Report the condition and return to the top-level REPL        | The failing form aborts the whole load.                         |
+|           | (no debugger; the process stays alive).                     |                                                                 |
+| =appease= | Same as =abort= (report and return to the prompt).          | Per-form recovery: the failing top-level form is reported       |
+|           |                                                             | (=;; [load] skipped a form: ...=) and skipped, and loading      |
+|           |                                                             | continues (skips are counted in =*LOAD-ERROR-COUNT*=).          |
+
+The essential distinctions:
+
+- =exit= is the fail-hard mode for batch / scripts / CI: any uncaught error stops the
+  process with a non-zero status.  The other three keep the session alive.
+- =debug= versus =abort=: both keep you alive, but =debug= opens the debugger to inspect
+  the backtrace and choose a restart, whereas =abort= simply unwinds back to the prompt.
+  =debug= is the natural choice for interactive development.
+- =abort= versus =appease=: identical at the REPL; they differ only for =LOAD=.  =abort=
+  aborts the whole file on the first bad form, while =appease= skips bad forms and loads
+  everything it can --- intended for loading large or partially-supported suites (e.g.
+  the SACLA / ANSI tests) so they reach their final report instead of dying on the first
+  unsupported form.
+
+Note that the =BOCL:*ON-ERROR*= variable defaults to =:DEBUG=, but the launcher
+overrides it from =--on-error= (so the running default is =exit=) unless
+=--no-prelude= is given.  The minimal debugger entered by =debug= is described in
+=debugger-specifications.org=.
+
 * Implementation-Dependent Features
 ** 1.5.1.5 Conformance Statement
 

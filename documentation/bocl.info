@@ -22,6 +22,7 @@ a runtime-loaded Lisp prelude.
 
 * Overview::            What bocl is.
 * Invocation::          Running bocl from the command line.
+* Error handling::      The ‘--on-error’ option.
 * Files::               Installed layout and start-up files.
 * Debugger::            The minimal debugger.
 * Further reading::     Manuals and specifications.
@@ -39,7 +40,7 @@ supporting files (‘cl-exports.lisp’, ‘bignum.lisp’,
 ‘bignum-integration.lisp’).
 
 
-File: bocl.info,  Node: Invocation,  Next: Files,  Prev: Overview,  Up: Top
+File: bocl.info,  Node: Invocation,  Next: Error handling,  Prev: Overview,  Up: Top
 
 2 Invocation
 ************
@@ -66,16 +67,57 @@ full list.
 ‘--no-prelude’
      Bare kernel only -- do not load the prelude.
 ‘--on-error ACTION’
-     On an unhandled error reaching the top level, do ACTION: one of
-     ‘debug’, ‘exit’, ‘abort’, ‘appease’.  ‘debug’ enters the minimal
-     debugger.
+     What to do when an unhandled error reaches the top level: one of
+     ‘exit’ (the default), ‘debug’, ‘abort’, ‘appease’.  *Note Error
+     handling::.
 ‘-quit, --quit’
      Quit when argument processing is done (otherwise enter the REPL).
 
 
-File: bocl.info,  Node: Files,  Next: Debugger,  Prev: Invocation,  Up: Top
+File: bocl.info,  Node: Error handling,  Next: Files,  Prev: Invocation,  Up: Top
 
-3 Files
+3 Error handling
+****************
+
+The ‘--on-error’ option (legacy alias ‘-on-error’) selects what bocl
+does when an _unhandled_ ‘SERIOUS-CONDITION’ reaches the top level -- an
+error your own code did not catch with ‘HANDLER-CASE’, ‘IGNORE-ERRORS’,
+or a restart.  The action is published to Lisp as ‘BOCL:*ON-ERROR*’.
+The default is ‘exit’.
+
+‘exit’
+     _At the REPL:_ report the condition and exit the process (status
+     1).  _While loading a file:_ the error aborts the load and the
+     process exits.  This is the fail-hard mode for batch use, scripts,
+     and CI.
+‘debug’
+     Enter the interactive debugger (‘INVOKE-DEBUGGER’): condition
+     banner, backtrace, restart menu, and a debug REPL. If the debugger
+     is continued, control returns to the prompt.  The natural choice
+     for interactive development.  *Note Debugger::.
+‘abort’
+     Report the condition and return to the top-level REPL -- no
+     debugger, the process stays alive.  While loading a file, the
+     failing form aborts the whole load.
+‘appease’
+     The same as ‘abort’ at the REPL. While loading a file, however, a
+     failing top-level form is reported (‘;; [load] skipped a form:
+     ...’) and skipped, and loading continues to the end (skips are
+     counted in ‘*LOAD-ERROR-COUNT*’).  This is meant for loading large
+     or partially-supported suites (e.g. the SACLA / ANSI tests) so they
+     reach their final report instead of dying on the first unsupported
+     form.
+
+   So: ‘exit’ fails hard; ‘debug’ opens the debugger; ‘abort’ returns to
+the REPL; and ‘appease’ differs from ‘abort’ only for ‘LOAD’, where it
+skips bad forms and keeps going.  (The ‘BOCL:*ON-ERROR*’ variable itself
+defaults to ‘:DEBUG’, but the launcher overrides it from ‘--on-error’
+unless ‘--no-prelude’ is given.)
+
+
+File: bocl.info,  Node: Files,  Next: Debugger,  Prev: Error handling,  Up: Top
+
+4 Files
 *******
 
 The default install prefix is ‘/opt/local’.
@@ -99,7 +141,7 @@ overrides the prelude search.
 
 File: bocl.info,  Node: Debugger,  Next: Further reading,  Prev: Files,  Up: Top
 
-4 The minimal debugger
+5 The minimal debugger
 **********************
 
 When an unhandled ‘SERIOUS-CONDITION’ reaches the top level under
@@ -114,7 +156,7 @@ in the error's dynamic context.  The complete specification is in
 
 File: bocl.info,  Node: Further reading,  Prev: Debugger,  Up: Top
 
-5 Further reading
+6 Further reading
 *****************
 
    • ‘bocl(1)’ -- the manual page.
@@ -128,11 +170,12 @@ File: bocl.info,  Node: Further reading,  Prev: Debugger,  Up: Top
 
 Tag Table:
 Node: Top329
-Node: Overview799
-Node: Invocation1212
-Node: Files2207
-Node: Debugger2913
-Node: Further reading3603
+Node: Overview852
+Node: Invocation1265
+Node: Error handling2267
+Node: Files4242
+Node: Debugger4952
+Node: Further reading5642
 
 End Tag Table
 
