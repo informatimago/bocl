@@ -75,3 +75,34 @@ libexec/bocl/modules/asdf3/module.manifest
 The module.manifest file must be created by the installation procedure
 of bocl make install, or by a script to let the user install his own
 modules.
+
+----------------------------------------------------------------------
+PROGRESS (slices 122-123, v1.3.9 / v1.3.10)
+----------------------------------------------------------------------
+DONE — the module system + install plumbing (everything except fetching ASDF):
+- Kernel: %LIST-DIRECTORY (opendir/readdir) — sources/bocl.c.
+- Boot scan (bootstrap/prelude.lisp): scans <libexec>/bocl/modules/<dir>/module.manifest,
+  merges each :FILES with its module dir to absolute namestrings, and builds
+  BOCL:*MODULE-LIST*.  The DIRECTORY name is not significant; the manifest :NAME
+  selects the module (modules/asdf3/ can provide "ASDF").
+- BOCL::MODULE-NAME / MODULE-FILES; conditions BOCL::INVALID-MODULE-PLIST and
+  BOCL::UNDEFINED-MODULE-ERROR.
+- REQUIRE: string-designator; with no pathnames, looks the module up by name
+  (string-equal) and LOADs its files, else signals UNDEFINED-MODULE-ERROR.
+    (require "ASDF")  and  (require :asdf)  both work once asdf is installed.
+- make install installs every modules/<name>/ (manifest + *.lisp) into
+  $PREFIX/libexec/bocl/modules/<name>/ (sources/Makefile).
+- modules/README.org (conventions + ASDF plan); modules/Makefile (build/stage rule for
+  ASDF, guarded on the submodule being present); top Makefile build runs make -C modules.
+Verified end to end with a temporary module: installed bocl discovers it at boot and
+(require :name) loads it.  No regressions (must-condition 147/0).
+
+BLOCKED — adding ASDF itself:
+- `git submodule add -b release https://gitlab.common-lisp.net/asdf/asdf.git modules/asdf-src`
+  was denied automatically (fetching/executing external code needs explicit user
+  authorization).  Once the user adds the submodule (command in modules/README.org),
+  `make build install` builds ASDF's single-file release, stages modules/asdf/
+  (asdf.lisp + manifest) and installs it, so (require :asdf) loads it.
+- Open question (separate from this plumbing): whether ASDF runs unmodified on bocl's
+  current CL surface — documentation.org §24 notes "It cannot run ASDF" today, so some
+  CL-surface work may be needed before ASDF actually loads.
