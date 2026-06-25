@@ -1,0 +1,54 @@
+The default setting of the --on-error should be:
+
+- from the start of processing options (--init, --eval, --load)
+  including loading the init file (rc file), the default --on-error
+  setting is exit
+
+- for interactive REPL (the --repl or default interactife mode), the
+  default --on-error is debug.
+
+
+Otherwise the --on-error sets the behavior for all the following
+options and working modes.
+
+If no --init or --no-init option is given, then the init file is loaded
+with --on-error exit.
+
+The current setting of --on-error is kept for the following options until the next --on-error:
+
+| command:                     | on error:                             |
+|------------------------------+---------------------------------------|
+| bocl \                       |                                       |
+| --on-error debug \           |                                       |
+| --init ~/foo.lisp \          | debug loading foo.lisp                |
+| --on-error appease \         |                                       |
+| --load ~/lib.lisp \          | appease loading lib.lisp              |
+| --on-error exit \            |                                       |
+| --eval '(print (lib:foo))' \ | print and exit if expression errors   |
+| --on-error abort \           |                                       |
+| --eval '(/ 0)' \             | print divide-by-zero and continue     |
+| --repl                       | the REPL is executed with the last    |
+|                              | setting of --on-error, ie abort here. |
+
+The user may add --on-error debug before --repl to get the debugger.
+
+| command: | on error:                                             |
+|----------+-------------------------------------------------------|
+| bocl     | ~/.bocl is loaded with --on-error exit by default. |
+|          | The REPL is entered with --on-error debug by default. |
+
+
+| command:         | on error:                                  |
+|------------------+--------------------------------------------|
+| bocl \           |                                            |
+| --on-error debug | ~/.bocl is loaded with --on-error debug    |
+|                  | The REPL is entered with --on-error debug  |
+
+| command:             | on error:       |
+|----------------------+-----------------|
+| bocl \               |                 |
+| --init ~/foo.lsp \   | exit  (default) |
+| --load ~/lib.lisp \  | exit  (default) |
+| --eval '(lib:foo)' \ | exit  (default) |
+| --repl               | debug (default) |
+
