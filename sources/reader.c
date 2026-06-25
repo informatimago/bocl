@@ -91,6 +91,7 @@ typedef struct parser_state {
     bool error;
     bool escape;
     bool suppress;   /* *READ-SUPPRESS*: reading a #+/#- discarded form */
+    int  backquote_depth;  /* nesting of `…` currently open; a `,` is an error at 0 */
     octet token[ARRAY_TOTAL_SIZE_LIMIT+1];
 } parser_state;
 
@@ -914,10 +915,17 @@ static Ref parse_object(parser_state* parser){
               advance_character(parser);
               skip_spaces(parser);
               if(parser->eof){ return NIL_Symbol; }
+              parser->backquote_depth++;
               Ref inner = parse_object(parser);
+              parser->backquote_depth--;
               return backquote_expand(inner);}
       case ',':
           {
+              /* A comma is only legal inside a backquote, and only to a depth
+                 matching the open backquotes (CLHS 2.4.6): otherwise a reader-error
+                 (suppressed under *READ-SUPPRESS*). */
+              if(parser->backquote_depth<=0 && !parser->suppress){
+                  READER_ERROR(parser->input_stream,"comma is illegal outside a backquote%s",""); }
               advance_character(parser);
               bool splicing = false;
               if(parser->ch == '@'){
@@ -925,7 +933,9 @@ static Ref parse_object(parser_state* parser){
                   advance_character(parser);}
               skip_spaces(parser);
               if(parser->eof){ return NIL_Symbol; }
+              parser->backquote_depth--;          /* the comma's form is one level out */
               Ref inner = parse_object(parser);
+              parser->backquote_depth++;
               return list(splicing ? S(UNQUOTE-SPLICING) : S(UNQUOTE),
                           inner, NULL);}
       case '"':
@@ -1164,6 +1174,7 @@ static Ref read_impl_unrooted(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref
        discarded — symbols are not interned, undefined-package etc. do not error,
        and the whole read returns NIL. */
     parser.suppress=!nullp(variable_value(S(*READ-SUPPRESS*)));
+    parser.backquote_depth=0;
     advance_character(&parser);
     skip_spaces(&parser);
     check_parser_error(&parser);
@@ -1243,6 +1254,7 @@ Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursi
     parser.error    = false;
     parser.escape   = false;
     parser.suppress = !nullp(variable_value(S(*READ-SUPPRESS*)));
+    parser.backquote_depth=0;
     advance_character(&parser);
     skip_spaces(&parser);
     Ref result = NIL_Symbol;
@@ -1352,7 +1364,7 @@ static void rm_standard_dispatch(Ref function, Ref arguments, MultipleValues* re
     p.input_stream=stream;
     p.length=0;
     p.ch=ch;
-    p.eof=false; p.error=false; p.escape=false; p.suppress=false;
+    p.eof=false; p.error=false; p.escape=false; p.suppress=false; p.backquote_depth=0;
     Ref r=parse_object(&p);
     if(!p.eof){ ungetc((int)p.ch, stream_cstream(stream)); }
     if(r==get_skip_marker()){ results->count=0; }   /* a no-value macro (comment, #+) */
