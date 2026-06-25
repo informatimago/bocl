@@ -19,3 +19,27 @@ Segmentation fault: 11
 21:36[pjb@thalassa org.xquartz:0 bocl-master 22Gi]$ bocl --no-init -q -x '(let ((l nil)) (do-symbols (s "CL") (push s l)) (sort l (function string<)))'
 Segmentation fault: 11
 
+
+----------------------------------------------------------------------
+PROGRESS (slice 120, v1.3.7) — FIXED
+----------------------------------------------------------------------
+ROOT CAUSE: the list merge-sort helper %merge (bootstrap/prelude.lisp) was
+recursive in NON-tail position: (cons (car b) (%merge less a (cdr b))).  Its
+recursion depth equals the total number of elements being merged, so the final
+merge of the two ~n/2 halves recursed ~n deep.  bocl's EVAL is a recursive C
+interpreter, so each Lisp frame consumes C stack — a SORT of only a few hundred
+elements overflowed the C stack and segfaulted (n=100 ok, n>=500 crashed; the CL
+package has 2420 accessible symbols).
+
+FIX: rewrote %merge ITERATIVELY — accumulate the picked elements in ACC and splice
+the remaining run with REVAPPEND, so the merge runs in O(1) Lisp/C stack depth.
+Stability preserved (on a tie, take from A, the left run).
+
+Verified:
+  (let ((l nil)) (do-symbols (s "CL") (push s l)) (sort l #'string<))   ; no longer crashes
+  sort of 1000 distinct strings: fully ordered, same multiset, stable.
+  must-sequence 3851/0/0 (sort-heavy), no regressions.
+
+SEPARATE BUG noticed while testing (NOT this segfault): FORMAT ~D ignores its mincol
+/ padchar parameters — (format nil "~5,'0D" 42) => "0D" (should be "00042"), and
+(format nil "~5D" 42) => "42" (no padding).  Worth its own issue.

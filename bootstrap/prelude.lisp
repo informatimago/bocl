@@ -932,12 +932,17 @@
   ;; Stable merge of two ordered lists. LESS is the comparator.  On a tie
   ;; (neither strictly less) take from A, the left run — whose elements precede
   ;; B's in the original sequence — so equal elements keep their input order.
-  (cond ((null a) b)
-        ((null b) a)
-        ((funcall less (car b) (car a))     ; B strictly less than A: take B
-         (cons (car b) (%merge less a (cdr b))))
-        (t                                  ; A <= B: take A (stable on ties)
-         (cons (car a) (%merge less (cdr a) b)))))
+  ;; ITERATIVE: a recursive merge would recurse to a depth equal to the total
+  ;; length being merged, overflowing the interpreter's C stack (SORT of a few
+  ;; hundred elements segfaulted).  We accumulate the picked elements and splice
+  ;; the remaining run with REVAPPEND, so the stack depth is O(1).
+  (let ((acc nil))
+    (do ()
+        ((or (null a) (null b))
+         (revappend acc (if (null a) b a)))
+      (if (funcall less (car b) (car a))     ; B strictly less than A: take B
+          (progn (push (car b) acc) (setq b (cdr b)))
+          (progn (push (car a) acc) (setq a (cdr a)))))))  ; A <= B: take A (stable)
 
 (defun %list-split (list)
   ;; Tortoise/hare split. For (a b) returns (values (a) (b)).
