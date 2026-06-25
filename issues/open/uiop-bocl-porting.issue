@@ -1,0 +1,73 @@
+UIOP/ASDF porting: implementation-specific API UIOP expects, to be provided as BOCL
+extensions (+ #+bocl clauses in UIOP's dispatch points).
+
+STATUS: open (analysis).  ASDF ships UIOP, a portability layer that dispatches per
+implementation (#+sbcl/#+ccl/... and falls back to NOT-IMPLEMENTED-ERROR for unknown
+Lisps).  bocl already exports :BOCL in *FEATURES*, so the port is: implement the
+primitives below in BOCL, then add #+bocl branches to the UIOP files cited.
+References are to modules/asdf-src/uiop/.
+
+== Already present in bocl ==
+machine-instance, compile-file, truename, probe-file, merge-pathnames, BOCL:QUIT,
+*FEATURES* has :BOCL :64-BIT-*.   Missing/!weak noted below.
+
+== TIER 1 — UIOP will not initialise without these ==
+
+1. *FEATURES* — add OS/arch keywords UIOP keys on: :UNIX (and :LINUX / :DARWIN),
+   :X86-64 / :ARM64.  UIOP derives os-unix/os-windows and arch from these
+   (uiop/os.lisp detect-os, *features*).  bocl has :BOCL but no :UNIX today.
+
+2. os.lisp — environment + cwd (each is a per-impl one-liner + NOT-IMPLEMENTED-ERROR):
+   - GETENV name -> string|nil                        (os.lisp:120)  => bocl:getenv
+   - (SETF GETENV) / SETENV, UNSETENV                 (os.lisp:137,149)
+   - GETCWD -> pathname                               (os.lisp:342)  => bocl:getcwd
+   - CHDIR path                                       (os.lisp:361)  => bocl:chdir
+
+3. image.lisp — process:
+   - QUIT code (have BOCL:QUIT; add #+bocl (bocl:quit code))   (image.lisp:82)
+   - RAW-COMMAND-LINE-ARGUMENTS -> list of strings    (image.lisp:241)
+       => bocl:*command-line-arguments* / bocl:command-line-arguments (the raw argv)
+
+4. filesystem.lisp / pathname.lisp — CL:DIRECTORY must enumerate a wildcard
+   ("dir/*.*", "dir/**/*.lisp"); bocl's DIRECTORY currently returns NIL for wildcards.
+   The kernel now has %LIST-DIRECTORY (sources/bocl.c) to build on.  UIOP also wants
+   NATIVE-NAMESTRING / PARSE-NATIVE-NAMESTRING and ENSURE-DIRECTORIES-EXIST,
+   DELETE-FILE-IF-EXISTS, RENAME-FILE-OVERWRITING-TARGET, FILE-WRITE-DATE (mostly
+   standard; verify wild-pathname + logical-pathname coverage — bocl pathnames are
+   partial, doc §19).
+
+5. Conditions — UIOP/ASDF WARN STYLE-WARNING subclasses; bocl's CLOS condition
+   hierarchy is broken (see issue clos-condition-hierarchy-parents).  Fix that so
+   (typep x 'warning) etc. hold; this is the first error hit loading ASDF.
+
+== TIER 2 — needed by RUN-PROGRAM and the compile path ==
+
+6. run-program.lisp — a subprocess facility.  Minimum: a synchronous %SYSTEM(command)
+   that runs a shell command and returns its exit code (run-program.lisp:462, the
+   %use-system fallback) => bocl:run-program / bocl:%system (fork+exec+waitpid, or
+   posix system(3)).  ASDF core does not need it, but many systems' build ops do.
+
+7. lisp-build.lisp — COMPILE-FILE* wraps CL:COMPILE-FILE and must capture conditions:
+   CL:COMPILE-FILE returning (values output-truename warnings-p failure-p), plus
+   HANDLER-BIND on WARNING/STYLE-WARNING/ERROR so UIOP can classify
+   compile-warned-error / compile-failed-error (lisp-build.lisp:207-244).  bocl has
+   COMPILE-FILE (minimal compilation) + *DEFAULT-COMPILED-FILE-TYPE* "fasl"; verify
+   the multiple-value return and condition signalling.
+
+== TIER 3 — optional / degradable (UIOP tolerates NOT-IMPLEMENTED-ERROR) ==
+
+8. launch-program.lisp — full async spawn: LAUNCH-PROGRAM with stdin/stdout/stderr
+   redirection, PROCESS-INFO-PID, %PROCESS-STATUS, WAIT-PROCESS, TERMINATE-PROCESS
+   (launch-program.lisp:546,269,287,365,466).  Needs real pipe/fork/exec/waitpid.
+9. image.lisp DUMP-IMAGE / CREATE-IMAGE (save an executable)        (image.lisp:361,431).
+10. lisp-build.lisp COMBINE-FASLS (monolithic bundles)              (lisp-build.lisp:846),
+    and the SBCL-only deferred-warnings machinery (return nil is fine).
+
+== Suggested approach ==
+- Implement Tier-1 BOCL primitives (getenv/setenv/getcwd/chdir, command-line-args,
+  working wildcard DIRECTORY) and add :UNIX etc. to *FEATURES*; fix the condition
+  hierarchy.  That should get UIOP/ASDF to load and define systems.
+- Add a small #+bocl porting patch to the UIOP files above (kept as a bocl-side patch
+  or upstreamed) so each dispatch calls the bocl primitive.
+- Add bocl:run-program (%system) for Tier 2; defer Tier 3.
+- Re-run the must-* suite after each step (esp. must-condition for the hierarchy fix).

@@ -1,0 +1,47 @@
+CLOS condition classes are defined with (STANDARD-OBJECT) parents instead of their
+standard CL superclasses, so TYPEP against an ancestor fails.
+
+STATUS: open.  Found 2026-06-25 while loading ASDF/UIOP (it WARNs a STYLE-WARNING
+subclass, which bocl's strict WARN rejects because the class is not TYPEP 'WARNING).
+
+== Symptom ==
+    (typep (make-condition 'style-warning) 'warning)         => NIL   ; expected T
+    (warn 'asdf::define-package-style-warning ...)            => TYPE-ERROR
+        "WARN: #<DEFINE-PACKAGE-STYLE-WARNING> is not of type WARNING"
+ASDF's (define-condition define-package-style-warning (style-warning) ...) is a
+WARNING subtype, but bocl breaks the chain at STYLE-WARNING.
+
+== Cause ==
+bootstrap/prelude.lisp registers the condition hierarchy TWICE:
+1. An ENSURE-CLOS-CLASS dolist (~line 4929) with the CORRECT parents:
+     (style-warning warning) (storage-condition serious-condition)
+     (error serious-condition) ... etc.
+2. A later block of DEFCLASS forms (~lines 5406-5429) that RE-define a subset with
+   (STANDARD-OBJECT) as the only superclass, clobbering the correct parents:
+     (defclass style-warning      (standard-object) ())   ; should be (warning)
+     (defclass storage-condition  (standard-object) ())   ; should be (serious-condition)
+     (defclass program-error      (standard-object) ())   ; should be (error)
+     (defclass control-error      (standard-object) ())   ; should be (error)
+     (defclass cell-error         (standard-object) (...)) ; should be (error)
+     (defclass arithmetic-error   (standard-object) (...)) ; should be (error)
+     (defclass stream-error       (standard-object) (...)) ; should be (error)
+     (defclass file-error         (standard-object) (...)) ; should be (error)
+     (defclass parse-error        (standard-object) ())    ; should be (error)
+     (defclass print-not-readable (standard-object) (...)) ; should be (error)
+So these stand-alone classes are disconnected from CONDITION/SERIOUS-CONDITION/
+ERROR/WARNING, and TYPEP / handler dispatch on an ancestor misses them.
+
+== Fix ==
+Give each of those DEFCLASS forms its proper CL superclass (matching the dolist).
+The comment there worried about "shadowing kernel classes", but inheriting FROM
+error/warning (resolved to the CLOS classes the dolist already registered) is exactly
+what is needed; HANDLER-CASE looks up kernel classes first, so kernel-condition
+dispatch is unaffected.  Re-run must-condition (147/0) and the must-* suite after the
+change.
+
+== Relevance ==
+Blocks ASDF/UIOP loading at the first WARN.  Also a plain conformance bug: e.g.
+(handler-case (error 'program-error ...) (error () :caught)) should catch via the
+ERROR ancestor.  Note: bocl's WARN intentionally type-checks its condition (issue
+must-condition forms 19-24) — the WARN check is correct; the class hierarchy is what
+is wrong.

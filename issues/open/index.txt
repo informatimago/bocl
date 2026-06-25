@@ -11,4 +11,7 @@ package-print-object-method.issue
 format-radix-mincol-padchar.issue
 slow-apropos.issue
 asdf.issue
+clos-condition-hierarchy-parents.issue
+uiop-bocl-porting.issue
+sockets.issue
 ansi-test.issue
