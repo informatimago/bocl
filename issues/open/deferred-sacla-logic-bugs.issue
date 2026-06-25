@@ -57,6 +57,34 @@ and |TPKG|::|ZEBRA| / |TPKG|::ZEBRA now intern in TPKG; |foo| still a CL-USER
 symbol; |pkg|:name still errors when NAME is not external.  No regression
 (must-cons 0/0, must-symbol unchanged, must-printer 71->70).
 
+== PROGRESS (Slices 83-93, v1.2.10-1.2.20) — must-reader 117->33, -data-and-control 12->1 ==
+Reader (must-reader 117->33): #+/#- that skips the last form returns EOF not a junk
+symbol (83); #n(...) sized vectors and #n* sized bit-vectors (84); backquote with a
+dotted unquote tail `(a . ,x) (85); READ-FROM-STRING returns the end position as a
+2nd value (86); reader signals typed END-OF-FILE / READER-ERROR conditions, plus #<
+and lone "."/"..." as READER-ERROR (87); READ-DELIMITED-LIST implemented (88);
+readtable accessors accept the optional readtable arg + GET-MACRO-CHARACTER returns
+correct (fn,non-terminating-p) (89); GET-DISPATCH-MACRO-CHARACTER reports #'s
+standard sub-characters (90).
+SETF (must-data-and-control 12->1, would also help hash F53 / symbol F98): SETF of
+(VALUES ...) places (91); ROTATEF/PSETF via GET-SETF-EXPANSION for correct eval
+order (92); SHIFTF/ROTATEF over (VALUES ...) places, GET-SETF-EXPANSION handles
+(values ...) (93).
+
+STILL OPEN — deep subsystem work, each a focused effort:
+  * F53 (hash) / F98 (symbol): plain SETF evaluates the new value BEFORE the place
+    subforms.  The fix is to route SETF through GET-SETF-EXPANSION, but that needs
+    the long-form DEFINE-SETF-EXPANDER for the place-recursive GETF/GET/SUBSEQ
+    (whose store-form re-SETFs their first subform) — bocl only has the short form.
+  * F192 (data-and-control): bocl reads floats as DOUBLE-FLOAT; CL defaults to
+    SINGLE-FLOAT, where (- 3.2 2.0) rounds to exactly 1.2.  Needs single-float
+    support / *READ-DEFAULT-FLOAT-FORMAT*.
+  * F58 (hash): WITH-HASH-TABLE-ITERATOR must expose its iterator as a local macro
+    that MACRO-FUNCTION sees via &ENVIRONMENT — needs lexical-environment macros.
+  * must-reader (33): a syntax-table-driven reader (SET-SYNTAX-FROM-CHAR making [
+    behave like (, etc.), #C float contagion, and backquoted vectors `#(,x) (the
+    last currently stack-overflows in backquote_expand during prelude load).
+
 == FIXED (Slice 82) — must-data-and-control 26->12: empty PROGN + ECASE/MVB/FDEFINITION ==
 Four independent fixes (data-and-control 11 fails/15 errors -> 4/8):
 (a) empty (PROGN) returned the PREVIOUS evaluation's value instead of NIL (eval.c)
