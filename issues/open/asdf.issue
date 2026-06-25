@@ -1,0 +1,77 @@
+We want to package asdf along with bocl, so it's easy for users to load and use systems.
+
+- get asdf as a git submodule
+  from: https://gitlab.common-lisp.net/asdf/asdf.git
+  branch: release
+
+- Read the instructions in asdf/, build asdf,
+  and install it in: $PREFIX/libexec/bocl/modules/asdf/
+  (root makefile targets build  install)
+
+- Implement REQUIRE so that:
+
+    (require "ASDF") ; require takes a string-designator so
+    (require :asdf)  ; is as good.
+
+  loads the asdf in $PREFIX/libexec/bocl/modules/asdf/
+
+Note REQUIRE loads a module, and usually there's a toplevel provide
+form in the loaded file, which will update the *MODULES* list.
+
+To implement loading such "system" modules, we'll need a module
+definition facility:
+
+- at boot time, bocl scans modules:
+
+    $PREFIX/libexec/bocl/modules/*/
+
+  and updates a BOCL:*MODULE-LIST*
+  mapping module names to module files to be loaded:
+
+
+BOCL::*MODULE-LIST* = ((:name "asdf" :files ("/opt/local/libexec/bocl/modules/asdf/asdf.lisp"))
+                      …)
+
+So we may define REQUIRE like:
+
+   (defun bocl::module-name (module-plist)
+       (or (get :name module-plist)
+           (error 'bocl::invalid-module-plist :object module-plist :reason "Missing :NAME entry")))
+
+   (defun bocl::module-files (module-plist)
+       (or (get :files module-plist)
+           (error 'bocl::invalid-module-plist :object module-plist :reason "Missing :FILES entry")))
+   
+   (defun REQUIRE (module-name &optional pathname-list)
+     (if (null pathname-list)
+        (let ((module (find (string module-name)  bocl::*module-list*
+                            :key (function bocl::module-name)
+                            :test (function string-equal))))
+          (if module
+             (require (bocl::module-name module) (bocl::module-files module))
+             (error 'undefined-module-error :module-name module-name)))
+        (dolist (pathname pathname-list)
+           (load pathname))))
+
+   
+The way $PREFIX/libexec/bocl/modules/*/ is mapped to bocl::*module-list*
+is thru the use of a module manifest file:
+
+$PREFIX/libexec/bocl/modules/*/module.manifest
+module.manifest contains:
+
+(:name "name"
+ :files ("relative/path.lisp" "relative/file.lisp"))
+
+The module-files are merged with
+$PREFIX/libexec/bocl/modules/$module-dir/ and put on
+bocl::*module-list*.
+
+Note: the directory name is not used to select the module, which
+allows using different spelling or include a version
+libexec/bocl/modules/asdf3/module.manifest
+--> (:name "asdf" :files "asdf.lisp")
+
+The module.manifest file must be created by the installation procedure
+of bocl make install, or by a script to let the user install his own
+modules.
