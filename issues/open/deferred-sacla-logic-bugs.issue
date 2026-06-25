@@ -92,19 +92,34 @@ SETF (must-data-and-control 12->1, would also help hash F53 / symbol F98): SETF 
 order (92); SHIFTF/ROTATEF over (VALUES ...) places, GET-SETF-EXPANSION handles
 (values ...) (93).
 
-STILL OPEN — deep subsystem work, each a focused effort:
-  * F53 (hash) / F98 (symbol): plain SETF evaluates the new value BEFORE the place
-    subforms.  The fix is to route SETF through GET-SETF-EXPANSION, but that needs
-    the long-form DEFINE-SETF-EXPANDER for the place-recursive GETF/GET/SUBSEQ
-    (whose store-form re-SETFs their first subform) — bocl only has the short form.
-  * F192 (data-and-control): bocl reads floats as DOUBLE-FLOAT; CL defaults to
-    SINGLE-FLOAT, where (- 3.2 2.0) rounds to exactly 1.2.  Needs single-float
-    support / *READ-DEFAULT-FLOAT-FORMAT*.
+FIXED LATER — Slice 103 (v1.2.30): plain SETF now evaluates the place subforms
+before the value.  Only GETF is genuinely place-recursive; GET/GETHASH/SUBSEQ/etc.
+use their subform once, so the SETF macro temp-binds the subforms of every simple
+place (left to right, then the value) and keeps GETF on the value-first path —
+no GET-SETF-EXPANSION dependency, no bootstrap-order problem.  F53 + F98 fixed,
+must-symbol now 0/0, zero regressions across all 13 files.
+
+NOT A BUG (conforming / impl-specific):
+  * F192 (data-and-control): bocl provides one float type (all DOUBLE-FLOAT), which
+    CLHS permits; reading 1.0s0/1.0f0/1.0d0/1.0l0 and every *READ-DEFAULT-FLOAT-
+    FORMAT* all yield DOUBLE-FLOAT (matches the expected output).  F192's
+    (eql (- 3.2 2.0) 1.2) is NIL because that is genuine double-precision rounding;
+    it only passes where the default float format is single.  Left as-is.
+  * F1312 (reader): (read-from-string "#+test1 a") with the feature absent skips to
+    EOF and signals END-OF-FILE (eof-error-p defaults to T) — correct CL; the test
+    wants a NIL return.
+
+STILL OPEN — deep subsystem work, each a focused effort (one form each):
   * F58 (hash): WITH-HASH-TABLE-ITERATOR must expose its iterator as a local macro
-    that MACRO-FUNCTION sees via &ENVIRONMENT — needs lexical-environment macros.
-  * must-reader (33): a syntax-table-driven reader (SET-SYNTAX-FROM-CHAR making [
-    behave like (, etc.), #C float contagion, and backquoted vectors `#(,x) (the
-    last currently stack-overflows in backquote_expand during prelude load).
+    that MACRO-FUNCTION sees via &ENVIRONMENT.  macro-function finds GLOBAL macros
+    but not local ones (macrolet/whti) — needs lexical macro environments threaded
+    through &environment and consulted by MACRO-FUNCTION.
+  * F1553 (reader test, really LOOP): `for v = init then step` stages STEP at the
+    loop bottom, so a REPEAT/UNTIL terminator forces one extra step.  Moving STEP
+    to the loop top fixes it but breaks AND-parallel stepping (FOR a FROM 1 AND
+    x = 0 THEN a); the fix must move only the STANDALONE (non-AND) `= then` step to
+    the top while AND-grouped steppers keep their fused bottom-of-loop old-value
+    capture.
 
 == FIXED (Slice 82) — must-data-and-control 26->12: empty PROGN + ECASE/MVB/FDEFINITION ==
 Four independent fixes (data-and-control 11 fails/15 errors -> 4/8):
