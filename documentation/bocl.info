@@ -1,0 +1,142 @@
+This is bocl.info, produced by makeinfo version 7.1.1 from bocl.texi.
+
+BOCL -- Bootstrap Common Lisp.
+
+   Copyright © 2021-2026 Pascal J. Bourguignon.  Licensed under the
+AGPL.
+INFO-DIR-SECTION Software development
+START-INFO-DIR-ENTRY
+* bocl: (bocl).                 BOCL Bootstrap Common Lisp interpreter.
+END-INFO-DIR-ENTRY
+
+
+File: bocl.info,  Node: Top,  Next: Overview,  Up: (dir)
+
+BOCL Common Lisp
+****************
+
+‘bocl’ is a Common Lisp implementation built from a small C kernel plus
+a runtime-loaded Lisp prelude.
+
+* Menu:
+
+* Overview::            What bocl is.
+* Invocation::          Running bocl from the command line.
+* Files::               Installed layout and start-up files.
+* Debugger::            The minimal debugger.
+* Further reading::     Manuals and specifications.
+
+
+File: bocl.info,  Node: Overview,  Next: Invocation,  Prev: Top,  Up: Top
+
+1 Overview
+**********
+
+‘bocl’ runs an interactive read-eval-print loop, and can load files and
+evaluate forms given on the command line before optionally entering the
+REPL. On start-up it loads its system Lisp files -- the prelude and its
+supporting files (‘cl-exports.lisp’, ‘bignum.lisp’,
+‘bignum-integration.lisp’).
+
+
+File: bocl.info,  Node: Invocation,  Next: Files,  Prev: Overview,  Up: Top
+
+2 Invocation
+************
+
+     bocl [options]
+
+   The most common options are summarized below; see ‘bocl(1)’ for the
+full list.
+
+‘-h, --help’
+     Print a usage summary and exit.
+‘-V, --version’
+     Print ‘(LISP-IMPLEMENTATION-VERSION)’ and exit.
+‘-l, --load FILE’
+     Load FILE.
+‘-x, -e, --eval FORM’
+     Evaluate FORM (quote it for the shell).
+‘-p, --package PACKAGE’
+     Start in PACKAGE.
+‘-b, --batch’
+     Exit on end of file on ‘*STANDARD-INPUT*’.
+‘-n, -norc, --no-init’
+     Do not load ‘~/.boclrc’.
+‘--no-prelude’
+     Bare kernel only -- do not load the prelude.
+‘--on-error ACTION’
+     On an unhandled error reaching the top level, do ACTION: one of
+     ‘debug’, ‘exit’, ‘abort’, ‘appease’.  ‘debug’ enters the minimal
+     debugger.
+‘-quit, --quit’
+     Quit when argument processing is done (otherwise enter the REPL).
+
+
+File: bocl.info,  Node: Files,  Next: Debugger,  Prev: Invocation,  Up: Top
+
+3 Files
+*******
+
+The default install prefix is ‘/opt/local’.
+
+‘PREFIX/bin/bocl’
+     The executable.
+‘PREFIX/libexec/bocl/’
+     The system Lisp files loaded at start-up: ‘prelude.lisp’,
+     ‘cl-exports.lisp’, ‘bignum.lisp’, ‘bignum-integration.lisp’.
+‘PREFIX/lib/libbocl.*’
+     The runtime library (static and shared) for embedding bocl in a C
+     program.
+‘PREFIX/include/bocl/’
+     The C headers for embedding.
+‘~/.boclrc’
+     Per-user init file (unless ‘--no-init’).
+
+   The environment variable ‘BOCL_PRELUDE’, if set to a readable path,
+overrides the prelude search.
+
+
+File: bocl.info,  Node: Debugger,  Next: Further reading,  Prev: Files,  Up: Top
+
+4 The minimal debugger
+**********************
+
+When an unhandled ‘SERIOUS-CONDITION’ reaches the top level under
+‘--on-error debug’ (or via ‘INVOKE-DEBUGGER’ / ‘BREAK’), bocl enters a
+minimal debugger: it prints the condition, a backtrace and the available
+restarts, then runs a read-eval-print loop.  Keyword commands
+(‘:backtrace’, ‘:restart’, ‘:continue’, ‘:abort’, ‘:quit’, ‘:help’) and
+bare restart numbers select actions; any other form is evaluated as Lisp
+in the error's dynamic context.  The complete specification is in
+‘debugger-specifications.org’.
+
+
+File: bocl.info,  Node: Further reading,  Prev: Debugger,  Up: Top
+
+5 Further reading
+*****************
+
+   • ‘bocl(1)’ -- the manual page.
+   • ‘PREFIX/share/doc/bocl/documentation.pdf’ -- the user manual.
+   • ‘PREFIX/share/doc/bocl/specifications.pdf’ -- the language and
+     implementation specifications.
+   • ‘PREFIX/share/doc/bocl/debugger-specifications.org’ -- the debugger
+     specification.
+
+
+
+Tag Table:
+Node: Top329
+Node: Overview799
+Node: Invocation1212
+Node: Files2207
+Node: Debugger2913
+Node: Further reading3603
+
+End Tag Table
+
+
+Local Variables:
+coding: utf-8
+End:

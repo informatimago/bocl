@@ -132,9 +132,10 @@ static char* find_prelude(void){
         if(slash){ *slash='\0'; } else { snprintf(dir,sizeof(dir),"."); }
         /* Candidate suffixes relative to the executable directory. */
         static const char* suffixes[]={
-            "/../bootstrap/prelude.lisp",   /* in-tree:  sources/../bootstrap */
-            "/bootstrap/prelude.lisp",      /* exe alongside bootstrap/      */
-            "/../share/bocl/prelude.lisp",  /* install:  bin/../share/bocl   */
+            "/../bootstrap/prelude.lisp",     /* in-tree:  sources/../bootstrap */
+            "/bootstrap/prelude.lisp",        /* exe alongside bootstrap/      */
+            "/../libexec/bocl/prelude.lisp",  /* install:  bin/../libexec/bocl */
+            "/../share/bocl/prelude.lisp",    /* install:  bin/../share/bocl   */
             "/../lib/bocl/prelude.lisp",
             NULL};
         for(int i=0; suffixes[i]; i++){
@@ -144,15 +145,17 @@ static char* find_prelude(void){
     }
 
     /* 3. Standard install paths. BOCL_PRELUDE_PATH is the location configured at
-          build time ($(bocldatadir)/prelude.lisp); it is tried first so a custom
+          build time ($(bocllibexecdir)/prelude.lisp); it is tried first so a custom
           $PREFIX install is found even when it is none of the hard-coded paths. */
     static const char* sys_paths[]={
 #ifdef BOCL_PRELUDE_PATH
         BOCL_PRELUDE_PATH,
 #endif
+        "/opt/local/libexec/bocl/prelude.lisp",
+        "/usr/local/libexec/bocl/prelude.lisp",
+        "/usr/libexec/bocl/prelude.lisp",
         "/usr/local/share/bocl/prelude.lisp",
         "/usr/share/bocl/prelude.lisp",
-        "/opt/bocl/share/bocl/prelude.lisp",
         NULL};
     for(int i=0; sys_paths[i]; i++){
         if(access(sys_paths[i],R_OK)==0){ return strdup(sys_paths[i]); }}

@@ -1,0 +1,144 @@
+.\" Manpage for bocl - BOCL Bootstrap Common Lisp.
+.TH BOCL 1 "2026-06-25" "bocl 1.3.1" "BOCL Common Lisp"
+.SH NAME
+bocl \- BOCL Bootstrap Common Lisp interpreter
+.SH SYNOPSIS
+.B bocl
+.RI [ options ]
+.SH DESCRIPTION
+.B bocl
+is a Common Lisp implementation built from a small C kernel plus a
+runtime-loaded Lisp prelude.  Run without a script it enters an interactive
+read\-eval\-print loop; it can also load files and evaluate forms given on the
+command line, then optionally drop into the REPL.
+.PP
+On start\-up
+.B bocl
+loads its system Lisp files (the prelude and supporting files); see
+.B FILES
+and
+.BR ENVIRONMENT .
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
+.TP
+.BR \-V ", " \-\-version
+Print
+.RB ( LISP\-IMPLEMENTATION\-VERSION )
+and exit.
+.TP
+.BI \-E " encoding"
+Set the character encodings.
+.TP
+.BI \-Eterminal " encoding\fR, \fB\-\-terminal\-encoding " encoding
+Character encoding for
+.BR *TERMINAL\-IO* .
+.TP
+.BR \-n ", " \-norc ", " \-\-no\-init
+Suppress loading the default init file
+.IR ~/.boclrc .
+.TP
+.B \-\-no\-prelude
+Suppress loading the prelude (bare kernel only).
+.TP
+.BR \-Q ", " \-q ", " \-\-quiet ", " \-\-silent
+With
+.BR \-\-batch ,
+also suppress heralds and prompts.
+.TP
+.BR \-b ", " \-\-batch
+Exit on end of file on
+.BR *STANDARD\-INPUT* .
+.TP
+.B \-\-verbose
+Raise verbosity (banner,
+.BR *LOAD\-VERBOSE* ,
+.BR *COMPILE\-VERBOSE* ).
+.TP
+.B \-\-print
+Set
+.B *LOAD\-PRINT*
+and
+.BR *COMPILE\-PRINT* .
+.TP
+.B \-\-dump
+Dump the heap.
+.TP
+.B \-\-no\-sigtrap
+Do not trap signals (for running under a debugger).
+.TP
+.BI \-\-on\-error " action"
+Action on an unhandled error reaching the top level:
+.BR debug ", " exit ", " abort ", or " appease .
+With
+.BR debug ,
+the minimal debugger is entered
+.RB ( INVOKE\-DEBUGGER );
+see
+.BR bocl\-debugger (7)
+or the debugger specification.
+.RB ( \-on\-error
+is a legacy alias.)
+.TP
+.BI \-i " file\fR, \fB\-\-init " file
+Load
+.I file
+as an init file (repeatable).
+.TP
+.BI \-x " form\fR, \fB\-e " form\fR, \fB\-\-eval " form
+Evaluate
+.I form
+(quote it for the shell).
+.TP
+.BI \-l " file\fR, \fB\-\-load " file
+Load
+.IR file .
+.TP
+.BI \-p " package\fR, \fB\-\-package " package
+Start in
+.IR package .
+.TP
+.BR \-repl ", " \-\-repl
+Enter the REPL when argument processing is done (default).
+.TP
+.BR \-quit ", " \-\-quit
+Quit when argument processing is done.
+.TP
+.BR \-w ", " \-\-wait
+Wait for a keypress after termination.
+.SH ENVIRONMENT
+.TP
+.B BOCL_PRELUDE
+If set to a readable path, used as the prelude instead of the search below.
+.SH FILES
+.TP
+.I PREFIX/libexec/bocl/prelude.lisp
+The installed prelude and the other system Lisp files
+.RI ( cl\-exports.lisp ", " bignum.lisp ", " bignum\-integration.lisp )
+loaded at start\-up.  The default
+.I PREFIX
+is
+.IR /opt/local .
+.TP
+.I ~/.boclrc
+Per\-user init file, loaded unless
+.B \-\-no\-init
+is given.
+.PP
+At start\-up the prelude is located by, in order:
+.B $BOCL_PRELUDE;
+paths relative to the executable
+.RI ( ../libexec/bocl/ ", " ../bootstrap/ ", " ../share/bocl/ );
+then standard install paths.
+.SH SEE ALSO
+The user manual
+.RI ( PREFIX/share/doc/bocl/documentation.pdf ),
+the specifications
+.RI ( PREFIX/share/doc/bocl/specifications.pdf ),
+and the debugger specification
+.RI ( PREFIX/share/doc/bocl/debugger\-specifications.org ).
+.SH AUTHOR
+Pascal J. Bourguignon <pjb@informatimago.com>.
+.SH COPYRIGHT
+Copyright 2021\-2026 Pascal J. Bourguignon.  Licensed under the AGPL.

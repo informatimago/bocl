@@ -1,0 +1,136 @@
+\input texinfo   @c -*-texinfo-*-
+@c %**start of header
+@setfilename bocl.info
+@settitle BOCL Common Lisp
+@documentencoding UTF-8
+@c %**end of header
+
+@copying
+BOCL --- Bootstrap Common Lisp.
+
+Copyright @copyright{} 2021--2026 Pascal J. Bourguignon.
+Licensed under the AGPL.
+@end copying
+
+@dircategory Software development
+@direntry
+* bocl: (bocl).                 BOCL Bootstrap Common Lisp interpreter.
+@end direntry
+
+@titlepage
+@title BOCL Common Lisp
+@subtitle Bootstrap Common Lisp --- user reference
+@author Pascal J. Bourguignon
+@page
+@insertcopying
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top BOCL Common Lisp
+
+@code{bocl} is a Common Lisp implementation built from a small C kernel plus a
+runtime-loaded Lisp prelude.
+@end ifnottex
+
+@menu
+* Overview::            What bocl is.
+* Invocation::          Running bocl from the command line.
+* Files::               Installed layout and start-up files.
+* Debugger::            The minimal debugger.
+* Further reading::     Manuals and specifications.
+@end menu
+
+@node Overview
+@chapter Overview
+
+@code{bocl} runs an interactive read-eval-print loop, and can load files and
+evaluate forms given on the command line before optionally entering the REPL.
+On start-up it loads its system Lisp files --- the prelude and its supporting
+files (@file{cl-exports.lisp}, @file{bignum.lisp},
+@file{bignum-integration.lisp}).
+
+@node Invocation
+@chapter Invocation
+
+@example
+bocl [options]
+@end example
+
+The most common options are summarized below; see @command{bocl(1)} for the
+full list.
+
+@table @option
+@item -h, --help
+Print a usage summary and exit.
+@item -V, --version
+Print @code{(LISP-IMPLEMENTATION-VERSION)} and exit.
+@item -l, --load @var{file}
+Load @var{file}.
+@item -x, -e, --eval @var{form}
+Evaluate @var{form} (quote it for the shell).
+@item -p, --package @var{package}
+Start in @var{package}.
+@item -b, --batch
+Exit on end of file on @code{*STANDARD-INPUT*}.
+@item -n, -norc, --no-init
+Do not load @file{~/.boclrc}.
+@item --no-prelude
+Bare kernel only --- do not load the prelude.
+@item --on-error @var{action}
+On an unhandled error reaching the top level, do @var{action}: one of
+@code{debug}, @code{exit}, @code{abort}, @code{appease}.  @code{debug} enters
+the minimal debugger.
+@item -quit, --quit
+Quit when argument processing is done (otherwise enter the REPL).
+@end table
+
+@node Files
+@chapter Files
+
+The default install prefix is @file{/opt/local}.
+
+@table @file
+@item @var{PREFIX}/bin/bocl
+The executable.
+@item @var{PREFIX}/libexec/bocl/
+The system Lisp files loaded at start-up: @file{prelude.lisp},
+@file{cl-exports.lisp}, @file{bignum.lisp}, @file{bignum-integration.lisp}.
+@item @var{PREFIX}/lib/libbocl.*
+The runtime library (static and shared) for embedding bocl in a C program.
+@item @var{PREFIX}/include/bocl/
+The C headers for embedding.
+@item ~/.boclrc
+Per-user init file (unless @option{--no-init}).
+@end table
+
+The environment variable @env{BOCL_PRELUDE}, if set to a readable path,
+overrides the prelude search.
+
+@node Debugger
+@chapter The minimal debugger
+
+When an unhandled @code{SERIOUS-CONDITION} reaches the top level under
+@option{--on-error debug} (or via @code{INVOKE-DEBUGGER} / @code{BREAK}), bocl
+enters a minimal debugger: it prints the condition, a backtrace and the
+available restarts, then runs a read-eval-print loop.  Keyword commands
+(@code{:backtrace}, @code{:restart}, @code{:continue}, @code{:abort},
+@code{:quit}, @code{:help}) and bare restart numbers select actions; any other
+form is evaluated as Lisp in the error's dynamic context.  The complete
+specification is in @file{debugger-specifications.org}.
+
+@node Further reading
+@chapter Further reading
+
+@itemize @bullet
+@item @command{bocl(1)} --- the manual page.
+@item @file{@var{PREFIX}/share/doc/bocl/documentation.pdf} --- the user manual.
+@item @file{@var{PREFIX}/share/doc/bocl/specifications.pdf} --- the language and
+implementation specifications.
+@item @file{@var{PREFIX}/share/doc/bocl/debugger-specifications.org} --- the
+debugger specification.
+@end itemize
+
+@bye

@@ -6,18 +6,24 @@ VERBOSE=@
 # ---- Installation layout (GNU-style; overridable) ----------------------------
 # Deliverables install under $(DESTDIR)$(PREFIX). DESTDIR is for staged installs
 # (packaging); PREFIX is the logical install root baked into the binary.
-PREFIX      ?= /usr/local
+PREFIX      ?= /opt/local
 DESTDIR     ?=
 exec_prefix ?= $(PREFIX)
 bindir      ?= $(exec_prefix)/bin
 libdir      ?= $(exec_prefix)/lib
+libexecdir  ?= $(exec_prefix)/libexec
 includedir  ?= $(PREFIX)/include
 datarootdir ?= $(PREFIX)/share
 datadir     ?= $(datarootdir)
+mandir      ?= $(datarootdir)/man
+infodir     ?= $(datarootdir)/info
+docdir      ?= $(datarootdir)/doc/bocl
 pkgconfdir  ?= $(libdir)/pkgconfig
 # bocl-private subdirs:
-boclincdir   = $(includedir)/bocl
-bocldatadir  = $(datadir)/bocl
+boclincdir     = $(includedir)/bocl
+bocldatadir    = $(datadir)/bocl
+bocllibexecdir = $(libexecdir)/bocl
+man1dir        = $(mandir)/man1
 
 # ---- Toolchain (all overridable for cross/alt compilers) ---------------------
 AR          ?= ar
@@ -146,7 +152,7 @@ endif
 # Compiled-in default location of the installed prelude, so an installed binary
 # finds it even outside the exe-relative / hard-coded search paths. $BOCL_PRELUDE
 # still overrides at runtime (see find_prelude() in main.c).
-DEFINES          += -DBOCL_PRELUDE_PATH='"$(bocldatadir)/prelude.lisp"'
+DEFINES          += -DBOCL_PRELUDE_PATH='"$(bocllibexecdir)/prelude.lisp"'
 
 UNAME=$(shell uname)
 

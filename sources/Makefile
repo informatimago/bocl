@@ -116,10 +116,36 @@ bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 # can #include <bocl/bocl.h> (internal "..." includes resolve in the same dir).
 INSTALL_HEADERS = $(wildcard *.h)
 
-# Prelude + bootstrap data the installed exe auto-loads (see find_prelude()).
-PRELUDE_SRC = ../bootstrap/prelude.lisp
+# The "system" Lisp files the installed executable loads at run time: the prelude
+# and its siblings (cl-exports.lisp loaded by bocl_load_prelude(), bignum*.lisp
+# loaded by the prelude itself).  They install together into $(bocllibexecdir) so
+# the runtime sibling-resolution keeps working.  Add new system files (e.g. ASDF)
+# here as they appear.
+SYSTEM_LISP = \
+	../bootstrap/prelude.lisp \
+	../bootstrap/cl-exports.lisp \
+	../bootstrap/bignum.lisp \
+	../bootstrap/bignum-integration.lisp
 
-.PHONY: install install-strip uninstall dist pkgconfig
+# Manual page (committed roff) and Texinfo source/output for the info manual.
+MAN_PAGE  = ../man/bocl.1
+INFO_TEXI = ../documentation/bocl.texi
+INFO_FILE = ../documentation/bocl.info
+
+# Documentation installed under $(docdir): the .org sources are always present;
+# the .pdf renders are installed only when they have been built (doc targets).
+DOC_ORG = ../README.org ../documentation/documentation.org \
+	../specifications/specifications.org ../specifications/debugger-specifications.org
+DOC_PDF = $(wildcard ../documentation/documentation.pdf \
+	../specifications/specifications.pdf ../specifications/debugger-specifications.pdf)
+
+.PHONY: install install-strip uninstall dist pkgconfig info
+
+# (Re)build the Texinfo info manual.  Needs makeinfo (texinfo); best-effort.
+info: $(INFO_FILE)
+$(INFO_FILE): $(INFO_TEXI)
+	@ printf "# Generating %-20s from %s\n" "$(@F)" "$(<F)"
+	-$(VERBOSE) ( cd ../documentation && makeinfo bocl.texi )
 
 bocl.pc:
 	@ printf "# Generating %-20s\n" "$@"
@@ -139,15 +165,31 @@ bocl.pc:
 install: build bocl.pc
 	@ printf "# Installing bocl %s into %s\n" "$(VERSION)" "$(DESTDIR)$(PREFIX)"
 	$(VERBOSE) $(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(libdir) \
-	    $(DESTDIR)$(boclincdir) $(DESTDIR)$(bocldatadir) $(DESTDIR)$(pkgconfdir)
+	    $(DESTDIR)$(boclincdir) $(DESTDIR)$(bocllibexecdir) $(DESTDIR)$(pkgconfdir) \
+	    $(DESTDIR)$(man1dir) $(DESTDIR)$(infodir) $(DESTDIR)$(docdir)
+	@ printf "#   bin/bocl\n"
 	$(VERBOSE) $(INSTALL) -m 755 bocl $(DESTDIR)$(bindir)/bocl
+	@ printf "#   lib/libbocl.{a,$(SO)} + soname links\n"
 	$(VERBOSE) $(INSTALL) -m 644 libbocl.a $(DESTDIR)$(libdir)/libbocl.a
 	-$(VERBOSE) $(RANLIB) $(DESTDIR)$(libdir)/libbocl.a >/dev/null 2>&1 || true
 	$(VERBOSE) $(INSTALL) -m 755 $(SHLIB) $(DESTDIR)$(libdir)/$(SHLIB)
 	$(VERBOSE) cd $(DESTDIR)$(libdir) && $(LN_S) $(SHLIB) $(SHLIB_MAJOR) && $(LN_S) $(SHLIB) $(SHLIB_LINK)
+	@ printf "#   include/bocl/*.h\n"
 	$(VERBOSE) for h in $(INSTALL_HEADERS) ; do \
 	    $(INSTALL) -m 644 $$h $(DESTDIR)$(boclincdir)/$$h ; done
-	$(VERBOSE) $(INSTALL) -m 644 $(PRELUDE_SRC) $(DESTDIR)$(bocldatadir)/prelude.lisp
+	@ printf "#   libexec/bocl/ system Lisp files\n"
+	$(VERBOSE) for f in $(SYSTEM_LISP) ; do \
+	    $(INSTALL) -m 644 $$f $(DESTDIR)$(bocllibexecdir)/ ; done
+	@ printf "#   share/man/man1/bocl.1\n"
+	$(VERBOSE) $(INSTALL) -m 644 $(MAN_PAGE) $(DESTDIR)$(man1dir)/bocl.1
+	@ printf "#   share/info/bocl.info\n"
+	-$(VERBOSE) $(MAKE) $(MFLAGS) $(INFO_FILE) >/dev/null 2>&1 || true
+	-$(VERBOSE) test -f $(INFO_FILE) && $(INSTALL) -m 644 $(INFO_FILE) $(DESTDIR)$(infodir)/bocl.info || \
+	    printf "#   (skipped bocl.info: makeinfo unavailable)\n"
+	@ printf "#   share/doc/bocl/ (org + pdf)\n"
+	$(VERBOSE) for d in $(DOC_ORG) $(DOC_PDF) ; do \
+	    $(INSTALL) -m 644 $$d $(DESTDIR)$(docdir)/ ; done
+	@ printf "#   lib/pkgconfig/bocl.pc\n"
 	$(VERBOSE) $(INSTALL) -m 644 bocl.pc $(DESTDIR)$(pkgconfdir)/bocl.pc
 
 # Same as install but strip the executable and shared library.
@@ -161,7 +203,11 @@ uninstall:
 	-$(VERBOSE) rm -f $(DESTDIR)$(libdir)/libbocl.a
 	-$(VERBOSE) rm -f $(DESTDIR)$(libdir)/$(SHLIB) $(DESTDIR)$(libdir)/$(SHLIB_MAJOR) $(DESTDIR)$(libdir)/$(SHLIB_LINK)
 	-$(VERBOSE) rm -f $(DESTDIR)$(pkgconfdir)/bocl.pc
+	-$(VERBOSE) rm -f $(DESTDIR)$(man1dir)/bocl.1
+	-$(VERBOSE) rm -f $(DESTDIR)$(infodir)/bocl.info
 	-$(VERBOSE) rm -rf $(DESTDIR)$(boclincdir)
+	-$(VERBOSE) rm -rf $(DESTDIR)$(bocllibexecdir)
+	-$(VERBOSE) rm -rf $(DESTDIR)$(docdir)
 	-$(VERBOSE) rm -rf $(DESTDIR)$(bocldatadir)
 
 # ----------------------------------------------------------------------
