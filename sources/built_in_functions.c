@@ -1,5 +1,6 @@
 #include "built_in_functions.h"
 #include "kernel_functions.h"
+#include "kernel_structure_functions.h"
 #include "kernel.h"
 #include "cons.h"
 #include "variable.h"
@@ -2562,6 +2563,28 @@ void kernel_CIRCLE_ACTION(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);
 }
 
+/* (%FIND-LOCAL-MACRO symbol environment) — if SYMBOL names a lexically-local macro
+   (MACROLET / WITH-HASH-TABLE-ITERATOR) in ENVIRONMENT, return a macro function for
+   it; else NIL.  MACRO-FUNCTION consults this so it sees local macros via the
+   &ENVIRONMENT it is given. */
+void kernel_FIND_LOCAL_MACRO(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref sym = pop_mandatory_argument(function,&current);
+    Ref env = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    Ref result = NIL_Symbol;
+    if(!nullp(env)){
+        Ref local = environment_find_function(sym, env);
+        if(!nullp(local) && env_local_macro_p(local)){
+            result = function_new(env_local_macro_name(local),
+                                  env_local_macro_lambda_list(local),
+                                  env_local_macro_body(local)); } }
+    results->count=1; results->values[0]=result;
+    close_live_pool(pool);
+}
+
 void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(KERNEL-ROOTSET);
         Ref lambda_list=S(NIL);
@@ -2575,6 +2598,9 @@ void kernel_initialize_built_in_functions(void){
     {   Ref fname=S(%CIRCLE-ACTION);
         Ref lambda_list=list(S(OBJECT),NULL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CIRCLE_ACTION));}
+    {   Ref fname=S(%FIND-LOCAL-MACRO);
+        Ref lambda_list=list(S(SYMBOL),S(ENVIRONMENT),NULL);
+        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FIND_LOCAL_MACRO));}
     {   Ref fname=S(GET-EVAL-COUNTERS);
         Ref lambda_list=S(NIL);
         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_EVAL_COUNTERS));}

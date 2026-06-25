@@ -22,6 +22,14 @@ Ref eval_global_environment(void){
         push_to_rootset(bocl_global_environment);}
     return bocl_global_environment;}
 
+/* The lexical environment of the macro call currently being expanded, so a macro
+   lambda-list's &ENVIRONMENT parameter can be bound to it (and MACRO-FUNCTION can
+   then find lexically-local macros there).  Set around the macro's application;
+   it is the live eval `environment`, which is already GC-rooted by the caller. */
+static Ref g_macroexpand_environment = NULL;
+Ref current_macroexpand_environment(void){
+    return g_macroexpand_environment ? g_macroexpand_environment : NIL_Symbol; }
+
 /* non_local_exit_t is declared in kernel.h so conditions.c can use it. */
 
 
@@ -1514,7 +1522,13 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             /* &WHOLE: prepend a fresh copy of the whole form (see above). */
             Ref margs=(consp(lambda_list)&&car(lambda_list)==S(&WHOLE))
                       ?cons(cons(car(form),arguments),arguments):arguments;
+            /* Expose the macro call's lexical environment to its &ENVIRONMENT
+               parameter (bound during this kernel_apply).  Save/restore for nested
+               expansions. */
+            Ref saved_menv=g_macroexpand_environment;
+            g_macroexpand_environment=environment;
             kernel_apply(fn,margs,&mac_results);
+            g_macroexpand_environment=saved_menv;
             Ref expansion = (mac_results.count > 0) ? mac_results.values[0] : NIL_Symbol;
             /* Minimal compilation by macro displacement: cache the expansion in
                place so a global-macro call is expanded ONCE, not on every
@@ -1690,13 +1704,15 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
             if(consp(arguments)){ arguments=cdr(arguments); }
             ll=cdr(ll);
             continue;}
-        /* &ENVIRONMENT var — bocl has no first-class macro environments; bind the
-           variable to NIL and do not consume an argument (it may appear anywhere). */
+        /* &ENVIRONMENT var — bound to the lexical environment of the macro call
+           being expanded, so the macro can pass it to MACRO-FUNCTION / MACROEXPAND
+           and see lexically-local macros.  Consumes no argument (may appear
+           anywhere in the lambda list). */
         if(symbolp(param) && param==S(&ENVIRONMENT)){
             ll=cdr(ll);
             if(!consp(ll) || !symbolp(car(ll))){
                 ERROR("&ENVIRONMENT: expected a variable%s","");}
-            environment_add_variable(env_make_lexical_variable(car(ll),NIL_Symbol),target_env);
+            environment_add_variable(env_make_lexical_variable(car(ll),current_macroexpand_environment()),target_env);
             ll=cdr(ll);
             continue;}
         /* &AUX (var) or (var init-form) — bind local variables in order. */

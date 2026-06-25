@@ -6089,9 +6089,11 @@ SUBTYPEP round-trips)."
 ;;; under the key $MACRO (the symbol named "$MACRO" in the kernel).
 
 (defun macro-function (symbol &optional environment)
-  "Return the macro-expansion function for SYMBOL, or NIL if not a macro."
-  (declare (ignore environment))
-  (get symbol '$macro))
+  "Return the macro-expansion function for SYMBOL, or NIL if not a macro.  A
+   lexically-local macro (MACROLET / WITH-HASH-TABLE-ITERATOR) visible in
+   ENVIRONMENT shadows the global definition."
+  (or (and environment (%find-local-macro symbol environment))
+      (get symbol '$macro)))
 
 ;;; (setf macro-function) — bocl's defun doesn't support (setf name) form yet.
 ;;; Use set-symbol-macro-function directly via the plist.
@@ -6166,19 +6168,26 @@ SUBTYPEP round-trips)."
   Call syntax: (with-hash-table-iterator (name table) body...).
   NAME is a local function of no arguments; each call returns
   (values more-p key value).  When the table is exhausted, returns (values NIL)."
+  ;; CLHS: NAME is established as a local MACRO (not a function), so it must be
+  ;; built with MACROLET — that is what MACRO-FUNCTION/&ENVIRONMENT report.  The
+  ;; macro takes no arguments and expands to the next-entry step form referencing
+  ;; the gensym KEYS-VAR / TABLE-VAR bound by the surrounding LET*.  (bocl has no
+  ;; nested backquote, so the expansion is built with explicit LIST forms.)
   (let ((name       (car  name-and-table))
         (hash-table (cadr name-and-table))
         (keys-var   (gensym "KEYS-"))
-        (table-var  (gensym "HT-")))
+        (table-var  (gensym "HT-"))
+        (kv         (gensym "K-"))
+        (vv         (gensym "V-")))
     `(let* ((,table-var ,hash-table)
             (,keys-var  (hash-table-keys ,table-var)))
-       (flet ((,name ()
-                (if (null ,keys-var)
-                    (values nil nil nil)
-                    (let* ((k (car ,keys-var))
-                           (v (gethash k ,table-var)))
-                      (setq ,keys-var (cdr ,keys-var))
-                      (values t k v)))))
+       (macrolet ((,name ()
+                    (list 'if (list 'null ',keys-var)
+                          '(values nil nil nil)
+                          (list 'let* (list (list ',kv (list 'car ',keys-var))
+                                            (list ',vv (list 'gethash ',kv ',table-var)))
+                                (list 'setq ',keys-var (list 'cdr ',keys-var))
+                                (list 'values t ',kv ',vv)))))
          ,@body))))
 
 ;;; ---- GET-SETF-EXPANSION ---------------------------------------------------
