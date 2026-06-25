@@ -2319,6 +2319,11 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
                                              (eof-error-p t) eof-value recursive-p)
   (kernel-read-preserving-whitespace stream eof-error-p eof-value recursive-p))
 
+(defun read-delimited-list (char &optional (stream *standard-input*) recursive-p)
+  ;; Read objects from STREAM until the (unescaped, non-quoted) CHAR is reached,
+  ;; returning them as a list (CHAR is consumed).  Delegates to the kernel reader.
+  (kernel-read-delimited-list char stream recursive-p))
+
 (defun read-char (&optional (stream *standard-input*)
                              (eof-error-p t) eof-value recursive-p)
   (kernel-read-char stream eof-error-p eof-value recursive-p))

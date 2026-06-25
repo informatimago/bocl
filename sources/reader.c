@@ -1208,8 +1208,33 @@ Ref kernel_read_preserving_whitespace(Ref input_stream,Ref eof_error_p,Ref eof_v
     return read_impl(input_stream,eof_error_p,eof_value,recursive_p,true);}
 
 Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursive_p){
-    NOT_IMPLEMENTED_YET();
-    return S(NIL);
+    /* Read objects from INPUT_STREAM until the unescaped CHARACTER is reached
+       (which is consumed), returning them as a list — like parse_list but with a
+       caller-chosen delimiter and an externally-supplied stream. */
+    octet delim = (octet)integer_value(character_code(character));
+    uword pool = open_live_pool();
+    add_to_live_pool(input_stream);
+    parser_state parser;
+    parser.input_stream = input_stream;
+    parser.length   = 0;
+    parser.ch       = ' ';
+    parser.eof      = false;
+    parser.error    = false;
+    parser.escape   = false;
+    parser.suppress = false;
+    advance_character(&parser);
+    skip_spaces(&parser);
+    Ref result = NIL_Symbol;
+    while(parser.ch != delim){
+        if(parser.eof || feof(stream_cstream(input_stream))){
+            END_OF_FILE(input_stream);}
+        Ref element = parse_object(&parser);
+        if(element != reader_skip_marker){
+            push(element,&result);
+            add_to_live_pool(result);}
+        skip_spaces(&parser);}
+    close_live_pool(pool);
+    return nreverse(result);
 }
 
 Ref kernel_unread_char(Ref ch, Ref stream){
