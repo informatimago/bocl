@@ -1432,8 +1432,14 @@ static void k_GET_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, Multiple
     Ref subtab=(disp>=0&&disp<128)?rtv_get(rt->slots->readtable.dispatch,disp):NIL_Symbol;
     if(nullp(subtab)){ ERROR("GET-DISPATCH-MACRO-CHARACTER: not a dispatch character%s",""); }
     if(sub>='a'&&sub<='z'){ sub-=32; }   /* CL upcases the sub-character */
+    Ref fn=(sub>=0&&sub<128)?rtv_get(subtab,sub):NIL_Symbol;
+    /* The standard # reader dispatches every non-digit sub-character through its
+       hardcoded switch rather than a subtab entry; report the standard dispatch
+       marker for them so GET-DISPATCH-MACRO-CHARACTER sees them as defined (digits
+       are the numeric infix argument, not sub-characters, and stay NIL). */
+    if(nullp(fn) && disp=='#' && !(sub>='0'&&sub<='9')){ fn=g_dispatch_marker; }
     results->count=1;
-    results->values[0]=(sub>=0&&sub<128)?rtv_get(subtab,sub):NIL_Symbol;
+    results->values[0]=fn;
     close_live_pool(pool);}
 
 static void k_SET_DISPATCH_MACRO_CHARACTER(Ref function, Ref arguments, MultipleValues* results){
