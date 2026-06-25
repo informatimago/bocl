@@ -5513,7 +5513,7 @@ the class object it denotes, so two specializers compare by class identity."
 
 ;;; ---- Standard array/call limits ------------------------------------------
 
-(defconstant array-rank-limit       8)
+(defconstant array-rank-limit       64)
 (defconstant array-dimension-limit  (expt 2 24))
 (defconstant array-total-size-limit (expt 2 24))
 (defconstant call-arguments-limit   4096)

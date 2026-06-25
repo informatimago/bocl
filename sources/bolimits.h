@@ -3,7 +3,7 @@
 
 #define ARRAY_TOTAL_SIZE_LIMIT    (32768)
 #define ARRAY_DIMENSION_LIMIT     (32768)
-#define ARRAY_RANK_LIMIT          (    8)
+#define ARRAY_RANK_LIMIT          (   64)
 #define CALL_ARGUMENTS_LIMIT      (   60)
 #define CHAR_CODE_LIMIT           (  256)
 #define LAMBDA_PARAMETERS_LIMIT   (   50)
