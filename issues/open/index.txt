@@ -8,4 +8,10 @@ deferred-gc-rooting-longtail.issue
 deferred-sacla-logic-bugs.issue
 deferred-signal-hooks.issue
 should-tests-type-errors.issue
+generational-gc.issue
+on-error-default-setting.issue
+package-print-object-method.issue
+segfault-1.issue
+stack-overflow-guard.issue
+format-radix-mincol-padchar.issue
 ansi-test.issue

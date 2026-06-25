@@ -178,6 +178,28 @@ _Noreturn void type_error(const char* fname,Ref object,Ref class){
     exit(EX_DATAERR);}
 
 
+_Noreturn void stack_overflow_error(void){
+    /* The interpreter's recursion is about to exhaust the C control stack.  Signal
+       a catchable STORAGE-CONDITION (a SERIOUS-CONDITION, the CL class for resource
+       exhaustion) while a margin of stack remains, so a HANDLER-CASE / the REPL can
+       recover instead of the process segfaulting.  The eval stack guard disables
+       itself across this call (see evale), so signalling + the handler running in
+       place do not re-trigger the guard. */
+    if(STORAGE_CONDITION_Class->class != NULL){
+        uword pool = open_live_pool();
+        Ref fmt = string_new_cstring(
+            "STORAGE ERROR: control stack exhausted (recursion too deep)");
+        add_to_live_pool(fmt);
+        Ref cond = make_simple_condition(STORAGE_CONDITION_Class, fmt, NIL_Symbol);
+        add_to_live_pool(cond);
+        signal_condition(cond, eval_global_environment());
+        /* signal_condition returned — no handler matched; fall through to exit. */
+        close_live_pool(pool);
+    }
+    fprintf(stderr,"\nSTORAGE ERROR: control stack exhausted (recursion too deep)\n\n");
+    exit(EX_SOFTWARE);}
+
+
 void* check_pointer(const char* fname,void* pointer){
     if(pointer){
         return pointer;}

@@ -463,6 +463,10 @@ int main(int argc,char** argv){
     pname=argv[0];
     program_path=argv[0];
     int status=0;
+    /* Capture a high address near the base of the C stack for the eval
+       stack-overflow guard (main's frame is close to the stack's start). */
+    {   char stack_anchor;
+        eval_init_stack_guard(&stack_anchor); }
     kernel_initialize();
     process_options(argc,argv);
 

@@ -4897,7 +4897,14 @@ the class object it denotes, so two specializers compare by class identity."
                          (format stream "~?"
                                  (simple-condition-format-control c)
                                  (simple-condition-format-arguments c)))
-                     (format stream "#<~A>" (type-of c)))
+                     ;; A non-simple kernel condition may still carry a format-control
+                     ;; (e.g. the STORAGE-CONDITION signalled on stack overflow); show
+                     ;; it when present, else just the type.
+                     (let ((fc (ignore-errors (simple-condition-format-control c))))
+                       (if (stringp fc)
+                           (format stream "#<~A ~?>" (type-of c) fc
+                                   (or (ignore-errors (simple-condition-format-arguments c)) '()))
+                           (format stream "#<~A>" (type-of c)))))
                  c))
 
 ;;; PRINT-OBJECT for PACKAGE.  A package is a kernel object (not a %obj instance),
@@ -9976,13 +9983,20 @@ the rest take :INITIAL-ELEMENT."
         (handler-bind
             ((serious-condition
                (lambda (c)
-                 (case bocl:*on-error*
-                   (:appease (%report-repl-condition c) (invoke-restart 'abort))
-                   (:abort   (%report-repl-condition c) (invoke-restart 'abort))
-                   (:exit    (%report-repl-condition c) (bocl:quit 1))
-                   (otherwise
-                    (invoke-debugger c)        ; :debug — may transfer via a restart
-                    (invoke-restart 'abort)))))) ; debugger continued -> back to REPL
+                 (cond
+                   ;; The control stack is exhausted: do NOT run the debugger here —
+                   ;; it would execute on the near-exhausted stack.  Report and ABORT
+                   ;; (unwind to the REPL, freeing the stack and re-arming the guard).
+                   ((typep c 'storage-condition)
+                    (%report-repl-condition c) (invoke-restart 'abort))
+                   (t
+                    (case bocl:*on-error*
+                      (:appease (%report-repl-condition c) (invoke-restart 'abort))
+                      (:abort   (%report-repl-condition c) (invoke-restart 'abort))
+                      (:exit    (%report-repl-condition c) (bocl:quit 1))
+                      (otherwise
+                       (invoke-debugger c)        ; :debug — may transfer via a restart
+                       (invoke-restart 'abort)))))))) ; debugger continued -> back to REPL
           (return-from done (eval form)))
       (abort () :report "Return to the top-level REPL." (return-from done (values))))))
 

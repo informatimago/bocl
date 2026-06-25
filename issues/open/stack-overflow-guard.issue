@@ -1,0 +1,49 @@
+Control-stack overflow guard: signal a catchable STORAGE-CONDITION instead of
+segfaulting on unbounded recursion.
+
+STATUS: DONE (slice 121, v1.3.8).  Requested after segfault-1 (deep SORT crashed):
+"test to avoid blowing the stack to a segfault and instead, having still some margin
+in the stack, signal an OUT-OF-STACK-MEMORY-ERROR".
+
+== Design ==
+bocl's EVAL is a recursive C interpreter, so unbounded Lisp recursion exhausts the C
+control stack and segfaults.  A cheap guard on the EVAL hot path now signals a
+catchable condition while a margin of stack remains.
+
+- sources/eval.c: eval_init_stack_guard(&anchor) (called from main() before the
+  prelude loads) captures a high address near the stack base and computes a limit a
+  safe margin below RLIMIT_STACK (margin = max(stack/8, 512 KiB); fallback 8 MiB if
+  the limit is unknown).  At the top of evale(): used = stack_base - &local; if
+  used > limit, signal.  Cost: a global load + subtract + compare per evale.
+- The signal is a STORAGE-CONDITION (the CL class for resource exhaustion, a
+  SERIOUS-CONDITION) carrying the report "control stack exhausted (recursion too
+  deep)" — sources/boerror.c stack_overflow_error().
+- Re-entrancy: a g_stack_guard_armed flag is cleared while signalling (so the
+  signal path + an in-place handler, which run within the reserved margin, do not
+  re-trigger) and re-armed automatically once the stack unwinds back below the limit.
+- REPL policy (bootstrap/prelude.lisp %repl-eval): a STORAGE-CONDITION reports and
+  ABORTs to the top-level REPL rather than entering the debugger — running the
+  debugger on a near-exhausted stack is unsafe.  User code can still catch it with
+  HANDLER-CASE (which unwinds to the user's shallow frame).
+- The condition PRINT-OBJECT now shows a non-simple condition's carried
+  format-control, so the storage condition prints its message.
+
+== Verified ==
+- (handler-case (rec 0) (storage-condition () :caught)) => :CAUGHT  (no segfault).
+- At the REPL, an infinite recursion prints "control stack exhausted" and returns to
+  the bocl> prompt; the next form runs.
+- The segfault-1 SORT form runs normally; no false positives across must-condition
+  147/0, must-sequence 3851/0, must-loop 852/0, must-cons 728/0.
+
+== Limitations / possible follow-ups ==
+- Only EVAL-driven (Lisp) recursion is guarded.  Recursion entirely inside C
+  (e.g. the printer's prin1 on deeply nested / circular structure — it has its own
+  PRIN1_MAX_DEPTH backstop; the GC mark is already iterative) is not covered by this
+  guard.
+- The margin is heuristic.  A handler that itself recurses deeply within the
+  reserved margin could still overflow (same caveat as other Lisps).  STORAGE-
+  CONDITION at the REPL aborts rather than debugs to minimise this.
+- Assumes a downward-growing stack (x86/ARM/most Unix); not validated on
+  upward-growing stacks.
+- STORAGE-CONDITION is a SERIOUS-CONDITION, not an ERROR (per CLHS); catch it with
+  (storage-condition () ...) or (serious-condition () ...), not (error () ...).

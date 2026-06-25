@@ -1,4 +1,5 @@
 #include <setjmp.h>
+#include <sys/resource.h>
 #include "eval.h"
 #include "kernel.h"
 #include "boerror.h"
@@ -339,7 +340,50 @@ Ref get_eval_counters(void){
     push(cons(S(VARIABLE),              integer_from_word(eval_counters.variable)),             &result);
     return result;}
 
+/* ---- Control-stack overflow guard ---------------------------------------- */
+/* The interpreter recurses on the C stack (each Lisp call nests several evale /
+   kernel_apply frames), so unbounded Lisp recursion would segfault.  We capture a
+   high address near the start of the stack and, on each evale, compare the current
+   depth against a limit set a safe margin below the real RLIMIT_STACK ceiling; when
+   exceeded we signal a catchable STORAGE-CONDITION instead of crashing.
+   g_stack_guard_armed is cleared while we signal (so the signalling + in-place
+   handler, which run within the reserved margin, do not re-trigger) and re-armed
+   automatically once the stack has unwound back below the limit. */
+static char*  g_stack_base   = NULL;   /* a high address near the base of the stack */
+static size_t g_stack_limit  = 0;      /* max used bytes before we signal */
+static bool   g_stack_guard_armed = true;
+
+void eval_init_stack_guard(char* approx_base){
+    g_stack_base = approx_base;
+    size_t total = 8u*1024*1024;       /* fallback if the limit is unknown */
+    struct rlimit rl;
+    if(getrlimit(RLIMIT_STACK,&rl)==0
+       && rl.rlim_cur!=RLIM_INFINITY && rl.rlim_cur>0){
+        total = (size_t)rl.rlim_cur;}
+    /* Reserve a generous margin so signalling the condition and running the
+       handler / REPL recovery have room. */
+    size_t margin = total/8;
+    if(margin < 512u*1024){ margin = 512u*1024; }
+    if(margin >= total)   { margin = total/2; }
+    g_stack_limit = total - margin;}
+
 Ref evale(Ref form,Ref environment,MultipleValues* results){
+    {   /* Stack-overflow guard: stack grows downward, so deeper frames have lower
+           addresses; used = base - current.  Cheap: a global load + subtract +
+           compare on the eval hot path. */
+        char probe;
+        if(g_stack_base != NULL){
+            size_t used = (size_t)(g_stack_base - &probe);
+            if(used > g_stack_limit){
+                if(g_stack_guard_armed){
+                    g_stack_guard_armed = false;   /* let the signal path use the margin */
+                    stack_overflow_error();        /* signals STORAGE-CONDITION; no return */
+                }
+                /* guard disarmed: we are within the reserved margin (signalling /
+                   handler path) — do not re-trigger. */
+            }else{
+                g_stack_guard_armed = true;        /* recovered: re-arm */
+            }}}
     uword pool=open_live_pool();
     add_to_live_pool(form);
     add_to_live_pool(environment);

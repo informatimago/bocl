@@ -41,6 +41,7 @@ _Noreturn void fatal(const char* fname,const char* message_format,...);
 _Noreturn void error(const char* fname,const char* message_format,...);
 _Noreturn void program_error(const char* fname,const char* message_format,...);
 _Noreturn void package_error(const char* fname,const char* message_format,...);
+_Noreturn void stack_overflow_error(void);
 _Noreturn void type_error(const char* fname,Ref object,Ref class);
 
 void*    check_pointer           (const char* fname,void*    pointer);
