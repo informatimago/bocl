@@ -282,6 +282,18 @@ static Ref backquote_element(Ref element){
 static Ref backquote_expand(Ref form){
     if(nullp(form)){
         return list(S(QUOTE), NIL_Symbol, NULL);}
+    /* A general (simple) vector — NOT a string or bit-vector, which are vector
+       subtypes with a different (OctetArray) slot layout that vector_length /
+       svref would misread.  `(error ,msg) with a literal string must keep the
+       string quoted, so exclude them here. */
+    if(vectorp(form) && !stringp(form) && !bit_vector_p(form)){
+        /* `#(e1 e2 …) — expand the elements as a backquoted list, then rebuild
+           the vector at run time: (APPLY #'VECTOR <list-form>). */
+        uword n=vector_length(form);
+        Ref elts=NIL_Symbol;
+        for(uword i=n; i-->0;){ elts=cons(svref(form,integer_from_uword(i)),elts); }
+        return list(S(APPLY), list(FUNCTION_Symbol, S(VECTOR), NULL),
+                    backquote_expand(elts), NULL);}
     if(!consp(form)){
         return list(S(QUOTE), form, NULL);}
     Ref head = car(form);
