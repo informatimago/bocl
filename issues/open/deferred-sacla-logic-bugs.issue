@@ -71,11 +71,21 @@ FIXED — Slice 111 (v1.2.38): FIND-RESTART :test-function + RESTART-CASE :inter
     a RESTART-CASE spec from a RESTART-BIND spec by whether the 2nd element is
     callable) to compute the restart's arguments.
 
-STILL OPEN in must-condition (1) — condition-restart association:
-  * 111: WITH-CONDITION-RESTARTS must associate restarts with a condition so that
-    FIND-RESTART with a DIFFERENT condition does not find them.  bocl conflates a
-    restart object with its name symbol and stores no association, so a restart found
-    for one condition is wrongly found for another.
+FIXED — Slice 112 (v1.2.39): condition-restart association + LET/LET* empty body
+(1 -> 0; must-condition fully GREEN, 147/0).
+  * 111: WITH-CONDITION-RESTARTS now binds a dynamic *%RESTART-ASSOCIATIONS* list of
+    (condition . restart-names); FIND-RESTART (conditions.c) hides a restart whose
+    name is associated but NOT with the condition being searched for.
+  * 108 (regression surfaced by the above): LET / LET* with an EMPTY body returned a
+    stale value (the last init, or via EVAL the form itself) instead of NIL — the
+    same class as the HANDLER-BIND empty-body bug (Slice 109).  Both now reset
+    `results` to NIL after evaluating the bindings, before the body.
+
+must-condition: 22 -> 0 across Slices 107-112 (v1.2.34-1.2.39).  Broad regression
+sweep clean: must-array 330/0, must-character 313/0, must-cons 728/0,
+must-data-and-control 310/1, must-do 75/0, must-loop 852/0, must-reader 1560/1,
+must-sequence 3851/0, must-string 414/0, must-symbol 113/0, must-eval 9/0 (the two
+1s are the known-conforming F192 double-float).
 
 == FIXED (Slice 63) — must-symbol SYMBOL-VALUE of NIL/T + REMPROP first-only ==
 Drove all 113 must-symbol forms with the GC off: 6 fails -> 1.

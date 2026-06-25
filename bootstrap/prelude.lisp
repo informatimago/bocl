@@ -5177,11 +5177,20 @@ the class object it denotes, so two specializers compare by class identity."
   (let ((r (find-restart 'use-value condition)))
     (when r (invoke-restart r value))))
 
+;; Condition/restart association (CLHS 9.1.4.2.4).  bocl conflates a restart object
+;; with its name symbol, so association is tracked in a dynamic list of
+;; (condition . restart-name-list) entries consulted by FIND-RESTART (conditions.c):
+;; a restart whose name appears in some entry is found only when the condition being
+;; searched for is one of the conditions it was associated with.
+(defvar *%restart-associations* nil)
+
 (defmacro with-condition-restarts (condition-form restarts-form &body body)
-  "Run BODY with the restarts associated with the condition.  bocl restarts are
-   not condition-associated, so CONDITION-FORM and RESTARTS-FORM are evaluated
-   (for effect) and BODY's values are returned."
-  `(progn ,condition-form ,restarts-form ,@body))
+  "Associate the restarts named by RESTARTS-FORM with the condition (CLHS
+   WITH-CONDITION-RESTARTS) for the dynamic extent of BODY, so FIND-RESTART with a
+   different condition does not see them."
+  `(let ((*%restart-associations*
+          (cons (cons ,condition-form ,restarts-form) *%restart-associations*)))
+     ,@body))
 
 ;;; NOTE: ABORT is already a kernel built-in (conditions.c).
 

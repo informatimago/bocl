@@ -647,6 +647,12 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                         var=env_make_lexical_variable(name,value);}
                     environment_add_variable(var,new_environment);}}
              environment=new_environment;
+             /* An empty body yields NIL (CLHS).  The binding inits above used
+                `results` as scratch, so reset it here before the body — otherwise an
+                empty LET body would return the last init value (or, via the EVAL
+                function, a stale form). */
+             results->count=1;
+             results->values[0]=NIL_Symbol;
              if(has_dynamic_binding){
                  /* Evaluate the body then restore special bindings.
                   * UWCLEANUP handles non-local exits; after the UNWIND block
@@ -733,6 +739,9 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     } else {
                         Ref var=env_make_lexical_variable(name,value);
                         environment_add_variable(var,environment);}}}
+            /* Empty body -> NIL; reset the scratch `results` used by the inits. */
+            results->count=1;
+            results->values[0]=NIL_Symbol;
             if(has_dynamic_star){
                 Frame frame;
                 frame.type=frame_protect;

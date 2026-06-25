@@ -286,9 +286,30 @@ static bool restart_applicable(Ref spec, Ref condition){
         return tr.count > 0 && !nullp(tr.values[0]);}
     return true;}
 
+/* WITH-CONDITION-RESTARTS association (CLHS 9.1.4.2.4): if NAME appears in the
+   dynamic *%RESTART-ASSOCIATIONS* list (entries (condition . restart-names)), the
+   restart is found only when CONDITION is one of the conditions it was associated
+   with.  Returns true when NAME is associated but NOT with CONDITION → hidden. */
+static bool restart_name_hidden(Ref name, Ref condition){
+    static Ref assoc_sym = NULL;
+    if(assoc_sym == NULL){ assoc_sym = symbol_intern_cstring("*%RESTART-ASSOCIATIONS*"); }
+    if(!symbol_boundp(assoc_sym)){ return false; }
+    bool appears = false, matches = false;
+    for(Ref a = symbol_value(assoc_sym); consp(a); a = cdr(a)){
+        Ref entry = car(a);
+        if(!consp(entry)){ continue; }
+        Ref acond = car(entry);
+        for(Ref ns = cdr(entry); consp(ns); ns = cdr(ns)){
+            if(car(ns) == name){
+                appears = true;
+                if(acond == condition){ matches = true; }
+                break;}}}
+    return appears && !matches;}
+
 /* (FIND-RESTART identifier &optional condition) → restart-designator or NIL.
    In bocl's minimal impl the "restart object" is just the name symbol.  A restart
-   whose :TEST-FUNCTION declines (on CONDITION) is skipped. */
+   whose :TEST-FUNCTION declines (on CONDITION) is skipped, as is one associated
+   (via WITH-CONDITION-RESTARTS) with a different condition. */
 static void kernel_FIND_RESTART(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
@@ -299,6 +320,11 @@ static void kernel_FIND_RESTART(Ref function, Ref arguments, MultipleValues* res
     if(!symbolp(name)){
         ERROR("FIND-RESTART: expected a symbol, got %s",
               string_cstring(prin1_to_string(name)));}
+    if(restart_name_hidden(name, condition)){
+        results->count = 1;
+        results->values[0] = NIL_Symbol;
+        close_live_pool(pool);
+        return;}
     Ref found = NIL_Symbol;
     for(Frame* frame=g_frame_stack; frame; frame=frame->next){
         if(frame->type == frame_restart){
