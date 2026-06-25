@@ -194,9 +194,13 @@ static void kernel_MAKE_CONDITION(Ref function, Ref arguments, MultipleValues* r
     Ref class_or_name = pop_mandatory_argument(function, &current);
     /* Accept the class object, or a symbol naming a class. */
     Ref cls = symbolp(class_or_name) ? find_class(class_or_name) : class_or_name;
-    if(!typep(cls, T_Class)){
-        ERROR("MAKE-CONDITION: %s is not a class",
-              string_cstring(prin1_to_string(class_or_name)));}
+    /* find_class returns C NULL (not NIL) when the symbol names no class — guard
+       BEFORE typep, which would dereference the NULL.  A type designator that does
+       not name a condition class is a TYPE-ERROR (CLHS make-condition), and the
+       must-condition suite catches exactly that ((error 'no-such-type) inside a
+       (type-error () t) handler-case). */
+    if(cls == NULL || !typep(cls, T_Class)){
+        TYPE_ERROR(class_or_name, CONDITION_Class);}
     Ref fmt  = pop_key_argument(function, &current, K(FORMAT-CONTROL),   NIL_Symbol);
     Ref args = pop_key_argument(function, &current, K(FORMAT-ARGUMENTS), NIL_Symbol);
     results->count = 1;

@@ -16,6 +16,33 @@ pressure.  Diagnostic primitives (kernel.c): (cl::%gc-enable x), (cl::%gc-stress
 (cl::%poison x) — the last toggles the use-after-free finder at runtime so it can
 target a post-prelude workload without the finder's slow sweep over the prelude.
 
+== must-condition opened (Slice 107, v1.2.34) — segfault fixed; 22 logic fails remain ==
+must-condition was a hard SEGFAULT (form 9: (error 'no-such-error!!)).  Root cause:
+kernel MAKE-CONDITION did `find_class(sym)` (returns C NULL, not NIL, for an unknown
+name) then `typep(cls, T_Class)` — dereferencing the NULL.  Now guard cls==NULL
+BEFORE typep and signal a TYPE-ERROR (CLHS make-condition: a designator that names no
+condition class is a type-error; the suite catches it via (type-error () t)).
+With the crash gone the whole file runs: forms=147, fails=22, no errors.
+
+To drive must-condition faithfully you MUST avoid a surrounding handler — SACLA runs
+it `(without-global-handlers (run-test "must-condition" :ignore-errors nil))`, and a
+handler-case(error) around eval would intercept the SIGNALled conditions the forms
+test.  Likewise the bocl REPL's %repl-eval wraps a handler-bind for SERIOUS-CONDITION,
+so piping forms to the REPL reports bogus "Unhandled SIMPLE-ERROR"; run via `-x ... -quit`
+(bocl_read_eval_cstring, no %repl-eval) or LOAD instead.  Driver: tmp/drivec.lisp.
+Ground truth (SBCL + CCL agree, all 22 -> T): tmp/cmp.lisp.
+
+The 22 remaining are genuine bocl bugs in three clusters:
+  * WARN type-check (19,20,21,22,24,146): WARN must signal a TYPE-ERROR when its
+    condition is not a WARNING (CLHS warn).
+  * HANDLER-BIND (25: empty (handler-bind nil) should be NIL; 38,39: multiple
+    same-type handlers in one HANDLER-BIND must each run, left-to-right, then the
+    enclosing frame, when they decline — signal_condition currently `goto next_frame`
+    after the FIRST matching binding, skipping later bindings in the same frame).
+  * Restart system (72,78,88,90,91,92,111,115,116): leftmost same-named restart wins;
+    :TEST-FUNCTION gating of FIND-RESTART; INVOKE-RESTART-INTERACTIVELY :INTERACTIVE;
+    RESTART-CASE value/MV semantics; FIND-RESTART with a condition arg.
+
 == FIXED (Slice 63) — must-symbol SYMBOL-VALUE of NIL/T + REMPROP first-only ==
 Drove all 113 must-symbol forms with the GC off: 6 fails -> 1.
   - SYMBOL-VALUE of the self-valued constants NIL / T (and keywords) returned the
