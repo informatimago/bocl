@@ -71,3 +71,36 @@ machine-instance, compile-file, truename, probe-file, merge-pathnames, BOCL:QUIT
   or upstreamed) so each dispatch calls the bocl primitive.
 - Add bocl:run-program (%system) for Tier 2; defer Tier 3.
 - Re-run the must-* suite after each step (esp. must-condition for the hierarchy fix).
+
+----------------------------------------------------------------------
+PROGRESS (slice 125, v1.3.12) — TIER 1 DONE
+----------------------------------------------------------------------
+DONE:
+- *FEATURES* += :UNIX :LINUX/:DARWIN :X86-64/:ARM64 (kernel.c).
+- Kernel %GETENV/%SETENV/%UNSETENV, %GETCWD, %CHDIR, %COMMAND-LINE-ARGUMENTS,
+  %DIRECTORY-P (bocl.c); BOCL wrappers bocl:getenv/setenv/unsetenv/getcwd/chdir/
+  command-line-arguments (+ *command-line-arguments*).
+- CL:DIRECTORY: real glob (*, ?, ** wild-inferiors) over %LIST-DIRECTORY/%DIRECTORY-P.
+- CLOS condition hierarchy fixed (see clos-condition-hierarchy-parents): style-warning
+  is now TYPEP 'warning, etc.
+No regressions (must-condition 147/0, -sequence 3851/0, -cons 728/0, -symbol 113/0).
+
+ASDF LOAD PROGRESS (loading modules/asdf/asdf.lisp directly):
+- The FIRST error (WARN of a STYLE-WARNING subclass) is GONE — UIOP's
+  DEFINE-PACKAGE-STYLE-WARNING now just warns, as it should.
+- NEXT blocker: SIMPLE-TYPE-ERROR "The value NIL is not of type PACKAGE", raised in
+  UIOP's DEFINE-PACKAGE (uiop/package.lisp) package surgery — some package op returns
+  / is handed NIL where a package object is expected (e.g. find-package of a not-yet-
+  existing package used as an argument, or rename/use of NIL).  This begins the
+  iterative ASDF-compat work; it is NOT a Tier-1 item.
+  Note: UIOP's DEFINE-PACKAGE is a large reimplementation of DEFPACKAGE with package
+  recycling and conflict resolution — it exercises far more of the package API than
+  CL:DEFPACKAGE; expect several package-system gaps here.
+
+REMAINING toward a loadable ASDF (separate, iterative):
+- A #+bocl UIOP port: redefine the still-NOT-IMPLEMENTED uiop functions to call the
+  bocl: primitives (getenv/getcwd/chdir/quit/raw-command-line-arguments).  Currently
+  unnecessary for the FIRST stages (UIOP's own definitions error only when CALLED),
+  but needed before run-program / image ops are used.
+- Work through UIOP's DEFINE-PACKAGE package-API needs, then Tier-2 (run-program,
+  compile-file* condition capture).
