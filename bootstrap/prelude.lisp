@@ -2358,6 +2358,28 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
   (kernel-read-from-string string eof-error-p eof-value start end
                             preserve-whitespace))
 
+;; ---- SET-SYNTAX-FROM-CHAR (with behaviour transfer for the standard macros) --
+;; The kernel reader dispatches the standard macro characters ( ' etc. by a
+;; hardcoded switch keyed on the character, so %SET-SYNTAX-FROM-CHAR (which copies
+;; the syntax-table entry) alone does not make a new character read like one of
+;; them.  These reader-macro FUNCTIONS reproduce the behaviour, and the wrapper
+;; installs them on TO-CHAR via SET-MACRO-CHARACTER when FROM-CHAR is one of them.
+
+(defun %rm-quote (stream char)
+  (declare (ignore char))
+  (list 'quote (read stream t nil t)))
+
+(defun %rm-open-paren (stream char)
+  (declare (ignore char))
+  (read-delimited-list #\) stream t))
+
+(defun set-syntax-from-char (to-char from-char
+                             &optional (to-readtable *readtable*) from-readtable)
+  (%set-syntax-from-char to-char from-char to-readtable from-readtable)
+  (cond ((char= from-char #\') (set-macro-character to-char #'%rm-quote      nil to-readtable))
+        ((char= from-char #\() (set-macro-character to-char #'%rm-open-paren nil to-readtable)))
+  t)
+
 ;; ---- String-stream macros -----------------------------------------------
 
 (defmacro with-output-to-string (var-spec &body body)

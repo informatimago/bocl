@@ -1617,7 +1617,8 @@ void reader_initialize(){
     register_reader_fn(S(SET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(FN),S(&OPTIONAL),S(READTABLE),NULL),    k_SET_DISPATCH_MACRO_CHARACTER);
     register_reader_fn(S(MAKE-DISPATCH-MACRO-CHARACTER), list(S(CHAR),S(&OPTIONAL),S(NON-TERMINATING-P),S(READTABLE),NULL), k_MAKE_DISPATCH_MACRO_CHARACTER);
     register_reader_fn(S(COPY-READTABLE),                NIL_Symbol,                         k_COPY_READTABLE);
-    register_reader_fn(S(SET-SYNTAX-FROM-CHAR),          NIL_Symbol,                         k_SET_SYNTAX_FROM_CHAR);
+    register_reader_fn(symbol_intern_cstring("%SET-SYNTAX-FROM-CHAR"),
+                       NIL_Symbol,                                                           k_SET_SYNTAX_FROM_CHAR);
     register_reader_fn(S(READTABLE-CASE),                NIL_Symbol,                         k_READTABLE_CASE);
     register_reader_fn(symbol_intern_cstring("%SET-READTABLE-CASE"),
                        NIL_Symbol,                                                           k_SET_READTABLE_CASE);}
