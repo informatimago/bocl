@@ -1190,6 +1190,11 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             frame.type = frame_handler_bind;
             frame.parameters.handler_bind.bindings = hb_bindings;
             frame.results = results;
+            /* An empty body must yield NIL (CLHS HANDLER-BIND).  Without this the
+               dolist below never runs and `results` keeps a stale value — e.g. via
+               the EVAL function (handler-bind nil) wrongly returned its own form. */
+            results->count = 1;
+            results->values[0] = NIL_Symbol;
             int code = setjmp(frame.non_local_exit);
             UNWIND(code){
                 UWBODY{

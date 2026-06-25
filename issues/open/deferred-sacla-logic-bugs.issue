@@ -43,11 +43,17 @@ FIXED — Slice 108 (v1.2.35): WARN type-check + ASSERT/CHECK-TYPE (22 -> 12).
   * CHECK-TYPE (136,137,138): now signals a correctable SIMPLE-TYPE-ERROR with a
     STORE-VALUE restart that stores into the place and re-tests.
 
-STILL OPEN in must-condition (12) — HANDLER-BIND ordering + restart system:
-  * HANDLER-BIND (25: empty (handler-bind nil) should be NIL; 38,39: multiple
-    same-type handlers in one HANDLER-BIND must each run, left-to-right, then the
-    enclosing frame, when they decline — signal_condition currently `goto next_frame`
-    after the FIRST matching binding, skipping later bindings in the same frame).
+FIXED — Slice 109 (v1.2.36): HANDLER-BIND (12 -> 9).
+  * 38,39: signal_condition no longer `goto next_frame` after the first matching
+    binding — it continues to the next binding in the SAME HANDLER-BIND (left-to-
+    right) when a handler declines, then enclosing frames.  The whole-cluster
+    deactivation during a handler is kept (form 39's re-signal must skip the entire
+    inner cluster and reach only the outer one).
+  * 25: HANDLER-BIND with an empty body now yields NIL.  The special form left
+    `results` stale when body was empty, so via the EVAL function (handler-bind nil)
+    returned its own form instead of NIL.
+
+STILL OPEN in must-condition (9) — restart system only:
   * Restart system (72,78,88,90,91,92,111,115,116): leftmost same-named restart wins;
     :TEST-FUNCTION gating of FIND-RESTART; INVOKE-RESTART-INTERACTIVELY :INTERACTIVE;
     RESTART-CASE value/MV semantics; FIND-RESTART with a condition arg.

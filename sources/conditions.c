@@ -52,15 +52,20 @@ Ref signal_condition(Ref cond, unused Ref environment){
                 Ref type_class = car(pair);
                 Ref handler_fn  = cdr(pair);
                 if(subclassp(cls, type_class)){
-                    /* Deactivate this frame while the handler runs so
-                       re-signaling the same condition from the handler
-                       skips this binding (CL spec requirement). */
+                    /* Deactivate the WHOLE cluster while the handler runs so a
+                       re-signal of the same condition from inside the handler skips
+                       every binding of this HANDLER-BIND (CLHS 9.1.4.1) and reaches
+                       only enclosing handlers. */
                     frame->type = frame_handler_bind_inactive;
                     MultipleValues hresults;
                     kernel_apply(handler_fn, list(cond, NULL), &hresults);
                     frame->type = frame_handler_bind; /* restore */
-                    /* Handler returned normally — continue signaling. */
-                    goto next_frame;
+                    (void)hresults;
+                    /* Handler declined (returned normally) — keep searching with the
+                       NEXT binding in THIS same cluster (left-to-right), then the
+                       enclosing frames.  (Do NOT skip to the next frame: a single
+                       HANDLER-BIND may bind the same type more than once, and each
+                       such handler must run in turn.) */
                 }
                 bindings = cdr(bindings);}}
 
@@ -85,7 +90,6 @@ Ref signal_condition(Ref cond, unused Ref environment){
                     longjmp(top->non_local_exit, code);}
                 clauses = cons_cdr(clauses);}}
 
-        next_frame:
         frame = frame->next;}
 
     /* No handler caught the condition. */
