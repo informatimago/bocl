@@ -1,0 +1,53 @@
+
+bocl> (list-all-packages)
+
+(#<PACKAGE 0xc5ff9db98> #<PACKAGE 0xc5ff9d8f0> #<PACKAGE 0xc5ff9d6c8> #<PACKAGE 0xc5ff9d540>)
+
+
+Something more like:
+
+(#<Package "SWANK-MACROSTEP"> #<Package "SWANK-REPL"> #<Package "SWANK-TRACE-DIALOG">
+ #<Package "SWANK-MREPL"> #<Package "SWANK-API"> #<Package "SWANK-IO-PACKAGE">
+ #<Package "SWANK/GRAY"> #<Package "CROSS-REFERENCE"> …)
+
+was expected.
+
+If we define at the bocl REPL:
+
+(defun print-object ((package package) stream)
+  (print-unreadable-object (package stream :identity nil :type t)
+    (format stream "~S" (package-name package)))
+  package)
+
+bocl> (setq *print-readably* nil)
+NIL
+bocl> (list-all-packages)
+
+(#<PACKAGE 0xc5ff9db98> #<PACKAGE 0xc5ff9d8f0> #<PACKAGE 0xc5ff9d6c8> #<PACKAGE 0xc5ff9d540>)
+
+
+We still don't get what we want…
+
+Furthermore:
+
+bocl> (setq *print-readably* t)
+T
+bocl> (list-all-packages)
+
+should signal a PRINT-NOT-READABLE error like:
+
+Attempt to print object #<Package "SWANK-MACROSTEP"> on stream #<string-output-stream  #x3020023C578D> .
+   [Condition of type print-not-readable]
+
+
+
+bocl> (mapcar 'package-name (list-all-packages))
+
+("COMMON-LISP" "COMMON-LISP-USER" "KEYWORD" "BOCL")
+
+
+We may suspect that other type of objects cannot be used to dispatch
+CLOS methods such as PRINT-OBJECT. This is a more general bug, not
+specific to PACKAGE, but to all lisp objects (kernel) vs
+STANDARD-OBJECT. Even if PACKAGE is not a STANDARD-OBJECT, CLOS
+methods can be defined to dispatch on them.
