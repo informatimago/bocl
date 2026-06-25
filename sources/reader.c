@@ -1364,7 +1364,10 @@ static Ref make_standard_readtable(void){
     return result;}
 
 static Ref readtable_arg(Ref* current, Ref function){
-    Ref rt = nullp(*current) ? current_readtable() : pop_mandatory_argument(function,current);
+    /* The optional READTABLE arg is a readtable designator: an omitted arg, or an
+       explicit NIL (the &OPTIONAL default), both denote the current readtable. */
+    Ref rt = nullp(*current) ? NIL_Symbol : pop_mandatory_argument(function,current);
+    if(nullp(rt)){ return current_readtable(); }
     if(!typep(rt,READTABLE_Class)){ TYPE_ERROR(rt,READTABLE_Class); }
     return rt;}
 
@@ -1517,11 +1520,11 @@ void reader_initialize(){
     push_to_rootset(g_standard_readtable);
     define_parameter(READTABLE,g_standard_readtable);
     register_reader_fn(S(READTABLEP),                    list(S(OBJECT),NULL),               k_READTABLEP);
-    register_reader_fn(S(GET-MACRO-CHARACTER),           list(S(CHAR),NULL),                 k_GET_MACRO_CHARACTER);
-    register_reader_fn(S(SET-MACRO-CHARACTER),           list(S(CHAR),S(FN),NULL),           k_SET_MACRO_CHARACTER);
-    register_reader_fn(S(GET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),NULL),          k_GET_DISPATCH_MACRO_CHARACTER);
-    register_reader_fn(S(SET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(FN),NULL),    k_SET_DISPATCH_MACRO_CHARACTER);
-    register_reader_fn(S(MAKE-DISPATCH-MACRO-CHARACTER), list(S(CHAR),NULL),                 k_MAKE_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(GET-MACRO-CHARACTER),           list(S(CHAR),S(&OPTIONAL),S(READTABLE),NULL),                 k_GET_MACRO_CHARACTER);
+    register_reader_fn(S(SET-MACRO-CHARACTER),           list(S(CHAR),S(FN),S(&OPTIONAL),S(NON-TERMINATING-P),S(READTABLE),NULL), k_SET_MACRO_CHARACTER);
+    register_reader_fn(S(GET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(&OPTIONAL),S(READTABLE),NULL),          k_GET_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(SET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(FN),S(&OPTIONAL),S(READTABLE),NULL),    k_SET_DISPATCH_MACRO_CHARACTER);
+    register_reader_fn(S(MAKE-DISPATCH-MACRO-CHARACTER), list(S(CHAR),S(&OPTIONAL),S(NON-TERMINATING-P),S(READTABLE),NULL), k_MAKE_DISPATCH_MACRO_CHARACTER);
     register_reader_fn(S(COPY-READTABLE),                NIL_Symbol,                         k_COPY_READTABLE);
     register_reader_fn(S(READTABLE-CASE),                NIL_Symbol,                         k_READTABLE_CASE);
     register_reader_fn(symbol_intern_cstring("%SET-READTABLE-CASE"),
