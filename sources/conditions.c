@@ -268,20 +268,49 @@ static Frame* find_restart_frame_by_name(Ref name, unused Ref environment){
                 restarts = cdr(restarts);}}}
     return NULL;}
 
-/* (FIND-RESTART name) → restart-designator or NIL.
-   In bocl's minimal impl the "restart object" is just the name symbol. */
+/* A restart with a :TEST-FUNCTION is applicable only when that function, called on
+   the condition (NIL if none), returns true (CLHS).  Only RESTART-BIND stores a
+   test (spec = (name fn interactive-fn test-fn)); a RESTART-CASE spec's 2nd element
+   is a lambda-list, not callable, and carries no test — always applicable. */
+static bool restart_applicable(Ref spec, Ref condition){
+    if(!consp(spec) || !consp(cdr(spec))){ return true; }
+    Ref second = cadr(spec);
+    bool bind_kind = functionp(second)||closurep(second)||built_in_function_p(second);
+    if(!bind_kind){ return true; }
+    Ref test_fn = NIL_Symbol;
+    Ref p = cddr(spec);                              /* (interactive-fn test-fn) */
+    if(consp(p) && consp(cdr(p))){ test_fn = cadr(p); }
+    if(functionp(test_fn)||closurep(test_fn)||built_in_function_p(test_fn)){
+        MultipleValues tr = {0};
+        kernel_apply(test_fn, cons(condition, NIL_Symbol), &tr);
+        return tr.count > 0 && !nullp(tr.values[0]);}
+    return true;}
+
+/* (FIND-RESTART identifier &optional condition) → restart-designator or NIL.
+   In bocl's minimal impl the "restart object" is just the name symbol.  A restart
+   whose :TEST-FUNCTION declines (on CONDITION) is skipped. */
 static void kernel_FIND_RESTART(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current = arguments;
     Ref name = pop_mandatory_argument(function, &current);
+    Ref condition = consp(current) ? car(current) : NIL_Symbol;
     /* Accept either a symbol or a restart object (which is also the symbol). */
     if(!symbolp(name)){
         ERROR("FIND-RESTART: expected a symbol, got %s",
               string_cstring(prin1_to_string(name)));}
-    Frame* rf = find_restart_frame_by_name(name, eval_global_environment());
+    Ref found = NIL_Symbol;
+    for(Frame* frame=g_frame_stack; frame; frame=frame->next){
+        if(frame->type == frame_restart){
+            Ref rs = frame->parameters.restart.restarts;
+            while(consp(rs)){
+                Ref spec = car(rs);
+                if(consp(spec) && car(spec)==name && restart_applicable(spec, condition)){
+                    found = name; goto done;}
+                rs = cdr(rs);}}}
+  done:
     results->count = 1;
-    results->values[0] = rf ? name : NIL_Symbol;
+    results->values[0] = found;
     close_live_pool(pool);}
 
 /* (INVOKE-RESTART restart-designator &rest args)
@@ -352,7 +381,19 @@ static void kernel_INVOKE_RESTART_INTERACTIVELY(Ref function, Ref arguments, Mul
     Ref spec = NIL_Symbol;
     {   Ref rs = target->parameters.restart.restarts;
         while(consp(rs)){ if(consp(car(rs))&&car(car(rs))==name){ spec=car(rs); break; } rs=cdr(rs); }}
-    Ref ifn = (consp(spec)&&consp(cdr(spec))&&consp(cddr(spec))) ? caddr(spec) : NIL_Symbol;
+    /* The interactive function lives at a different position by spec kind:
+       RESTART-BIND spec = (name fn interactive-fn)         -> 3rd element;
+       RESTART-CASE spec = (name varlist body interactive)  -> 4th element.
+       Tell them apart by whether the 2nd element is callable. */
+    Ref ifn = NIL_Symbol;
+    if(consp(spec) && consp(cdr(spec))){
+        Ref second = cadr(spec);
+        bool bind_kind = functionp(second)||closurep(second)||built_in_function_p(second);
+        if(bind_kind){
+            ifn = consp(cddr(spec)) ? caddr(spec) : NIL_Symbol;
+        }else if(consp(cddr(spec)) && consp(cdddr(spec))){
+            ifn = car(cdddr(spec));
+        }}
     Ref args = NIL_Symbol;
     if(functionp(ifn) || closurep(ifn) || built_in_function_p(ifn)){
         MultipleValues ir = {0};
@@ -472,6 +513,7 @@ void kernel_initialize_conditions(void){
     Ref ll_cls     = list(S(CLASS-OR-NAME), NULL);
     Ref ll_c       = list(S(CONDITION), NULL);
     Ref ll_restart = list(S(RESTART-DESIGNATOR), NULL);
+    Ref ll_find_restart = list(S(RESTART-DESIGNATOR), S(&OPTIONAL), S(CONDITION), NULL);
     Ref ll_empty   = NIL_Symbol;
 
     register_fn(S(SIGNAL),                            ll_datum,   kernel_SIGNAL);
@@ -481,7 +523,7 @@ void kernel_initialize_conditions(void){
     register_fn(S(CONDITIONP),                        ll_obj,     kernel_CONDITIONP);
     register_fn(S(SIMPLE-CONDITION-FORMAT-CONTROL),   ll_c,       kernel_SIMPLE_CONDITION_FORMAT_CONTROL);
     register_fn(S(SIMPLE-CONDITION-FORMAT-ARGUMENTS), ll_c,       kernel_SIMPLE_CONDITION_FORMAT_ARGUMENTS);
-    register_fn(S(FIND-RESTART),                      ll_restart, kernel_FIND_RESTART);
+    register_fn(S(FIND-RESTART),                      ll_find_restart, kernel_FIND_RESTART);
     register_fn(S(INVOKE-RESTART),                    ll_restart, kernel_INVOKE_RESTART);
     register_fn(S(INVOKE-RESTART-INTERACTIVELY),      ll_restart, kernel_INVOKE_RESTART_INTERACTIVELY);
     register_fn(S(COMPUTE-RESTARTS),                  list(S(&OPTIONAL),S(CONDITION),NULL), kernel_COMPUTE_RESTARTS);

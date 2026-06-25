@@ -1222,16 +1222,23 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 MultipleValues fr={0};
                 Ref fn      = evale(cadr(binding), environment, &fr);
                 /* :interactive-function (used by INVOKE-RESTART-INTERACTIVELY to
-                   compute the args); :report-function / :test-function ignored. */
+                   compute the args) and :test-function (used by FIND-RESTART /
+                   COMPUTE-RESTARTS to decide whether the restart is applicable);
+                   :report-function is ignored. */
                 Ref interactive_fn = NIL_Symbol;
+                Ref test_fn        = NIL_Symbol;
                 {   Ref opts=cddr(binding);
                     while(consp(opts) && consp(cdr(opts))){
                         if(car(opts)==keyword_intern_cstring("INTERACTIVE-FUNCTION")){
                             MultipleValues ir={0};
                             interactive_fn = evale(cadr(opts), environment, &ir);
-                            break;}
+                            add_to_live_pool(interactive_fn);}
+                        else if(car(opts)==keyword_intern_cstring("TEST-FUNCTION")){
+                            MultipleValues tr={0};
+                            test_fn = evale(cadr(opts), environment, &tr);
+                            add_to_live_pool(test_fn);}
                         opts=cddr(opts);}}
-                COLLECT(restarts, list(rname, fn, interactive_fn, NULL));
+                COLLECT(restarts, list(rname, fn, interactive_fn, test_fn, NULL));
                 add_to_live_pool(restarts);}   /* root partial list across the next evale */
             /* COLLECT already builds source order; do NOT nreverse (leftmost of
                same-named restarts must win). */
@@ -1275,17 +1282,27 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 Ref rest    = cdr(clause);
                 Ref varlist = consp(rest) ? car(rest) : NIL_Symbol;
                 rest = consp(rest) ? cdr(rest) : NIL_Symbol;
-                /* Skip known keyword options (:report, :interactive, :test)
-                   and their associated value forms.  We must NOT skip
-                   arbitrary keywords because a restart body may legitimately
-                   begin with a keyword literal (e.g. `(my-restart () :ok)`). */
+                /* Skip known keyword options (:report, :interactive, :test) and
+                   their value forms, capturing the :INTERACTIVE function (used by
+                   INVOKE-RESTART-INTERACTIVELY to compute the restart's arguments).
+                   We must NOT skip arbitrary keywords because a restart body may
+                   legitimately begin with a keyword literal (e.g.
+                   `(my-restart () :ok)`). */
+                Ref interactive_fn = NIL_Symbol;
                 while(consp(rest) && consp(cdr(rest)) &&
                       (car(rest)==K(REPORT) ||
                        car(rest)==K(INTERACTIVE) ||
                        car(rest)==K(TEST))){
+                    if(car(rest)==K(INTERACTIVE)){
+                        MultipleValues ir={0};
+                        interactive_fn = evale(cadr(rest), environment, &ir);
+                        add_to_live_pool(interactive_fn);}
                     rest = cddr(rest);}
                 Ref body_form = cons(PROGN_Symbol, skip_declares(rest));
-                COLLECT(restarts, list(rname, varlist, body_form, NULL));}
+                /* Spec = (name varlist body-form interactive-fn).  A RESTART-BIND
+                   spec is (name fn interactive-fn): the two are told apart by whether
+                   the 2nd element is callable (RESTART-BIND) or a lambda-list. */
+                COLLECT(restarts, list(rname, varlist, body_form, interactive_fn, NULL));}
             /* COLLECT already builds source order [first..last]; do NOT nreverse —
                when several clauses share a name the FIRST (leftmost) must win
                (CLHS: INVOKE-RESTART / FIND-RESTART select the most recently bound,

@@ -61,16 +61,21 @@ FIXED — Slice 110 (v1.2.37): restart ordering + WITH-SIMPLE-RESTART (9 -> 5).
   * 115,116: WITH-SIMPLE-RESTART now returns two values (NIL T) when its restart is
     invoked (CLHS), instead of just NIL.
 
-STILL OPEN in must-condition (5) — restart system:
-  * 78: FIND-RESTART must honour a restart's :TEST-FUNCTION (a restart whose test
-    returns NIL is not found).  RESTART-BIND currently parses only
-    :INTERACTIVE-FUNCTION and drops :TEST-FUNCTION/:REPORT-FUNCTION.
-  * 90,91,92: INVOKE-RESTART-INTERACTIVELY must use a RESTART-CASE clause's
-    :INTERACTIVE function to compute the args (currently only RESTART-BIND's
-    :INTERACTIVE-FUNCTION is consulted).
-  * 111: FIND-RESTART / COMPUTE-RESTARTS condition association (WITH-CONDITION-
-    RESTARTS) — bocl restarts are not condition-associated, so a restart found for
-    one condition is wrongly found for another.
+FIXED — Slice 111 (v1.2.38): FIND-RESTART :test-function + RESTART-CASE :interactive
+(5 -> 1).
+  * 78: RESTART-BIND now captures :TEST-FUNCTION (spec = (name fn interactive test)),
+    and FIND-RESTART (now (identifier &optional condition)) calls the test on the
+    condition, skipping the restart when it declines.
+  * 90,91,92: RESTART-CASE now captures its clause's :INTERACTIVE function (spec =
+    (name varlist body interactive)) and INVOKE-RESTART-INTERACTIVELY uses it (telling
+    a RESTART-CASE spec from a RESTART-BIND spec by whether the 2nd element is
+    callable) to compute the restart's arguments.
+
+STILL OPEN in must-condition (1) — condition-restart association:
+  * 111: WITH-CONDITION-RESTARTS must associate restarts with a condition so that
+    FIND-RESTART with a DIFFERENT condition does not find them.  bocl conflates a
+    restart object with its name symbol and stores no association, so a restart found
+    for one condition is wrongly found for another.
 
 == FIXED (Slice 63) — must-symbol SYMBOL-VALUE of NIL/T + REMPROP first-only ==
 Drove all 113 must-symbol forms with the GC off: 6 fails -> 1.
