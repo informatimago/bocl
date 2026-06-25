@@ -5403,30 +5403,30 @@ the class object it denotes, so two specializers compare by class identity."
 ;;;
 ;;; We define ONLY purely user-facing condition classes that DON'T shadow
 ;;; existing kernel classes:
-(defclass program-error    (standard-object) () )
-(defclass control-error    (standard-object) () )
-(defclass cell-error       (standard-object) ((name :initarg :name :accessor cell-error-name)))
+(defclass program-error    (error) () )
+(defclass control-error    (error) () )
+(defclass cell-error       (error) ((name :initarg :name :accessor cell-error-name)))
 (defclass unbound-variable (cell-error)      () )
 (defclass undefined-function (cell-error)    () )
-(defclass arithmetic-error (standard-object)
+(defclass arithmetic-error (error)
   ((operation :initarg :operation :accessor arithmetic-error-operation)
    (operands  :initarg :operands  :accessor arithmetic-error-operands)))
 (defclass division-by-zero         (arithmetic-error) ())
 (defclass floating-point-overflow  (arithmetic-error) ())
 (defclass floating-point-underflow (arithmetic-error) ())
 (defclass floating-point-inexact   (arithmetic-error) ())
-(defclass stream-error             (standard-object)
+(defclass stream-error             (error)
   ((stream :initarg :stream :accessor stream-error-stream)))
 (defclass end-of-file              (stream-error) ())
-(defclass file-error               (standard-object)
+(defclass file-error               (error)
   ((pathname :initarg :pathname :accessor file-error-pathname)))
-(defclass package-error            (standard-object) ((package :initarg :package)))
-(defclass parse-error              (standard-object) ())
+(defclass package-error            (error) ((package :initarg :package)))
+(defclass parse-error              (error) ())
 (defclass reader-error             (parse-error stream-error) ())
-(defclass print-not-readable       (standard-object)
+(defclass print-not-readable       (error)
   ((object :initarg :object :accessor print-not-readable-object)))
-(defclass storage-condition        (standard-object) ())
-(defclass style-warning            (standard-object) ())
+(defclass storage-condition        (serious-condition) ())
+(defclass style-warning            (warning) ())
 
 (defmacro define-condition (name superclasses slots &rest options)
   "Define a condition class NAME inheriting from SUPERCLASSES.
@@ -5603,10 +5603,70 @@ the class object it denotes, so two specializers compare by class identity."
 
 ;;; ---- DIRECTORY -----------------------------------------------------------
 
+(defun %wild-match (pat str)
+  "Glob-match STR against PAT: #\\* matches any (possibly empty) run, #\\? one char."
+  (let ((pp 0) (sp 0) (pl (length pat)) (sl (length str)) (star -1) (m 0))
+    (loop
+      (cond
+        ((< sp sl)
+         (cond
+           ((and (< pp pl) (or (char= (char pat pp) #\?)
+                               (char= (char pat pp) (char str sp))))
+            (incf pp) (incf sp))
+           ((and (< pp pl) (char= (char pat pp) #\*))
+            (setq star pp m sp) (incf pp))
+           ((>= star 0) (setq pp (1+ star)) (incf m) (setq sp m))
+           (t (return nil))))
+        (t (loop while (and (< pp pl) (char= (char pat pp) #\*)) do (incf pp))
+           (return (= pp pl)))))))
+
+(defun %split-path (s)
+  "Split namestring S on #\\/ into components, dropping empty ones."
+  (let ((parts '()) (start 0) (n (length s)))
+    (dotimes (i n)
+      (when (char= (char s i) #\/)
+        (when (> i start) (push (subseq s start i) parts))
+        (setq start (1+ i))))
+    (when (> n start) (push (subseq s start n) parts))
+    (nreverse parts)))
+
+(defun %glob (dir comps)
+  "DIR is a directory namestring ending in '/'.  COMPS is a list of glob component
+   strings.  Returns the matching path strings; '**' matches zero or more levels."
+  (if (null comps)
+      nil
+      (let ((comp (first comps)) (rest (rest comps)) (acc '()))
+        (cond
+          ((string= comp "**")
+           (setq acc (%glob dir rest))                  ; zero levels at DIR
+           (dolist (e (common-lisp::%list-directory dir))
+             (let ((sub (concatenate 'string dir e "/")))
+               (when (common-lisp::%directory-p sub)
+                 (setq acc (append acc (%glob sub comps))))))
+           acc)
+          ((or (find #\* comp) (find #\? comp))
+           (dolist (e (common-lisp::%list-directory dir) (nreverse acc))
+             (when (%wild-match comp e)
+               (let ((full (concatenate 'string dir e)))
+                 (if rest
+                     (when (common-lisp::%directory-p (concatenate 'string full "/"))
+                       (setq acc (nreconc (%glob (concatenate 'string full "/") rest) acc)))
+                     (push full acc))))))
+          (t
+           (let ((full (concatenate 'string dir comp)))
+             (if rest
+                 (when (common-lisp::%directory-p (concatenate 'string full "/"))
+                   (%glob (concatenate 'string full "/") rest))
+                 (when (probe-file full) (list full)))))))))
+
 (defun directory (pathspec &key)
-  "Return a list of pathnames matching PATHSPEC.
-  Stub in bocl — returns NIL (no glob support yet)."
-  pathspec nil)
+  "List of pathnames matching PATHSPEC.  Supports #\\* / #\\? glob components and
+   '**' for recursive (wild-inferiors) directory matching."
+  (let* ((ns    (if (pathnamep pathspec) (namestring pathspec) (string pathspec)))
+         (abs   (and (> (length ns) 0) (char= (char ns 0) #\/)))
+         (base  (if abs "/" (namestring (bocl::getcwd))))
+         (comps (%split-path ns)))
+    (mapcar #'pathname (%glob base comps))))
 
 ;;; ---- Missing numeric utilities -------------------------------------------
 
@@ -9999,6 +10059,47 @@ the rest take :INITIAL-ELEMENT."
                        (invoke-restart 'abort)))))))) ; debugger continued -> back to REPL
           (return-from done (eval form)))
       (abort () :report "Return to the top-level REPL." (return-from done (values))))))
+
+;;; ---- OS portability primitives (UIOP/ASDF) — BOCL extensions -------------
+;;; Thin wrappers over the kernel %GETENV / %GETCWD / %CHDIR / %COMMAND-LINE-
+;;; ARGUMENTS, in the BOCL package, that the UIOP port layer (#+bocl clauses)
+;;; calls for getenv / getcwd / chdir / quit / raw-command-line-arguments.
+
+(defun bocl::getenv (name)
+  "Value of environment variable NAME (a string designator), or NIL if unset."
+  (common-lisp::%getenv (string name)))
+
+(defun bocl::setenv (name value)
+  "Set environment variable NAME to VALUE (both string designators)."
+  (common-lisp::%setenv (string name) (string value)))
+
+(defun (setf bocl::getenv) (value name)
+  (common-lisp::%setenv (string name) (string value))
+  value)
+
+(defun bocl::unsetenv (name)
+  "Remove environment variable NAME."
+  (common-lisp::%unsetenv (string name)))
+
+(defun bocl::getcwd ()
+  "The current working directory, as a pathname (POSIX getcwd(3))."
+  (let ((s (common-lisp::%getcwd)))
+    (and s (pathname s))))
+
+(defun bocl::chdir (path)
+  "Change the current directory to PATH (a string or pathname); T on success."
+  (common-lisp::%chdir (if (pathnamep path) (namestring path) (string path))))
+
+(defun bocl::command-line-arguments ()
+  "The process command-line arguments (a list of strings; argv[0] first)."
+  (common-lisp::%command-line-arguments))
+
+(defvar bocl::*command-line-arguments* (common-lisp::%command-line-arguments)
+  "The process command-line arguments captured at start-up.")
+
+(export '(bocl::getenv bocl::setenv bocl::unsetenv bocl::getcwd bocl::chdir
+          bocl::command-line-arguments bocl::*command-line-arguments*)
+        "BOCL")
 
 ;;; ---- Module system (issue asdf) ------------------------------------------
 ;;; Installed "system" modules live under <libexec>/bocl/modules/<dir>/, each with a

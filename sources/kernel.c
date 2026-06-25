@@ -2697,6 +2697,24 @@ static void kernel_initialize_features(void){
     push(K(32-BIT-HOST),&list);
 #endif
 
+    /* OS / architecture features.  UIOP (ASDF's portability layer) keys on these:
+       :UNIX is how it derives OS-UNIX, and it dispatches per architecture. */
+#if defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
+    push(K(UNIX),&list);
+#endif
+#if defined(__linux__)
+    push(K(LINUX),&list);
+#elif defined(__APPLE__) && defined(__MACH__)
+    push(K(DARWIN),&list);
+#elif defined(__FreeBSD__)
+    push(K(FREEBSD),&list);
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+    push(K(X86-64),&list);
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    push(K(ARM64),&list);
+#endif
+
     define_parameter(features,list);
 
     define_constant(S(ARRAY-TOTAL-SIZE-LIMIT),  I(ARRAY_TOTAL_SIZE_LIMIT));

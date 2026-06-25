@@ -462,6 +462,9 @@ int main(int argc,char** argv){
     setvbuf(stderr,NULL,_IONBF,0);
     pname=argv[0];
     program_path=argv[0];
+    /* Capture argv for BOCL's %COMMAND-LINE-ARGUMENTS (UIOP raw-command-line-args). */
+    {   extern int bocl_main_argc; extern char** bocl_main_argv;
+        bocl_main_argc=argc; bocl_main_argv=argv; }
     int status=0;
     /* Capture a high address near the base of the C stack for the eval
        stack-overflow guard (main's frame is close to the stack's start). */

@@ -27,6 +27,7 @@
 #include <sys/socket.h>   /* AF_UNSPEC for LONG-SITE-NAME getaddrinfo */
 #include <netdb.h>        /* getaddrinfo / AI_CANONNAME (FQDN) */
 #include <dirent.h>       /* opendir/readdir for %LIST-DIRECTORY */
+#include <sys/stat.h>     /* stat/S_ISDIR for %DIRECTORY-P */
 
 
 Ref bocl_eval(Ref sexp){
@@ -315,6 +316,110 @@ static void kernel_LIST_DIRECTORY(unused Ref function, Ref arguments, MultipleVa
     free(path);
     results->count=1;
     results->values[0]=out;
+    close_live_pool(pool);}
+
+/* ---- OS environment / cwd / argv (UIOP/ASDF portability primitives) ------- */
+
+/* Process command-line argv, captured by main() for %COMMAND-LINE-ARGUMENTS. */
+int    bocl_main_argc = 0;
+char** bocl_main_argv = NULL;
+
+/* (%GETENV name) -> value string, or NIL if the variable is unset. */
+static void kernel_GETENV(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref name=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!typep(name,STRING_Class)){ TYPE_ERROR(name,STRING_Class); }
+    char* n=string_cstring(name);
+    const char* v=getenv(n);
+    free(n);
+    results->count=1;
+    results->values[0]=v ? string_new_cstring(v) : NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (%SETENV name value) -> value ; sets the environment variable (overwriting). */
+static void kernel_SETENV(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref name=pop_mandatory_argument(function,&current);
+    Ref value=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!typep(name,STRING_Class)){ TYPE_ERROR(name,STRING_Class); }
+    if(!typep(value,STRING_Class)){ TYPE_ERROR(value,STRING_Class); }
+    char* n=string_cstring(name); char* v=string_cstring(value);
+    setenv(n,v,1);
+    free(n); free(v);
+    results->count=1; results->values[0]=value;
+    close_live_pool(pool);}
+
+/* (%UNSETENV name) -> NIL ; removes the environment variable. */
+static void kernel_UNSETENV(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref name=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    if(!typep(name,STRING_Class)){ TYPE_ERROR(name,STRING_Class); }
+    char* n=string_cstring(name);
+    unsetenv(n);
+    free(n);
+    results->count=1; results->values[0]=NIL_Symbol;
+    close_live_pool(pool);}
+
+/* (%GETCWD) -> the current working directory as a string (with a trailing "/"). */
+static void kernel_GETCWD(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    char buf[4096];
+    Ref out=NIL_Symbol;
+    if(getcwd(buf,sizeof(buf)-2)!=NULL){
+        size_t l=strlen(buf);
+        if(l==0 || buf[l-1]!='/'){ buf[l]='/'; buf[l+1]='\0'; }
+        out=string_new_cstring(buf);}
+    results->count=1; results->values[0]=out;
+    close_live_pool(pool);}
+
+/* (%CHDIR path) -> T on success, NIL on failure. */
+static void kernel_CHDIR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref pathspec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    char* path;
+    if(typep(pathspec,STRING_Class)){ path=string_cstring(pathspec); }
+    else if(typep(pathspec,PHYSICAL_PATHNAME_Class)){ path=string_cstring(namestring(pathspec)); }
+    else { TYPE_ERROR(pathspec,STRING_Class); }
+    int rc=chdir(path);
+    free(path);
+    results->count=1; results->values[0]=as_boolean(rc==0);
+    close_live_pool(pool);}
+
+/* (%COMMAND-LINE-ARGUMENTS) -> list of the raw argv strings (argv[0] first). */
+static void kernel_COMMAND_LINE_ARGUMENTS(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    Ref out=NIL_Symbol;
+    for(int i=bocl_main_argc-1; i>=0; i--){
+        if(bocl_main_argv && bocl_main_argv[i]){
+            Ref s=string_new_cstring(bocl_main_argv[i]);
+            add_to_live_pool(s);
+            push(s,&out);
+            add_to_live_pool(out);}}
+    results->count=1; results->values[0]=out;
+    close_live_pool(pool);}
+
+/* (%DIRECTORY-P path) -> T if PATH names an existing directory, else NIL. */
+static void kernel_DIRECTORY_P(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref pathspec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    char* path;
+    if(typep(pathspec,STRING_Class)){ path=string_cstring(pathspec); }
+    else if(typep(pathspec,PHYSICAL_PATHNAME_Class)){ path=string_cstring(namestring(pathspec)); }
+    else { TYPE_ERROR(pathspec,STRING_Class); }
+    struct stat st;
+    bool isdir = (stat(path,&st)==0) && S_ISDIR(st.st_mode);
+    free(path);
+    results->count=1; results->values[0]=as_boolean(isdir);
     close_live_pool(pool);}
 
 /* APPEND is needed by backquote-expanded code; the kernel previously only
@@ -975,6 +1080,22 @@ void bocl_register_load(void){
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
     Ref ld=symbol_intern_cstring("%LIST-DIRECTORY");
     set_symbol_function(ld,built_in_function_new(ld,list(S(PATH),NULL),kernel_LIST_DIRECTORY));
+    /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
+    {   Ref s;
+        s=symbol_intern_cstring("%GETENV");
+        set_symbol_function(s,built_in_function_new(s,list(S(NAME),NULL),kernel_GETENV));
+        s=symbol_intern_cstring("%SETENV");
+        set_symbol_function(s,built_in_function_new(s,list(S(NAME),S(VALUE),NULL),kernel_SETENV));
+        s=symbol_intern_cstring("%UNSETENV");
+        set_symbol_function(s,built_in_function_new(s,list(S(NAME),NULL),kernel_UNSETENV));
+        s=symbol_intern_cstring("%GETCWD");
+        set_symbol_function(s,built_in_function_new(s,NIL_Symbol,kernel_GETCWD));
+        s=symbol_intern_cstring("%CHDIR");
+        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_CHDIR));
+        s=symbol_intern_cstring("%COMMAND-LINE-ARGUMENTS");
+        set_symbol_function(s,built_in_function_new(s,NIL_Symbol,kernel_COMMAND_LINE_ARGUMENTS));
+        s=symbol_intern_cstring("%DIRECTORY-P");
+        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_DIRECTORY_P));}
     Ref af=S(APPEND);
     set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
     /* Helper for CLOS: detect C NULL (returned by kernel find-class for unknown names). */
