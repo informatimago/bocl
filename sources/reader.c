@@ -325,6 +325,33 @@ static Ref get_skip_marker(void){
         push_to_rootset(reader_skip_marker);}
     return reader_skip_marker;}
 
+/* Signal a TYPED reader condition (END-OF-FILE / READER-ERROR) so HANDLER-CASE
+   can catch it by type — the C error() macros only raise a generic SIMPLE-ERROR,
+   which the ANSI tests (and real programs) cannot distinguish.  Routes through the
+   Lisp ERROR function, which builds the CLOS condition of CLASS_SYMBOL.  During
+   early bootstrap (ERROR not yet defined) it falls back to the C error() path. */
+_Noreturn static void reader_signal(Ref class_symbol, Ref stream){
+    if(symbol_fboundp(S(ERROR))){
+        uword pool=open_live_pool();
+        add_to_live_pool(stream);
+        MultipleValues mv; mv.count=0;
+        kernel_apply(symbol_function(S(ERROR)),
+                     list(class_symbol, keyword_intern_cstring("STREAM"), stream, NULL), &mv);
+        close_live_pool(pool);}
+    /* No handler matched (or ERROR undefined): hard-fail via the C path. */
+    error("reader","%s on stream %s",
+          string_cstring(symbol_name(class_symbol)),
+          string_cstring(prin1_to_string(stream)));}
+
+/* Re-route the reader's EOF / syntax errors to the typed CLOS conditions.  The
+   format arguments of READER_ERROR are intentionally dropped — the condition TYPE
+   is the contract the standard specifies; the detailed message is a nicety the
+   generic C path provided. */
+#undef END_OF_FILE
+#define END_OF_FILE(stream)            reader_signal(S(END-OF-FILE),  (stream))
+#undef READER_ERROR
+#define READER_ERROR(stream,fmt,...)   reader_signal(S(READER-ERROR), (stream))
+
 /* CL reads the feature expression with *PACKAGE* bound to KEYWORD, so a
    bare `bocl` in `#+bocl` means `:bocl`. We don't switch packages while
    reading; instead, we recursively coerce non-operator symbols to keywords
@@ -796,6 +823,13 @@ static Ref parse_token(parser_state* parser){
             Ref sym=package_find_external_cstring(name_part,pkg);
             if(sym){ return sym; }
             ERROR("READ: %s is not external in package %s",name_part,pkg_buf); }}
+    /* An UNESCAPED token of nothing but dots is invalid (CLHS 2.3.3): a lone "."
+       is only the dotted-pair marker (consumed by parse_list, never reaching
+       here), and "..", "..." etc. are never valid tokens.  Escaped forms (|.| /
+       \.) took the `escaped` branch above and remain valid symbols. */
+    {   bool all_dots = parser->length>0;
+        for(uword i=0;i<parser->length;i++){ if(parser->token[i]!='.'){ all_dots=false; break; } }
+        if(all_dots){ READER_ERROR(parser->input_stream,"a token of only dots is invalid%s",""); }}
     bool valid=true;
     Ref result=scan_integer(parser);
     if(result==NIL_Symbol){

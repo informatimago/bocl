@@ -9308,14 +9308,15 @@ the rest take :INITIAL-ELEMENT."
         (%patch-read-label object ref object) ; close any circular references
         object))))
 (set-dispatch-macro-character #\# #\#
-  (lambda (stream sub arg) (declare (ignore sub stream))
+  (lambda (stream sub arg) (declare (ignore sub))
     (let ((cell (assoc arg *read-labels*)))
-      (if cell (cdr cell) (error "Reference to undefined label #~D#" arg)))))
+      (if cell (cdr cell)
+          (error 'reader-error :stream stream)))))   ; undefined #n# label
 
-;; #< — objects printed this way cannot be read back.
+;; #< — objects printed this way cannot be read back (CLHS: a reader-error).
 (set-dispatch-macro-character #\# #\<
-  (lambda (stream sub arg) (declare (ignore stream sub arg))
-    (error "#<...> is not readable")))
+  (lambda (stream sub arg) (declare (ignore sub arg))
+    (error 'reader-error :stream stream)))
 
 ;;; ---- BOCL extension hooks (init / abort / quit) + QUIT -------------------
 ;;; bocl extension (see issues/closed/extension-hooks): three lists of function
