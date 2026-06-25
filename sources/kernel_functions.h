@@ -166,7 +166,7 @@ Ref kernel_peek_char(Ref par_peek_type, Ref par_input_stream, Ref par_eof_error_
 Ref kernel_read(Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
 Ref kernel_read_preserving_whitespace(Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
 Ref kernel_read_delimited_list(Ref par_character, Ref par_input_stream, Ref par_recursive_p);
-Ref kernel_read_from_string(Ref par_input_string, Ref par_eof_error_p, Ref par_eof_value, Ref par_start, Ref par_end, Ref par_preserve_whitespace);
+Ref kernel_read_from_string(Ref par_input_string, Ref par_eof_error_p, Ref par_eof_value, Ref par_start, Ref par_end, Ref par_preserve_whitespace, Ref* position_out);
 Ref stream_input_string(Ref par_string, Ref par_start, Ref par_end);
 Ref stream_output_string(Ref par_element_type);
 Ref string_output_stream_get_string(Ref par_string_output_stream);

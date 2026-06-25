@@ -1184,13 +1184,22 @@ Ref kernel_unread_char(Ref ch, Ref stream){
     ungetc((int)code, cstream);
     return ch;}
 
-Ref kernel_read_from_string(Ref input_string,Ref eof_error_p,Ref eof_value,Ref start,Ref end,Ref preserve_whitespace){
+Ref kernel_read_from_string(Ref input_string,Ref eof_error_p,Ref eof_value,Ref start,Ref end,Ref preserve_whitespace,Ref* position_out){
     Ref stream = stream_input_string(input_string, start, end);
     Ref result;
     if(is_true(preserve_whitespace))
         result=kernel_read_preserving_whitespace(stream, eof_error_p, eof_value, NIL_Symbol);
     else
         result=kernel_read(stream, eof_error_p, eof_value, NIL_Symbol);
+    /* CLHS read-from-string's second value: the index of the first character not
+       read.  The bounded stream is fmemopen'd over [START,END), so ftell gives the
+       offset consumed within it (already reflecting the reader's one-char lookahead
+       pushback); add START for the absolute index into the original string. */
+    if(position_out){
+        word istart = nullp(start) ? 0 : integer_value(start);
+        long off = ftell(stream_cstream(stream));
+        if(off < 0){ off = 0; }
+        *position_out = integer_from_word(istart + off);}
     stream_close(stream);
     return result;}
 

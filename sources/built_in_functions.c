@@ -2057,8 +2057,12 @@ void kernel_KERNEL_READ_FROM_STRING(Ref function,Ref arguments,MultipleValues* r
     Ref def_preserve_whitespace = NIL_Symbol;
     Ref par_preserve_whitespace = pop_optional_argument(function,&current,def_preserve_whitespace);
     check_no_more_arguments(function,current);
-    results->count=1;
-    results->values[0] = kernel_read_from_string(par_input_string, par_eof_error_p, par_eof_value, par_start, par_end, par_preserve_whitespace);
+    /* READ-FROM-STRING returns two values: the object and the index of the first
+       unread character (CLHS). */
+    Ref position = I(0);
+    results->count=2;
+    results->values[0] = kernel_read_from_string(par_input_string, par_eof_error_p, par_eof_value, par_start, par_end, par_preserve_whitespace, &position);
+    results->values[1] = position;
     close_live_pool(pool);
 }
 

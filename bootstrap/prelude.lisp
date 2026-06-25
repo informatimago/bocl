@@ -2330,8 +2330,8 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
 
 (defun read-from-string (string &optional (eof-error-p t) eof-value
                          &key (start 0) end preserve-whitespace)
-  ;; Returns the first Lisp object read from STRING.
-  ;; (The second CL return value — the end position — is not yet returned.)
+  ;; Returns two values: the first Lisp object read from STRING, and the index of
+  ;; the first character not read (the kernel primitive supplies both).
   (kernel-read-from-string string eof-error-p eof-value start end
                             preserve-whitespace))
 
