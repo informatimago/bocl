@@ -1,0 +1,50 @@
+SACLA should-* (recommended) tests — wrong-type-argument TYPE-ERRORs.
+
+STATUS: open, deferred.  Opened after the SACLA must-* suite reached zero real
+failures (v1.3.0).  The should-* tier is RECOMMENDED, not required, conformance.
+
+== What ==
+The SACLA "should-*" test files (bootstrap/sacla/lisp/tests/should-*.lisp) exercise
+recommended behaviour.  bocl fails ~45 of them; SBCL and CCL pass almost all, so they
+are genuine bocl gaps, not test artifacts.  Almost every failure is the same shape: a
+standard function should signal a TYPE-ERROR when handed a wrong-type argument, but
+bocl returns a value (or signals a plain SIMPLE-ERROR) instead.  Example forms:
+
+    (handler-case (array-dimensions 'not-an-array)   ; should TYPE-ERROR
+      (type-error () t) (error () nil) (:no-error (&rest r) (declare (ignore r)) nil))
+    (handler-case (adjustable-array-p "not-an-array") ; should TYPE-ERROR
+      (type-error () t) (error () nil) (:no-error (&rest r) (declare (ignore r)) nil))
+
+== Per-file gap counts (bocl fails vs SBCL baseline) ==
+Driven with the bare driver (these files use plain top-level forms, no deftest /
+classify-error harness).  bocl fails / (SBCL fails out of forms):
+  * should-array            ~25 / (1 of 33)
+  * should-character         13 / (0 of 49)
+  * should-cons              ?? / (4 of 141)   — bocl run timed out; re-measure
+  * should-sequence          ?? / (1 of 72)
+  * should-symbol            ?? / (1 of 44)
+  * should-data-and-control   0 / (0 of 4)
+  * should-eval               0 / (0 of 2)
+  * should-hash-table         0 / (0 of 3)
+  * should-package            0 / (0 of 6)
+  * should-string             — / (0 forms read by SBCL; verify)
+Also untriaged: desirable-printer (223 lines), x-sequence (300 lines).
+
+== How to drive ==
+These are bare-form files, so the must-condition-style driver works:
+    bocl -norc -x '(load ".../tmp/drive.lisp")' -x '(drive ".../should-array.lisp")' -quit
+(tmp/drive.lisp counts a form as pass iff it returns non-NIL; ERROR is counted
+separately.)  Cross-check expected values against SBCL/CCL with tmp/cmp-style helpers.
+The forms where SBCL ALSO fails are NOT bocl bugs — exclude them (e.g. should-cons has
+4 such, should-array/sequence/symbol 1 each).
+
+== Approach ==
+Mechanical but broad: add wrong-type-argument checks to the C builtins (and a few
+Lisp wrappers) for the array / character / cons / sequence / symbol operators these
+files cover, signalling TYPE-ERROR (the kernel TYPE_ERROR macro, or a Lisp
+(error 'type-error ...)).  A handful may need optional features bocl does not
+implement (adjustable arrays, fill pointers, displaced arrays) — those are feature
+work, not type-checks, and may be left unsupported.
+
+Deliberately deferred at v1.3.0: the must-* suite (required conformance) is the
+priority and is complete; should-* is recommended.

@@ -7,4 +7,5 @@ deferred-cons-paged-heap.issue
 deferred-gc-rooting-longtail.issue
 deferred-sacla-logic-bugs.issue
 deferred-signal-hooks.issue
+should-tests-type-errors.issue
 ansi-test.issue
