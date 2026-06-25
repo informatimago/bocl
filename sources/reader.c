@@ -1566,6 +1566,31 @@ static void k_SET_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* re
     results->count=1; results->values[0]=mode;
     close_live_pool(pool);}
 
+static void k_SET_SYNTAX_FROM_CHAR(Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
+    Ref current=arguments;
+    int to_ch  =char_arg(pop_mandatory_argument(function,&current));
+    int from_ch=char_arg(pop_mandatory_argument(function,&current));
+    Ref to_rt   = nullp(current) ? current_readtable()  : pop_mandatory_argument(function,&current);
+    if(nullp(to_rt)){ to_rt=current_readtable(); }
+    Ref from_rt = nullp(current) ? g_standard_readtable : pop_mandatory_argument(function,&current);
+    if(nullp(from_rt)){ from_rt=g_standard_readtable; }
+    check_no_more_arguments(function,current);
+    if(!typep(to_rt,READTABLE_Class)){ TYPE_ERROR(to_rt,READTABLE_Class); }
+    if(!typep(from_rt,READTABLE_Class)){ TYPE_ERROR(from_rt,READTABLE_Class); }
+    if(to_ch<0||to_ch>=128||from_ch<0||from_ch>=128){
+        ERROR("SET-SYNTAX-FROM-CHAR: only codes 0..127 are supported%s",""); }
+    /* Copy FROM-CHAR's syntax type, macro function, and dispatch sub-table to
+       TO-CHAR.  (bocl's standard macro characters are read by a hardcoded switch
+       keyed on the character, so copying the standard marker does not transfer
+       list/quote/comment BEHAVIOUR to a different character — that would need a
+       fully syntax-table-driven reader; this still installs user macro functions
+       and lets the readtable accessors round-trip.) */
+    rtv_set(to_rt->slots->readtable.syntax,  to_ch, rtv_get(from_rt->slots->readtable.syntax,  from_ch));
+    rtv_set(to_rt->slots->readtable.macros,  to_ch, rtv_get(from_rt->slots->readtable.macros,  from_ch));
+    rtv_set(to_rt->slots->readtable.dispatch,to_ch, rtv_get(from_rt->slots->readtable.dispatch,from_ch));
+    results->count=1; results->values[0]=T_Symbol; close_live_pool(pool);}
+
 static void register_reader_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
     set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
 
@@ -1592,6 +1617,7 @@ void reader_initialize(){
     register_reader_fn(S(SET-DISPATCH-MACRO-CHARACTER),  list(S(DISP),S(SUB),S(FN),S(&OPTIONAL),S(READTABLE),NULL),    k_SET_DISPATCH_MACRO_CHARACTER);
     register_reader_fn(S(MAKE-DISPATCH-MACRO-CHARACTER), list(S(CHAR),S(&OPTIONAL),S(NON-TERMINATING-P),S(READTABLE),NULL), k_MAKE_DISPATCH_MACRO_CHARACTER);
     register_reader_fn(S(COPY-READTABLE),                NIL_Symbol,                         k_COPY_READTABLE);
+    register_reader_fn(S(SET-SYNTAX-FROM-CHAR),          NIL_Symbol,                         k_SET_SYNTAX_FROM_CHAR);
     register_reader_fn(S(READTABLE-CASE),                NIL_Symbol,                         k_READTABLE_CASE);
     register_reader_fn(symbol_intern_cstring("%SET-READTABLE-CASE"),
                        NIL_Symbol,                                                           k_SET_READTABLE_CASE);}
