@@ -1364,6 +1364,8 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Frame frame;
             frame.type=frame_block;
             frame.parameters.block.name=name;
+            frame.parameters.block.function=NIL_Symbol;     /* explicit BLOCK, not a call */
+            frame.parameters.block.environment=NIL_Symbol;
             frame.results=results;
             int result=setjmp(frame.non_local_exit);
             UNWIND(result){
@@ -1910,6 +1912,10 @@ static void eval_body_in_block(Ref function,Ref block_name,Ref body,Ref environm
     Frame frame;
     frame.type=frame_block;
     frame.parameters.block.name=block_name;
+    /* Function-body block: record the function + parameter environment so the
+       debugger backtrace can show this as a :CALL frame with its parameters. */
+    frame.parameters.block.function=function;
+    frame.parameters.block.environment=environment;
     frame.results=results;
     int code=setjmp(frame.non_local_exit);
     UNWIND(code){

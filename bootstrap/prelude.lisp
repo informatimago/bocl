@@ -9700,24 +9700,40 @@ the rest take :INITIAL-ELEMENT."
   (common-lisp::%backtrace))
 
 (defun frame-kind (frame)
-  "Keyword denoting the kind of FRAME (:BLOCK :CATCH :RESTART :HANDLER-CASE
+  "Keyword denoting the kind of FRAME (:CALL :BLOCK :CATCH :RESTART :HANDLER-CASE
    :HANDLER-BIND :UNWIND-PROTECT :DYNAMIC-BINDING :TAGBODY), or NIL."
   (and (consp frame) (car frame)))
 
 (defun frame-name (frame)
-  "The name(s) associated with FRAME (block/catch name; list of restart names),
-   or NIL for frames that carry no name."
+  "The name associated with FRAME: the function name of a :CALL frame, the block /
+   catch name, or the list of restart names; NIL for frames that carry no name."
   (cond ((not (consp frame)) nil)
         ((eq (car frame) :restart) (cdr frame))
         ((consp (cdr frame)) (cadr frame))
         (t nil)))
 
+(defun frame-bindings (frame)
+  "For a :CALL frame, the alist ((parameter . value) ...) of the function's
+   parameters and their current values; NIL for any other frame."
+  (if (and (consp frame) (eq (car frame) :call))
+      (cddr frame)
+      nil))
+
 (defun print-frame (frame &optional (stream *standard-output*) &key (verbosity 0))
-  "Print FRAME on STREAM.  VERBOSITY 0 prints the kind and name; higher levels are
-   reserved for parameter names/values once a function-call stack exists."
-  (declare (ignore verbosity))
+  "Print FRAME on STREAM.  VERBOSITY 0 prints the kind and name only; for a :CALL
+   frame, 1 also prints the parameter names and 2 the parameter names and their
+   values (subject to the *PRINT-* variables INVOKE-DEBUGGER binds from the
+   BOCL:*DEBUGGER-PRINT-* variables)."
   (let ((kind (frame-kind frame)) (name (frame-name frame)))
     (case kind
+      (:call
+       (format stream "(~S" name)
+       (when (and (integerp verbosity) (>= verbosity 1))
+         (dolist (b (frame-bindings frame))
+           (if (>= verbosity 2)
+               (format stream " ~S=~S" (car b) (cdr b))
+               (format stream " ~S" (car b)))))
+       (format stream ")"))
       ((:block :catch) (format stream "~(~A~) ~S" kind name))
       (:restart        (format stream "restart~{ ~S~}" name))
       ((nil)           (format stream "<frame>"))
@@ -9726,7 +9742,7 @@ the rest take :INITIAL-ELEMENT."
 
 (export '(*init-hook* *abort-hook* *quit-hook* *stop-hook* *cont-hook*
           *prompt-function* quit
-          *on-error* backtrace frame-kind frame-name print-frame
+          *on-error* backtrace frame-kind frame-name frame-bindings print-frame
           *debugger-print-array* *debugger-print-base* *debugger-print-case*
           *debugger-print-circle* *debugger-print-escape* *debugger-print-gensym*
           *debugger-print-length* *debugger-print-level* *debugger-print-lines*
@@ -9758,15 +9774,50 @@ the rest take :INITIAL-ELEMENT."
       *debug-io*
       *standard-input*))
 
-(defun %print-backtrace (stream)
-  (format stream "~&Backtrace (innermost frame first):~%")
-  (let ((i 0))
-    (dolist (f (bocl:backtrace))
-      (format stream "  ~2D: " i)
-      (bocl:print-frame f stream :verbosity 0)
-      (terpri stream)
-      (incf i)))
+(defun %debugger-frames ()
+  "BOCL:BACKTRACE with the debugger's own machinery elided: drop every frame up to
+   and including the INVOKE-DEBUGGER call, leaving the signalling handler and the
+   error's own call chain (cosmetic)."
+  (let* ((frames (bocl:backtrace))
+         (tail (member 'invoke-debugger frames
+                       :key (lambda (f) (and (eq (bocl:frame-kind f) :call)
+                                             (bocl:frame-name f))))))
+    (if tail (cdr tail) frames)))
+
+(defun %print-backtrace (stream &key (verbosity 1) (type :all) (start 0) count)
+  "Print the backtrace on STREAM.  VERBOSITY 0/1/2 (see BOCL:PRINT-FRAME); TYPE :ALL
+   or :CALL (only function-call frames); START skips that many frames; COUNT limits
+   the number printed."
+  (let ((frames (%debugger-frames)))
+    (when (eq type :call)
+      (setq frames (remove-if-not (lambda (f) (eq (bocl:frame-kind f) :call)) frames)))
+    (format stream "~&Backtrace (innermost frame first):~%")
+    (let ((i 0) (shown 0))
+      (dolist (f frames)
+        (when (and (>= i start) (or (null count) (< shown count)))
+          (format stream "  ~2D: " i)
+          (bocl:print-frame f stream :verbosity verbosity)
+          (terpri stream)
+          (incf shown))
+        (incf i))))
   (values))
+
+(defun %parse-backtrace-options (args)
+  "Map the :BACKTRACE command's keyword arguments (e.g. :TYPE call :VERBOSE 1
+   :COUNT 10 :START 20) to the &KEY arguments of %PRINT-BACKTRACE."
+  (let ((opts '()))
+    (loop while (and args (keywordp (car args)))
+          do (let ((k (pop args)) (v (when args (pop args))))
+               (case k
+                 ((:verbose :verbosity) (setq opts (list* :verbosity v opts)))
+                 (:type (setq opts (list* :type
+                                          (if (keywordp v) v
+                                              (intern (string-upcase (string v)) :keyword))
+                                          opts)))
+                 (:count (setq opts (list* :count v opts)))
+                 (:start (setq opts (list* :start v opts)))
+                 (t nil))))
+    opts))
 
 (defun %print-restart-menu (stream restarts)
   (if restarts
@@ -9798,6 +9849,20 @@ the rest take :INITIAL-ELEMENT."
                   ~&  <form>            evaluate <form> and print its values~%")
   (values))
 
+(defun %debugger-read-line-forms (in)
+  "Read one debugger command line from IN and return the list of Lisp forms on it
+   (so `:restart try-again` or `:backtrace :verbose 1` parse as several tokens), or
+   :EOF at end of input."
+  (let ((line (read-line in nil :eof)))
+    (if (eq line :eof)
+        :eof
+        (with-input-from-string (s line)
+          (let ((forms '()))
+            (loop (let ((f (read s nil '%eof)))
+                    (when (eq f '%eof) (return))
+                    (push f forms)))
+            (nreverse forms))))))
+
 (defun %run-debugger (condition)
   (let ((out (%debug-output)) (in (%debug-input)))
     (fresh-line out)
@@ -9809,31 +9874,39 @@ the rest take :INITIAL-ELEMENT."
       (loop
         (format out "~&debug> ")
         (force-output out)
-        (let ((cmd (read in nil '%eof)))
+        (let ((forms (%debugger-read-line-forms in)))
           (cond
-            ((eq cmd '%eof)       (return nil))
-            ((eq cmd :continue)   (return nil))
-            ((eq cmd :abort)
-             (let ((r (find-restart 'abort condition)))
-               (if r (invoke-restart r) (return nil))))
-            ((eq cmd :quit)       (bocl:quit))
-            ((eq cmd :backtrace)  (%print-backtrace out))
-            ((eq cmd :restarts)
-             (setq restarts (compute-restarts condition))
-             (%print-restart-menu out restarts))
-            ((eq cmd :restart)
-             (%invoke-selected-restart out restarts (read in nil '%eof) condition))
-            ((eq cmd :help)       (%debugger-help out))
-            ((integerp cmd)
-             (%invoke-selected-restart out restarts cmd condition))
+            ((eq forms :eof) (return nil))
+            ((null forms)    nil)          ; blank line — re-prompt
             (t
-             (handler-case
-                 (let ((vals (multiple-value-list (eval cmd))))
-                   (if vals
-                       (dolist (v vals) (format out "~&~S~%" v))
-                       (format out "~&; No values~%")))
-               (serious-condition (e)
-                 (format out "~&; Error during debugger eval: ~A~%" e))))))))))
+             (let ((cmd (car forms)) (args (cdr forms)))
+               (cond
+                 ((eq cmd :continue) (return nil))
+                 ((eq cmd :abort)
+                  (let ((r (find-restart 'abort condition)))
+                    (if r (invoke-restart r) (return nil))))
+                 ((eq cmd :quit)     (bocl:quit))
+                 ((eq cmd :help)     (%debugger-help out))
+                 ((eq cmd :restarts)
+                  (setq restarts (compute-restarts condition))
+                  (%print-restart-menu out restarts))
+                 ((eq cmd :restart)
+                  (%invoke-selected-restart out restarts (car args) condition))
+                 ((eq cmd :backtrace)
+                  (apply #'%print-backtrace out (%parse-backtrace-options args)))
+                 ((integerp cmd)
+                  (%invoke-selected-restart out restarts cmd condition))
+                 (t
+                  ;; Not a debugger command — evaluate each form on the line as Lisp
+                  ;; in the error's dynamic context.
+                  (dolist (form forms)
+                    (handler-case
+                        (let ((vals (multiple-value-list (eval form))))
+                          (if vals
+                              (dolist (v vals) (format out "~&~S~%" v))
+                              (format out "~&; No values~%")))
+                      (serious-condition (e)
+                        (format out "~&; Error during debugger eval: ~A~%" e))))))))))))))
 
 (defun invoke-debugger (condition)
   "Enter the debugger on CONDITION (CLHS 9.1.4.2).  Honours *DEBUGGER-HOOK*, binds

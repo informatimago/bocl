@@ -2,7 +2,7 @@
 
 
 NAME=specifications
-PDFS=$(NAME).pdf
+PDFS=$(NAME).pdf debugger-specifications.pdf
 
 VERBOSE=@
 
@@ -23,7 +23,7 @@ documents pdfs :$(PDFS)
 
 clean::
 	@ printf "# Cleaning up\n"
-	-$(VERBOSE) rm -f $(NAME).tex missfont.log ./--version.lock
+	-$(VERBOSE) rm -f $(NAME).tex debugger-specifications.tex missfont.log ./--version.lock
 
 
 .PHONY::  questions tbd

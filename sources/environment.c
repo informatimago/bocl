@@ -227,6 +227,32 @@ Ref env_variable_value(Ref variable){
     if(env_constant_variable_p(variable))      { return env_constant_variable_value(variable); }
     TYPE_ERROR(variable,LEXICAL_VARIABLE_Class);}
 
+/* (name . value) alist of ENVIRONMENT's OWN bound variables (its direct level
+   only — i.e. a function's parameters), in source/left-to-right order.  Symbol-macro
+   wrappers are skipped (they have no value cell).  Used by the debugger backtrace to
+   show a call frame's parameters and their current values. */
+Ref environment_local_bindings(Ref environment){
+    if(!typep(environment,ENVIRONMENT_Class)){ return NIL_Symbol; }
+    uword pool=open_live_pool();
+    add_to_live_pool(environment);
+    Ref out=NIL_Symbol;
+    Ref vars=environment->slots->environment.variables;
+    while(consp(vars)){
+        Ref var=cons_car(vars);
+        if(env_lexical_variable_p(var)
+           || env_local_special_variable_p(var)
+           || env_global_special_variable_p(var)
+           || env_constant_variable_p(var)){
+            Ref pair=cons(env_variable_wrapper_name(var), env_variable_value(var));
+            add_to_live_pool(pair);
+            push(pair,&out);
+            add_to_live_pool(out);}
+        vars=cons_cdr(vars);}
+    /* variables are prepended as bound, so OUT is already in source order. */
+    close_live_pool(pool);
+    add_to_live_pool(out);
+    return out;}
+
 Ref env_set_variable_value(Ref new_value, Ref variable){
     if(env_lexical_variable_p(variable)){
         set_env_lexical_variable_value(new_value,variable);

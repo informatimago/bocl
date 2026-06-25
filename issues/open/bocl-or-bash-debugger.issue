@@ -206,7 +206,7 @@ invoke restarts; lisp forms evaluate (e.g. *print-base* shows the debugger
 binding 10); :abort/:continue return to the REPL; break + :continue resumes;
 handled errors (handler-case) do NOT enter the debugger.
 
-REMAINING (kept open — needs a kernel function-call stack):
+PROGRESS (slice 46/51) REMAINING (kept open — needs a kernel function-call stack):
 - The backtrace currently exposes the active dynamic CONTROL frames (block,
   catch, handler-case/bind, restart, unwind-protect, dynamic-binding, tagbody),
   NOT function-call frames.  So FRAME-NAME gives function names only for BLOCK
@@ -216,3 +216,39 @@ REMAINING (kept open — needs a kernel function-call stack):
   longjmp) is the prerequisite; it is the larger remaining piece of this issue.
 - Cosmetic: the debugger's own frames (BACKTRACE/%PRINT-BACKTRACE/%RUN-DEBUGGER)
   appear at the top of the backtrace; they could be elided.
+
+----------------------------------------------------------------------
+PROGRESS (slice 114, v1.3.1) — CLOSED: function-call frames + cosmetics done.
+----------------------------------------------------------------------
+DONE — the remaining pieces above are now implemented:
+- Function-call frames.  The implicit block APPLY pushes around a function body
+  (eval_body_in_block) now records the function object and its parameter
+  environment in the block frame (sources/kernel_types.h Frame.parameters.block;
+  set in sources/eval.c; explicit BLOCK forms set both to NIL).  %BACKTRACE
+  (sources/conditions.c) turns such a frame into a (:CALL name (param . value)...)
+  descriptor, computing the parameter/value alist on demand via the new
+  environment_local_bindings() (sources/environment.c / .h).
+- BOCL:FRAME-KIND now returns :CALL for call frames; BOCL:FRAME-NAME returns the
+  function name; new BOCL:FRAME-BINDINGS returns the (param . value) alist;
+  BOCL:PRINT-FRAME :verbosity 1 prints parameter names and :verbosity 2 prints
+  names=values (subject to the *DEBUGGER-PRINT-* bindings).  Verified:
+  (defun foo (a b) (bocl:backtrace)) (foo 42 'hi) -> a :CALL frame (FOO A=42 B=HI).
+- Debugger backtrace cosmetics: %DEBUGGER-FRAMES elides every frame up to and
+  including the INVOKE-DEBUGGER frame, so the trace starts at the error's own call
+  chain (CRASH/OUTER with their argument values), not the debugger machinery.
+- The debugger REPL is now line-oriented (reads a whole line, parses tokens), so
+  the issue's command syntax works: ":backtrace :type call :verbose 2 :count 10",
+  ":restart try-again", ":restart 2", bare integer, :continue/:abort/:quit/:help,
+  and any other form(s) evaluate as Lisp.  %PRINT-BACKTRACE honours
+  :verbosity/:type/:start/:count.
+Verified end to end (--on-error debug, piped stdin): error -> banner + elided
+backtrace (verbosity 1) + restart menu; :backtrace :type call :verbose 2 shows
+the user frames with argument values; debugger Lisp eval works ((* 6 7) -> 42);
+:abort returns to a live top-level REPL.  No regressions across the must-* suite
+(must-condition 147/0, -loop 852/0, -cons 728/0, -sequence 3851/0, -do 75/0,
+-symbol 113/0, -package 335/0).
+
+SPEC: the full debugger specification (UI + API with the CL implementation) is in
+specifications/debugger-specifications.org.
+
+This issue is COMPLETE; move to issues/closed/ at the next housekeeping pass.

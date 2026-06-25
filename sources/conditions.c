@@ -501,7 +501,19 @@ static void kernel_BACKTRACE(unused Ref function, unused Ref arguments, Multiple
           case frame_dynamic_binding:
             desc = list(keyword_intern_cstring("DYNAMIC-BINDING"), NULL); break;
           case frame_block:
-            desc = list(keyword_intern_cstring("BLOCK"), f->parameters.block.name, NULL); break;
+            /* A function-body block carries the function + parameter environment:
+               report it as a :CALL frame (name . ((param . value) ...)) so the
+               debugger can show parameters at verbosity 1/2.  An explicit BLOCK form
+               (function = NIL) stays a plain (:block name). */
+            if(!nullp(f->parameters.block.function)){
+                Ref binds = environment_local_bindings(f->parameters.block.environment);
+                add_to_live_pool(binds);
+                desc = cons(keyword_intern_cstring("CALL"),
+                            cons(f->parameters.block.name, binds));
+            }else{
+                desc = list(keyword_intern_cstring("BLOCK"), f->parameters.block.name, NULL);
+            }
+            break;
           case frame_catch:
             desc = list(keyword_intern_cstring("CATCH"), f->parameters.catch.object, NULL); break;
           case frame_tagbody:

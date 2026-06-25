@@ -146,6 +146,12 @@ typedef struct Frame {
     union {
         struct {
             Ref name;
+            /* For a function-body block (pushed by APPLY), FUNCTION is the function
+               object and ENVIRONMENT its parameter environment, so the debugger
+               backtrace can report a :CALL frame with parameter names and values.
+               For an explicit BLOCK form both are NIL_Symbol. */
+            Ref function;
+            Ref environment;
         } block;
         struct {
             Ref object;

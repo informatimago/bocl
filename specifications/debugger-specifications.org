@@ -1,0 +1,283 @@
+# -*- mode:org;coding:utf-8 -*-
+
+#+AUTHOR: Pascal J. Bourguignon
+#+EMAIL: pjb@informatimago.com
+#+DATE: 2026-06-25
+#+TITLE: Specifications of the BOCL Minimal Debugger (INVOKE-DEBUGGER)
+
+* Scope
+
+This document specifies bocl's minimal Common Lisp debugger: the behaviour of
+=COMMON-LISP:INVOKE-DEBUGGER=, the interactive debugger REPL it runs, and the
+kernel backtrace API the debugger is built on.  The debugger is implemented
+entirely and conformingly in Common Lisp (=bootstrap/prelude.lisp=) on top of a
+small kernel backtrace primitive (=sources/conditions.c=, =sources/eval.c=,
+=sources/environment.c=).
+
+The goal is a *minimal* debugger: display the condition, the backtrace and the
+available restarts, and offer a read-eval-print loop that understands a handful
+of keyword commands and otherwise evaluates Lisp forms in the dynamic context of
+the error.  There is deliberately no stepping, tracing, or stack-frame mutation
+(use =CL:TRACE= and =CL:BREAK= for those); and no inspection/modification of
+lexical variables.
+
+* User interface
+
+** Entering the debugger
+
+The debugger is entered by =INVOKE-DEBUGGER= — directly, or indirectly when an
+unhandled =SERIOUS-CONDITION= reaches the top level while =BOCL:*ON-ERROR*= is
+=:DEBUG= (see [[* The =--on-error= launcher option and =BOCL:*ON-ERROR*=]]), or by
+=BREAK=.
+
+On entry the debugger prints, on the debug stream (see =%DEBUG-OUTPUT= below):
+
+1. a banner naming the condition's type and its printed representation, e.g.
+
+   : Debugger invoked on condition of type SIMPLE-ERROR:
+   :   boom 42
+
+2. the *backtrace*, innermost frame first, at verbosity 1 (parameter names), e.g.
+
+   : Backtrace (innermost frame first):
+   :   0: (LAMBDA C)
+   :   1: (CRASH N)
+   :   2: (OUTER K)
+   :   3: HANDLER-BIND
+   :   4: restart ABORT
+   :   5: BLOCK DONE
+   :   6: (%REPL-EVAL FORM)
+   :   7: CATCH BOCL::%QUIT-CATCH-TAG
+
+   The debugger's own machinery (=BACKTRACE=, =%PRINT-BACKTRACE=,
+   =%RUN-DEBUGGER=, =INVOKE-DEBUGGER=, …) is elided from the top of the trace.
+
+3. the *restart menu*, e.g.
+
+   : Available restarts:
+   :   0: [ABORT]
+
+It then loops, printing the prompt =debug> = and reading one command line.
+
+** The debugger command line
+
+Each line is read whole and parsed into a sequence of Lisp tokens (so a command
+and its arguments may share a line).  The first token selects the action:
+
+| First token        | Meaning                                                              |
+|--------------------+----------------------------------------------------------------------|
+| =:continue=        | Return =NIL= from =INVOKE-DEBUGGER= (resume; see CONTINUE below).     |
+| =:abort=           | Invoke the =ABORT= restart (return to the top-level REPL); if none,   |
+|                    | behave like =:continue=.                                             |
+| =:quit=            | Exit bocl (=BOCL:QUIT=) via the top-level catch.                      |
+| =:backtrace= [opts]| Re-print the backtrace; OPTS below.                                  |
+| =:restarts=        | Re-compute and re-print the restart menu.                            |
+| =:restart= D       | Invoke the restart designated by D (a menu number or a restart name).|
+| =:help=            | Print the command summary.                                          |
+| an integer N       | Invoke restart number N from the menu (shorthand for =:restart N=).   |
+| any other form(s)  | Evaluate each form on the line as Lisp and print its values.         |
+
+Debugger commands are keywords (and bare restart numbers); every other token —
+including non-command keywords — is evaluated as a Lisp expression.  This is the
+"keywords for commands" convention from the issue, e.g.:
+
+: debug> :backtrace :type call :verbose 2 :count 10
+: debug> :restart try-again
+: debug> :restart 2
+: debug> :continue
+: debug> (setf (symbol-value 'common-lisp-user::*x*) 42)
+: debug> *print-base*
+
+*=:backtrace= options* (keyword/value pairs, any order):
+
+| Option            | Values            | Default | Effect                                     |
+|-------------------+-------------------+---------+--------------------------------------------|
+| =:verbose= (=:verbosity=) | 0 / 1 / 2 | 1       | Per-frame detail; see =PRINT-FRAME=.        |
+| =:type=           | =all= / =call=    | =all=   | =call= shows only function-call frames.     |
+| =:start=          | integer           | 0       | Skip this many (post-elision) frames.       |
+| =:count=          | integer           | (all)   | Print at most this many frames.             |
+
+(=:type call= and similar accept either a keyword =:call= or a bare symbol =call=.)
+
+** Restart selection and interactivity
+
+=:restart D= and a bare integer both resolve to a restart via
+=%INVOKE-SELECTED-RESTART=: an integer indexes the printed menu
+(=(nth N restarts)=); a symbol is looked up with =(FIND-RESTART name condition)=.
+The chosen restart is invoked with =INVOKE-RESTART=, which transfers control and
+does not return to the debugger loop.  If the restart was established with an
+=:INTERACTIVE= function (=RESTART-CASE=) or =:INTERACTIVE-FUNCTION=
+(=RESTART-BIND=), invoking it interactively may itself read further input to
+compute the restart's arguments.
+
+** Evaluation context
+
+Forms typed at the debugger REPL are evaluated with =EVAL= in the *dynamic*
+context of the function that entered the debugger (i.e. of the call to
+=ERROR= / =CERROR= / =SIGNAL= / =INVOKE-DEBUGGER=), but *not* its lexical
+context.  Consequently a debugger form may inspect and modify dynamic
+(special) variables and any Lisp objects reachable from them, but it cannot
+read or assign the lexical variables of the suspended frames.  Errors signalled
+while evaluating a debugger form are caught and reported, and the loop
+continues (the debugger does not recursively re-enter itself for them).
+
+* The =--on-error= launcher option and =BOCL:*ON-ERROR*=
+
+The command-line option is spelled =--on-error= (two dashes; =-on-error= is kept
+as a legacy alias).  Its argument is published as the keyword
+=BOCL:*ON-ERROR*=:
+
+| =--on-error= value | =BOCL:*ON-ERROR*= | Behaviour on an unhandled SERIOUS-CONDITION at top level |
+|--------------------+-------------------+----------------------------------------------------------|
+| =debug=            | =:debug=          | Enter the debugger (=INVOKE-DEBUGGER=).                   |
+| =abort=            | =:abort=          | Report the condition and return to the prompt.           |
+| =appease=          | =:appease=        | Report the condition and return to the prompt.           |
+| =exit=             | =:exit=           | Report the condition and exit the process.               |
+
+The top-level REPL routes every form through =%REPL-EVAL=, which wraps the form
+in =RESTART-CASE (ABORT)= + =HANDLER-BIND= for =SERIOUS-CONDITION=.  Because the
+handler runs *before* the stack unwinds, the backtrace seen by the debugger
+still contains the frames between the error and the top level.  This wrapper is
+also why an unhandled error no longer terminates the process and pushes the
+typed-ahead line back to the surrounding shell: control returns to the bocl
+prompt instead of taking the C =error()= exit path.
+
+* API with the Common Lisp implementation
+
+** =INVOKE-DEBUGGER= (CLHS 9.1.4.2)
+
+: (invoke-debugger condition) => |never returns normally, or NIL if continued|
+
+Steps:
+
+1. If =*DEBUGGER-HOOK*= is non-=NIL=, call it as =(funcall hook condition hook)=
+   with =*DEBUGGER-HOOK*= bound to =NIL= for the duration.  (A hook that returns
+   declines; control then proceeds to the built-in debugger.  A hook normally
+   performs a non-local exit if it handles the condition.)
+
+2. Bind the thirteen =CL:*PRINT-*= variables from the corresponding
+   =BOCL:*DEBUGGER-PRINT-*= variables (table below), so that printing performed
+   by the debugger — including =PRINT-FRAME= at verbosity 2 — is bounded and
+   readable regardless of the ambient printer settings.
+
+3. Run the built-in debugger REPL (=%RUN-DEBUGGER=).
+
+=BREAK= enters the debugger the same way, having first established a =CONTINUE=
+restart, and returns =NIL= when continued.
+
+** =*DEBUGGER-HOOK*=
+
+: (defvar *debugger-hook* nil)
+
+=NIL=, or a function of two arguments =(condition hook)=.  Honoured by
+=INVOKE-DEBUGGER= as described above; bound to =NIL= around the call so the hook
+cannot recurse into itself.
+
+** Printer-control variables bound by =INVOKE-DEBUGGER=
+
+| Debugger variable                  | Default | CL printer variable bound to it  |
+|------------------------------------+---------+----------------------------------|
+| =BOCL:*DEBUGGER-PRINT-ARRAY*=        | T       | =CL:*PRINT-ARRAY*=                 |
+| =BOCL:*DEBUGGER-PRINT-BASE*=         | 10      | =CL:*PRINT-BASE*=                  |
+| =BOCL:*DEBUGGER-PRINT-CASE*=         | :UPCASE | =CL:*PRINT-CASE*=                  |
+| =BOCL:*DEBUGGER-PRINT-CIRCLE*=       | T       | =CL:*PRINT-CIRCLE*=                |
+| =BOCL:*DEBUGGER-PRINT-ESCAPE*=       | T       | =CL:*PRINT-ESCAPE*=                |
+| =BOCL:*DEBUGGER-PRINT-GENSYM*=       | T       | =CL:*PRINT-GENSYM*=                |
+| =BOCL:*DEBUGGER-PRINT-LENGTH*=       | 8       | =CL:*PRINT-LENGTH*=                |
+| =BOCL:*DEBUGGER-PRINT-LEVEL*=        | 3       | =CL:*PRINT-LEVEL*=                 |
+| =BOCL:*DEBUGGER-PRINT-LINES*=        | 2       | =CL:*PRINT-LINES*=                 |
+| =BOCL:*DEBUGGER-PRINT-PRETTY*=       | NIL     | =CL:*PRINT-PRETTY*=                |
+| =BOCL:*DEBUGGER-PRINT-RADIX*=        | NIL     | =CL:*PRINT-RADIX*=                 |
+| =BOCL:*DEBUGGER-PRINT-READABLY*=     | NIL     | =CL:*PRINT-READABLY*=              |
+| =BOCL:*DEBUGGER-PRINT-RIGHT-MARGIN*= | 72      | =CL:*PRINT-RIGHT-MARGIN*=          |
+
+** Debug I/O streams
+
+The debugger uses =*DEBUG-IO*= when it is a usable stream, falling back to
+=*STANDARD-OUTPUT*= for output (=%DEBUG-OUTPUT=) and =*STANDARD-INPUT*= for input
+(=%DEBUG-INPUT=), since =*DEBUG-IO*= / =*TERMINAL-IO*= may be =NIL= in bocl.
+
+** Backtrace API
+
+The debugger is built on a kernel primitive and four Lisp accessors.  All are
+exported from the =BOCL= package.
+
+*** =(BOCL:BACKTRACE) => list-of-frames=
+
+The active dynamic frames, innermost (top of stack) first.  Each /frame/ is an
+opaque list descriptor (see the format below).  The list reflects the control
+and call frames that are live at the moment of the call — at debugger time, the
+chain from the signalling point up to the top-level catch.
+
+*** =(BOCL:FRAME-KIND frame) => keyword-or-NIL=
+
+The kind of the frame:
+
+| Keyword            | Frame                                                       |
+|--------------------+-------------------------------------------------------------|
+| =:CALL=            | A function-call frame (a function body).                     |
+| =:BLOCK=           | An explicit =BLOCK= form.                                    |
+| =:CATCH=           | A =CATCH= form (tag is the name).                            |
+| =:TAGBODY=         | A =TAGBODY= form.                                            |
+| =:HANDLER-CASE=    | A =HANDLER-CASE= frame.                                      |
+| =:HANDLER-BIND=    | A =HANDLER-BIND= frame.                                      |
+| =:RESTART=         | A =RESTART-CASE= / =RESTART-BIND= frame.                     |
+| =:UNWIND-PROTECT=  | An =UNWIND-PROTECT= cleanup frame.                           |
+| =:DYNAMIC-BINDING= | A dynamic (special) variable binding frame.                 |
+
+*** =(BOCL:FRAME-NAME frame) => name=
+
+For a =:CALL= frame, the function name (or a lambda expression / =NIL= for an
+anonymous function); for =:BLOCK= / =:CATCH=, the block/catch name; for
+=:RESTART=, the list of the frame's restart names; =NIL= otherwise.
+
+*** =(BOCL:FRAME-BINDINGS frame) => alist=
+
+For a =:CALL= frame, the alist =((parameter . value) ...)= of the function's
+parameters and their current values (left-to-right); =NIL= for any other frame.
+
+*** =(BOCL:PRINT-FRAME frame &optional (stream *standard-output*) &key (verbosity 0)) => frame=
+
+Print =frame= on =stream=:
+
+- *verbosity 0* — the frame kind and name only.  A call frame prints =(NAME)=.
+- *verbosity 1* — for a call frame, also the parameter /names/: =(NAME P1 P2)=.
+- *verbosity 2* — for a call frame, the parameter names and /values/:
+  =(NAME P1=V1 P2=V2)=, the values printed subject to the =CL:*PRINT-*=
+  variables that =INVOKE-DEBUGGER= bound from the =BOCL:*DEBUGGER-PRINT-*=
+  variables.
+
+** Frame descriptor format (=BOCL:%BACKTRACE=)
+
+The kernel primitive =BOCL:%BACKTRACE= (used by =BOCL:BACKTRACE=) returns a list
+of descriptors; the accessors above hide this shape, but it is:
+
+| Descriptor                                   | Kind                |
+|----------------------------------------------+---------------------|
+| =(:call name (param . value) ...)=           | function call       |
+| =(:block name)=                              | explicit block      |
+| =(:catch tag)=                               | catch               |
+| =(:tagbody)=                                 | tagbody             |
+| =(:handler-case)= / =(:handler-bind)=        | handler             |
+| =(:restart name ...)=                        | restart frame       |
+| =(:unwind-protect)= / =(:dynamic-binding)=   | cleanup / binding   |
+
+* Implementation notes
+
+A function-call frame is the block frame that =APPLY= pushes around a function
+body (the implicit block named after the function, used by =RETURN-FROM=).  That
+frame additionally records the function object and its parameter environment
+(=sources/kernel_types.h=, =Frame.parameters.block=); =BOCL:%BACKTRACE= turns it
+into a =:call= descriptor and computes the parameter/value alist on demand via
+=environment_local_bindings= (=sources/environment.c=).  Frames are kept on the
+global dynamic frame stack and are popped as the C stack unwinds (including
+across the =longjmp= used for non-local exits), so the backtrace taken from
+inside a =HANDLER-BIND= handler — before any unwinding — is complete.
+
+* Limitations (by design, for now)
+
+- No stepping or execution tracing from the debugger (use =CL:TRACE=, =CL:BREAK=).
+- No inspection or modification of stack frames beyond reading a call frame's
+  parameter values; lexical variables of suspended frames are not accessible.
+- Only Lisp-defined functions appear as =:call= frames; calls to kernel
+  (C-implemented) functions push no frame and are not shown individually.
