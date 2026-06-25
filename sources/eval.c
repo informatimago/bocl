@@ -1233,7 +1233,8 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                         opts=cddr(opts);}}
                 COLLECT(restarts, list(rname, fn, interactive_fn, NULL));
                 add_to_live_pool(restarts);}   /* root partial list across the next evale */
-            restarts = nreverse(restarts);
+            /* COLLECT already builds source order; do NOT nreverse (leftmost of
+               same-named restarts must win). */
             add_to_live_pool(restarts);
 
             Frame frame;
@@ -1285,7 +1286,10 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     rest = cddr(rest);}
                 Ref body_form = cons(PROGN_Symbol, skip_declares(rest));
                 COLLECT(restarts, list(rname, varlist, body_form, NULL));}
-            restarts = nreverse(restarts);
+            /* COLLECT already builds source order [first..last]; do NOT nreverse —
+               when several clauses share a name the FIRST (leftmost) must win
+               (CLHS: INVOKE-RESTART / FIND-RESTART select the most recently bound,
+               which for one RESTART-CASE is the textually first). */
 
             Frame frame;
             frame.type = frame_restart;

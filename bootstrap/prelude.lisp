@@ -2042,9 +2042,11 @@ identity."
 
 ;; WITH-SIMPLE-RESTART: shorthand for RESTART-CASE with one named restart.
 (defmacro with-simple-restart (restart-spec &body body)
-  (let ((name (if (consp restart-spec) (car restart-spec) restart-spec)))
+  ;; CLHS WITH-SIMPLE-RESTART: if the restart is invoked, return two values NIL and T.
+  (let ((name   (if (consp restart-spec) (car restart-spec) restart-spec))
+        (report (if (consp restart-spec) (cadr restart-spec) nil)))
     `(restart-case (progn ,@body)
-       (,name () nil))))
+       (,name () ,@(when report `(:report ,report)) (values nil t)))))
 
 ;;;; -----------------------------------------------------------------------
 ;;;; Slice 13 — printer control variables, WRITE, PPRINT, stream predicates

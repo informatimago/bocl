@@ -53,10 +53,24 @@ FIXED — Slice 109 (v1.2.36): HANDLER-BIND (12 -> 9).
     `results` stale when body was empty, so via the EVAL function (handler-bind nil)
     returned its own form instead of NIL.
 
-STILL OPEN in must-condition (9) — restart system only:
-  * Restart system (72,78,88,90,91,92,111,115,116): leftmost same-named restart wins;
-    :TEST-FUNCTION gating of FIND-RESTART; INVOKE-RESTART-INTERACTIVELY :INTERACTIVE;
-    RESTART-CASE value/MV semantics; FIND-RESTART with a condition arg.
+FIXED — Slice 110 (v1.2.37): restart ordering + WITH-SIMPLE-RESTART (9 -> 5).
+  * 72,88: RESTART-CASE and RESTART-BIND no longer nreverse their COLLECTed restart
+    list (COLLECT already builds source order), so when several clauses/bindings
+    share a name the textually FIRST (leftmost) wins, as INVOKE-RESTART/FIND-RESTART
+    select.
+  * 115,116: WITH-SIMPLE-RESTART now returns two values (NIL T) when its restart is
+    invoked (CLHS), instead of just NIL.
+
+STILL OPEN in must-condition (5) — restart system:
+  * 78: FIND-RESTART must honour a restart's :TEST-FUNCTION (a restart whose test
+    returns NIL is not found).  RESTART-BIND currently parses only
+    :INTERACTIVE-FUNCTION and drops :TEST-FUNCTION/:REPORT-FUNCTION.
+  * 90,91,92: INVOKE-RESTART-INTERACTIVELY must use a RESTART-CASE clause's
+    :INTERACTIVE function to compute the args (currently only RESTART-BIND's
+    :INTERACTIVE-FUNCTION is consulted).
+  * 111: FIND-RESTART / COMPUTE-RESTARTS condition association (WITH-CONDITION-
+    RESTARTS) — bocl restarts are not condition-associated, so a restart found for
+    one condition is wrongly found for another.
 
 == FIXED (Slice 63) — must-symbol SYMBOL-VALUE of NIL/T + REMPROP first-only ==
 Drove all 113 must-symbol forms with the GC off: 6 fails -> 1.
