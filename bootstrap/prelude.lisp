@@ -4895,6 +4895,18 @@ the class object it denotes, so two specializers compare by class identity."
                      (format stream "#<~A>" (type-of c)))
                  c))
 
+;;; PRINT-OBJECT for PACKAGE.  A package is a kernel object (not a %obj instance),
+;;; so the C printer routes it here via the PRINT-OBJECT generic — letting user
+;;; methods dispatch and giving the readable-looking #<PACKAGE "name"> instead of
+;;; #<PACKAGE 0xADDR>.  A package has no read syntax, so under *PRINT-READABLY* it
+;;; signals PRINT-NOT-READABLE (CLHS).
+(ensure-method 'print-object nil '(package t)
+               (lambda (p stream)
+                 (if *print-readably*
+                     (error 'print-not-readable :object p)
+                     (format stream "#<~A ~S>" (type-of p) (package-name p)))
+                 p))
+
 ;;; Register the standard CONDITION class hierarchy as CLOS classes, so that
 ;;; (DEFCLASS foo (ERROR) ...) and DEFINE-CONDITION can inherit them (FIND-CLASS
 ;;; and ENSURE-CLOS-CLASS resolve superclasses from *%classes*).  These are SEPARATE

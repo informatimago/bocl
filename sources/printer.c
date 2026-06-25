@@ -62,13 +62,19 @@ static bool print_md_array(Ref object,FILE* out,bool escape){
     return false;
 }
 
-static bool g_in_condition_print = false;
-static bool print_condition_via_print_object(Ref object,Ref stream,bool escape){
-    if(g_in_condition_print){ return false; }
-    if(!typep(object,CONDITION_Class)){ return false; }
+static bool g_in_print_object = false;
+/* Route a kernel object that participates in the CLOS PRINT-OBJECT protocol — a
+   CONDITION or a PACKAGE — through the Lisp PRINT-OBJECT generic, so user methods
+   are honoured and packages print as #<PACKAGE "name"> (CLOS dispatch on these
+   kernel classes works).  CLOS %obj instances are dispatched by the Lisp PRIN1
+   wrapper instead.  The g_in_print_object guard breaks recursion: if a method
+   re-prints the object itself, this returns false and the raw #<…> path is used. */
+static bool print_via_print_object(Ref object,Ref stream,bool escape){
+    if(g_in_print_object){ return false; }
+    if(!typep(object,CONDITION_Class) && !typep(object,PACKAGE_Class)){ return false; }
     Ref po=S(PRINT-OBJECT);
     if(!symbol_fboundp(po)){ return false; }   /* before the prelude defines it */
-    g_in_condition_print=true;
+    g_in_print_object=true;
     /* The C printer's prin1/princ do not themselves bind *PRINT-ESCAPE*, so set
        it around the dispatch (PRIN1 => escaped #<…>, PRINC => bare report). */
     Ref pe=S(*PRINT-ESCAPE*);
@@ -80,7 +86,7 @@ static bool print_condition_via_print_object(Ref object,Ref stream,bool escape){
     kernel_apply(symbol_function(po),list(object,stream,NULL),&mv);
     close_live_pool(pool);
     set_symbol_value(pe, saved);
-    g_in_condition_print=false;
+    g_in_print_object=false;
     return true;}
 
 /* ---- *PRINT-CIRCLE* support + recursion backstop ------------------------- */
@@ -664,7 +670,7 @@ static Ref prin1_inner(Ref object,Ref stream){
     if(print_md_array(object,out,true)){ return object; }
 
     /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
-    if(print_condition_via_print_object(object,stream,true)){ return object; }
+    if(print_via_print_object(object,stream,true)){ return object; }
 
     /* Dispatch to PRINT-OBJECT for CLOS instances (%obj structs).
        clos_instance_p() returns true only after (%clos-register) is called,
@@ -814,7 +820,7 @@ Ref princ(Ref object,Ref stream){
     if(print_md_array(object,out,false)){ return object; }
 
     /* Conditions print via the Lisp PRINT-OBJECT generic (formatted report). */
-    if(print_condition_via_print_object(object,stream,false)){ return object; }
+    if(print_via_print_object(object,stream,false)){ return object; }
 
     /* Safe fallback for CLOS instances in princ too. */
     if(clos_instance_p(object)){

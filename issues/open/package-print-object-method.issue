@@ -51,3 +51,35 @@ CLOS methods such as PRINT-OBJECT. This is a more general bug, not
 specific to PACKAGE, but to all lisp objects (kernel) vs
 STANDARD-OBJECT. Even if PACKAGE is not a STANDARD-OBJECT, CLOS
 methods can be defined to dispatch on them.
+
+----------------------------------------------------------------------
+PROGRESS (slice 119, v1.3.6)
+----------------------------------------------------------------------
+ROOT CAUSE: CLOS method dispatch on kernel classes already WORKS — e.g.
+  (defgeneric foo (x)) (defmethod foo ((p package)) :pkg) (foo (find-package "KEYWORD"))
+  => :PKG.  The bug was NOT in dispatch but in the PRINTER: the C printer routed only
+CONDITIONs and CLOS %obj instances through the Lisp PRINT-OBJECT generic; every other
+kernel object (PACKAGE, ...) hit the raw "#<CLASS 0xADDR>" fallback, so PRINT-OBJECT
+was never called for it and no user method could run.
+
+DONE (packages):
+- sources/printer.c: generalized print_condition_via_print_object ->
+  print_via_print_object; it now also routes PACKAGE objects through PRINT-OBJECT
+  (guarded against recursion).  Used by both PRIN1 and PRINC.
+- bootstrap/prelude.lisp: added a PRINT-OBJECT method on (PACKAGE T) that prints
+  #<PACKAGE "name"> and, under *PRINT-READABLY*, signals PRINT-NOT-READABLE.
+Verified:
+    (list-all-packages) => (#<PACKAGE "COMMON-LISP"> #<PACKAGE "COMMON-LISP-USER">
+                            #<PACKAGE "KEYWORD"> #<PACKAGE "BOCL">)
+    (defmethod print-object ((p package) s) (format s "#<PKG ~A>" (package-name p)) p)
+       then (prin1 (find-package "KEYWORD"))      => #<PKG KEYWORD>   (user method runs)
+    (let ((*print-readably* t)) (prin1 (find-package "KEYWORD")))   => PRINT-NOT-READABLE
+No regressions (must-condition 147/0, must-printer 439/0, must-cons 728/0).
+
+REMAINING (small, per-type):
+- The C printer now dispatches PRINT-OBJECT for CONDITION and PACKAGE.  To make EVERY
+  kernel object type dispatchable (streams, readtables, random-states, hash-tables,
+  ...), route all objects through PRINT-OBJECT with a default (T T) method that falls
+  back to the raw #<CLASS id> form (the recursion guard already supports this).  Each
+  type that wants a nicer/printed-readably representation then just needs its own
+  PRINT-OBJECT method.  Deferred as a broader printer change; the mechanism is in place.
