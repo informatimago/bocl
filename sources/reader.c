@@ -1156,7 +1156,10 @@ static Ref read_impl_unrooted(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref
     parser.eof=false;
     parser.error=false;
     parser.escape=false;
-    parser.suppress=false;
+    /* *READ-SUPPRESS* true: read (and consume) normally, but the object is
+       discarded — symbols are not interned, undefined-package etc. do not error,
+       and the whole read returns NIL. */
+    parser.suppress=!nullp(variable_value(S(*READ-SUPPRESS*)));
     advance_character(&parser);
     skip_spaces(&parser);
     check_parser_error(&parser);
@@ -1199,6 +1202,8 @@ static Ref read_impl_unrooted(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref
        separating space). */
     if(parser.ch != (octet)EOF && (preserve || !whitespacep(parser.ch))){
         ungetc((int)parser.ch, stream_cstream(input_stream));}
+    /* Under *READ-SUPPRESS* the object just read is discarded (CLHS 2.4.18). */
+    if(parser.suppress){ return NIL_Symbol; }
     return object;}
 
 /* The reader keeps INPUT_STREAM only in a C-stack parser_state struct, which the
@@ -1233,7 +1238,7 @@ Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursi
     parser.eof      = false;
     parser.error    = false;
     parser.escape   = false;
-    parser.suppress = false;
+    parser.suppress = !nullp(variable_value(S(*READ-SUPPRESS*)));
     advance_character(&parser);
     skip_spaces(&parser);
     Ref result = NIL_Symbol;
@@ -1246,7 +1251,8 @@ Ref kernel_read_delimited_list(Ref character,Ref input_stream,unused Ref recursi
             add_to_live_pool(result);}
         skip_spaces(&parser);}
     close_live_pool(pool);
-    return nreverse(result);
+    /* *READ-SUPPRESS*: the delimiter was consumed, but the result is discarded. */
+    return parser.suppress ? NIL_Symbol : nreverse(result);
 }
 
 Ref kernel_unread_char(Ref ch, Ref stream){

@@ -2321,13 +2321,21 @@ self-replace (SEQUENCE1 eq SEQUENCE2) copies as if through a temporary (CLHS)."
 
 ;; ---- Input wrappers -----------------------------------------------------
 
+(defun %input-stream-designator (stream)
+  ;; An input-stream designator: NIL denotes *STANDARD-INPUT*, T denotes
+  ;; *TERMINAL-IO*, a stream denotes itself (CLHS Glossary).
+  (cond ((null stream) *standard-input*)
+        ((eq stream t)  *terminal-io*)
+        (t stream)))
+
 (defun read (&optional (stream *standard-input*)
                        (eof-error-p t) eof-value recursive-p)
-  (kernel-read stream eof-error-p eof-value recursive-p))
+  (kernel-read (%input-stream-designator stream) eof-error-p eof-value recursive-p))
 
 (defun read-preserving-whitespace (&optional (stream *standard-input*)
                                              (eof-error-p t) eof-value recursive-p)
-  (kernel-read-preserving-whitespace stream eof-error-p eof-value recursive-p))
+  (kernel-read-preserving-whitespace (%input-stream-designator stream)
+                                     eof-error-p eof-value recursive-p))
 
 (defun read-delimited-list (char &optional (stream *standard-input*) recursive-p)
   ;; Read objects from STREAM until the (unescaped, non-quoted) CHAR is reached,
