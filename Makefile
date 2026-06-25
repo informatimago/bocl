@@ -6,13 +6,20 @@ DOCTARGET = pdfs
 all:       		 documents build test
 documents: 		 specifications design documentation
 .PHONY:    		 documents bocl clean clean-backups regenerate                  \
-		 test tests specifications design documentation
+		 test tests specifications design documentation                  \
+		 install install-strip uninstall info dist check-lib
 
 specifications:  ; @cd specifications && $(MAKE) $(MFLAGS) $(DOCTARGET)
 design:          ; @cd design         && $(MAKE) $(MFLAGS) $(DOCTARGET)
 build:           ; @for dir in sources tests ; do  $(MAKE) -C $$dir $(MFLAGS) build ; done
 test tests:      ; @cd tests          && $(MAKE) $(MFLAGS) test
 documentation:   ; @cd documentation  && $(MAKE) $(MFLAGS) $(DOCTARGET)
+
+# Install / package the deliverables.  These live in sources/Makefile (which knows
+# the FHS layout under $(DESTDIR)$(PREFIX)); delegate to it.  Pass PREFIX / DESTDIR
+# on the command line, e.g.  make install PREFIX=/opt/local DESTDIR=/tmp/stage
+install install-strip uninstall info dist check-lib:
+	@cd sources && $(MAKE) $(MFLAGS) $@
 clean:
 	-@rm -f test.xml
 	@for dir in $(SUBDIRS)     ; do $(MAKE) -C $$dir $(MFLAGS) clean ; done
