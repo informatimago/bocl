@@ -1185,6 +1185,12 @@ floating ratio_to_float(Ref r){
 /* COMPLEX */
 
 Ref complex_new(Ref re, Ref im){
+    /* Float contagion (CLHS 12.1.5.3): if exactly one part is a float, coerce the
+       other (an integer or ratio) to a float too, so #C(5/3 7.0) has two float
+       parts.  (Bignum parts are left alone — out of scope and pathological in #C.) */
+    if((floatp(re)!=floatp(im)) && !bignump(re) && !bignump(im)){
+        if(!floatp(re)){ re=float_from_floating(ratiop(re)?ratio_to_float(re):(floating)integer_value(re)); }
+        if(!floatp(im)){ im=float_from_floating(ratiop(im)?ratio_to_float(im):(floating)integer_value(im)); }}
     /* (complex r 0) collapses to the real R only when BOTH parts are rational
        and the imaginary part is the integer 0 (CLHS 12.1.5.3): a float part
        forces a complex result even when the imaginary part is 0.0, so

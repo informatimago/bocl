@@ -1059,6 +1059,10 @@ static Ref parse_object(parser_state* parser){
                 advance_character(parser);   /* skip '.' */
                 skip_spaces(parser);
                 Ref form=parse_object(parser);
+                if(parser->suppress){ return get_skip_marker(); }   /* *READ-SUPPRESS*: don't eval */
+                /* #. is disabled when *READ-EVAL* is false — a reader-error (CLHS). */
+                if(nullp(variable_value(READ_EVAL))){
+                    READER_ERROR(parser->input_stream,"#. is not allowed when *READ-EVAL* is false%s",""); }
                 return bocl_eval(form); }
             case 'p': case 'P': {  /* #P"..." => a pathname */
                 advance_character(parser);   /* skip 'P' */
@@ -1478,15 +1482,24 @@ static void k_COPY_READTABLE(Ref function, Ref arguments, MultipleValues* result
     uword pool=open_live_pool(); add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments;
     Ref from=nullp(current)?current_readtable():pop_mandatory_argument(function,&current);
-    /* (the optional TO-READTABLE arg is accepted but a fresh copy is returned) */
-    if(!nullp(current)){ (void)pop_mandatory_argument(function,&current); }
+    Ref to=nullp(current)?NIL_Symbol:pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     if(nullp(from)){ from=g_standard_readtable; }   /* (copy-readtable nil) => standard */
     if(!typep(from,READTABLE_Class)){ TYPE_ERROR(from,READTABLE_Class); }
     add_to_live_pool(from);
-    Ref syntax=make_rt_vector(I(CS_CONSTITUENT)); add_to_live_pool(syntax);
-    Ref macros=make_rt_vector(NIL_Symbol);        add_to_live_pool(macros);
-    Ref dispatch=make_rt_vector(NIL_Symbol);      add_to_live_pool(dispatch);
+    Ref syntax, macros, dispatch;
+    if(!nullp(to)){
+        /* Copy FROM into the existing TO-readtable and return TO (CLHS). */
+        if(!typep(to,READTABLE_Class)){ TYPE_ERROR(to,READTABLE_Class); }
+        add_to_live_pool(to);
+        syntax=to->slots->readtable.syntax;
+        macros=to->slots->readtable.macros;
+        dispatch=to->slots->readtable.dispatch;
+    } else {
+        syntax=make_rt_vector(I(CS_CONSTITUENT)); add_to_live_pool(syntax);
+        macros=make_rt_vector(NIL_Symbol);        add_to_live_pool(macros);
+        dispatch=make_rt_vector(NIL_Symbol);      add_to_live_pool(dispatch);
+    }
     for(int i=0;i<128;i++){
         rtv_set(syntax,i,rtv_get(from->slots->readtable.syntax,i));
         rtv_set(macros,i,rtv_get(from->slots->readtable.macros,i));
@@ -1494,11 +1507,19 @@ static void k_COPY_READTABLE(Ref function, Ref arguments, MultipleValues* result
         if(!nullp(sub)){
             Ref nsub=make_rt_vector(NIL_Symbol);
             for(int j=0;j<128;j++){ rtv_set(nsub,j,rtv_get(sub,j)); }
-            rtv_set(dispatch,i,nsub);}}
-    Readtable* rt=(Readtable*)allocate(sizeof(Readtable));
-    rt->syntax=syntax; rt->macros=macros; rt->dispatch=dispatch;
-    rt->readcase=from->slots->readtable.readcase; rt->objcount=4;
-    Ref result=Object_new(READTABLE_Class,(Slots*)rt);
+            rtv_set(dispatch,i,nsub);}
+        else { rtv_set(dispatch,i,NIL_Symbol); }}
+    Ref result;
+    if(!nullp(to)){
+        to->slots->readtable.readcase=from->slots->readtable.readcase;
+        gc_write_barrier(to->slots);
+        result=to;
+    } else {
+        Readtable* rt=(Readtable*)allocate(sizeof(Readtable));
+        rt->syntax=syntax; rt->macros=macros; rt->dispatch=dispatch;
+        rt->readcase=from->slots->readtable.readcase; rt->objcount=4;
+        result=Object_new(READTABLE_Class,(Slots*)rt);
+    }
     close_live_pool(pool); add_to_live_pool(result);
     results->count=1; results->values[0]=result;}
 
@@ -1517,6 +1538,15 @@ static void k_SET_READTABLE_CASE(Ref function, Ref arguments, MultipleValues* re
     Ref mode=pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
     if(mode!=K(UPCASE)&&mode!=K(DOWNCASE)&&mode!=K(PRESERVE)&&mode!=K(INVERT)){
+        /* CLHS: an invalid readtable-case mode is a TYPE-ERROR, not a plain error. */
+        MultipleValues mv; mv.count=0;
+        kernel_apply(symbol_function(S(ERROR)),
+                     list(S(TYPE-ERROR),
+                          keyword_intern_cstring("DATUM"), mode,
+                          keyword_intern_cstring("EXPECTED-TYPE"),
+                          list(S(MEMBER),K(UPCASE),K(DOWNCASE),K(PRESERVE),K(INVERT),NULL),
+                          NULL),
+                     &mv);
         ERROR("(SETF READTABLE-CASE): invalid mode %s",
               string_cstring(prin1_to_string(mode)));}
     rt->slots->readtable.readcase=mode;
