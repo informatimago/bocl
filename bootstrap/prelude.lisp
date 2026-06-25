@@ -3765,14 +3765,17 @@ SETQ/INCF/DECF is left in place (sequential)."
             (setq sub-binds (append sub-binds (mapcar #'list vars vals)))
             (let ((og (gensym "ROT-OLD-")))
               (setq olds      (append olds (list og)))
-              (setq old-binds (append old-binds (list (list og access-form)))))
+              ;; capture ALL of the place's current values (a (VALUES ...) place
+              ;; has several), so a multi-value place rotates correctly.
+              (setq old-binds (append old-binds
+                                      (list (list og `(multiple-value-list ,access-form))))))
             (setq svars  (append svars  (list stores)))
             (setq sforms (append sforms (list store-form)))))
         ;; place_i receives old_{i+1}; the last place receives old_1.
         (let ((newvals (append (cdr olds) (list (car olds)))))
           `(let* (,@sub-binds            ; capture every place subform once, in order
                   ,@old-binds)           ; read every old value before any store
-             ,@(mapcar (lambda (sv val sf) `(multiple-value-bind ,sv ,val ,sf))
+             ,@(mapcar (lambda (sv val sf) `(multiple-value-bind ,sv (values-list ,val) ,sf))
                        svars newvals sforms)
              nil)))))
 
@@ -3867,7 +3870,10 @@ SETQ/INCF/DECF is left in place (sequential)."
         (setq sub-binds (append sub-binds (mapcar #'list vars vals)))
         (let ((og (gensym "SHIFTF-OLD-")))
           (setq olds      (append olds (list og)))
-          (setq old-binds (append old-binds (list (list og access-form)))))
+          ;; capture ALL of the place's current values (a (VALUES ...) place has
+          ;; several) so multi-value places shift correctly.
+          (setq old-binds (append old-binds
+                                  (list (list og `(multiple-value-list ,access-form))))))
         (setq svars  (append svars  (list stores)))
         (setq sforms (append sforms (list store-form)))))
     (let ((nv (gensym "SHIFTF-NEW-")))
@@ -3875,10 +3881,10 @@ SETQ/INCF/DECF is left in place (sequential)."
       (let ((newvals (append (cdr olds) (list nv))))
         `(let* (,@sub-binds            ; capture every place subform once
                 ,@old-binds            ; read every old value before any store
-                (,nv ,newval))
-           ,@(mapcar (lambda (sv val sf) `(multiple-value-bind ,sv ,val ,sf))
+                (,nv (multiple-value-list ,newval)))
+           ,@(mapcar (lambda (sv val sf) `(multiple-value-bind ,sv (values-list ,val) ,sf))
                      svars newvals sforms)
-           ,(car olds))))))            ; return old value of place 1
+           (values-list ,(car olds)))))))   ; return old value(s) of place 1
 
 (defun %case-key-tests (tmp clause)
   ;; The COND test for a (CASE/CCASE) clause: (k ...) keys -> (or (eql tmp 'k) ...).
@@ -6147,6 +6153,22 @@ places share structure."
     ((symbolp place)
      (let ((store (gensym "STORE-")))
        (values nil nil (list store) `(setq ,place ,store) place)))
+    ((and (consp place) (eq (car place) 'values))
+     ;; (values p1 p2 ...): concatenate the sub-expansions.  STORES is the union
+     ;; of every place's store variables (so a caller MULTIPLE-VALUE-BINDs them to
+     ;; the supplied values); the store-form runs each place's store-form; the
+     ;; access-form reads them all back as multiple values.
+     (let ((vars nil) (vals nil) (stores nil) (sforms nil) (accesses nil))
+       (dolist (p (cdr place))
+         (multiple-value-bind (v vl s sf af) (get-setf-expansion p)
+           (setq vars     (append vars v))
+           (setq vals     (append vals vl))
+           (setq stores   (append stores s))
+           (setq sforms   (append sforms (list sf)))
+           (setq accesses (append accesses (list af)))))
+       (values vars vals stores
+               `(progn ,@sforms (values ,@stores))
+               `(values ,@accesses))))
     ((consp place)
      (let ((expander (gethash (car place) *setf-expanders*)))
        (if expander
