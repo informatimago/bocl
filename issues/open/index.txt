@@ -1,19 +1,53 @@
-minimal-compilation.issue
-missing-functions.issue
+Rules of Processing Issues
+
+- if an issue is completely done, it should be closed and moved to issues/closed/.
+
+- process the issues in the order given here.
+
+- strive to implement an issue completely. Only in case of
+  inconsistency, or dependency (including missing specifications, or
+  missing implementation of another issue)  may issue be put on hold
+  and the following issues processed.
+
+- before processing an issue, check the state of the
+  implementation. Sometimes progress has been made that render parts
+  or the whole of the issue irrelevant anymore. The issue may then be
+  closed with an explanation of how it's already implemented.
+
+- when bugs are discovered, if they are non-blocking for the current
+  issue, they can be enqueued by the creation of a new issue, and
+  added to this index list. If a bug is discovered that is blocking
+  for the current issue then it must be fixed in the frame of the
+  current issue. (can be separate commit).
+
+
+Current list of issues to resolve:
+
+asdf.issue
+
+dribble.issue
+format-radix-mincol-padchar.issue
+on-error-default-setting.issue
+
+structured-pathnames.issue
+uiop-bocl-porting.issue
+sockets.issue
+
+slow-apropos.issue
+package-print-object-method.issue
+clos-condition-hierarchy-parents.issue
+precise-condition-subclasses.issue
+should-tests-type-errors.issue
+
 deferred-bignum-ops.issue
 deferred-cons-paged-heap.issue
-deferred-sacla-logic-bugs.issue
+deferred-sacla-logic-bugs.tissue
 deferred-signal-hooks.issue
-should-tests-type-errors.issue
+
+minimal-compilation.issue
+missing-functions.issue
 generational-gc.issue
-on-error-default-setting.issue
-package-print-object-method.issue
-format-radix-mincol-padchar.issue
-slow-apropos.issue
-asdf.issue
-clos-condition-hierarchy-parents.issue
-uiop-bocl-porting.issue
-structured-pathnames.issue
-sockets.issue
-precise-condition-subclasses.issue
+
 ansi-test.issue
+
+
