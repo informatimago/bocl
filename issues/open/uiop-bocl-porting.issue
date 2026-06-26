@@ -157,3 +157,36 @@ NEXT BLOCKER (form 114, uiop/configuration.lisp): structured pathnames.
   for ASDF to even LOAD, let alone OPERATE.  Tracked in a dedicated ticket:
   structured-pathnames.issue.  After that: re-walk the load (more UIOP run-program /
   filesystem dispatch, then ASDF core), then DEFSYSTEM / OPERATE.
+
+----------------------------------------------------------------------
+PROGRESS (slice 127, v1.3.14) — ASDF LOAD now reaches form 254/~? (of the bundle's
+top-level forms); structured pathnames + two CLOS gaps cleared
+----------------------------------------------------------------------
+Continuing the form-by-form load of modules/asdf/asdf.lisp (with *LOAD-PATHNAME* bound,
+as CL:LOAD does), three more blockers found + fixed.  All prelude-only.
+
+1. Structured pathnames (form 114, uiop/configuration.lisp) — DONE.  See
+   structured-pathnames.issue: PATHNAME-DIRECTORY returns (:ABSOLUTE|:RELATIVE . parts)
+   parsed from the namestring; DIRECTORY-NAMESTRING / MERGE-PATHNAMES / %PN-COMP-STRING
+   updated to match.  Unblocks ENSURE-PATHNAME ... :WANT-RELATIVE T.
+
+2. DEFGENERIC / DEFMETHOD with a (SETF name) function name (form 131, component.lisp:
+   (defgeneric (setf component-version) ...)).  bocl errored "expected SYMBOL, got CONS"
+   because the gf registry keyed by EQL and %INSTALL-DISCRIMINATING-FUNCTION did
+   SET-SYMBOL-FUNCTION on the name.  Fix: *%GFS* now uses EQUAL keys (so a freshly-read
+   (SETF FOO) cons keys consistently), and %INSTALL-DISCRIMINATING-FUNCTION installs a
+   (SETF accessor) gf as ACCESSOR's setf-function (%REGISTER-SETF-FUNCTION) — so
+   (setf (accessor x) v) dispatches through the gf.  Verified end-to-end.
+
+3. (SETF DOCUMENTATION) (form 201).  Was unsupported (stale "defun doesn't allow setf
+   names" note — the kernel DOES support (defun (setf foo) ...)).  DOCUMENTATION is now
+   backed by *DOCUMENTATION-TABLE* with a real (SETF DOCUMENTATION) writer.
+
+NEXT BLOCKER (form 254, a with-upgradability eval-when):
+  "Unbound slot ASDF/COMPONENT:NAME in object of class SYSTEM" — a CLOS instance is
+  created and its NAME slot read while unbound.  Likely a defclass :initform / initarg
+  or shared-initialize gap in bocl's CLOS (a SYSTEM is built without its NAME being set,
+  or slot defaulting differs).  This begins the CLOS-conformance leg of the ASDF port
+  (expect several defclass/initialize-instance/slot-default gaps before DEFSYSTEM works).
+  No regressions through v1.3.14 (full must-* sweep clean except the two pre-existing
+  1-off fails in must-data-and-control float TRUNCATE and must-reader #+feature).

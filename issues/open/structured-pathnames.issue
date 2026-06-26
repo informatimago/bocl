@@ -1,10 +1,38 @@
 Implement structured pathnames: PATHNAME-DIRECTORY (and friends) must return the
 parsed CL structure, not the raw namestring.  Gating work for loading/using ASDF.
 
-STATUS: open (subsystem).  Discovered porting UIOP/ASDF (see uiop-bocl-porting.issue):
-ASDF cannot even LOAD without this — at load time it computes default config/cache
-pathnames and calls UIOP ENSURE-PATHNAME ... :WANT-RELATIVE T, which tests
-(eq :relative (car (pathname-directory p))).
+STATUS: core DONE (v1.3.14); refinements remain.  Discovered porting UIOP/ASDF (see
+uiop-bocl-porting.issue): ASDF could not even LOAD without this — at load time it
+computes default config/cache pathnames and calls UIOP ENSURE-PATHNAME ...
+:WANT-RELATIVE T, which tests (eq :relative (car (pathname-directory p))).
+
+== DONE (v1.3.14) ==
+PATHNAME-DIRECTORY now returns the CL structured component, parsed from the namestring:
+NIL, or (:ABSOLUTE|:RELATIVE . parts) with parts being strings, :UP (".."), :WILD
+("*"), :WILD-INFERIORS ("**"); "." segments dropped.  Examples now correct:
+  ".cache/"     -> (:RELATIVE ".cache")        "/usr/local/" -> (:ABSOLUTE "usr" "local")
+  "x.txt"       -> NIL  (name "x" type "txt")  "/"           -> (:ABSOLUTE)
+  "../a/b.l"    -> (:RELATIVE :UP "a")          "./x"         -> (:RELATIVE)
+Pathnames stay namestring-backed (kernel object / #P reader / printer / GC / the many
+C namestring() call sites are untouched); the accessors PARSE on demand and round-trip
+through MAKE-PATHNAME.  Also: DIRECTORY-NAMESTRING returns the directory string (not the
+list); MERGE-PATHNAMES rewritten to merge structured components (CLHS 19.2.3, via a new
+%DIR-MERGE); %PN-COMP-STRING maps :UP/:BACK -> "..".  The existing WILD-PATHNAME-P /
+PATHNAME-MATCH-P / %LP-DIR-MATCH already consumed structured dirs, so they now work.
+No regressions (must-sequence 3851/0, -string 414/0, -printer 439/0, -loop 852/0, etc.).
+This unblocked the ASDF load past uiop/configuration.lisp (form 114 -> 254+).
+
+== REMAINING refinements (not blocking the current ASDF load) ==
+- NAME/TYPE could return :WILD for "*" (today they return the string "*", which the
+  wild predicates already handle, so low priority).
+- A name containing a dot built via (MAKE-PATHNAME :NAME "a.b" :TYPE NIL) does not
+  round-trip (inherent to namestring-backed pathnames); acceptable for now.
+- TRUENAME does not canonicalise "." / ".." to an absolute path (pre-existing, separate).
+- Logical pathnames / wild TRANSLATE-PATHNAME beyond what UIOP needs.
+- The full CLHS surface (ENOUGH-NAMESTRING relativisation, :BACK vs :UP semantics) is
+  only as complete as ASDF exercises.
+
+== Original analysis ==
 
 == The gap ==
 bocl pathnames are currently string-backed.  The component accessors return the whole

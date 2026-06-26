@@ -3607,11 +3607,29 @@ SETQ/INCF/DECF is left in place (sequential)."
         ((>= i (string-length base)) last)
       (when (eql (char base i) #\.) (setq last i)))))
 
+(defun %parse-physical-directory (s)
+  "Parse the directory portion of a POSIX namestring S into a CL directory
+   component: NIL when there is no directory part, otherwise the list
+   (:ABSOLUTE|:RELATIVE . components), where each component is a string, :UP
+   (\"..\"), :WILD (\"*\") or :WILD-INFERIORS (\"**\").  \".\" segments are dropped."
+  (let ((dir-end (%path-dir-end s)))
+    (if (< dir-end 0)
+        nil                                       ; no #\/ at all => no directory
+        (let* ((abs  (and (> (string-length s) 0) (eql (char s 0) #\/)))
+               (body (subseq s 0 (+ dir-end 1)))  ; through the final #\/
+               (segs (%split-path body))          ; drops empty segments
+               (comps '()))
+          (dolist (seg segs)
+            (cond ((string= seg ".")  nil)
+                  ((string= seg "..") (push :up comps))
+                  ((string= seg "**") (push :wild-inferiors comps))
+                  ((string= seg "*")  (push :wild comps))
+                  (t                  (push seg comps))))
+          (cons (if abs :absolute :relative) (nreverse comps))))))
+
 (defun pathname-directory (pathname)
-  ;; Return the directory as a string like "/usr/local/" or "".
-  (let* ((s (if (stringp pathname) pathname (namestring pathname)))
-         (pos (%path-dir-end s)))
-    (if (< pos 0) "" (subseq s 0 (+ pos 1)))))
+  ;; CLHS 19.2: the directory component is NIL or (:ABSOLUTE|:RELATIVE . parts).
+  (%parse-physical-directory (if (stringp pathname) pathname (namestring pathname))))
 
 (defun file-namestring (pathname)
   ;; Return the base-name part (name + type, e.g. "foo.lisp").
@@ -3647,7 +3665,11 @@ SETQ/INCF/DECF is left in place (sequential)."
   (pathname "~/"))
 
 (defun directory-namestring (pathname)
-  (pathname-directory pathname))
+  ;; The directory portion of the namestring AS A STRING (e.g. "/usr/local/"),
+  ;; not the structured list that PATHNAME-DIRECTORY returns.
+  (let* ((s (if (stringp pathname) pathname (namestring pathname)))
+         (pos (%path-dir-end s)))
+    (if (< pos 0) "" (subseq s 0 (+ pos 1)))))
 
 (defun host-namestring (p)
   (setq p nil) "")
@@ -3656,15 +3678,29 @@ SETQ/INCF/DECF is left in place (sequential)."
   (setq defaults nil)
   (if (stringp pathname) pathname (namestring pathname)))
 
+(defun %dir-merge (pdir ddir)
+  ;; Merge a directory component PDIR over the defaults DDIR (CLHS 19.2.3):
+  ;; an absent or :ABSOLUTE PDIR is taken as-is; a :RELATIVE PDIR has its
+  ;; components appended onto DDIR (keeping DDIR's :ABSOLUTE/:RELATIVE head).
+  (cond ((null pdir)                  ddir)
+        ((eq (car pdir) :absolute)    pdir)
+        ((null ddir)                  pdir)
+        (t                            (cons (car ddir)
+                                            (append (cdr ddir) (cdr pdir))))))
+
 (defun merge-pathnames (pathname &optional (defaults "") default-version)
-  ;; If PATHNAME is absolute (starts with /), return it unchanged.
-  ;; Otherwise prepend DEFAULTS's directory.
-  (setq default-version nil)
-  (let ((s (if (stringp pathname) pathname (namestring pathname)))
-        (d (if (stringp defaults) defaults (namestring defaults))))
-    (if (and (> (string-length s) 0) (eql (char s 0) #\/))
-        (pathname s)
-        (pathname (concatenate 'string (pathname-directory d) s)))))
+  ;; Fill in unsupplied components of PATHNAME from DEFAULTS (CLHS 19.2.3),
+  ;; using the structured directory component.  (DEFAULTS defaults to "" here so
+  ;; this physical version is safe to call before *DEFAULT-PATHNAME-DEFAULTS* is
+  ;; defined; the logical-aware wrapper below supplies the proper default.)
+  (declare (ignore default-version))
+  (let* ((p    (pathname pathname))
+         (d    (pathname defaults))
+         (dir  (%dir-merge (pathname-directory p) (pathname-directory d)))
+         (name (or (pathname-name p) (pathname-name d)))
+         (type (or (pathname-type p) (pathname-type d))))
+    (make-pathname :directory dir :name name :type type
+                   :device (pathname-device p) :host (pathname-host p))))
 
 (defun make-pathname (&key host device directory name type version defaults)
   ;; Build a pathname string from components.
@@ -4122,7 +4158,9 @@ SETQ/INCF/DECF is left in place (sequential)."
 
 (defparameter *%classes* (make-hash-table))  ; symbol -> %cls
 
-(defparameter *%gfs* (make-hash-table))      ; symbol -> %gf
+(defparameter *%gfs* (make-hash-table :test 'equal))  ; name -> %gf
+;; EQUAL (not EQL) so a (SETF FOO) cons function-name keys consistently across
+;; the freshly-read conses produced by DEFGENERIC / DEFMETHOD.
 
 ;;; Save kernel versions before overriding.
 (defparameter *%kernel-find-class* (symbol-function 'find-class))
@@ -4664,7 +4702,11 @@ SETQ/INCF/DECF is left in place (sequential)."
                          name args))
                 (%invoke-effective-method sorted args)))))
     (sethash df *%gf-by-fn* gf)   ; so FIND-METHOD can map #'gf back to its %gf
-    (set-symbol-function df name)))
+    ;; A (SETF accessor) generic function is installed as ACCESSOR's setf-function
+    ;; (consulted by the SETF macro), not as a symbol-function.
+    (if (and (consp name) (eq (car name) 'setf))
+        (%register-setf-function (cadr name) df)
+        (set-symbol-function df name))))
 
 ;;; ---- 20. ENSURE-GENERIC-FUNCTION and ENSURE-METHOD ---------------------
 
@@ -5740,10 +5782,16 @@ the class object it denotes, so two specializers compare by class identity."
 (defvar *documentation-table* (make-hash-table))
 
 (defun documentation (object doc-type)
-  "Return the documentation string for OBJECT of type DOC-TYPE."
-  object doc-type  nil)   ; stub
+  "Return the documentation string for OBJECT of type DOC-TYPE, or NIL."
+  (cdr (assoc doc-type (gethash object *documentation-table*))))
 
-;;; (setf documentation) not supported in bocl (defun doesn't allow setf names).
+(defun (setf documentation) (new object doc-type)
+  "Store the documentation string NEW for OBJECT of type DOC-TYPE."
+  (let ((entry (assoc doc-type (gethash object *documentation-table*))))
+    (if entry
+        (setf (cdr entry) new)
+        (push (cons doc-type new) (gethash object *documentation-table*))))
+  new)
 
 ;;;; ========================================================================
 ;;;; Slice 22 — I/O built-ins, list set operations, hash utilities,
@@ -8093,6 +8141,7 @@ result array; return that array."
   (cond ((null c)               "")
         ((eq c :wild)           "*")
         ((eq c :wild-inferiors) "**")
+        ((or (eq c :up) (eq c :back)) "..")
         ((eq c :unspecific)     "")
         ((stringp c)            c)
         ((symbolp c)            (string-downcase (symbol-name c)))
