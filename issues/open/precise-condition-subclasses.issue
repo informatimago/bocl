@@ -1,0 +1,74 @@
+Audit and refine the conditions signalled by the kernel and prelude: signal precise
+condition classes (with useful slots) instead of generic ones, so handlers can
+discriminate and report better.
+
+STATUS: open (audit + incremental work).  Motivated by the stack-overflow guard, which
+signals a generic STORAGE-CONDITION; it should signal a specific
+BOCL:OUT-OF-STACK-MEMORY-ERROR (a STORAGE-CONDITION subclass) carrying the relevant
+parameters, catchable on its own.
+
+== Goal ==
+Today most error sites signal the most generic class that fits:
+- kernel: ~134 ERROR(...) -> SIMPLE-ERROR, ~75 TYPE_ERROR -> SIMPLE-TYPE-ERROR,
+  4 PROGRAM_ERROR, plus PACKAGE_ERROR, stack_overflow_error -> STORAGE-CONDITION.
+- prelude: ~90 (error "...") -> SIMPLE-ERROR, plus (error 'type-error ...) x8,
+  'simple-type-error x3, 'reader-error x2, 'program-error x2, 'control-error,
+  'package-error, 'print-not-readable, and a few (error 'bocl::...).
+Generic conditions can only be caught as ERROR / SIMPLE-ERROR / SERIOUS-CONDITION, so
+a handler cannot tell "stack exhausted" from "heap exhausted", or "unbound variable"
+from any other error, and the conditions carry no structured data (just a message).
+
+We want to (a) use the STANDARD CL condition class when one fits, and (b) introduce
+BOCL: subclasses for implementation-specific conditions, each with slots, so user code
+can HANDLER-CASE precisely and tools can introspect.
+
+== First, motivating case ==
+  (define-condition bocl:out-of-memory-error      (storage-condition) ())
+  (define-condition bocl:out-of-stack-memory-error (bocl:out-of-memory-error)
+    ((limit :initarg :limit :reader bocl:out-of-memory-limit)      ; bytes
+     (used  :initarg :used  :reader bocl:out-of-memory-used)))
+  (define-condition bocl:out-of-heap-memory-error  (bocl:out-of-memory-error)
+    ((requested :initarg :requested :reader ...)))
+boerror.c stack_overflow_error() should signal OUT-OF-STACK-MEMORY-ERROR (with the
+RLIMIT-derived limit and current usage), still a STORAGE-CONDITION, so existing
+handlers keep working but new code can catch (bocl:out-of-stack-memory-error () ...).
+
+== The audit ==
+Walk every signalling site and classify it; signal the most specific appropriate
+class, filling slots:
+
+1. Kernel ERROR("CATEGORY: ...") sites whose message already names a CL category map
+   to standard classes (heuristic grep shows: READ:, USE-PACKAGE:, INVOKE-RESTART:,
+   HANDLER-CASE:, HANDLER-BIND:, SYMBOL-MACROLET:, LOG:, RANDOM:, PARSE-FLOAT:, ...):
+     - READ:/reader -> READER-ERROR (with :stream)        [reader.c]
+     - INVOKE-RESTART:/HANDLER-* / "no catch tag" -> CONTROL-ERROR
+     - USE-PACKAGE:/EXPORT:/... -> PACKAGE-ERROR (with :package)  [packages.c]
+     - LOG:/RANDOM:/PARSE-FLOAT: domain issues -> ARITHMETIC-ERROR or a BOCL math cond
+     - file/stream I/O -> FILE-ERROR / STREAM-ERROR (with :pathname / :stream)
+     - "Unbound variable" -> UNBOUND-VARIABLE (cell-error, :name)   [eval.c]
+     - "Undefined function" -> UNDEFINED-FUNCTION (cell-error, :name) [eval.c]
+2. TYPE_ERROR sites: make them real TYPE-ERRORs that fill :DATUM and :EXPECTED-TYPE
+   (CLHS type-error-datum / type-error-expected-type).  Today type_error() builds a
+   SIMPLE-TYPE-ERROR with only a message; add the two slots so handlers can inspect.
+3. Storage / resource: BOCL:OUT-OF-STACK-MEMORY-ERROR, BOCL:OUT-OF-HEAP-MEMORY-ERROR
+   (both <- STORAGE-CONDITION); a GC/heap-corruption condition if useful.
+4. Genuinely generic remainder stays SIMPLE-ERROR.
+
+== Where ==
+- Define the BOCL: condition classes in the prelude (DEFINE-CONDITION, BOCL package,
+  exported), alongside the existing OS-portability / module sections.
+- For C signal sites, add helpers mirroring type_error()/package_error() that build
+  the specific kernel class (the kernel already has UNBOUND_VARIABLE etc. classes? —
+  verify; add where missing) and pass slot values.
+- Keep the kernel-first / CLOS-dual hierarchy intact (see clos-condition-hierarchy-
+  parents): a specific subclass must still be TYPEP its standard ancestor so old
+  handlers fire.
+
+== Deliverables / order ==
+1. BOCL:OUT-OF-STACK-MEMORY-ERROR + retrofit stack_overflow_error() (small, do first).
+2. UNBOUND-VARIABLE / UNDEFINED-FUNCTION at the two eval.c sites (high value, common).
+3. TYPE-ERROR :datum/:expected-type slots.
+4. Sweep the remaining kernel ERROR("CAT: ...") and prelude (error "...") sites by
+   category.
+Re-run the must-* suite after each step (handler dispatch is sensitive); especially
+must-condition.
