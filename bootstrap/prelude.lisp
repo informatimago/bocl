@@ -4528,9 +4528,24 @@ SETQ/INCF/DECF is left in place (sequential)."
                        (setf (slot-value self ',sname) new-value))
                     writer-forms)))))
     `(progn
-       (ensure-clos-class ',name ',dsuper-names
-                           (list ,@(mapcar (lambda (s) `(%parse-slot-spec ',s))
-                                          direct-slots)))
+       (ensure-clos-class
+        ',name ',dsuper-names
+        (list ,@(mapcar
+                 (lambda (ps)
+                   ;; Build the slot plist with a REAL :initfunction closure that
+                   ;; EVALUATES the initform per instance — so computed initforms
+                   ;; like (MAKE-HASH-TABLE) or (LIST ...) work, not just self-
+                   ;; evaluating literals.  (PARSED-SLOTS carries a non-NIL
+                   ;; :initfunction iff the slot supplied an :initform.)
+                   `(list :name ',(getf ps :name)
+                          :initargs ',(getf ps :initargs)
+                          :readers ',(getf ps :readers)
+                          :writers ',(getf ps :writers)
+                          :initform ',(getf ps :initform)
+                          :initfunction ,(when (getf ps :initfunction)
+                                           `(lambda () ,(getf ps :initform)))
+                          :allocation ',(getf ps :allocation)))
+                 parsed-slots)))
        ,@(nreverse reader-forms)
        ,@(nreverse writer-forms)
        (find-class ',name))))
