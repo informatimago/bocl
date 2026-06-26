@@ -4285,6 +4285,19 @@ SETQ/INCF/DECF is left in place (sequential)."
   "Find an effective slot plist for SLOT-NAME in class CLS, or NIL."
   (find slot-name (%cls-eslots cls) :key (lambda (s) (getf s :name))))
 
+;; Read/write a slot's storage given its effective-slot plist.  An :INSTANCE slot
+;; lives in the instance's slot vector at :LOCATION; a :CLASS slot is shared by all
+;; instances and lives in a one-element box (:CELL) held in the (per-class) eslot.
+(defun %eslot-ref (object eslot)
+  (if (eq (getf eslot :allocation) :class)
+      (car (getf eslot :cell))
+      (svref (%obj-slots object) (getf eslot :location))))
+
+(defun %eslot-set (object eslot value)
+  (if (eq (getf eslot :allocation) :class)
+      (setf (car (getf eslot :cell)) value)
+      (setf (svref (%obj-slots object) (getf eslot :location)) value)))
+
 (defun slot-value (object slot-name)
   "Return the value of slot SLOT-NAME in OBJECT."
   (unless (%is-obj object)
@@ -4293,7 +4306,7 @@ SETQ/INCF/DECF is left in place (sequential)."
          (eslot (%find-eslot cls slot-name)))
     (unless eslot
       (error "SLOT-VALUE: class ~S has no slot named ~S" (%cls-name cls) slot-name))
-    (let ((val (svref (%obj-slots object) (getf eslot :location))))
+    (let ((val (%eslot-ref object eslot)))
       (if (eq val *%unbound*)
           (error "Unbound slot ~S in object of class ~S" slot-name (%cls-name cls))
           val))))
@@ -4306,7 +4319,7 @@ SETQ/INCF/DECF is left in place (sequential)."
          (eslot (%find-eslot cls slot-name)))
     (unless eslot
       (error "(SETF SLOT-VALUE): class ~S has no slot named ~S" (%cls-name cls) slot-name))
-    (setf (svref (%obj-slots object) (getf eslot :location)) new-value)
+    (%eslot-set object eslot new-value)
     new-value))
 
 (define-setf-expander slot-value (object slot-name) (new-value)
@@ -4320,7 +4333,7 @@ SETQ/INCF/DECF is left in place (sequential)."
          (eslot (%find-eslot cls slot-name)))
     (unless eslot
       (error "SLOT-BOUNDP: class ~S has no slot ~S" (%cls-name cls) slot-name))
-    (not (eq (svref (%obj-slots object) (getf eslot :location)) *%unbound*))))
+    (not (eq (%eslot-ref object eslot) *%unbound*))))
 
 (defun slot-makunbound (object slot-name)
   "Make slot SLOT-NAME in OBJECT unbound."
@@ -4330,7 +4343,7 @@ SETQ/INCF/DECF is left in place (sequential)."
          (eslot (%find-eslot cls slot-name)))
     (unless eslot
       (error "SLOT-MAKUNBOUND: class ~S has no slot ~S" (%cls-name cls) slot-name))
-    (setf (svref (%obj-slots object) (getf eslot :location)) *%unbound*)
+    (%eslot-set object eslot *%unbound*)
     object))
 
 (defun slot-exists-p (object slot-name)
@@ -4430,6 +4443,9 @@ SETQ/INCF/DECF is left in place (sequential)."
                         :initform initform
                         :initfunction initfunction
                         :allocation allocation
+                        ;; A :CLASS slot's single shared value lives in this box
+                        ;; (one per class); :INSTANCE slots use :LOCATION instead.
+                        :cell (when (eq allocation :class) (list *%unbound*))
                         :readers (dedup readers #'eq)
                         :writers (dedup writers #'equal))
                   result)
@@ -4903,11 +4919,11 @@ the class object it denotes, so two specializers compare by class identity."
               (get-properties initargs (or (getf eslot :initargs) nil))
             ikey  ; not used
             (if found
-                (setf (svref (%obj-slots instance) (getf eslot :location)) ivalue)
-                (when (and (eq (svref (%obj-slots instance) (getf eslot :location)) *%unbound*)
+                (%eslot-set instance eslot ivalue)
+                (when (and (eq (%eslot-ref instance eslot) *%unbound*)
                            (getf eslot :initfunction))
-                  (setf (svref (%obj-slots instance) (getf eslot :location))
-                        (funcall (getf eslot :initfunction)))))))))
+                  (%eslot-set instance eslot
+                              (funcall (getf eslot :initfunction)))))))))
     instance))
 
 (defun make-instance (class-designator &rest initargs)
