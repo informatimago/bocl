@@ -14,4 +14,7 @@
 
 void reader_initialize(void);
 
+/* Push CH back onto STREAM (ungetc); helper for a future UNREAD-CHAR built-in. */
+Ref kernel_unread_char(Ref ch, Ref stream);
+
 #endif

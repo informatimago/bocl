@@ -376,7 +376,7 @@ static void heap_verify_free_list(Zone* z, FreeBlock* sentinel, const char* whic
         if(f->size == 0 || f->size % sizeof(word) != 0 || (char*)f + f->size > zend)
                                                   heap_dump_and_abort(which, z, (Block*)f);
         if(!free_block_p((Block*)f))              heap_dump_and_abort(which, z, (Block*)f);
-        if(++guard > (zend - zstart) / (uword)MinimumBlockSize + 16)
+        if(++guard > (uword)(zend - zstart) / (uword)MinimumBlockSize + 16)
                                                   heap_dump_and_abort("free-list cycle", z, (Block*)f);}
 }
 
@@ -611,7 +611,7 @@ static void mark(Block* root){
                 mark_wstack_push(child);}}}
 
 
-static Block* free_block(Zone* zone,Block* block){
+static unused Block* free_block(Zone* zone,Block* block){
     /* if it's contiguous to free blocks, then join them */
     /* Damned, to test if the previous block is free, we'd have to
     walk the whole freelist! for each garbage block!  */
@@ -707,7 +707,7 @@ static uword sweep_zone(Zone* zone, bool minor){
             if(!free_block_p(current))
                 total += current->size;
             FreeBlock* fb = (FreeBlock*)current;
-            if(tail != NULL && (Block*)((char*)tail + tail->size) == current){
+            if(tail != NULL && (Block*)(void*)((char*)tail + tail->size) == current){
                 /* coalesce: extend the tail block in-place */
                 tail->size = CHECK_SIZE_TO_HALFWORD(
                     (uword)tail->size + (uword)fb->size);
@@ -1095,9 +1095,13 @@ static bool in_root_set_p(Block* block){
     if(current==NULL){
         return false;}
     while(current && block_objcount(current)==3){
-        if(current->blocks[1]==block){   /* car == the searched object */
+        /* BLOCKS is a struct-hack VARRAY (declared [1]); this cons block really
+           has 3 entries (objcount==3).  Index through a decayed pointer so the
+           access is not flagged against the nominal [1] bound. */
+        Block* const* b = current->blocks;
+        if(b[1]==block){   /* car == the searched object */
             return true;}
-        current=current->blocks[2];}     /* cdr == next cons */
+        current=b[2];}     /* cdr == next cons */
     return false;}
 
 static bool in_free_list(FreeBlock* list,Block* block){

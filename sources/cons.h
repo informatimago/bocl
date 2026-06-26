@@ -19,5 +19,6 @@
 Ref push(Ref element,Ref* list);
 Ref pop(Ref* list);
 Ref list(Ref first_element,...);
+Ref bocl_append(Ref lists);   /* APPEND of a list of lists (last shared, rest copied) */
 
 #endif

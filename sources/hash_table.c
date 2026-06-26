@@ -36,8 +36,8 @@ static bool string_equalp(Ref a, Ref b){
 bool equalp(Ref a, Ref b){
     /* Numbers: cross-type numeric equality. */
     if((integerp(a) || floatp(a)) && (integerp(b) || floatp(b))){
-        floating av = integerp(a) ? (floating)integer_value(a) : float_value(a);
-        floating bv = integerp(b) ? (floating)integer_value(b) : float_value(b);
+        floating av = integerp(a) ? integer_value_as_floating(a) : float_value(a);
+        floating bv = integerp(b) ? integer_value_as_floating(b) : float_value(b);
         return av == bv;}
     /* Characters: case-insensitive. */
     if(characterp(a) && characterp(b)){
@@ -151,7 +151,7 @@ static uword string_hash_ci(Ref s){
 static uword object_hash(Ref key, int depth){
     if(depth <= 0){ return 7u; }
     if(integerp(key) || floatp(key)){
-        floating v = integerp(key) ? (floating)integer_value(key) : float_value(key);
+        floating v = integerp(key) ? integer_value_as_floating(key) : float_value(key);
         return (uword)(word)v; }
     if(characterp(key)){
         return (uword)tolower((int)integer_value(character_code(key))); }

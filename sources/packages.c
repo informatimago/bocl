@@ -82,7 +82,7 @@ Ref package_new(const char* name, const char* const* nicknames){
 /* The string named by a CL string designator: a string is itself, a symbol
    gives its symbol-name, a character gives a one-character string.  Anything
    else is a type error.  (Package functions take string designators.) */
-Ref string_designator_name(Ref designator){
+static Ref string_designator_name(Ref designator){
     if(typep(designator, STRING_Class)){ return designator; }
     if(symbolp(designator))            { return symbol_name(designator); }
     if(characterp(designator)){

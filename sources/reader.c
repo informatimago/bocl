@@ -1300,14 +1300,18 @@ Ref kernel_read_from_string(Ref input_string,Ref eof_error_p,Ref eof_value,Ref s
 /* ============================================================ */
 /*  Readtable & reader macros                                    */
 /* ============================================================ */
-/* Character syntax types (CL standard; mirror the reference reader). */
-#define CS_INVALID                0
-#define CS_WHITESPACE             1
-#define CS_SINGLE_ESCAPE          2
-#define CS_MULTIPLE_ESCAPE        3
-#define CS_CONSTITUENT            4
-#define CS_TERMINATING_MACRO      5
-#define CS_NON_TERMINATING_MACRO  6
+/* Character syntax types (CL standard; mirror the reference reader).  An enum
+   (not #defines) so the full, standard-mirroring set may be spelled out without
+   -Wunused-macros flagging the categories bocl does not reference by name. */
+enum {
+    CS_INVALID               = 0,
+    CS_WHITESPACE            = 1,
+    CS_SINGLE_ESCAPE         = 2,
+    CS_MULTIPLE_ESCAPE       = 3,
+    CS_CONSTITUENT           = 4,
+    CS_TERMINATING_MACRO     = 5,
+    CS_NON_TERMINATING_MACRO = 6
+};
 
 extern Ref Object_new(Ref class, Slots* slots);
 
@@ -1594,7 +1598,7 @@ static void k_SET_SYNTAX_FROM_CHAR(Ref function, Ref arguments, MultipleValues* 
 static void register_reader_fn(Ref fname, Ref lambda_list, KernelFunctionPtr fn){
     set_symbol_function(fname, built_in_function_new(fname, lambda_list, fn));}
 
-void reader_initialize(){
+void reader_initialize(void){
     define_parameter(READ_BASE,integer_from_word(10));
     define_parameter(READ_DEFAULT_FLOAT_FORMAT,S(SINGLE-FLOAT));
     define_parameter(READ_EVAL,S(T));

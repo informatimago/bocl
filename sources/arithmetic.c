@@ -19,7 +19,7 @@
 /* Lossy BIGNUM -> double for float contagion.  Recurses to depth = #digits. */
 static floating bignum_horner_float(Ref digits){
     if(!consp(digits)){ return 0.0; }
-    return (floating)integer_value(cons_car(digits))
+    return integer_value_as_floating(cons_car(digits))
          + 1000000000.0 * bignum_horner_float(cons_cdr(digits));}
 
 static floating bignum_to_floating(Ref b){
@@ -1034,7 +1034,7 @@ void kernel_INTEGER_DECODE_FLOAT(Ref function, Ref arguments, MultipleValues* re
     floating sig = frexp(v, &e);
     /* significand as integer: sig * 2^FLOAT-DIGITS */
     int digits = DBL_MANT_DIG;            /* 53 for double */
-    long long isig = (long long)(fabs(sig) * (1LL << digits));
+    long long isig = (long long)(fabs(sig) * (double)(1LL << digits));
     int sign = (v < 0.0) ? -1 : 1;
     results->count=3;
     results->values[0] = integer_from_word((word)isig);
@@ -1138,14 +1138,14 @@ void kernel_LOGBITP(Ref function, Ref arguments, MultipleValues* results){
  * -------------------------------------------------------------------- */
 
 static void kernel_RATIOP(Ref function, Ref arguments, MultipleValues* results){
-    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    uword pool=open_live_pool(); add_to_live_pool(arguments); (void)function;
     Ref obj=cons_car(arguments);
     results->count=1;
     results->values[0] = ratiop(obj) ? T_Symbol : NIL_Symbol;
     close_live_pool(pool);}
 
 static void kernel_NUMERATOR(Ref function, Ref arguments, MultipleValues* results){
-    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    uword pool=open_live_pool(); add_to_live_pool(arguments); (void)function;
     Ref r=cons_car(arguments);
     if(!integerp(r)&&!ratiop(r)){ TYPE_ERROR(r,NUMBER_Class); }
     results->count=1;
@@ -1153,7 +1153,7 @@ static void kernel_NUMERATOR(Ref function, Ref arguments, MultipleValues* result
     close_live_pool(pool);}
 
 static void kernel_DENOMINATOR(Ref function, Ref arguments, MultipleValues* results){
-    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    uword pool=open_live_pool(); add_to_live_pool(arguments); (void)function;
     Ref r=cons_car(arguments);
     if(!integerp(r)&&!ratiop(r)){ TYPE_ERROR(r,NUMBER_Class); }
     results->count=1;
@@ -1161,7 +1161,7 @@ static void kernel_DENOMINATOR(Ref function, Ref arguments, MultipleValues* resu
     close_live_pool(pool);}
 
 static void kernel_COMPLEXP(Ref function, Ref arguments, MultipleValues* results){
-    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    uword pool=open_live_pool(); add_to_live_pool(arguments); (void)function;
     Ref obj=cons_car(arguments);
     results->count=1;
     results->values[0] = complexp(obj) ? T_Symbol : NIL_Symbol;
@@ -1178,21 +1178,21 @@ static void kernel_COMPLEX(Ref function, Ref arguments, MultipleValues* results)
     close_live_pool(pool);}
 
 static void kernel_REALPART(Ref function, Ref arguments, MultipleValues* results){
-    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    uword pool=open_live_pool(); add_to_live_pool(arguments); (void)function;
     Ref c=cons_car(arguments); check_number(c);
     results->count=1;
     results->values[0] = complex_realpart(c);
     close_live_pool(pool);}
 
 static void kernel_IMAGPART(Ref function, Ref arguments, MultipleValues* results){
-    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    uword pool=open_live_pool(); add_to_live_pool(arguments); (void)function;
     Ref c=cons_car(arguments); check_number(c);
     results->count=1;
     results->values[0] = complex_imagpart(c);
     close_live_pool(pool);}
 
 static void kernel_RATIONALP(Ref function, Ref arguments, MultipleValues* results){
-    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    uword pool=open_live_pool(); add_to_live_pool(arguments); (void)function;
     Ref obj=cons_car(arguments);
     results->count=1;
     results->values[0] = (integerp(obj)||ratiop(obj)) ? T_Symbol : NIL_Symbol;

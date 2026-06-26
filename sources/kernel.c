@@ -1000,7 +1000,7 @@ Ref parse_bignum_cstring(const char* token, int base){
     free(mag); free(tmp);
     return r; }
 
-void kernel_BIGNUMP(Ref function,Ref arguments,MultipleValues* results){
+static void kernel_BIGNUMP(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments;
@@ -1010,7 +1010,7 @@ void kernel_BIGNUMP(Ref function,Ref arguments,MultipleValues* results){
     results->values[0]=as_boolean(bignump(x));
     close_live_pool(pool);}
 
-void kernel_BIGNUM_VALUE(Ref function,Ref arguments,MultipleValues* results){
+static void kernel_BIGNUM_VALUE(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments;
@@ -1020,7 +1020,7 @@ void kernel_BIGNUM_VALUE(Ref function,Ref arguments,MultipleValues* results){
     results->values[0]=bignum_value(x);
     close_live_pool(pool);}
 
-void kernel_MAKE_INTEGER_FROM_BIGNUM(Ref function,Ref arguments,MultipleValues* results){
+static void kernel_MAKE_INTEGER_FROM_BIGNUM(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments;
@@ -1031,7 +1031,7 @@ void kernel_MAKE_INTEGER_FROM_BIGNUM(Ref function,Ref arguments,MultipleValues* 
     close_live_pool(pool);}
 
 /* (%GC-STRESS n) — diagnostic: set the GC-stress period at runtime (0 = off). */
-void kernel_GC_STRESS(Ref function,Ref arguments,MultipleValues* results){
+static void kernel_GC_STRESS(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments;
@@ -1043,7 +1043,7 @@ void kernel_GC_STRESS(Ref function,Ref arguments,MultipleValues* results){
     close_live_pool(pool);}
 
 /* (%GC-ENABLE x) — diagnostic: enable (x non-nil) or disable (nil) the GC. */
-void kernel_GC_ENABLE(Ref function,Ref arguments,MultipleValues* results){
+static void kernel_GC_ENABLE(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments;
@@ -1056,7 +1056,7 @@ void kernel_GC_ENABLE(Ref function,Ref arguments,MultipleValues* results){
 
 /* (%POISON x) — diagnostic: enable (x non-nil) / disable (nil) the use-after-free
    finder at runtime, so it can target a post-prelude workload. */
-void kernel_POISON(Ref function,Ref arguments,MultipleValues* results){
+static void kernel_POISON(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(function); add_to_live_pool(arguments);
     Ref current=arguments;
@@ -1178,9 +1178,9 @@ Ref ratio_denominator(Ref r){
 
 /* Rational → floating */
 floating ratio_to_float(Ref r){
-    if(integerp(r)) return (floating)integer_value(r);
-    return (floating)integer_value(r->slots->ratio.numerator)
-         / (floating)integer_value(r->slots->ratio.denominator);}
+    if(integerp(r)) return integer_value_as_floating(r);
+    return integer_value_as_floating(r->slots->ratio.numerator)
+         / integer_value_as_floating(r->slots->ratio.denominator);}
 
 /* COMPLEX */
 
@@ -1189,8 +1189,8 @@ Ref complex_new(Ref re, Ref im){
        other (an integer or ratio) to a float too, so #C(5/3 7.0) has two float
        parts.  (Bignum parts are left alone — out of scope and pathological in #C.) */
     if((floatp(re)!=floatp(im)) && !bignump(re) && !bignump(im)){
-        if(!floatp(re)){ re=float_from_floating(ratiop(re)?ratio_to_float(re):(floating)integer_value(re)); }
-        if(!floatp(im)){ im=float_from_floating(ratiop(im)?ratio_to_float(im):(floating)integer_value(im)); }}
+        if(!floatp(re)){ re=float_from_floating(ratiop(re)?ratio_to_float(re):integer_value_as_floating(re)); }
+        if(!floatp(im)){ im=float_from_floating(ratiop(im)?ratio_to_float(im):integer_value_as_floating(im)); }}
     /* (complex r 0) collapses to the real R only when BOTH parts are rational
        and the imaginary part is the integer 0 (CLHS 12.1.5.3): a float part
        forces a complex result even when the imaginary part is 0.0, so
@@ -1718,7 +1718,7 @@ Class* Class_slots(Ref name,Ref superclasses){
     that->direct_superclasses=superclasses;
     return that;}
 
-Class* make_boot_Class(){
+Class* make_boot_Class(void){
     Class* that=allocate(sizeof(*that));
     that->objcount=2;
     that->name=&uninitialized_object;

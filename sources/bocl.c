@@ -72,9 +72,9 @@ Ref bocl_repl(Ref inp,Ref out){
     /* REPL history variables (CLHS 25.1.1).  (Interned here with explicit names
        because S(//) / S(///) would be read as C line comments.)
        -        : the form currently being evaluated
-       +/++/+++ : the last three forms evaluated
-       *​/**​/*** : the primary values of the last three evaluations
-       /​//​///  : the value LISTS of the last three evaluations                  */
+       + ++ +++   : the last three forms evaluated
+       * ** ***   : the primary values of the last three evaluations
+       / // ///   : the value LISTS of the last three evaluations                  */
     Ref vd=S(-);
     Ref vp1=S(+),  vp2=S(++),  vp3=S(+++);
     Ref vs1=S(*),  vs2=S(**),  vs3=S(***);
@@ -423,8 +423,7 @@ static void kernel_DIRECTORY_P(unused Ref function, Ref arguments, MultipleValue
     close_live_pool(pool);}
 
 /* APPEND is needed by backquote-expanded code; the kernel previously only
-   shipped NCONC. */
-extern Ref bocl_append(Ref lists);
+   shipped NCONC.  (bocl_append is declared in cons.h.) */
 extern Ref bocl_write_char(Ref ch, Ref stream);
 
 static void kernel_WRITE_CHAR(unused Ref function, Ref arguments, MultipleValues* results){
@@ -818,7 +817,7 @@ static void kernel_SLEEP(unused Ref function, Ref arguments, MultipleValues* res
     uword pool=open_live_pool(); add_to_live_pool(arguments);
     Ref current=arguments;
     Ref secs_ref=cons_car(current);
-    double s=floatp(secs_ref)?float_value(secs_ref):(double)integer_value(secs_ref);
+    double s=floatp(secs_ref)?float_value(secs_ref):integer_value_as_floating(secs_ref);
     if(s>0.0){
         struct timespec ts;
         ts.tv_sec=(time_t)s;
@@ -1160,7 +1159,6 @@ void bocl_register_load(void){
     }
     /* Slice 23 — timing, write-string, sleep, clear-input. */
     {   Ref ll_e   = list(S(&REST),symbol_intern_cstring("ARGS"),NULL);
-        Ref ll_x   = list(S(X),NULL);
         Ref ll_str = list(symbol_intern_cstring("STRING"),S(&REST),symbol_intern_cstring("OPTS"),NULL);
         Ref ll_s_o = list(S(SECONDS),NULL);
         Ref ll_si  = list(S(STREAM),S(&OPTIONAL),NULL);
@@ -1258,7 +1256,7 @@ void bocl_call(Ref fname,Ref arguments){
         prin1(results.values[i],out);
         terpri(out);}}
 
-void bocl_test(){
+void bocl_test(void){
     prin1(S(PAPA),variable_value(S(*STANDARD-OUTPUT*)));
     terpri(variable_value(S(*STANDARD-OUTPUT*)));
     bocl_call(S(CAR),list(list(S(FOO),NULL),NULL));}

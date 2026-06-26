@@ -48,6 +48,14 @@ Ref integer_from_word(word value);
 Ref integer_from_uword(uword value);
 word integer_value(Ref object);
 
+/* An INTEGER's value as a floating.  Use this instead of casting INTEGER_VALUE's
+   WORD result straight to double: a direct (floating)integer_value(x) is a cast of
+   a function-call result to a non-matching type, which trips -Wbad-function-cast. */
+static inline floating integer_value_as_floating(Ref object){
+    word value = integer_value(object);
+    return (floating)value;
+}
+
 /* BIGNUM — arbitrary-precision integer; (SIGN . DIGITS) i%-format cons, base 10^9. */
 extern Ref BIGNUM_Class;
 bool bignump(Ref object);

@@ -324,6 +324,7 @@ static bool symbol_name_needs_escape(const char* s, uword len, int rcase){
           case '(': case ')': case '"': case '\'': case '`':
           case ',': case ';': case '\\': case '|': case ':':
             return true;
+          default: break;
         }
         if(rcase==0 && c>='a' && c<='z'){ return true; }
         if(rcase==1 && c>='A' && c<='Z'){ return true; }
@@ -1123,7 +1124,7 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
                  ~F  alone — print as-is with default precision. */
               Ref arg = fmt_pop(args_ptr);
               floating v = floatp(arg)  ? float_value(arg)
-                         : integerp(arg)? (floating)integer_value(arg)
+                         : integerp(arg)? integer_value_as_floating(arg)
                          : 0.0;
               if(fmt_has[0] || fmt_has[1]){
                   /* Have explicit parameters */
@@ -1137,7 +1138,12 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
                       snprintf(fmtbuf,sizeof(fmtbuf),"%%%d.%df",width,dec_places);
                   else
                       snprintf(fmtbuf,sizeof(fmtbuf),"%%.%df",dec_places);
+                  /* FMTBUF is built above from integer width/precision only, so it
+                     is a safe — if not literal — printf format. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
                   snprintf(outbuf,sizeof(outbuf),fmtbuf,(double)v);
+#pragma GCC diagnostic pop
                   fputs(outbuf,out);
               } else {
                   /* No explicit parameters: use princ for default output */

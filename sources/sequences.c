@@ -4,6 +4,7 @@
 #include "kernel.h"
 #include "cons.h"
 #include "variable.h"
+#include "sequences.h"
 
 /* Phase 5.2: FUNCALL / APPLY / MAPCAR / MAPC / EVERY / SOME / NOTANY /
    NOTEVERY as kernel built-ins. These all evaluate the function argument

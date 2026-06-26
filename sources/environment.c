@@ -41,7 +41,8 @@ Ref environment_next_environment(Ref environment){
     Environment* env=&(environment->slots->environment);
     return env->next_environment;}
 
-Ref environment_find_frame_environment(Frame* frame,Ref environment){
+static Ref environment_find_frame_environment(Frame* frame,Ref environment){
+    (void)frame;   /* stub: not implemented yet */
     NOT_IMPLEMENTED_YET();
     return environment;}
 
@@ -89,7 +90,8 @@ Ref environment_frames(Ref environment){
               break;
           case frame_restart:
               push(list(S(RESTART),frame_env,frame->parameters.restart.restarts,NULL),&results);
-              break;}
+              break;
+          default: break;}
         frame=frame->next;}
     results=nreverse(results);
     close_live_pool(pool);

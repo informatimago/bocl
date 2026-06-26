@@ -28,7 +28,7 @@ Ref eval_global_environment(void){
    then find lexically-local macros there).  Set around the macro's application;
    it is the live eval `environment`, which is already GC-rooted by the caller. */
 static Ref g_macroexpand_environment = NULL;
-Ref current_macroexpand_environment(void){
+static Ref current_macroexpand_environment(void){
     return g_macroexpand_environment ? g_macroexpand_environment : NIL_Symbol; }
 
 /* non_local_exit_t is declared in kernel.h so conditions.c can use it. */
@@ -605,13 +605,13 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref expansion = env_local_symbol_macro_p(variable)
                         ? env_local_symbol_macro_expansion(variable)
                         : env_global_symbol_macro_expansion(variable);
-                    uword pool=open_live_pool();
+                    uword sm_pool=open_live_pool();
                     add_to_live_pool(expansion);
                     add_to_live_pool(value_form);
-                    Ref form=list(S(SETF),expansion,value_form,NULL);
-                    add_to_live_pool(form);
-                    last_value=evale(form,environment,results);
-                    close_live_pool(pool);}
+                    Ref sm_form=list(S(SETF),expansion,value_form,NULL);
+                    add_to_live_pool(sm_form);
+                    last_value=evale(sm_form,environment,results);
+                    close_live_pool(sm_pool);}
                 else{
                     Ref value=evale(value_form,environment,results);
                     if(!nullp(variable)){
@@ -1098,7 +1098,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         if(operator==S(HANDLER-CASE)){
             eval_counters.UNWIND_PROTECT++;  /* reuse counter; no dedicated one */
             check_arg_count_min(arguments,1);
-            Ref form=car(arguments);
+            Ref protected_form=car(arguments);
             Ref raw_clauses=cdr(arguments);
             /* Normalise each clause: (type (var) body...) → (type-class var body-form). */
             Ref clauses=NIL_Symbol;
@@ -1159,7 +1159,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             int code = setjmp(frame.non_local_exit);
             if(code == 0){
                 push_frame(&frame, environment);
-                evale(form, environment, results);
+                evale(protected_form, environment, results);
                 pop_frame(&frame, environment);
                 /* Normal return: if there is a :no-error clause, run it (handlers
                    now inactive) with its lambda-list bound to the form's values. */
@@ -1323,7 +1323,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
            non-local exits that merely pass THROUGH this frame work correctly. */
         if(operator==S(RESTART-CASE)){
             check_arg_count_min(arguments,1);
-            Ref form         = car(arguments);
+            Ref restartable_form = car(arguments);
             Ref raw_clauses  = cdr(arguments);
             /* Parse each clause: (name lambda-list [keyword form]... body...) */
             COLLECTING(restarts);
@@ -1371,7 +1371,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             int code = setjmp(frame.non_local_exit);
             UNWIND(code){
                 UWBODY{
-                    evale(form, environment, results);}
+                    evale(restartable_form, environment, results);}
                 UWCLEANUP{}}
 
             /* Check code: 0 = form completed normally; 2 = restart invoked. */
