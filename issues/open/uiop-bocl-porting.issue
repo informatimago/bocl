@@ -182,11 +182,27 @@ as CL:LOAD does), three more blockers found + fixed.  All prelude-only.
    names" note — the kernel DOES support (defun (setf foo) ...)).  DOCUMENTATION is now
    backed by *DOCUMENTATION-TABLE* with a real (SETF DOCUMENTATION) writer.
 
-NEXT BLOCKER (form 254, a with-upgradability eval-when):
-  "Unbound slot ASDF/COMPONENT:NAME in object of class SYSTEM" — a CLOS instance is
-  created and its NAME slot read while unbound.  Likely a defclass :initform / initarg
-  or shared-initialize gap in bocl's CLOS (a SYSTEM is built without its NAME being set,
-  or slot defaulting differs).  This begins the CLOS-conformance leg of the ASDF port
-  (expect several defclass/initialize-instance/slot-default gaps before DEFSYSTEM works).
-  No regressions through v1.3.14 (full must-* sweep clean except the two pre-existing
-  1-off fails in must-data-and-control float TRUNCATE and must-reader #+feature).
+CLOS-conformance leg (form 254 — a large with-upgradability spanning ASDF's
+component/operation/system/session/find-system machinery).  Several distinct CLOS /
+type-system gaps, each peeled in turn:
+
+  (a) Slot inheritance did not MERGE same-named slots across superclasses (CLHS 7.5.3).
+      ASDF's SYSTEM gets NAME from COMPONENT (:initarg :name) and again, bare, from
+      PROTO-SYSTEM; %COMPUTE-ESLOTS took only the first CPL definition and dropped the
+      other's :initarg, so (make-instance 'system :name ...) left NAME unbound.  FIXED:
+      %COMPUTE-ESLOTS now unions :initargs / :readers / :writers and takes the most-
+      specific :initform / :allocation.  ("Unbound slot NAME in object of class SYSTEM".)
+
+  (b) SUBTYPEP did not work on CLOS class OBJECTS (only class-name symbols), so UIOP
+      COERCE-CLASS's (subtypep <define-op-class> <operation-class>) was NIL and
+      MAKE-OPERATION failed.  FIXED: SUBTYPEP now coerces both args via %AS-CLOS-CLASS
+      and walks the CPL; every CLOS class is a subtype of STANDARD-OBJECT/CLASS/etc.
+
+  (c) TYPEP of a class object against STANDARD-CLASS / CLASS / STANDARD-OBJECT was NIL,
+      breaking COERCE-CLASS's ETYPECASE over class objects.  FIXED in the active TYPEP.
+
+NEXT BLOCKER (still inside form 254): SIMPLE-TYPE-ERROR "expected HASH-TABLE, got CONS"
+  — ASDF's session / find-system creates or accesses a hash-table-typed slot that holds
+  a CONS (likely an :initform / with-asdf-session / registry gap).  Under investigation.
+  No regressions through these fixes (must-condition 142/147 w/ the 5 driver artifacts,
+  must-array 330/0, must-loop 852/0, must-cons 728/0, must-sequence 3851/0, ...).

@@ -4271,6 +4271,14 @@ SETQ/INCF/DECF is left in place (sequential)."
     ;; Compound type specifier — delegate to kernel
     (t (funcall *%kernel-typep* object type))))
 
+;;; X coerced to a CLOS class object: X itself if it is one, the class named X if
+;;; X is a symbol naming a DEFCLASS'd class, else NIL.  Used by the CLOS-aware
+;;; SUBTYPEP / coerce-class logic (the active SUBTYPEP is defined in Slice 30).
+(defun %as-clos-class (x)
+  (cond ((%is-cls x) x)
+        ((symbolp x) (let ((c (gethash x *%classes*))) (and (%is-cls c) c)))
+        (t nil)))
+
 ;;; ---- 9. SLOT-VALUE and friends ------------------------------------------
 
 (defun %find-eslot (cls slot-name)
@@ -4381,27 +4389,52 @@ SETQ/INCF/DECF is left in place (sequential)."
 (defun %compute-eslots (cls)
   "Compute the effective slot definitions for CLS from its CPL.
   Each effective slot is a plist:
-    (:name :location :initargs :initform :initfunction :allocation :readers :writers)"
-  (let ((result nil)
-        (seen (make-hash-table))
-        (loc 0))
+    (:name :location :initargs :initform :initfunction :allocation :readers :writers)
+  Per CLHS 7.5.3, a slot defined by several classes in the CPL is MERGED into one
+  effective slot: the union of :INITARGS (and :READERS / :WRITERS), and the
+  most-specific (first in CPL) :INITFORM / :INITFUNCTION / :ALLOCATION.  (Taking
+  only the first class's definition silently drops the others' :INITARGs — e.g. a
+  slot given :INITARG by one superclass and re-declared bare by another would lose
+  the initarg, leaving the slot unbindable via MAKE-INSTANCE.)"
+  (let ((order nil)                       ; slot names, first (most-specific) first
+        (groups (make-hash-table)))       ; name -> list of direct slot plists
     (dolist (c (%cls-cpl cls))
       (dolist (dslot (%cls-dslots c))
         (let ((name (getf dslot :name)))
-          (unless (gethash name seen)
-            (sethash name seen t)
-            (let* ((alloc (or (getf dslot :allocation) :instance))
-                   (eslot (list :name name
-                                :location loc
-                                :initargs  (getf dslot :initargs)
-                                :initform  (getf dslot :initform)
-                                :initfunction (getf dslot :initfunction)
-                                :allocation alloc
-                                :readers (getf dslot :readers)
-                                :writers (getf dslot :writers))))
-              (when (eq alloc :instance) (incf loc))
-              (push eslot result))))))
-    (nreverse result)))
+          (multiple-value-bind (existing present) (gethash name groups)
+            (declare (ignore existing))
+            (unless present (push name order)))
+          (sethash name groups (cons dslot (gethash name groups))))))
+    (flet ((dedup (list test)            ; keep first occurrence, preserve order
+             (let ((acc nil))
+               (dolist (x list (nreverse acc))
+                 (unless (member x acc :test test) (push x acc))))))
+      (let ((result nil) (loc 0))
+        (dolist (name (nreverse order))
+          ;; GROUPS[name] was consed in CPL order, so its head is the LEAST specific;
+          ;; reverse to visit most-specific first.
+          (let ((initargs nil) (readers nil) (writers nil)
+                (initform nil) (initfunction nil) (allocation nil))
+            (dolist (d (reverse (gethash name groups)))
+              (setq initargs (append initargs (getf d :initargs)))
+              (setq readers  (append readers  (getf d :readers)))
+              (setq writers  (append writers  (getf d :writers)))
+              (when (and (null initfunction) (getf d :initfunction))
+                (setq initform     (getf d :initform)
+                      initfunction (getf d :initfunction)))
+              (when (null allocation) (setq allocation (getf d :allocation))))
+            (unless allocation (setq allocation :instance))
+            (push (list :name name
+                        :location loc
+                        :initargs (dedup initargs #'eq)
+                        :initform initform
+                        :initfunction initfunction
+                        :allocation allocation
+                        :readers (dedup readers #'eq)
+                        :writers (dedup writers #'equal))
+                  result)
+            (when (eq allocation :instance) (incf loc))))
+        (nreverse result)))))
 
 ;;; ---- 12. Slot spec parsing -----------------------------------------------
 
@@ -7572,14 +7605,18 @@ change the count, but PREDICATE is called in that order (it may have effects)."
     ((and (eql type1 'cons)      (eql type2 'list))      (values t t))
     ((and (eql type1 'null)      (eql type2 'list))      (values t t))
     ((and (eql type1 'null)      (eql type2 'symbol))    (values t t))
-    ;; CLOS class subtyping: TYPE2 is a superclass of TYPE1 when its %cls is in
-    ;; TYPE1's class precedence list (covers conditions defined via DEFCLASS /
-    ;; DEFINE-CONDITION inheriting the standard condition classes).
-    ((and (symbolp type1)
-          (let ((c1 (gethash type1 *%classes*)) (c2 (gethash type2 *%classes*)))
-            (and (%is-cls c1) (%is-cls c2)
-                 (not (null (member c2 (%cls-cpl c1)))))))
-     (values t t))
+    ;; CLOS class subtyping: works for class OBJECTS and class-name symbols.
+    ;; TYPE2 is a supertype of TYPE1 when its %cls is in TYPE1's class precedence
+    ;; list (covers conditions defined via DEFCLASS / DEFINE-CONDITION, and UIOP
+    ;; COERCE-CLASS, which calls (subtypep <class-object> <class-object>)).
+    ((%as-clos-class type1)
+     (let ((c1 (%as-clos-class type1))
+           (c2 (%as-clos-class type2)))
+       (cond (c2 (values (not (null (member c2 (%cls-cpl c1)))) t))
+             ;; Every CLOS class is a subtype of these metaclass / root types.
+             ((member type2 '(standard-object t class standard-class)) (values t t))
+             ((null type2) (values nil t))
+             (t (values nil nil)))))
     (t (values nil nil))))
 
 ;;;; =========================================================================
@@ -7595,6 +7632,12 @@ change the count, but PREDICATE is called in that order (it may have effects)."
   (cond
     ((eq type t) t)
     ((eq type nil) nil)
+    ;; A CLOS class object (from DEFCLASS / FIND-CLASS) is itself an instance of
+    ;; STANDARD-CLASS / CLASS / STANDARD-OBJECT / METAOBJECT (the metaclass
+    ;; hierarchy) — needed by UIOP COERCE-CLASS's ETYPECASE over class objects.
+    ((and (%is-cls object)
+          (member type '(standard-class class standard-object metaobject specializer)))
+     t)
     ;; FIXNUM / BIGNUM — both are kernel INTEGERs; a bignum is the boxed kind.
     ;; Guarded on %bignump so this is correct even when bignum support is absent
     ;; (then every integer is a fixnum and there are no bignums).
