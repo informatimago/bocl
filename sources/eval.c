@@ -9,9 +9,6 @@
 #include "bocl.h"
 #include "packages.h"
 
-/* Forward decls for the apply helpers implemented later in this file. */
-void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
-void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results);
 
 /* The single lazily-allocated global lexical environment. Held by the GC rootset
    so it survives across bocl_eval calls. */

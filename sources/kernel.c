@@ -1461,8 +1461,7 @@ static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
        symbol's home package accordingly.  During very early bootstrap (before
        kernel_initialize_packages) the packages are NULL; those symbols get their
        home package fixed up at the end of kernel_initialize_packages. */
-    {   extern Ref COMMON_LISP_Package, KEYWORD_Package;
-        if(obarray==KERNEL_obarray && COMMON_LISP_Package){
+    {   if(obarray==KERNEL_obarray && COMMON_LISP_Package){
             symbol->slots->symbol.package=COMMON_LISP_Package; }
         else if(obarray==KEYWORD_obarray && KEYWORD_Package){
             symbol->slots->symbol.package=KEYWORD_Package; }}
@@ -2634,7 +2633,6 @@ Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
 
 static Ref rootset;
 static Ref kernel_initialize_rootset(void){
-    extern Ref all_packages;   /* the package registry (sentinel header, packages.c) */
     rootset=NIL_Symbol;
     push(UNBOUND_Object,&rootset);
     push(KERNEL_obarray,&rootset);
@@ -2767,7 +2765,6 @@ static void kernel_initialize_features(void){
    check, no allocation otherwise), to keep ordinary crashes unperturbed.  The
    Lisp runner wraps each hook in IGNORE-ERRORS. */
 static void bocl_run_abort_hooks(int sig){
-    extern Ref BOCL_Package;
     if(BOCL_Package==NULL || !typep(BOCL_Package,PACKAGE_Class)){ return; }
     Ref present=BOCL_Package->slots->package.present;
     Ref hooks_sym=find_symbol(string_new_cstring("*ABORT-HOOK*"),present);
@@ -2810,7 +2807,6 @@ static void bocl_crash_handler(int sig, siginfo_t* info, void* ucontext){
    unchanged when no hook is set.  The Lisp runner wraps each hook in
    IGNORE-ERRORS. */
 static void bocl_run_nullary_hooks(const char* hook_var, const char* runner){
-    extern Ref BOCL_Package;
     if(BOCL_Package==NULL || !typep(BOCL_Package,PACKAGE_Class)){ return; }
     Ref present=BOCL_Package->slots->package.present;
     Ref hooks_sym=find_symbol(string_new_cstring(hook_var),present);

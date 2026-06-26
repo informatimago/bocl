@@ -12,6 +12,10 @@
 #include "character.h"
 #include "stream.h"
 
+/* Used by the #. read-eval dispatch below; defined in bocl.c (declared at file
+   scope rather than as a nested extern). */
+extern Ref bocl_eval(Ref);
+
 /* The recursive_p parameters are unused, since we don't deal with #=/## references */
 
 
@@ -1065,7 +1069,6 @@ static Ref parse_object(parser_state* parser){
                 if(!esc){ octet_upcase(parser->token); }
                 return symbol_new(string_new_cstring((const char*)parser->token)); }
             case '.': {  /* #.form => evaluate FORM at read time (read-eval) */
-                extern Ref bocl_eval(Ref);
                 advance_character(parser);   /* skip '.' */
                 skip_spaces(parser);
                 Ref form=parse_object(parser);

@@ -33,7 +33,7 @@ static const char* fopen_mode_for(direction_t dir,
                || if_exists==K(NEW-VERSION)
                || if_exists==K(RENAME)
                || if_exists==K(RENAME-AND-DELETE)){ return base; }
-            if(if_exists==K(OVERWRITE))       { return (dir==direction_io)?"r+":"r+"; }
+            if(if_exists==K(OVERWRITE))       { return "r+"; }   /* read/write, no truncate */
             if(if_exists==K(APPEND))          { return (dir==direction_io)?"a+":"a"; }
             if(if_exists==K(ERROR)){
                 ERROR("File exists (and if-exists is %s)",

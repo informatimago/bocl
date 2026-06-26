@@ -2,8 +2,11 @@
 #define structure_h
 #include "kernel.h"
 
-/* Note: those declarations are redundent with those generated in
-kernel_functions.h, but we have docstring comments here. ;-) */
+/* Note: those declarations are redundant with those generated in
+kernel_functions.h, but we keep them here for the docstring comments. ;-)
+The redundancy is deliberate, so silence -Wredundant-decls for this block. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wredundant-decls"
 
 Ref make_structure_class(Ref name,Ref direct_superclass,Ref offset,Ref slots);
 /*
@@ -58,6 +61,7 @@ sets the slot value of the indexed slot,
 return the new-value.
 May signal an out-of-bound error.
 */
+#pragma GCC diagnostic pop
 
 
 void structure_initialize(void);

@@ -655,8 +655,7 @@ void kernel_initialize_packages(void){
        the prelude, by EXPORTing the standard CL symbols.)  Every keyword lives
        in KEYWORD_obarray and is external, so KEYWORD's present and external
        tables both ARE that obarray. */
-    {   extern Ref KERNEL_obarray; extern Ref KEYWORD_obarray;
-        COMMON_LISP_Package->slots->package.present = KERNEL_obarray;
+    {   COMMON_LISP_Package->slots->package.present = KERNEL_obarray;
         gc_write_barrier(COMMON_LISP_Package->slots);
         KEYWORD_Package->slots->package.present  = KEYWORD_obarray;
         KEYWORD_Package->slots->package.external = KEYWORD_obarray;
@@ -711,8 +710,7 @@ void kernel_initialize_packages(void){
        system existed: those created during early bootstrap got KERNEL_obarray /
        KEYWORD_obarray as a placeholder home.  (Symbols interned after this point
        get the right home package from symbol_intern_obarray directly.) */
-    {   extern Ref KERNEL_obarray, KEYWORD_obarray;
-        Ref it=cons_cdr(KERNEL_obarray);
+    {   Ref it=cons_cdr(KERNEL_obarray);
         while(consp(it)){ Ref s=cons_car(it); s->slots->symbol.package=COMMON_LISP_Package;
             gc_write_barrier(s->slots); it=cons_cdr(it); }
         it=cons_cdr(KEYWORD_obarray);

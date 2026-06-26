@@ -22,6 +22,13 @@
 #include "eval.h"
 #include "version.h"
 
+/* Globals defined elsewhere, declared at file scope (rather than as nested
+   externs inside the functions that use them). */
+extern int    bocl_main_argc;     /* set from main()'s argc/argv; read by bocl.c */
+extern char** bocl_main_argv;
+extern bool   bocl_load_recover;  /* recover-and-continue load mode (bocl.c)      */
+extern Ref    COMMON_LISP_Package, COMMON_LISP_USER_Package;   /* packages.c       */
+
 static const char* source="http://gitlab.com/bocl/bocl/";
 static const char* bocl_lisp="(defun repl () (catch 'quit (do () () (print (eval (read))))))";
 static char* initfile=NULL;
@@ -463,8 +470,7 @@ int main(int argc,char** argv){
     pname=argv[0];
     program_path=argv[0];
     /* Capture argv for BOCL's %COMMAND-LINE-ARGUMENTS (UIOP raw-command-line-args). */
-    {   extern int bocl_main_argc; extern char** bocl_main_argv;
-        bocl_main_argc=argc; bocl_main_argv=argv; }
+    {   bocl_main_argc=argc; bocl_main_argv=argv; }
     int status=0;
     /* Capture a high address near the base of the C stack for the eval
        stack-overflow guard (main's frame is close to the stack's start). */
@@ -510,7 +516,6 @@ int main(int argc,char** argv){
            bound to COMMON-LISP: every symbol it interns then lands in CL (where
            the reader's bare symbols already go), instead of in CL-USER.  After
            the bootstrap, user code defaults to COMMON-LISP-USER per the standard. */
-        extern Ref COMMON_LISP_Package, COMMON_LISP_USER_Package;
         set_symbol_value(S(*PACKAGE*), COMMON_LISP_Package);
         char* prelude=find_prelude();
         if(prelude){
@@ -551,8 +556,7 @@ int main(int argc,char** argv){
        recovery so user files (rc / init / -l, and everything they LOAD) skip
        individual bad forms instead of aborting — this lets large suites such as
        the ANSI tests load as much as possible and still reach their report. */
-    {   extern bool bocl_load_recover;
-        if(on_error==on_error_appease){ bocl_load_recover=true; }}
+    {   if(on_error==on_error_appease){ bocl_load_recover=true; }}
 
     /* Publish the --on-error action to Lisp as BOCL:*ON-ERROR* so the REPL's
        %REPL-EVAL wrapper can decide whether an unhandled error enters the

@@ -471,40 +471,35 @@ void kernel_MAX(Ref function,Ref arguments,MultipleValues* results){
  *  Single-arg form treats divisor as 1.                                 *
  * -------------------------------------------------------------------- */
 
-/* Result of integer trunc/floor/ceil/round with two integer args. */
-typedef struct { word q; word r; } intdiv_t;
+/* Integer trunc/floor/ceil/round with two integer args.  The quotient and
+   remainder are returned through *Q and *R (output parameters rather than a
+   by-value struct). */
+static void int_truncate(word num, word den, word* q, word* r){
+    *q = num/den;                /* C99 truncates toward zero */
+    *r = num - *q*den;}
 
-static intdiv_t int_truncate(word num, word den){
-    intdiv_t out;
-    out.q = num/den;             /* C99 truncates toward zero */
-    out.r = num - out.q*den;
-    return out;}
+static void int_floor(word num, word den, word* q, word* r){
+    int_truncate(num,den,q,r);
+    if(*r!=0 && ((*r<0)!=(den<0))){
+        *q -= 1;
+        *r += den;}}
 
-static intdiv_t int_floor(word num, word den){
-    intdiv_t out = int_truncate(num,den);
-    if(out.r!=0 && ((out.r<0)!=(den<0))){
-        out.q -= 1;
-        out.r += den;}
-    return out;}
+static void int_ceiling(word num, word den, word* q, word* r){
+    int_truncate(num,den,q,r);
+    if(*r!=0 && ((*r<0)==(den<0))){
+        *q += 1;
+        *r -= den;}}
 
-static intdiv_t int_ceiling(word num, word den){
-    intdiv_t out = int_truncate(num,den);
-    if(out.r!=0 && ((out.r<0)==(den<0))){
-        out.q += 1;
-        out.r -= den;}
-    return out;}
-
-static intdiv_t int_round(word num, word den){
+static void int_round(word num, word den, word* q, word* r){
     /* Banker's rounding: ties to even. */
-    intdiv_t out = int_truncate(num,den);
-    word twice_r = out.r * 2;
+    int_truncate(num,den,q,r);
+    word twice_r = *r * 2;
     word abs_den = den<0?-den:den;
     word abs_twice_r = twice_r<0?-twice_r:twice_r;
     if(abs_twice_r > abs_den
-       || (abs_twice_r == abs_den && (out.q & 1))){
-        if((out.r<0)==(den<0)){ out.q += 1; out.r -= den; }
-        else                  { out.q -= 1; out.r += den; }}
-    return out;}
+       || (abs_twice_r == abs_den && (*q & 1))){
+        if((*r<0)==(den<0)){ *q += 1; *r -= den; }
+        else               { *q -= 1; *r += den; }}}
 
 #define DIVOP_KERNEL(cname,intop,floatop,modechar)                            \
     void cname(Ref function,Ref arguments,MultipleValues* results){            \
@@ -534,10 +529,10 @@ static intdiv_t int_round(word num, word den){
             if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }             \
             if(n==WORD_MIN && d==-1){                                          \
                 ARITHMETIC_ERROR("Integer overflow in division by -1%s",""); } \
-            intdiv_t r=intop(n,d);                                             \
+            word rq,rr; intop(n,d,&rq,&rr);                                    \
             results->count=2;                                                  \
-            results->values[0]=integer_from_word(r.q);                         \
-            results->values[1]=integer_from_word(r.r); }                       \
+            results->values[0]=integer_from_word(rq);                          \
+            results->values[1]=integer_from_word(rr); }                        \
         close_live_pool(pool);}
 
 DIVOP_KERNEL(kernel_TRUNCATE, int_truncate, trunc, 't')
@@ -566,8 +561,8 @@ void kernel_MOD(Ref function,Ref arguments,MultipleValues* results){
     } else {
         word n=integer_value(num), d=integer_value(den);
         if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
-        intdiv_t r=int_floor(n,d);
-        results->values[0]=integer_from_word(r.r);}
+        word rq,rr; int_floor(n,d,&rq,&rr); (void)rq;
+        results->values[0]=integer_from_word(rr);}
     close_live_pool(pool);}
 
 void kernel_REM(Ref function,Ref arguments,MultipleValues* results){
@@ -591,8 +586,8 @@ void kernel_REM(Ref function,Ref arguments,MultipleValues* results){
     } else {
         word n=integer_value(num), d=integer_value(den);
         if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
-        intdiv_t r=int_truncate(n,d);
-        results->values[0]=integer_from_word(r.r);}
+        word rq,rr; int_truncate(n,d,&rq,&rr); (void)rq;
+        results->values[0]=integer_from_word(rr);}
     close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *

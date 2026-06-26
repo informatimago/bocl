@@ -8,13 +8,8 @@
 #include "reader.h"
 #include "printer.h"
 
-/* Forward declarations for Slice 23 helpers (defined in bostring.c / bit_vector.c / vector.c). */
-extern Ref char_ref(Ref string, Ref index);
-extern Ref char_set(Ref string, Ref index, Ref new_char);
-extern Ref bit(Ref vector, Ref index);
-extern Ref bit_set(Ref vector, Ref index, Ref new_bit);
-extern Ref svref(Ref vector, Ref index);
-extern Ref svref_set(Ref vector, Ref index, Ref new_object);
+/* char_ref/char_set/bit/bit_set/svref/svref_set (defined in bostring.c /
+   bit_vector.c / vector.c) are declared in the generated kernel_functions.h. */
 
 void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results){
     uword pool=open_live_pool();

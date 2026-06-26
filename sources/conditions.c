@@ -349,7 +349,7 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     Ref current = arguments;
     Ref designator = pop_mandatory_argument(function, &current);
     Ref restart_args = current; /* remaining args passed to restart body */
-    Ref name = symbolp(designator) ? designator : designator;
+    Ref name = designator;   /* only a symbol restart designator is supported */
     if(!symbolp(name)){
         ERROR("INVOKE-RESTART: expected a symbol, got %s",
               string_cstring(prin1_to_string(designator)));}

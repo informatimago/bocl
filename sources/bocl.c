@@ -52,7 +52,6 @@ Ref bocl_read_eval_cstring(const char* text){
    designator, call (funcall *prompt-function* out) to produce the prompt; else
    write the default implementation-defined prompt. */
 static void bocl_emit_prompt(Ref out){
-    extern Ref BOCL_Package;
     if(BOCL_Package!=NULL && typep(BOCL_Package,PACKAGE_Class)){
         Ref present=BOCL_Package->slots->package.present;
         Ref sym=find_symbol(string_new_cstring("*PROMPT-FUNCTION*"),present);
@@ -243,7 +242,6 @@ Ref bocl_load_cstring(const char* path){
    (a) the COMMON-LISP external table is populated, and
    (b) S(DEFMACRO) etc. in eval.c match the symbols the reader interns. */
 Ref bocl_load_prelude(const char* prelude_path){
-    extern Ref COMMON_LISP_Package, COMMON_LISP_USER_Package;
     /* Set *PACKAGE* = COMMON-LISP for the duration of the bootstrap so the
        reader interns bare symbols into the CL package, matching eval.c's
        S(...) caches.  Restore to CL-USER afterwards (as main.c does). */
@@ -423,8 +421,7 @@ static void kernel_DIRECTORY_P(unused Ref function, Ref arguments, MultipleValue
     close_live_pool(pool);}
 
 /* APPEND is needed by backquote-expanded code; the kernel previously only
-   shipped NCONC.  (bocl_append is declared in cons.h.) */
-extern Ref bocl_write_char(Ref ch, Ref stream);
+   shipped NCONC.  (bocl_append is declared in cons.h, bocl_write_char in printer.h.) */
 
 static void kernel_WRITE_CHAR(unused Ref function, Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();

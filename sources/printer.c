@@ -1097,7 +1097,8 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               if(has_pfx){
                   /* ~nR — print in radix n. */
                   int radix=(int)prefix;
-                  if(radix<2) radix=2; if(radix>36) radix=36;
+                  if(radix<2)  radix=2;
+                  if(radix>36) radix=36;
                   if(integerp(arg)) fmt_write_integer(out,integer_value(arg),radix,atsignp);
                   else              princ(arg,stream);
               } else if(integerp(arg)){
