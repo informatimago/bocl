@@ -201,8 +201,60 @@ type-system gaps, each peeled in turn:
   (c) TYPEP of a class object against STANDARD-CLASS / CLASS / STANDARD-OBJECT was NIL,
       breaking COERCE-CLASS's ETYPECASE over class objects.  FIXED in the active TYPEP.
 
-NEXT BLOCKER (still inside form 254): SIMPLE-TYPE-ERROR "expected HASH-TABLE, got CONS"
-  — ASDF's session / find-system creates or accesses a hash-table-typed slot that holds
-  a CONS (likely an :initform / with-asdf-session / registry gap).  Under investigation.
-  No regressions through these fixes (must-condition 142/147 w/ the 5 driver artifacts,
-  must-array 330/0, must-loop 852/0, must-cons 728/0, must-sequence 3851/0, ...).
+  (d) Computed slot :INITFORMs were not evaluated (v1.3.16).  DEFCLASS captured the
+      initform as a literal, so :INITFORM (MAKE-HASH-TABLE) stored the CONS, not a hash
+      table ("expected HASH-TABLE, got CONS" on ASDF's SESSION class).  DEFCLASS now
+      injects a real (lambda () <initform>) closure, evaluated per instance.  General
+      CLOS correctness fix; was the next form-254 layer.
+
+NEXT BLOCKER (still inside form 254, after v1.3.16): kernel OUT-OF-BOUNDS — "index 0 is
+  out of bound to index (max 0)" = an aref/char/svref/elt/structure access at index 0 of
+  a ZERO-LENGTH vector/string/structure, during load of an ASDF core form (the large
+  with-upgradability spanning component/operation/system/session/find-system).  Not yet
+  localised: the form-254 reload is ~4 min and was further throttled (~8 min) by CPU
+  contention from other parallel jobs (sbcl/ccl at 99%); the sub-form bisection probe
+  hung (a sub-form loops when evaluated standalone outside its eval-when).  A backtrace
+  facility that names frames would make this much faster — see write-tickets note.
+  Next step: instrument the kernel OUT_OF_BOUNDS macro (boerror.h:19) to log the C
+  __FUNCTION__ + a one-shot marker, or wrap elt/aref/char at the Lisp level for one
+  diagnostic load, to identify the accessor and the ASDF call site.
+
+  No regressions through v1.3.16 (must-condition 142/147 w/ the 5 signal-handler driver
+  artifacts, must-array 330/0, -character 313/0, -cons 728/0, -do 75/0, -hash-table 96/0,
+  -loop 852/0, -sequence 3851/0).
+
+  (e) CLOS :ALLOCATION :CLASS slots were unsupported (v1.3.17).  bocl stored every slot
+      in the instance vector by :location; a :class slot got a location but no cell, so
+      reading one did (svref #() 0) -> "In svref: OUT-OF-BOUNDS index 0 (max 0)".  ASDF
+      mandates :allocation :class for ALL operation slots, so this was the last form-254
+      blocker.  FIXED: a :class slot's shared value lives in a per-class box (:cell);
+      slot access routes through %ESLOT-REF / %ESLOT-SET.
+
+======================================================================
+MILESTONE (v1.3.17): ASDF 3.3.7 LOADS AND IS FUNCTIONAL ON bocl.
+======================================================================
+  (load "modules/asdf/asdf.lisp") completes all ~257 top-level forms with no error.
+  (find-package "ASDF") -> #<PACKAGE "ASDF/INTERFACE">  (ASDF is a nickname)
+  (asdf:asdf-version) -> "3.3.7"
+  (asdf:make-operation 'asdf:load-op) -> #<ASDF/LISP-ACTION:LOAD-OP ...>
+    (exercises COERCE-CLASS, the :class operation slots, and the whole CLOS chain.)
+
+STATUS SUMMARY (v1.3.13 -> v1.3.17): the ASDF bundle load went from form 39 to a FULL
+load, by fixing a string of *general* bocl conformance bugs, each committed/pushed
+independently and valuable beyond ASDF:
+  - DO-SYMBOLS O(n^2) -> O(n)                                  (v1.3.13)
+  - destructuring MACRO lambda-lists (CLHS 3.4.4)             (v1.3.13)
+  - Tier-1 #+bocl UIOP port (getenv/getcwd/chdir/quit/argv)   (v1.3.13)
+  - structured pathnames (PATHNAME-DIRECTORY etc.)            (v1.3.14)
+  - DEFGENERIC/DEFMETHOD (setf name) + (setf documentation)   (v1.3.14)
+  - CLHS-7.5.3 slot merging across the CPL                    (v1.3.15)
+  - CLOS-aware SUBTYPEP / TYPEP over class objects            (v1.3.15)
+  - computed DEFCLASS :initforms (per-instance closure)       (v1.3.16)
+  - CLOS :allocation :class slots                             (v1.3.17)
+
+REMAINING toward USING ASDF (next leg, separate): DEFSYSTEM + OPERATE on a real system
+— exercises find-system / the .asd source-registry, INPUT-FILES / OUTPUT-FILES pathname
+merging, COMPILE-FILE* condition capture (Tier-2, run-program for some ops), and the
+plan/perform machinery.  Expect more pathname (truename/ensure-directories-exist) and
+compile-path gaps.  A trivial in-memory system + (asdf:operate 'load-op ...) is the next
+test to drive.
