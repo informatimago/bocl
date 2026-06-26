@@ -83,3 +83,21 @@ REMAINING (kept open — larger refactor):
   (kernel ERROR), whose invoke_debugger is a stub.  Routing pre-REPL form evaluation
   through the same *ON-ERROR* / %REPL-EVAL mechanism as the REPL would make debug/
   abort/appease/exit uniform across processing and the REPL.
+
+
+There is an inconsistency in the specifications between -i and -l and
+--on-error ordered semantics.
+
+So to clarify, if there's an --on-error before the first
+-norc|--no-init or -i|--init, then it will apply on loading the RC
+file and all the init files, otherwise the default --on-error exit
+applies.  The init files are collected first, and the RC file (if
+-norc|--no-init is not given) and the init files are loaded.
+
+Note these files may change the setting of BOCL:*ON-ERROR* and this
+applies immediately, and for the following init files and -l|-x
+arguments, unless a new --on-error is given for the -l|-x arguments.
+
+So basically, the `--on-error …` arguments after the first -i|--init
+are equivalent to `-x '(setf bocl:*on-error* …)'` and are processed in
+order with -x and -l options.
