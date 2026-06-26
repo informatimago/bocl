@@ -106,3 +106,34 @@ BLOCKED — adding ASDF itself:
 - Open question (separate from this plumbing): whether ASDF runs unmodified on bocl's
   current CL surface — documentation.org §24 notes "It cannot run ASDF" today, so some
   CL-surface work may be needed before ASDF actually loads.
+
+----------------------------------------------------------------------
+CLOSED (v1.4.x — ASDF 3.3.7 packaged, loadable via REQUIRE)
+----------------------------------------------------------------------
+All deliverables of this issue are done:
+
+- ASDF is a git submodule (modules/asdf-src, branch release, ASDF 3.3.7).
+- modules/Makefile builds the single-file release (cat of the UIOP+ASDF sources)
+  and stages modules/asdf/ (asdf.lisp + module.manifest); a bocl UIOP port
+  (modules/asdf-bocl-port.patch) is applied to the sources during the build.
+- make install installs modules/asdf/ into $PREFIX/libexec/bocl/modules/asdf/.
+- The module system (BOCL:*MODULE-LIST*, %SCAN-MODULES over <libexec>/bocl/
+  modules/<dir>/module.manifest, BOCL::MODULE-NAME/MODULE-FILES, the
+  INVALID-MODULE-PLIST / UNDEFINED-MODULE-ERROR conditions) and the enhanced
+  REQUIRE (string designator; module-name lookup; PROVIDE/*MODULES* tracking)
+  are implemented in bootstrap/prelude.lisp.
+- ASDF 3.3.7 now fully LOADS and RUNS on bocl — this took a chain of general
+  CL/CLOS conformance fixes (see uiop-bocl-porting.issue): O(1) DO-SYMBOLS,
+  destructuring macro lambda-lists, structured pathnames, DEFGENERIC/DEFMETHOD
+  (setf name), (setf documentation), CLHS-7.5.3 slot merging, CLOS-aware
+  SUBTYPEP/TYPEP over class objects, computed DEFCLASS :initforms, and
+  :allocation :class slots — resolving the "Open question: whether ASDF runs
+  unmodified on bocl" (it runs, via the #+bocl UIOP port).
+
+Verified end to end: %SCAN-MODULES discovers the asdf manifest and builds the
+(:NAME "asdf" :FILES (".../asdf.lisp")) plist; (require :asdf) then loads it,
+(asdf:asdf-version) => "3.3.7", *MODULES* gains "ASDF", and a second
+(require "ASDF") is a no-op.
+
+REMAINING ASDF work (tracked separately, NOT part of this packaging issue):
+using ASDF to DEFSYSTEM + OPERATE on real systems — see uiop-bocl-porting.issue.
