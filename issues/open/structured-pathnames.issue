@@ -1,0 +1,51 @@
+Implement structured pathnames: PATHNAME-DIRECTORY (and friends) must return the
+parsed CL structure, not the raw namestring.  Gating work for loading/using ASDF.
+
+STATUS: open (subsystem).  Discovered porting UIOP/ASDF (see uiop-bocl-porting.issue):
+ASDF cannot even LOAD without this — at load time it computes default config/cache
+pathnames and calls UIOP ENSURE-PATHNAME ... :WANT-RELATIVE T, which tests
+(eq :relative (car (pathname-directory p))).
+
+== The gap ==
+bocl pathnames are currently string-backed.  The component accessors return the whole
+namestring instead of the parsed pieces:
+  (pathname-directory ".cache/")   => ".cache/"      ; want (:RELATIVE ".cache")
+  (pathname-directory "/a/b/")     => "/a/b/"         ; want (:ABSOLUTE "a" "b")
+  (pathname-directory "x.txt")     => ""              ; want NIL
+  (pathname-name "x.txt") / (pathname-type "x.txt")   ; want "x" / "txt"
+So any code that pattern-matches on the directory list (UIOP, ASDF, lots of portable
+CL) breaks.  Doc S19 already flags pathnames as partial.
+
+== What CL requires (CLHS 19.2, 19.3) ==
+A pathname has six components: host, device, directory, name, type, version.
+- DIRECTORY is a list: (:ABSOLUTE . components) or (:RELATIVE . components), where each
+  component is a string, :WILD, :WILD-INFERIORS, :UP, :BACK, or :HOME; or NIL / :UNSPECIFIC.
+- NAME / TYPE are strings (or :WILD / NIL), split on the LAST dot of the final segment
+  (a leading-dot file like ".cache" has name ".cache", type NIL; "a.b.c" -> name "a.b",
+  type "c").
+- Accessors: PATHNAME-HOST/-DEVICE/-DIRECTORY/-NAME/-TYPE/-VERSION; MAKE-PATHNAME (with
+  the component keywords + :DEFAULTS); PATHNAME / PARSE-NAMESTRING / NAMESTRING /
+  FILE-NAMESTRING / DIRECTORY-NAMESTRING / ENOUGH-NAMESTRING.
+- MERGE-PATHNAMES and the *DEFAULT-PATHNAME-DEFAULTS* semantics (fill unsupplied
+  components; relative-vs-absolute directory merge per CLHS 19.2.3).
+- WILD-PATHNAME-P, PATHNAME-MATCH-P, TRANSLATE-PATHNAME (at least enough for UIOP).
+- #P reader + PRINT-OBJECT round-trip via the namestring.
+
+== Suggested approach ==
+- Give the kernel Pathname object real slots (host/device/directory/name/type/version)
+  or keep the namestring but PARSE on construction and cache the parsed structure.
+- A POSIX namestring parser: split on "/", leading "/" => :ABSOLUTE else :RELATIVE,
+  "." => drop, ".." => :UP, trailing "/" => no name/type, else last segment splits into
+  name/type on the last interior dot.  (Logical pathnames out of scope for now.)
+- Re-implement PATHNAME-DIRECTORY etc. to read the parsed structure; rebuild the
+  namestring from components for NAMESTRING / printing.
+- MERGE-PATHNAMES per spec; wire *DEFAULT-PATHNAME-DEFAULTS*.
+- Keep TRUENAME / PROBE-FILE / DIRECTORY working on the new representation.
+- Re-run must-* (esp. any pathname tests) + the SACLA suites; then re-walk the ASDF
+  load (uiop-bocl-porting.issue) — this unblocks form ~114 (uiop/configuration.lisp).
+
+== Why now ==
+It is the single blocker preventing ASDF from loading after the LOOP / destructuring /
+DO-SYMBOLS / Tier-1 fixes (v1.3.13).  ASDF's entire component/system model is pathname-
+centric, so OPERATE will need MERGE-PATHNAMES, wild DIRECTORY, name/type splitting, and
+ENOUGH-NAMESTRING to behave per spec.

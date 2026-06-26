@@ -1827,14 +1827,19 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
             continue;}
         if(symbolp(param) && (param==S(&REST) || param==S(&BODY))){
             ll = cdr(ll);
-            if(!consp(ll) || !symbolp(car(ll))){
-                ERROR("%s: expected a symbol after &REST",
+            if(!consp(ll) || !(symbolp(car(ll)) || consp(car(ll)))){
+                ERROR("%s: expected a symbol or sub-lambda-list after &REST",
                       string_cstring(symbol_name(function_name(function))));}
             Ref rest_param = car(ll);
             rest_value = arguments;     /* keep for &KEY lookups too */
             saw_rest = true;
-            Ref wrap = env_make_lexical_variable(rest_param, arguments);
-            environment_add_variable(wrap, target_env);
+            if(consp(rest_param)){
+                /* Destructuring &REST/&BODY (macro / DESTRUCTURING-BIND): bind the
+                   remaining arguments against the sub-lambda-list. */
+                bind_required_parameters(function, rest_param, arguments, target_env);
+            } else {
+                Ref wrap = env_make_lexical_variable(rest_param, arguments);
+                environment_add_variable(wrap, target_env);}
             state = in_rest_done;
             ll = cdr(ll);
             continue;}
@@ -1877,8 +1882,13 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
                 MultipleValues init_results = {0};
                 value = evale(opt_init, target_env, &init_results);
                 supplied = false;}
-            Ref var = env_make_lexical_variable(opt_name, value);
-            environment_add_variable(var, target_env);
+            /* OPT_NAME may itself be a nested sub-lambda-list (macro /
+               DESTRUCTURING-BIND): destructure VALUE against it. */
+            if(consp(opt_name)){
+                bind_required_parameters(function, opt_name, value, target_env);
+            } else {
+                Ref var = env_make_lexical_variable(opt_name, value);
+                environment_add_variable(var, target_env);}
             if(!nullp(opt_svar)){
                 Ref sw = env_make_lexical_variable(opt_svar,
                                                    supplied ? T_Symbol : NIL_Symbol);
@@ -1933,7 +1943,16 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
                 environment_add_variable(sw, target_env);}
             ll = cdr(ll);
             continue;}
-        /* Required parameter. */
+        /* Required parameter — a symbol, or (in a macro / DESTRUCTURING-BIND
+           lambda list) a nested sub-lambda-list to destructure the matching
+           argument against (CLHS 3.4.4).  We allow it on any lambda list; a
+           destructuring spec on an ordinary function lambda list is technically
+           non-conforming but harmless. */
+        if(consp(param)){
+            Ref value=pop_mandatory_argument(function,&arguments);
+            bind_required_parameters(function,param,value,target_env);
+            ll=cdr(ll);
+            continue;}
         if(!symbolp(param)){
             ERROR("Lambda-list parameter is not a symbol: %s",
                   string_cstring(prin1_to_string(param)));}
@@ -1941,6 +1960,12 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
         Ref var=env_make_lexical_variable(param,value);
         environment_add_variable(var,target_env);
         ll=cdr(ll);}
+    /* A dotted lambda-list tail — (a b . rest) — is equivalent to a trailing
+       &REST rest (CLHS 3.4.4, macro / DESTRUCTURING-BIND lists): bind the tail
+       symbol to whatever arguments remain, and skip the no-more-args check. */
+    if(!nullp(ll) && symbolp(ll)){
+        environment_add_variable(env_make_lexical_variable(ll,arguments),target_env);
+        state = in_rest_done;}
     if(state == in_required || state == in_optional){
         check_no_more_arguments(function,arguments);}
     /* Validate the keyword-argument plist for any &KEY lambda list (shape +

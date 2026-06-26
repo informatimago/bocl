@@ -1,0 +1,69 @@
+diff --git a/uiop/common-lisp.lisp b/uiop/common-lisp.lisp
+index c76cb47..34c04fd 100644
+--- a/uiop/common-lisp.lisp
++++ b/uiop/common-lisp.lisp
+@@ -21,7 +21,7 @@
+   #+(or mcl cmucl) (:shadow #:user-homedir-pathname))
+ (in-package :uiop/common-lisp)
+ 
+-#-(or abcl allegro clasp clisp clozure cmucl cormanlisp ecl gcl genera lispworks mcl mezzano mkcl sbcl scl xcl)
++#-(or bocl abcl allegro clasp clisp clozure cmucl cormanlisp ecl gcl genera lispworks mcl mezzano mkcl sbcl scl xcl)
+ (error "ASDF is not supported on your implementation. Please help us port it.")
+ 
+ ;; (declaim (optimize (speed 1) (debug 3) (safety 3))) ; DON'T: trust implementation defaults.
+diff --git a/uiop/image.lisp b/uiop/image.lisp
+index 9ea0cec..d886dfa 100644
+--- a/uiop/image.lisp
++++ b/uiop/image.lisp
+@@ -78,7 +78,8 @@ This is designed to abstract away the implementation specific quit forms."
+                (cond
+                  (exit `(,exit :code code :abort (not finish-output)))
+                  (quit `(,quit :unix-status code :recklessly-p (not finish-output)))))
+-    #-(or abcl allegro clasp clisp clozure cmucl ecl gcl genera lispworks mcl mkcl sbcl scl xcl)
++    #+bocl (bocl:quit code)
++    #-(or abcl allegro bocl clasp clisp clozure cmucl ecl gcl genera lispworks mcl mkcl sbcl scl xcl)
+     (not-implemented-error 'quit "(called with exit code ~S)" code))
+ 
+   (defun die (code format &rest arguments)
+@@ -237,7 +238,8 @@ depending on whether *LISP-INTERACTION* is set, enter debugger or die"
+     #+mkcl (loop :for i :from 0 :below (mkcl:argc) :collect (mkcl:argv i))
+     #+sbcl sb-ext:*posix-argv*
+     #+xcl system:*argv*
+-    #-(or abcl allegro clasp clisp clozure cmucl ecl gcl genera lispworks mcl mezzano mkcl sbcl scl xcl)
++    #+bocl (bocl:command-line-arguments)
++    #-(or abcl allegro bocl clasp clisp clozure cmucl ecl gcl genera lispworks mcl mezzano mkcl sbcl scl xcl)
+     (not-implemented-error 'raw-command-line-arguments))
+ 
+   (defun command-line-arguments (&optional (arguments (raw-command-line-arguments)))
+diff --git a/uiop/os.lisp b/uiop/os.lisp
+index ab7e8a8..4efc263 100644
+--- a/uiop/os.lisp
++++ b/uiop/os.lisp
+@@ -116,7 +116,8 @@ use getenvp to return NIL in such a case."
+                 (ccl:%get-cstring value))))
+     #+mkcl (#.(or (find-symbol* 'getenv :si nil) (find-symbol* 'getenv :mk-ext nil)) x)
+     #+sbcl (sb-ext:posix-getenv x)
+-    #-(or abcl allegro clasp clisp clozure cmucl cormanlisp ecl gcl genera lispworks mcl mezzano mkcl sbcl scl xcl)
++    #+bocl (bocl:getenv x)
++    #-(or abcl allegro bocl clasp clisp clozure cmucl cormanlisp ecl gcl genera lispworks mcl mezzano mkcl sbcl scl xcl)
+     (not-implemented-error 'getenv))
+ 
+   (defsetf getenv (x) (val)
+@@ -339,6 +340,7 @@ suitable for use as a directory name to segregate Lisp FASLs, C dynamic librarie
+         #+mkcl (mk-ext:getcwd)
+         #+sbcl (sb-ext:parse-native-namestring (sb-unix:posix-getcwd/))
+         #+xcl (extensions:current-directory)
++        #+bocl (pathname (strcat (bocl:getcwd) "/"))
+         (not-implemented-error 'getcwd)))
+ 
+   (defun chdir (x)
+@@ -357,7 +359,8 @@ suitable for use as a directory name to segregate Lisp FASLs, C dynamic librarie
+       #+lispworks (hcl:change-directory x)
+       #+mkcl (mk-ext:chdir x)
+       #+sbcl (progn (require :sb-posix) (symbol-call :sb-posix :chdir (sb-ext:native-namestring x)))
+-      #-(or abcl allegro clasp clisp clozure cmucl cormanlisp ecl gcl genera lispworks mkcl sbcl scl xcl)
++      #+bocl (bocl:chdir (namestring x))
++      #-(or abcl allegro bocl clasp clisp clozure cmucl cormanlisp ecl gcl genera lispworks mkcl sbcl scl xcl)
+       (not-implemented-error 'chdir))))
+ 
+ 

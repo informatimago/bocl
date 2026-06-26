@@ -2759,7 +2759,8 @@ SETQ/INCF/DECF is left in place (sequential)."
              ;; others' values from the start of the iteration.  Process each
              ;; variable, then (if AND was used) fuse this group's steps.
              (let ((%old-steps steps) (%old-letb letb) (%nvars 0)
-                   (%eq-then-info nil))   ; (var step-form) of a lone `= init then step`
+                   (%eq-then-info nil)    ; (var step-form) of a lone `= init then step`
+                   (%destr-pairs nil))    ; (pattern . gensym) of destructured FOR vars
               (flet ((%one-for ()
                (setq %nvars (+ %nvars 1))
                (let* ((fvar  (pop!))
@@ -2769,13 +2770,12 @@ SETQ/INCF/DECF is left in place (sequential)."
                     (destr (consp fvar))
                     (v     (if destr (gensym "DSTR-") fvar)))
                (when destr
-                 ;; Bind the pattern's leaves, and make destructuring the first
-                 ;; body step each iteration — it runs after the sub-clause has
-                 ;; set the hidden gensym V (in setups) or stepped it, and before
-                 ;; the later DO/COLLECT clauses, which append after this point.
-                 (dolist (pv (%loop-pattern-vars fvar)) (push (list pv nil) letb))
-                 (setq body (append body
-                                    (list (cons 'progn (%loop-destr-form fvar v))))))
+                 ;; Bind the pattern's leaves; the destructuring of the hidden gensym
+                 ;; V into them is pushed to SETUPS *after* the sub-clause below (so it
+                 ;; runs right after V is assigned, and crucially BEFORE any later
+                 ;; FOR x = ... clause that references the pattern's variables —
+                 ;; setups run, in push order, before the body).
+                 (dolist (pv (%loop-pattern-vars fvar)) (push (list pv nil) letb)))
                (skip-type-spec)   ; optional OF-TYPE / bare type spec (ignored)
                (cond
                  ;; FOR v IN list [BY step-fn]
@@ -2989,7 +2989,14 @@ SETQ/INCF/DECF is left in place (sequential)."
                              (when other-v
                                (push `(setq ,ov (car ,keys-var)) steps))))))))
                  (t
-                  (error "LOOP FOR: unknown sub-clause ~S" (pk)))))))
+                  (error "LOOP FOR: unknown sub-clause ~S" (pk))))
+               ;; Record (pattern . gensym) so the destructuring of V into the
+               ;; pattern's leaves is emitted into SETUPS *after* this for-clause's
+               ;; post-processing (which, for `= init then step`, hoists the step into
+               ;; SETUPS) — so destructuring sees V's final per-iteration value, and
+               ;; runs before any subsequent FOR x = ... clause reads the leaves.
+               (when destr
+                 (setq %destr-pairs (cons (cons fvar v) %destr-pairs))))))
               (%one-for)
               (do () ((not (%lkw (pk) "AND"))) (pop!) (%one-for)))
              ;; AND joined >1 variable: fuse this group's steps into one parallel
@@ -3027,7 +3034,13 @@ SETQ/INCF/DECF is left in place (sequential)."
                          (push b vars)
                          (push b auxs)))
                    (dolist (b (nreverse auxs)) (push b letb))
-                   (dolist (b (nreverse vars)) (push b letb))))))))
+                   (dolist (b (nreverse vars)) (push b letb))))))
+               ;; Emit the destructuring of each destructured FOR var into SETUPS,
+               ;; AFTER the post-processing above (so it runs after V's final
+               ;; per-iteration value is assigned — including a hoisted `= then`
+               ;; step — and before any later FOR x = ... clause reads the leaves).
+               (dolist (%dp (reverse %destr-pairs))
+                 (push (cons 'progn (%loop-destr-form (car %dp) (cdr %dp))) setups))))
             ;; REPEAT n
             ((%lkw kw "REPEAT")
              (let ((rv (gensym "R-")))
@@ -3758,11 +3771,18 @@ SETQ/INCF/DECF is left in place (sequential)."
   "All symbols accessible in PACKAGE: its present symbols plus the external
    symbols inherited (and not shadowed) from the packages it uses."
   (let* ((pkg (find-package package))
-         (result (copy-list (package-symbols pkg))))
+         (result (copy-list (package-symbols pkg)))
+         ;; EQ hash set of symbols already collected, so the inherited-symbol
+         ;; dedup is O(1) per symbol rather than a linear MEMBER over RESULT —
+         ;; the latter makes DO-SYMBOLS over a CL-inheriting package O(n^2)
+         ;; (n ~ 1000), which dominates UIOP/ASDF's DEFINE-PACKAGE load time.
+         (seen (make-hash-table :test 'eq)))
+    (dolist (s result) (setf (gethash s seen) t))
     (dolist (used (package-use-list pkg) result)
       (dolist (s (package-exported-symbols used))
-        (when (and (eq s (find-symbol (symbol-name s) pkg))
-                   (not (member s result)))
+        (when (and (not (gethash s seen))
+                   (eq s (find-symbol (symbol-name s) pkg)))
+          (setf (gethash s seen) t)
           (push s result))))))
 
 (defmacro do-symbols (varspec &body body)

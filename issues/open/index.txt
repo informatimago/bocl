@@ -13,6 +13,7 @@ slow-apropos.issue
 asdf.issue
 clos-condition-hierarchy-parents.issue
 uiop-bocl-porting.issue
+structured-pathnames.issue
 sockets.issue
 precise-condition-subclasses.issue
 ansi-test.issue

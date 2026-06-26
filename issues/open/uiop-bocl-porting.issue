@@ -104,3 +104,56 @@ REMAINING toward a loadable ASDF (separate, iterative):
   but needed before run-program / image ops are used.
 - Work through UIOP's DEFINE-PACKAGE package-API needs, then Tier-2 (run-program,
   compile-file* condition capture).
+
+----------------------------------------------------------------------
+PROGRESS (slice 126, v1.3.13) — ASDF LOAD now reaches form 114/~?; 3 blockers cleared
+----------------------------------------------------------------------
+Loading modules/asdf/asdf.lisp form-by-form, the bundle now loads through 113 of its
+top-level forms (was stuck at 39).  Each blocker found + fixed:
+
+1. LOOP destructuring vs `FOR x = ...` (prelude.lisp, LOOP macro).
+   `(loop for (p . syms) in L for pp = (f p syms) ...)` evaluated PP with stale leaves:
+   the destructuring of the hidden gensym into the pattern leaves was emitted into the
+   loop BODY, but `for pp =` lands in SETUPS (which run before body).  Fix: defer the
+   destructuring into SETUPS via a new %DESTR-PAIRS accumulator, emitted AFTER the
+   for-clause post-block (so it runs after a hoisted `= then` step and before any later
+   FOR clause reads the leaves).  This was the bug behind UIOP ENSURE-IMPORT seeing
+   from-package=NIL.  must-loop stays 852/0.
+
+2. Destructuring MACRO lambda-lists (kernel: sources/eval.c bind_required_parameters).
+   bocl rejected `(defmacro m ((&optional) &body b) ...)` and `&body (then &optional
+   else)` (UIOP WITH-UPGRADABILITY, IF-LET) with "Lambda-list parameter is not a
+   symbol".  Added CLHS 3.4.4 destructuring: a required param / &optional var / &rest|
+   &body var that is a sub-list recurses into bind_required_parameters; dotted tails
+   (a . rest) bind the tail as &rest.  Allowed on all lambda lists (harmless for
+   ordinary functions).  No regressions across the must-* suite.
+
+3. DO-SYMBOLS O(n^2) (prelude.lisp %PKG-ACCESSIBLE-SYMBOLS) — THE load-time killer.
+   Every UIOP/ASDF DEFINE-PACKAGE that :USEs a CL-re-exporting package iterates ~1000
+   symbols; %PKG-ACCESSIBLE-SYMBOLS deduped inherited symbols with a linear (MEMBER s
+   result), so DO-SYMBOLS over such a package was ~17 s (16.8 s measured for an empty
+   body over 978 symbols!) and each ENSURE-PACKAGE ~27 s.  Replaced MEMBER with an EQ
+   hash set: DO-SYMBOLS 978 -> 0.13 s (130x).  (bocl's hash tables are already O(1)
+   bucketed; the stale "alist-backed" comment in kernel_types.h is wrong.)
+
+TIER-1 #+bocl UIOP PORT — added #+bocl branches in the asdf-src submodule (raw cat
+build, so source edits flow straight into build/asdf.lisp; no host Lisp needed):
+  - uiop/common-lisp.lisp: add :bocl to the "is ASDF supported?" feature guard.
+  - uiop/os.lisp:  getenv -> (bocl:getenv x);  getcwd -> (pathname (strcat (bocl:getcwd)
+    "/"));  chdir -> (bocl:chdir (namestring x)).
+  - uiop/image.lisp:  quit -> (bocl:quit code);  raw-command-line-arguments ->
+    (bocl:command-line-arguments).
+  (setenv / (setf getenv) / unsetenv not yet ported — add when first called.)
+  These edits live in the submodule working tree; keep them on a bocl porting branch /
+  patch (see modules/README.org) — they are candidates to upstream.
+
+NEXT BLOCKER (form 114, uiop/configuration.lisp): structured pathnames.
+  ASDF computes default config/cache pathnames at LOAD time and calls UIOP
+  ENSURE-PATHNAME ... :WANT-RELATIVE T, which checks (eq :relative (car (pathname-
+  directory p))).  bocl's pathnames are string-based: (pathname-directory ".cache/")
+  returns the STRING ".cache/", not (:RELATIVE ".cache").  UIOP/ASDF need structured
+  pathnames (directory as (:relative|:absolute comp...), name/type split, merge, wild).
+  This is a sizeable subsystem (doc S19 "pathnames are partial") and is the gating work
+  for ASDF to even LOAD, let alone OPERATE.  Tracked in a dedicated ticket:
+  structured-pathnames.issue.  After that: re-walk the load (more UIOP run-program /
+  filesystem dispatch, then ASDF core), then DEFSYSTEM / OPERATE.

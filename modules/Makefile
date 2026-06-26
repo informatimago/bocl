@@ -18,7 +18,13 @@ modules: asdf
 # its single-file release and stage it as the install-ready module asdf/.
 asdf:
 	@ if [ -f asdf-src/Makefile ] ; then \
-	    printf "# Building ASDF (single-file release) with $(LISP)\n" ; \
+	    printf "# Applying bocl UIOP port (asdf-bocl-port.patch), if not already applied\n" ; \
+	    if git -C asdf-src apply --reverse --check ../asdf-bocl-port.patch >/dev/null 2>&1 ; then \
+	      printf "#   (already applied)\n" ; \
+	    else \
+	      git -C asdf-src apply ../asdf-bocl-port.patch && printf "#   applied\n" ; \
+	    fi ; \
+	    printf "# Building ASDF (single-file release; raw cat of sources)\n" ; \
 	    $(MAKE) -C asdf-src build/asdf.lisp && \
 	    mkdir -p asdf && \
 	    cp asdf-src/build/asdf.lisp asdf/asdf.lisp && \

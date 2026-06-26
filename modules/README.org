@@ -43,6 +43,19 @@ a separate install-ready directory with a generated manifest.  The intended wiri
 
 See =modules/Makefile= for the (guarded) build/stage rules.
 
+** bocl UIOP port patch
+
+UIOP dispatches per implementation with =#+sbcl= / =#+ccl= / ... read conditionals
+and falls back to =NOT-IMPLEMENTED-ERROR= for unknown Lisps.  =modules/asdf-bocl-port.patch=
+adds =#+bocl= branches to the UIOP sources (currently =uiop/common-lisp.lisp=,
+=uiop/os.lisp=, =uiop/image.lisp=) that call bocl's primitives
+(=bocl:getenv= / =getcwd= / =chdir= / =quit= / =command-line-arguments=).  The =asdf=
+build target applies it to =asdf-src/= (idempotently) before the =cat= concatenation,
+so it flows into =build/asdf.lisp=.  These edits are candidates to upstream; until then
+they live as a patch so a clean submodule checkout is not required to carry them.  See
+=issues/open/uiop-bocl-porting.issue= for the port status and the remaining blockers
+(notably =structured-pathnames.issue=).
+
 NOTE: the ASDF submodule was not added automatically — fetching/building external
 source code requires explicit authorization.  Add the submodule with the command
 above, then =make modules && make install=.  (Whether ASDF runs unmodified on bocl's
