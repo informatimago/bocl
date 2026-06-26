@@ -115,7 +115,7 @@ tests: deps $(RUN_TARGETS)
 test:  deps $(RUN_TARGETS)
 
 deps:   $(all_SRCS:%.c=%.d)
-include $(all_SRCS:%.c=%.d)
+-include $(all_SRCS:%.c=%.d)
 
 
 clean:

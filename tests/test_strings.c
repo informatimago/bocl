@@ -44,7 +44,9 @@ static void test_char_case(void){
     TEST_EQ(eql, e("#\\7"), e("(char-upcase #\\7)"));}
 
 /* ---- STRING coercion ---- */
-
+/* The following cases are blocked by the task-#59 GC bug; compiled + registered
+   only under -DBOCL_GC59_TESTS (a normal build runs the light char cases). */
+#ifdef BOCL_GC59_TESTS
 static void test_string_designator(void){
     /* On a symbol: yields the symbol's name. */
     TEST_EQ(equal, e("\"FOO\""), e("(string 'foo)"));
@@ -62,6 +64,7 @@ static void test_string_case(void){
             e("(string-downcase \"Hello World\")"));
     TEST_EQ(equal, e("\"Hello World\""),
             e("(string-capitalize \"hello world\")"));}
+#endif /* BOCL_GC59_TESTS */
 
 /* ---- string ordering ---- */
 
@@ -77,7 +80,7 @@ static void test_string_ordering(void){
     TEST_EQ(eql, T_Symbol,   e("(string-greaterp \"abd\" \"ABC\")"));}
 
 /* ---- trim ---- */
-
+#ifdef BOCL_GC59_TESTS
 static void test_string_trim(void){
     TEST_EQ(equal, e("\"hello\""),
             e("(string-trim \" \" \"   hello   \")"));
@@ -101,6 +104,7 @@ static void test_search(void){
 static void test_substitute(void){
     TEST_EQ(equal, e("\"hxllo\""),
             e("(substitute #\\x #\\e \"hello\")"));}
+#endif /* BOCL_GC59_TESTS */
 
 /* Slice-5 test scope NOTE: The full string library works correctly
    one-at-a-time at the REPL (see /tmp/bocl-slice5.lisp for the manual
@@ -116,4 +120,11 @@ TEST_SUITE(test_strings, strings_init, strings_clean)
     TEST_CASE( "char predicates",   test_char_predicates)
     TEST_CASE( "char case",         test_char_case)
     TEST_CASE( "string ordering",   test_string_ordering)
+#ifdef BOCL_GC59_TESTS
+    TEST_CASE( "string designator", test_string_designator)
+    TEST_CASE( "string case",       test_string_case)
+    TEST_CASE( "string trim",       test_string_trim)
+    TEST_CASE( "SEARCH",            test_search)
+    TEST_CASE( "SUBSTITUTE",        test_substitute)
+#endif
     TEST_FINALIZE()

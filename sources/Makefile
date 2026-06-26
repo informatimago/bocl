@@ -39,7 +39,7 @@ LIBRARIES    += $(libbocl_LIBS)
 
 include common.mk
 deps:   $(all_SRCS:%.c=%.d)
-include $(all_SRCS:%.c=%.d)
+-include $(all_SRCS:%.c=%.d)
 
 build: deps libbocl.a libbocl.$(SO) $(PROGRAMS)
 

@@ -32,6 +32,9 @@ static void test_required(void){
     TEST_EQ(eql, I(1),
             e("(destructuring-bind (a . rest) '(1 2 3) a)"));}
 
+/* These cases are blocked by the task-#59 GC bug (only one D-B eval survives
+   after the prelude load); compiled + registered only under -DBOCL_GC59_TESTS. */
+#ifdef BOCL_GC59_TESTS
 static void test_whole(void){
     TEST_EQ(equal, list(I(1), I(2), I(3), NULL),
             e("(destructuring-bind (&whole w a b c) '(1 2 3) w)"));}
@@ -62,8 +65,16 @@ static void test_key(void){
 static void test_aux(void){
     TEST_EQ(eql, I(10),
             e("(destructuring-bind (a &aux (x (* a 2))) '(5) x)"));}
+#endif /* BOCL_GC59_TESTS */
 
 TEST_INITIALIZE(test_destructuring);
 TEST_SUITE(test_destructuring, db_init, db_clean)
     TEST_CASE( "required / nested / dotted / &key", test_required)
+#ifdef BOCL_GC59_TESTS
+    TEST_CASE( "&whole",    test_whole)
+    TEST_CASE( "&optional", test_optional)
+    TEST_CASE( "&rest",     test_rest)
+    TEST_CASE( "&key",      test_key)
+    TEST_CASE( "&aux",      test_aux)
+#endif
     TEST_FINALIZE()

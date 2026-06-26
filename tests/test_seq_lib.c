@@ -53,6 +53,11 @@ static void test_position(void){
     TEST_EQ(eql, I(2), e("(position 'c '(a b c d))"));
     TEST_EQ(eql, I(3), e("(position-if #'oddp '(2 4 6 7 8))"));}
 
+/* The remaining cases are blocked by the task-#59 GC bug (see the NOTE below):
+   running them back-to-back trips it.  They are compiled and registered only
+   under -DBOCL_GC59_TESTS, so a normal build neither warns about unused
+   functions nor crashes; define the macro to run them once GC is fixed. */
+#ifdef BOCL_GC59_TESTS
 static void test_count(void){
     TEST_EQ(eql, I(3), e("(count 'a '(a b a c a))"));
     TEST_EQ(eql, I(3), e("(count-if #'evenp '(1 2 3 4 5 6))"));}
@@ -120,6 +125,7 @@ static void test_pairlis(void){
                  cons(S(A), I(1)),
                  NULL),
             r);}
+#endif /* BOCL_GC59_TESTS */
 
 /* Slice-4 test scope NOTE: the sequence library functions all work
    correctly when invoked one-at-a-time at the REPL (see the manual
@@ -137,4 +143,18 @@ TEST_SUITE(test_seq_lib, seq_lib_init, seq_lib_clean)
     TEST_CASE( "REDUCE",            test_reduce)
     TEST_CASE( "FIND / FIND-IF",    test_find)
     TEST_CASE( "POSITION",          test_position)
+#ifdef BOCL_GC59_TESTS
+    TEST_CASE( "COUNT / COUNT-IF",  test_count)
+    TEST_CASE( "REMOVE / REMOVE-IF",test_remove)
+    TEST_CASE( "MAPCAN",            test_mapcan)
+    TEST_CASE( "CONCATENATE",       test_concatenate_list)
+    TEST_CASE( "SUBSEQ",            test_subseq)
+    TEST_CASE( "BUTLAST",           test_butlast)
+    TEST_CASE( "SORT",              test_sort_numbers)
+    TEST_CASE( "UNION",             test_union)
+    TEST_CASE( "INTERSECTION",      test_intersection)
+    TEST_CASE( "SET-DIFFERENCE",    test_set_difference)
+    TEST_CASE( "ADJOIN",            test_adjoin)
+    TEST_CASE( "PAIRLIS",           test_pairlis)
+#endif
     TEST_FINALIZE()
