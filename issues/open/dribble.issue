@@ -163,3 +163,47 @@ produces a dribble file =trace.sexp=:
 (dribble)
 #+end_src
 
+
+----------------------------------------------------------------------
+PLAN (CL-first: real compound streams, then dribble in CL)
+----------------------------------------------------------------------
+The clean approach (pjb's suggestion): implement CL's compound streams for real,
+then write dribble in pure CL on top of them.
+
+The single enabling hook is the kernel function STREAM_OUTPUT_CSTREAM(stream)
+(sources/stream.c) — EVERY printer / PRINC / WRITE-CHAR / FORMAT path obtains its
+FILE* there.  So a custom output stream whose FILE* is a callback stream
+(fopencookie on glibc/Linux, funopen on BSD/macOS) makes the ENTIRE printer
+redirect through it with ZERO printer.c changes: the cookie write callback simply
+funcalls a stored Lisp write-function with the bytes.
+
+  1. Kernel: BOCL::%MAKE-OUTPUT-CALLBACK-STREAM (write-fn) -> an output stream
+     backed by a fopencookie/funopen FILE*; the write callback builds a string
+     from the bytes and funcalls WRITE-FN.  Root WRITE-FN in the stream object
+     (e.g. the FileStream `string` slot) so GC keeps it.  One #ifdef for the two
+     libc cookie APIs.
+  2. CL (replaces the current stubs): MAKE-BROADCAST-STREAM (write-fn fans out to
+     each target with WRITE-STRING), MAKE-TWO-WAY-STREAM, MAKE-ECHO-STREAM,
+     MAKE-SYNONYM-STREAM, and a %MAKE-LINE-PREFIX-STREAM (state: at-line-start;
+     prefixes ";; O: " / ";; E: " and forces a newline when the partner stream
+     interrupts mid-line).
+  3. CL dribble: (dribble path) opens the file (append), writes ";; H: bocl
+     <version>", and rebinds *STANDARD-OUTPUT* / *ERROR-OUTPUT* to broadcasts of
+     {real stream, line-prefix stream over the dribble file}; the REPL writes the
+     raw input verbatim; (dribble) restores + closes + returns NIL.
+  4. BOCL:DRIBBLE-FILE-PATHNAME (&key (type "log") time-zone) — pure CL using
+     DECODE-UNIVERSAL-TIME under (or $XDG_STATE_HOME ~/.local/state)/bocl/dribbles/.
+  5. CLI (main.c): --dribble / --dribble=FILE.
+
+ONE RISK to validate first: the cookie write callback calls back into the Lisp
+evaluator from inside a stdio write — i.e. deep in the printer, inside EVALE, with
+GC live-pools active (and stdio holding the cookie FILE's lock).  For dribble this
+nests only one level (stdout-cookie -> writes to the real FILE* + the dribble
+FILE*, neither of which re-enters), and stdio buffering means the callback fires
+on flush, so FORCE-OUTPUT must fflush the cookie.  Prototype %MAKE-OUTPUT-CALLBACK-
+STREAM and print through it (incl. a GC during the callback) before building the
+rest; if re-entrancy proves unsafe, keep only the line-prefix tee in C and the
+control/path logic in CL.
+
+STATUS: design agreed (CL-first); ready to implement, starting with the kernel
+callback-stream + real MAKE-BROADCAST-STREAM and a re-entrancy/GC smoke test.
