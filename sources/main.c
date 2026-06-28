@@ -54,13 +54,43 @@ static bool do_sigtrap=true;
 static char* on_error_action=NULL;
 typedef enum { on_error_debug, on_error_exit, on_error_abort, on_error_appease } on_error_action_t;
 static on_error_action_t on_error=on_error_exit;
-/* Whether --on-error was given explicitly on the command line.  When it was NOT,
+/* Whether --on-error was given anywhere on the command line.  When it was NOT,
    option/rc/file processing uses EXIT (fail hard, good for batch) but the
-   interactive REPL uses DEBUG (issue on-error-default-setting). */
-static bool on_error_explicit=false;
+   interactive REPL defaults to DEBUG (issue on-error-default-setting). */
+static bool any_on_error=false;
 static string_list* initfiles=NULL;
-static string_list* expressions_and_loads=NULL;
+static string_list* expressions_and_loads=NULL;  /* table anchor only (see process_options) */
 static char* package=NULL;
+
+/* Command-line-ORDER list of post-init actions: -x (eval), -l (load) and any
+   --on-error given AFTER the first -i.  Processed in order so --on-error
+   interleaves with -x/-l exactly as written, equivalent to
+   -x '(setf bocl:*on-error* ...)' (issue on-error-default-setting). */
+typedef enum { act_eval, act_load, act_seterr } action_kind;
+typedef struct { action_kind kind; char* value; } action_t;
+static action_t* actions=NULL;
+static int n_actions=0, cap_actions=0;
+static void push_action(action_kind k, char* v){
+    if(n_actions>=cap_actions){
+        cap_actions = cap_actions ? cap_actions*2 : 8;
+        actions = CHECK_POINTER(realloc(actions,(size_t)cap_actions*sizeof(*actions)));}
+    actions[n_actions].kind=k; actions[n_actions].value=v; n_actions++;}
+
+static on_error_action_t parse_on_error(const char* s){
+    if(0==strcmp(s,"debug"))   return on_error_debug;
+    if(0==strcmp(s,"exit"))    return on_error_exit;
+    if(0==strcmp(s,"abort"))   return on_error_abort;
+    if(0==strcmp(s,"appease")) return on_error_appease;
+    fprintf(stderr,"WARNING: unknown --on-error action: %s (using exit).\n",s);
+    return on_error_exit;}
+
+static const char* on_error_keyword(on_error_action_t a){
+    switch(a){
+      case on_error_debug:   return ":DEBUG";
+      case on_error_exit:    return ":EXIT";
+      case on_error_abort:   return ":ABORT";
+      case on_error_appease: return ":APPEASE";
+      default:               return ":EXIT";}}
 
 
 /* Candidate RC (init) file paths searched in order; the first existing file
@@ -329,6 +359,10 @@ static void process_options(int argc,char** argv){
     on_error_action=NULL;   /* NULL = not given: EXIT for processing, DEBUG for REPL */
     package=strdup("COMMON-LISP-USER");
     pname=argv[0];
+    /* Whether a -i|--init has been seen yet: an --on-error BEFORE the first -i
+       governs the rc/init-file phase; one AFTER it joins the ordered -x/-l
+       action list (issue on-error-default-setting). */
+    bool seen_init=false;
     int i=1;
     while(i<argc){
         /* --dribble=FILE : the option parser matches variants by exact strcmp
@@ -351,50 +385,40 @@ static void process_options(int argc,char** argv){
                         argv[i-1]);
                 print_help();
                 exit(EX_USAGE);}
-            switch(options[k].argument_type){
-              case strg:
-                  if(*options[k].argument.variable.string){
-                      fprintf(stderr,"WARNING: argument for %s has already been given: %s ; changing it to %s.\n",
-                              argv[i-1],
-                              (*options[k].argument.variable.string),
-                              argv[i]);}
-                  /* Always apply the supplied value — including when a default
-                     was pre-set (on_error_action defaults to "exit", package to
-                     "COMMON-LISP-USER").  Previously the assignment lived only in
-                     the else branch, so -on-error/-p were silently ignored
-                     whenever a default existed. */
-                  (*options[k].argument.variable.string)=argv[i];
-                  break;
-              case elst:
-                  string_list_push(strdup(argv[i]),options[k].argument.variable.list);
-                  break;
-              case load:
-                  string_list_push(generate_load_form(argv[i]),options[k].argument.variable.list);
-                  break;
-              case none: /* fall thru */
-              default:
-                  break;}}
+            char* arg=argv[i];
+            if(options[k].argument_type==elst
+               && options[k].argument.variable.list==&initfiles){
+                /* -i|--init : phase-1 file, loaded after the rc file. */
+                string_list_push(strdup(arg),&initfiles);
+                seen_init=true;
+            }else if(options[k].argument_type==elst
+                     && options[k].argument.variable.list==&expressions_and_loads){
+                /* -x|-e|--eval : ordered post-init action. */
+                push_action(act_eval,strdup(arg));
+            }else if(options[k].argument_type==load){
+                /* -l|--load : ordered post-init action. */
+                push_action(act_load,generate_load_form(arg));
+            }else if(options[k].argument_type==strg
+                     && options[k].argument.variable.string==&on_error_action){
+                /* --on-error : before the first -i it sets the init-phase policy
+                   (last wins); after it, an ordered setf of BOCL:*ON-ERROR*. */
+                any_on_error=true;
+                if(seen_init){ push_action(act_seterr,strdup(arg)); }
+                else         { on_error_action=arg; }
+            }else{
+                /* Other string options (encoding, terminal-encoding, package). */
+                if(*options[k].argument.variable.string){
+                    fprintf(stderr,"WARNING: argument for %s has already been given: %s ; changing it to %s.\n",
+                            argv[i-1],(*options[k].argument.variable.string),arg);}
+                (*options[k].argument.variable.string)=arg;}}
         i++;}
-    /* Some post processing: */
-    if(on_error_action==NULL){
-        /* Not given: EXIT for option/rc/file processing; the REPL default (DEBUG)
-           is applied when BOCL:*ON-ERROR* is published, below. */
-        on_error=on_error_exit;
-        on_error_explicit=false;}
-    else{
-        on_error_explicit=true;
-        if(0==strcmp(on_error_action,"debug")){
-            on_error=on_error_debug;}
-        else if(0==strcmp(on_error_action,"exit")){
-            on_error=on_error_exit;}
-        else if(0==strcmp(on_error_action,"abort")){
-            on_error=on_error_abort;}
-        else if(0==strcmp(on_error_action,"appease")){
-            on_error=on_error_appease;}}
+    /* Post processing: the init-phase error policy (the --on-error before the
+       first -i, else EXIT).  The REPL default (DEBUG when no --on-error was
+       given at all) and the ordered post-init changes are applied in run_session. */
+    on_error = (on_error_action==NULL) ? on_error_exit : parse_on_error(on_error_action);
     all_encoding=validate_encoding("all",all_encoding);
     terminal_encoding=validate_encoding("terminal",terminal_encoding);
     initfiles=string_list_nreverse(initfiles);
-    expressions_and_loads=string_list_nreverse(expressions_and_loads);
     if(do_verbose && do_print){
         print_options();}}
 
@@ -432,19 +456,40 @@ bool error_handler(Ref error){
       default:
           abort();}}
 
+/* Set the current error policy: the C enum (which drives bocl_load_recover for
+   per-form recovery under appease) AND the Lisp BOCL:*ON-ERROR* that the
+   %REPL-EVAL / %LOAD-EVAL-TOPLEVEL-FORM wrappers consult.  This is how a
+   command-line --on-error takes effect immediately for the forms that follow. */
+static void apply_on_error(on_error_action_t a){
+    on_error=a;
+    bocl_load_recover=(a==on_error_appease);
+    if(!do_noprelude){
+        char buf[64];
+        snprintf(buf,sizeof(buf),"(SETQ BOCL:*ON-ERROR* %s)",on_error_keyword(a));
+        bocl_read_eval_cstring(buf);}}
+
 /* The session body, run under the BOCL:QUIT top-level catch (see main()):
-   init/rc files, BOCL:*INIT-HOOK*, then the -x/-l forms, IN-PACKAGE and the
-   REPL.  Returns the exit status as an integer Ref. */
+   rc/init files (phase 1), BOCL:*INIT-HOOK*, then the ordered -x/-l/--on-error
+   actions (phase 2), IN-PACKAGE and the REPL.  All user forms are evaluated
+   through bocl_toplevel_eval (the %REPL-EVAL wrapper), so BOCL:*ON-ERROR*
+   governs errors uniformly across processing and the REPL (debug / appease /
+   abort / exit).  Returns the exit status as an integer Ref. */
 static Ref run_session(void* ctx){
     (void)ctx;
     int status=0;
+
+    /* Phase 1 — rc file + -i init files, under the init-phase policy: the
+       --on-error given before the first -i, else EXIT. */
+    apply_on_error(on_error);
     if(!do_norc){
         char* rcfile=find_rc_file();
         if(rcfile){
             /* prepend so it loads before any -i files */
             initfiles=string_list_cons(rcfile,initfiles);}}
     {do_string_list(ifile,initfiles){
-            bocl_load_cstring(ifile);}}
+            char* form=generate_load_form(ifile);
+            bocl_toplevel_eval_cstring(form);
+            free(form);}}
     string_list_free(initfiles);
     initfiles=NULL;
 
@@ -472,17 +517,23 @@ static Ref run_session(void* ctx){
         else{
             bocl_read_eval_cstring("(common-lisp:dribble (bocl:dribble-file-pathname))");}}
 
-    {do_string_list(expression,expressions_and_loads){
-            bocl_read_eval_cstring(expression);}}
-    string_list_free(expressions_and_loads);
-    expressions_and_loads=NULL;
+    /* Phase 2 — the ordered -x/-l forms and the post-first-i --on-error
+       settings, processed in command-line order.  An --on-error mutates
+       BOCL:*ON-ERROR* immediately and applies to every following action. */
+    for(int a=0;a<n_actions;a++){
+        switch(actions[a].kind){
+          case act_seterr: apply_on_error(parse_on_error(actions[a].value)); break;
+          case act_eval:   /* fall through */
+          case act_load:   bocl_toplevel_eval_cstring(actions[a].value);     break;
+          default:                                                           break;}}
 
     if(package){
         bocl_in_package(bocl_read_cstring(package));}
 
     if(do_repl){
-        /* When a Lisp-level REPL (e.g. BOCL:REPL) is available, call it
-           instead.  For now, use the C bocl_repl() entry point directly. */
+        /* The interactive REPL defaults to DEBUG; if --on-error was given
+           anywhere, BOCL:*ON-ERROR* already holds its final value. */
+        if(!any_on_error){ apply_on_error(on_error_debug); }
         Ref result=bocl_repl(variable_value(S(*STANDARD-INPUT*)),
                              variable_value(S(*STANDARD-OUTPUT*)));
         if(integerp(result)){
@@ -580,32 +631,16 @@ int main(int argc,char** argv){
         bocl_read_eval_cstring("(SETQ *LOAD-PRINT*      T)");
         bocl_read_eval_cstring("(SETQ *COMPILE-PRINT*   T)");}
 
-    /* The prelude has now loaded.  Under -on-error appease, enable per-form
-       recovery so user files (rc / init / -l, and everything they LOAD) skip
-       individual bad forms instead of aborting — this lets large suites such as
-       the ANSI tests load as much as possible and still reach their report. */
-    {   if(on_error==on_error_appease){ bocl_load_recover=true; }}
+    /* The error policy (BOCL:*ON-ERROR* and the bocl_load_recover flag) is no
+       longer published once here: run_session applies it per phase via
+       apply_on_error() — the init-phase value for rc/init files, then each
+       ordered --on-error for the -x/-l actions, then the REPL default. */
 
-    /* Publish the --on-error action to Lisp as BOCL:*ON-ERROR* so the REPL's
-       %REPL-EVAL wrapper can decide whether an unhandled error enters the
-       debugger (:debug), is reported (:appease/:abort) or exits (:exit). */
-    if(!do_noprelude){
-        /* When --on-error was NOT given, the interactive REPL defaults to DEBUG
-           (while the option/rc/file processing above ran under EXIT).  When it WAS
-           given, the REPL uses that action too. */
-        const char* k = (!on_error_explicit)            ? ":DEBUG"
-                      : (on_error==on_error_debug)      ? ":DEBUG"
-                      : (on_error==on_error_exit)       ? ":EXIT"
-                      : (on_error==on_error_abort)      ? ":ABORT"
-                      :                                   ":APPEASE";
-        char buf[64];
-        snprintf(buf,sizeof(buf),"(SETQ BOCL:*ON-ERROR* %s)",k);
-        bocl_read_eval_cstring(buf);}
-
-    /* The session — init/rc files, BOCL:*INIT-HOOK*, then -x/-l forms, IN-PACKAGE
-       and the REPL — runs inside a top-level CATCH for BOCL:QUIT, so QUIT (from
-       an init hook, a loaded form, or the REPL) performs a proper non-local exit
-       that runs pending UNWIND-PROTECT clean-ups.  *QUIT-HOOK* runs afterwards. */
+    /* The session — rc/init files, BOCL:*INIT-HOOK*, then the ordered -x/-l
+       actions, IN-PACKAGE and the REPL — runs inside a top-level CATCH for
+       BOCL:QUIT, so QUIT (from an init hook, a loaded form, or the REPL)
+       performs a proper non-local exit that runs pending UNWIND-PROTECT
+       clean-ups.  *QUIT-HOOK* runs afterwards. */
     {   Ref r=bocl_run_with_toplevel_catch(run_session,NULL);
         if(integerp(r)){ status=(int)integer_value(r); }}
 

@@ -85,8 +85,15 @@ error your own code did not catch with ‘HANDLER-CASE’, ‘IGNORE-ERRORS’,
 or a restart.  The action is published to Lisp as ‘BOCL:*ON-ERROR*’.
 When ‘--on-error’ is _not_ given, option processing, the init/rc files
 and ‘-l’ / ‘-x’ forms run under ‘exit’ (fail hard, good for batch),
-while the interactive REPL instead defaults to ‘debug’; an explicit
-‘--on-error’ applies to everything that follows it, including the REPL.
+while the interactive REPL instead defaults to ‘debug’.
+
+   An ‘--on-error’ given _before_ the first ‘-i’ (or ‘--no-init’) sets
+the policy used to load the rc and init files; one given _after_ the
+first ‘-i’ is processed in command-line order together with the ‘-l’ /
+‘-x’ forms -- it behaves exactly like ‘-x '(setf bocl:*on-error*
+ACTION)'’ and applies to everything that follows it until the next
+‘--on-error’.  If any ‘--on-error’ is given, the REPL uses the last
+value in effect; otherwise it defaults to ‘debug’.
 
 ‘exit’
      _At the REPL:_ report the condition and exit the process (status
@@ -176,9 +183,9 @@ Node: Top329
 Node: Overview852
 Node: Invocation1265
 Node: Error handling2267
-Node: Files4485
-Node: Debugger5195
-Node: Further reading5885
+Node: Files4900
+Node: Debugger5610
+Node: Further reading6300
 
 End Tag Table
 

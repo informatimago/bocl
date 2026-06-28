@@ -96,8 +96,15 @@ error your own code did not catch with @code{HANDLER-CASE}, @code{IGNORE-ERRORS}
 a restart.  The action is published to Lisp as @code{BOCL:*ON-ERROR*}.  When
 @option{--on-error} is @emph{not} given, option processing, the init/rc files and
 @option{-l} / @option{-x} forms run under @code{exit} (fail hard, good for batch),
-while the interactive REPL instead defaults to @code{debug}; an explicit
-@option{--on-error} applies to everything that follows it, including the REPL.
+while the interactive REPL instead defaults to @code{debug}.
+
+An @option{--on-error} given @emph{before} the first @option{-i} (or
+@option{--no-init}) sets the policy used to load the rc and init files; one given
+@emph{after} the first @option{-i} is processed in command-line order together with
+the @option{-l} / @option{-x} forms --- it behaves exactly like @option{-x '(setf
+bocl:*on-error* ACTION)'} and applies to everything that follows it until the next
+@option{--on-error}.  If any @option{--on-error} is given, the REPL uses the last
+value in effect; otherwise it defaults to @code{debug}.
 
 @table @code
 @item exit

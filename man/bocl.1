@@ -84,9 +84,24 @@ Report the condition and exit the process (status 1).
 This is the default while processing options, init/rc files and \-l/\-x forms; the
 interactive REPL instead defaults to
 .BR debug .
-An explicit
+A
 .B \-\-on\-error
-applies to everything that follows it, including the REPL.
+given before the first
+.B \-i
+(or
+.BR \-\-no\-init )
+sets the policy for loading the rc and init files; one given after the first
+.B \-i
+is processed in command\-line order together with the
+.BR \-l / \-x
+forms (equivalent to
+.BR "\-x '(setf bocl:*on\-error* ...)'" )
+and applies to everything that follows it until the next
+.BR \-\-on\-error .
+If any
+.B \-\-on\-error
+is given, the REPL uses the last value; otherwise it defaults to
+.BR debug .
 .TP
 .B debug
 Enter the interactive debugger

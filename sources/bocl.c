@@ -48,6 +48,28 @@ Ref bocl_read_eval_cstring(const char* text){
     stream_finish_output(out);
     return result;}
 
+/* Evaluate one already-parsed top-level form through the Lisp %REPL-EVAL
+   wrapper, so BOCL:*ON-ERROR* governs an unhandled SERIOUS-CONDITION
+   (debug / appease / abort / exit) exactly as in the interactive REPL —
+   instead of the process being killed.  On the bare kernel (prelude not
+   loaded, %REPL-EVAL unavailable) it falls back to a direct EVAL.  This is
+   the pre-REPL counterpart of what bocl_repl() does per form, used by the
+   launcher for rc/init files and -l/-x forms (issue on-error-default-setting). */
+Ref bocl_toplevel_eval(Ref sexp){
+    Ref out=variable_value(S(*STANDARD-OUTPUT*));
+    MultipleValues results={0};
+    {   Ref re=symbol_intern_cstring("%REPL-EVAL");
+        if(symbol_fboundp(re)){
+            kernel_apply(symbol_function(re),cons(sexp,NIL_Symbol),&results);
+        } else {
+            evale(sexp,eval_global_environment(),&results);}}
+    stream_finish_output(out);
+    return (results.count>0)?results.values[0]:NIL_Symbol;}
+
+/* Read TEXT and evaluate it through the %REPL-EVAL wrapper (see above). */
+Ref bocl_toplevel_eval_cstring(const char* text){
+    return bocl_toplevel_eval(bocl_read_cstring(text));}
+
 /* Emit the REPL prompt.  If BOCL:*PROMPT-FUNCTION* is a non-NIL function
    designator, call (funcall *prompt-function* out) to produce the prompt; else
    write the default implementation-defined prompt. */

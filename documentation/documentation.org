@@ -181,8 +181,15 @@ code did not catch with =HANDLER-CASE=, =IGNORE-ERRORS=, or a restart.  The acti
 is published to Lisp as =BOCL:*ON-ERROR*=.  There are four actions.  When
 =--on-error= is /not/ given, option processing, the init/rc files and =-l= / =-x=
 forms run under =exit= (fail hard, good for batch), while the interactive REPL
-instead defaults to =debug=; an explicit =--on-error= applies to everything that
-follows it, including the REPL.
+instead defaults to =debug=.
+
+An =--on-error= given /before/ the first =-i= (or =--no-init=) sets the policy used
+to load the rc and init files; one given /after/ the first =-i= is processed in
+command-line order together with the =-l= / =-x= forms --- it behaves exactly like
+=-x '(setf bocl:*on-error* ACTION)'= and applies to everything that follows it
+until the next =--on-error=.  The init files may themselves =setf= =*on-error*=,
+which takes effect immediately for the following forms.  If any =--on-error= is
+given, the REPL uses the last value in effect; otherwise it defaults to =debug=.
 
 | Action    | At the REPL (unhandled error in a typed / =-x= form)        | While LOADing a file (rc, =-i=, =-l=, nested loads)              |
 |-----------+-------------------------------------------------------------+-----------------------------------------------------------------|

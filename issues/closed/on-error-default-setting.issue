@@ -101,3 +101,41 @@ arguments, unless a new --on-error is given for the -l|-x arguments.
 So basically, the `--on-error …` arguments after the first -i|--init
 are equivalent to `-x '(setf bocl:*on-error* …)'` and are processed in
 order with -x and -l options.
+
+
+----------------------------------------------------------------------
+PROGRESS (v1.4.9) — REMAINING items DONE; issue closed
+----------------------------------------------------------------------
+Both items from the previous REMAINING section are now implemented:
+
+1. Command-line-ORDER interleaving of --on-error with -i/-l/-x.
+   sources/main.c now builds, in addition to the phase-1 `initfiles` list (-i,
+   loaded after the rc file), ONE ordered phase-2 action list of -x (eval), -l
+   (load) and the --on-error settings that appear AFTER the first -i.  The
+   actions run in command-line order, an `act_seterr` mutating BOCL:*ON-ERROR*
+   immediately — exactly like -x '(setf bocl:*on-error* ACTION)'.  An --on-error
+   BEFORE the first -i (or --no-init) sets the init-phase policy (last wins, else
+   EXIT) used for the rc + init files and carried into phase 2; one AFTER it is
+   an ordered action.  The REPL uses the last value when any --on-error was
+   given, else DEBUG.  (This is the -i-centric resolution stated at the bottom of
+   this issue; -x/-l before an --on-error with no -i present therefore collapse
+   to the init-phase value, as specified.)
+
+2. Pre-REPL evaluation routed through the SAME *ON-ERROR* / %REPL-EVAL machinery
+   as the REPL.  New bocl_toplevel_eval()/bocl_toplevel_eval_cstring() in bocl.c
+   call the Lisp %REPL-EVAL wrapper (falling back to a direct eval on the bare
+   kernel).  run_session loads rc/init files as (load "...") forms and runs all
+   -x/-l actions through it, so :debug enters the Lisp debugger, :appease/:abort
+   report and continue, and :exit quits with cleanups — uniformly across
+   processing and the REPL.  apply_on_error() keeps the C `on_error` enum (and
+   thus bocl_load_recover for per-form appease recovery) in sync with
+   BOCL:*ON-ERROR*.  The dead C error_handler()/invoke_debugger() stubs are left
+   as-is (never reached).
+
+Verified on the built binary: default EXIT (pre-REPL error -> exit 1);
+--on-error abort/appease continue; ordered `--on-error abort -i foo --on-error
+exit -x '(error)'` honours each setting in turn; init-phase EXIT vs explicit
+policy for -i files; appease per-form load recovery; and --on-error debug
+pre-REPL now ENTERS the Lisp debugger (backtrace + restart menu) instead of a C
+exit.  No regression in the CUnit suites that run here.  man/bocl.1,
+documentation.org/.texi/.info and the pdf updated to describe the ordering.

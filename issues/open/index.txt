@@ -23,8 +23,6 @@ Rules of Processing Issues
 
 Current list of issues to resolve:
 
-on-error-default-setting.issue
-
 structured-pathnames.issue
 uiop-bocl-porting.issue
 sockets.issue
