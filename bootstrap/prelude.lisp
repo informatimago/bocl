@@ -2646,11 +2646,9 @@ SETQ/INCF/DECF is left in place (sequential)."
         (anon-sum  nil)   ; shared var for anonymous sum/count
         (anon-max  nil)   ; shared var for anonymous maximize
         (anon-min  nil)   ; shared var for anonymous minimize
-        (always-f  nil)
-        (always-set nil) ; T if an ALWAYS clause was seen (always-f may be NIL)
-        (never-f   nil)
-        (never-set  nil) ; T if a NEVER clause was seen (never-f may be NIL)
-        (thereis-f nil)
+        (always-set nil) ; T if an ALWAYS clause was seen (for result + conflict check)
+        (never-set  nil) ; T if a NEVER clause was seen
+        (thereis-set nil) ; T if a THEREIS clause was seen
         (return-f  nil)
         (return-set nil)
         (end-tag   (gensym "END-")))  ; created here so WHILE/UNTIL can target it
@@ -3101,10 +3099,26 @@ SETQ/INCF/DECF is left in place (sequential)."
                (when (try! "OF-TYPE") (pop!))   ; optional accumulator type (ignored)
                (when (and rest (not (%loop-kw-p (pk)))) (pop!))   ; bare accumulator type
                (add-accum :minimize (or iv (anon-var :minimize)) e)))
-            ;; ALWAYS / NEVER / THEREIS
-            ((%lkw kw "ALWAYS")   (setq always-f  (pop!) always-set  t))
-            ((%lkw kw "NEVER")    (setq never-f   (pop!) never-set   t))
-            ((%lkw kw "THEREIS")  (setq thereis-f (pop!)))
+            ;; ALWAYS / NEVER / THEREIS — boolean termination clauses tested at
+            ;; their TEXTUAL position in the body (CLHS 6.1.2.3 / 6.1.9), so a
+            ;; preceding WHILE/UNTIL or stepped FOR can terminate the loop before
+            ;; the test runs (e.g. `for p = x then (next p) while p thereis (f p)`
+            ;; must not evaluate (f NIL)).  The *-SET flags drive the result form
+            ;; and the accumulation-conflict check below.
+            ((%lkw kw "ALWAYS")
+             (setq always-set t)
+             (setq body (append body
+                          (list `(unless ,(pop!) (return-from ,(or name nil) nil))))))
+            ((%lkw kw "NEVER")
+             (setq never-set t)
+             (setq body (append body
+                          (list `(when ,(pop!) (return-from ,(or name nil) nil))))))
+            ((%lkw kw "THEREIS")
+             (setq thereis-set t)
+             (let ((tv (gensym "TV-")))
+               (setq body (append body
+                            (list `(let ((,tv ,(pop!)))
+                                     (when ,tv (return-from ,(or name nil) ,tv))))))))
             ;; RETURN
             ((%lkw kw "RETURN")
              ;; RETURN form terminates the loop IMMEDIATELY (CLHS 6.1.5), so emit
@@ -3305,7 +3319,7 @@ SETQ/INCF/DECF is left in place (sequential)."
     ;; A value-accumulation clause and a boolean ALWAYS/NEVER/THEREIS clause have
     ;; conflicting result semantics and may not be combined (CLHS 6.1.2.3) — a
     ;; PROGRAM-ERROR, signalled here so it surfaces at macro-expansion time.
-    (when (and accums (or always-set never-set thereis-f))
+    (when (and accums (or always-set never-set thereis-set))
       (error 'program-error))
     ;; A variable bound by WITH/FOR twice, or an iteration variable also named by
     ;; INTO, is a PROGRAM-ERROR (CLHS 6.1.1.7).  An INTO name MAY be shared by
@@ -3341,14 +3355,6 @@ SETQ/INCF/DECF is left in place (sequential)."
                            (dolist (a accums (nreverse fs))
                              (let ((f (%loop-accum-step (first a) (second a) (third a))))
                                (when f (push f fs))))))
-           (always-chk   (when always-f
-                           `((unless ,always-f (return-from ,(or name nil) nil)))))
-           (never-chk    (when never-f
-                           `((when   ,never-f  (return-from ,(or name nil) nil)))))
-           (thereis-chk  (when thereis-f
-                           (let ((tv (gensym "TV-")))
-                             `((let ((,tv ,thereis-f))
-                                 (when ,tv (return-from ,(or name nil) ,tv)))))))
            ;; COLLECT builds its list reversed (cons); reverse each collect var
            ;; ONCE at loop end so the value is forward-order for FINALLY, for an
            ;; INTO variable, and for the loop result alike.  (APPEND/NCONC/SUM/
@@ -3380,9 +3386,6 @@ SETQ/INCF/DECF is left in place (sequential)."
                ,top-tag
                ,@test-forms
                ,@setup-forms
-               ,@always-chk
-               ,@never-chk
-               ,@thereis-chk
                ,@body
                ,@accum-forms
                ,@step-forms
