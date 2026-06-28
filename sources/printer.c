@@ -894,6 +894,46 @@ static void fmt_write_integer(FILE* out, word n, int radix, bool atsignp){
     else if(atsignp) fputc('+',out);
     for(int i=len-1;i>=0;i--) fputc((unsigned char)tmp[i],out);}
 
+/* FORMAT radix directive (~D ~B ~O ~X and ~nR) on one integer argument.
+   Renders ARG (fixnum OR bignum) in RADIX, then applies, per CLHS 22.3.2.1:
+     - @ (ATSIGNP): always print a sign;
+     - : (COLONP):  group digits by COMMA_INTERVAL using COMMACHAR;
+     - left-pad the whole field to MINCOL columns with PADCHAR.
+   A non-integer ARG is printed as by ~A (princ) in the field (CLHS).        */
+static void fmt_radix_arg(FILE* out, Ref arg, int radix, bool atsignp, bool colonp,
+                          word mincol, char padchar, char commachar, word comma_interval){
+    if(!(integerp(arg) || bignump(arg))){
+        Ref repr=princ_to_string(arg);
+        char* cs=string_cstring(repr); uword slen=strlen(cs);
+        fputs(cs,out);
+        for(word p=(word)slen;p<mincol;p++) fputc(padchar,out);
+        free(cs); return;}
+    /* Capture the signed magnitude digits (no radix prefix) via a memory
+       stream, reusing the fixnum/bignum-aware writer. */
+    char* raw=NULL; size_t rawlen=0;
+    FILE* mem=open_memstream(&raw,&rawlen);
+    if(!mem){ write_integer_in_base(out,arg,radix); return; }  /* no-pad fallback */
+    write_integer_in_base(mem,arg,radix);
+    fclose(mem);
+    const char* digits=raw?raw:"";
+    char sign=0;
+    if(*digits=='-'){ sign='-'; digits++; }
+    else if(atsignp){ sign='+'; }
+    size_t ndig=strlen(digits);
+    if(comma_interval<1) comma_interval=3;
+    /* Insert COMMACHAR before digit k (from the left) when (ndig-k) is a
+       positive multiple of COMMA_INTERVAL — i.e. group from the right. */
+    size_t cap=ndig + ndig/(size_t)comma_interval + 2;
+    char* grouped=(char*)malloc(cap); int glen=0;
+    for(size_t k=0;k<ndig;k++){
+        if(colonp && k>0 && ((ndig-k)%(size_t)comma_interval)==0) grouped[glen++]=commachar;
+        grouped[glen++]=digits[k];}
+    int total=glen + (sign?1:0);
+    for(word p=total;p<mincol;p++) fputc(padchar,out);
+    if(sign) fputc(sign,out);
+    fwrite(grouped,1,(size_t)glen,out);
+    free(grouped); free(raw);}
+
 /* --- FORMAT ~R spelled-out integers: English cardinal / ordinal, Roman ------ */
 static const char* const fmt_card_ones[20] = {
     "zero","one","two","three","four","five","six","seven","eight","nine","ten",
@@ -1008,6 +1048,11 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
             while(i<end && ctrl[i]>='0' && ctrl[i]<='9'){
                 v=v*10+(ctrl[i]-'0'); got=true; i++;}
             if(neg && got) v=-v;
+            /* Character parameter: 'c — the param value is the char code of c
+               (CLHS 22.3).  Used for padchar / comma-char, e.g. ~5,'0D. */
+            if(!got && !neg && i<end && ctrl[i]=='\''){
+                i++;
+                if(i<end){ v=(word)(unsigned char)ctrl[i]; got=true; i++; }}
             if(!got && !neg && i<end && toupper((unsigned char)ctrl[i])=='V'){
                 Ref a=fmt_pop(args_ptr); v=integerp(a)?integer_value(a):0; got=true; i++;}
             if(!got && !neg && i<end && ctrl[i]=='#'){
@@ -1072,35 +1117,29 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               } else {
                   prin1(arg,stream);}
               break;}
-          case 'D': {
-              Ref arg=fmt_pop(args_ptr);
-              if(integerp(arg)) fmt_write_integer(out,integer_value(arg),10,atsignp);
-              else              princ(arg,stream);
-              break;}
-          case 'B': {
-              Ref arg=fmt_pop(args_ptr);
-              if(integerp(arg)) fmt_write_integer(out,integer_value(arg),2,atsignp);
-              else              princ(arg,stream);
-              break;}
-          case 'O': {
-              Ref arg=fmt_pop(args_ptr);
-              if(integerp(arg)) fmt_write_integer(out,integer_value(arg),8,atsignp);
-              else              princ(arg,stream);
-              break;}
-          case 'X': {
-              Ref arg=fmt_pop(args_ptr);
-              if(integerp(arg)) fmt_write_integer(out,integer_value(arg),16,atsignp);
-              else              princ(arg,stream);
+          case 'D': case 'B': case 'O': case 'X': {
+              /* ~mincol,padchar,commachar,comma-interval{D,B,O,X} */
+              int  radix    = (d=='D')?10 : (d=='B')?2 : (d=='O')?8 : 16;
+              word mincol   = fmt_has[0] ? fmt_params[0]        : 0;
+              char padchar  = fmt_has[1] ? (char)fmt_params[1]  : ' ';
+              char commach  = fmt_has[2] ? (char)fmt_params[2]  : ',';
+              word interval = fmt_has[3] ? fmt_params[3]        : 3;
+              fmt_radix_arg(out,fmt_pop(args_ptr),radix,atsignp,colonp,
+                            mincol,padchar,commach,interval);
               break;}
           case 'R': {
               Ref arg=fmt_pop(args_ptr);
               if(has_pfx){
-                  /* ~nR — print in radix n. */
+                  /* ~radix,mincol,padchar,commachar,comma-intervalR */
                   int radix=(int)prefix;
                   if(radix<2)  radix=2;
                   if(radix>36) radix=36;
-                  if(integerp(arg)) fmt_write_integer(out,integer_value(arg),radix,atsignp);
-                  else              princ(arg,stream);
+                  word mincol   = fmt_has[1] ? fmt_params[1]       : 0;
+                  char padchar  = fmt_has[2] ? (char)fmt_params[2] : ' ';
+                  char commach  = fmt_has[3] ? (char)fmt_params[3] : ',';
+                  word interval = fmt_has[4] ? fmt_params[4]       : 3;
+                  fmt_radix_arg(out,arg,radix,atsignp,colonp,
+                                mincol,padchar,commach,interval);
               } else if(integerp(arg)){
                   /* No radix: ~R cardinal, ~:R ordinal, ~@R Roman (CLHS 22.3.2.1). */
                   char rb[512];

@@ -1,0 +1,74 @@
+FORMAT: the radix directives ~D ~B ~O ~X ~R ignore their prefix parameters
+(mincol, padchar, colinc, minpad, comma-char, comma-interval).
+
+STATUS: open.  Found 2026-06-25 while testing the SORT segfault (segfault-1).
+
+== Symptom ==
+    (format nil "~5,'0D" 42)   => "0D"      ; expected "00042"
+    (format nil "~5D"    42)   => "42"       ; expected "   42"
+    (format nil "~3,'*D" 5)    => (untested) ; expected "**5"
+A zero-padded / right-justified integer field — extremely common, e.g. for
+"~5,'0D" hour:minute formatting or fixed-width tables — does not pad at all, and
+worse, "~5,'0D" produces a corrupt "0D" (the '0 pad-char parameter and the field
+width are dropped, and stray output appears).
+
+== Expected (CLHS 22.3.2.1, ~D / ~R) ==
+~mincol,padchar,commachar,comma-intervalD prints the integer right-justified in a
+field of at least MINCOL columns, padded on the left with PADCHAR (default space);
+with : the digits are grouped by COMMA-INTERVAL using COMMACHAR; with @ a sign is
+always printed.  ~B ~O ~X are ~D with radix 2/8/16; ~R takes the radix as its first
+parameter.
+
+== Cause ==
+sources/printer.c, the C format runner.  The ~A / ~S cases (around printer.c:1032
+and :1062) read fmt_params[]/fmt_has[] for mincol + padchar and pad correctly.  The
+radix cases do NOT — e.g. ~D (printer.c:1074):
+
+    case 'D': {
+        Ref arg=fmt_pop(args_ptr);
+        if(integerp(arg)) fmt_write_integer(out,integer_value(arg),10,atsignp);
+        else              princ(arg,stream);
+        break;}
+
+It never consults fmt_params, so mincol/padchar/colinc/minpad are ignored; the
+"0D" corruption suggests the parameter prefix is also being mis-consumed for ~D.
+The same applies to ~B (:1079), ~O (:1084), ~X (:1089) and ~R (:1094).
+
+== Fix sketch ==
+Render the integer to a temporary buffer (fmt_write_integer already exists; for ~R
+honour the radix parameter and for : insert COMMACHAR every COMMA-INTERVAL digits),
+then left-pad to MINCOL with PADCHAR exactly as the ~A / ~S cases do.  Factor the
+"~A/~S" mincol/padchar padding into a small helper and reuse it for the radix
+directives.  Also handle BIGNUM args (integer_value() truncates) by formatting via
+the bignum printer rather than integer_value().
+
+== Repro ==
+    bocl --no-init -q -x '(prin1 (list (format nil "~5,'"'"'0D" 42)
+                                       (format nil "~5D" 42)
+                                       (format nil "~D" 42)))'
+    => ("0D" "42" "42")     ; want ("00042" "   42" "42")
+
+== DONE (2026-06-28, v1.4.8) ==
+Root cause was deeper than "the radix cases ignore fmt_params": the FORMAT
+parameter parser (printer.c bocl_format_run) had NO case for the 'c
+character-parameter syntax at all.  So "~5,'0D" parsed 5, then treated the
+quote as the directive char, fell through to default, and emitted the literal
+"0D" — the observed corruption.  Fix:
+  1. Parser: handle 'c in the comma-separated param loop (param value = char
+     code of c).  This also makes ~A/~S padchar (e.g. ~10,,,'xA) work.
+  2. New helper fmt_radix_arg(): renders the integer (fixnum OR bignum, via the
+     existing fixnum/bignum-aware write_integer_in_base captured through
+     open_memstream — no more integer_value() truncation of bignums), applies
+     @ sign, : comma grouping (commachar / comma-interval, grouped from the
+     right), then left-pads to mincol with padchar.
+  3. Rewired ~D/~B/~O/~X (merged) and ~nR to call it with the correct
+     per-directive param mapping (~D: mincol,padchar,commachar,interval;
+     ~R: radix,mincol,padchar,commachar,interval).  ~R cardinal/ordinal/Roman
+     (no radix param) unchanged.
+
+Verified (standalone binary): ~5,'0D 42 -> "00042"; ~5D -> "   42"; ~3,'*D 5
+-> "**5"; ~8,'0B 5 -> "00000101"; ~X 255 -> "FF"; ~:D 1234567 -> "1,234,567";
+~,,'.:D -> "1.234.567"; ~@D 42 -> "+42"; ~5,'0D -7 -> "000-7"; ~8R 255 ->
+"377"; ~16,8,'0R 255 -> "000000FF"; ~VD / ~V,'0D (variable params) OK; bignums
+(24-digit value, grouped, zero-padded, negative) OK; ~R cardinal/ordinal/Roman
+OK; ~A padchar OK.  No regression in the CUnit suites that build/run here.
