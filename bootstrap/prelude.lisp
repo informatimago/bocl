@@ -7756,6 +7756,21 @@ change the count, but PREDICATE is called in that order (it may have effects)."
     ((eq type 'fixnum) (and (typep object 'integer)
                             (not (and (fboundp '%bignump) (%bignump object)))))
     ((eq type 'bignum) (and (fboundp '%bignump) (%bignump object)))
+    ;; Atomic type names the kernel TYPEP does not cover.  Each is the standard
+    ;; CL type (CLHS 4.3, 12.1.1) expressed via the matching predicate.
+    ((eq type 'function)      (functionp object))
+    ((eq type 'boolean)       (or (eq object t) (eq object nil)))
+    ((eq type 'keyword)       (keywordp object))
+    ((eq type 'atom)          (not (consp object)))
+    ((eq type 'bit)           (or (eql object 0) (eql object 1)))
+    ((eq type 'signed-byte)   (integerp object))
+    ((eq type 'unsigned-byte) (and (integerp object) (>= object 0)))
+    ((eq type 'simple-string) (simple-string-p object))
+    ((eq type 'simple-vector) (simple-vector-p object))
+    ((eq type 'simple-array)  (or (vectorp object) (and (fboundp '%md-array-p)
+                                                        (%md-array-p object))))
+    ((eq type 'base-char)     (characterp object))
+    ((eq type 'standard-char) (and (characterp object) (standard-char-p object)))
     ;; Compound type specifiers
     ((consp type)
      (let ((head (car type))
