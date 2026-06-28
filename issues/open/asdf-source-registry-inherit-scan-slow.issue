@@ -1,0 +1,48 @@
+ASDF default/inherited source-registry scan is pathologically slow (effectively hangs).
+
+STATUS: open.  Discovered driving the ASDF OPERATE work (uiop-bocl-porting.issue).
+Non-blocking when a caller configures an explicit registry with
+:IGNORE-INHERITED-CONFIGURATION (the test driver does this), but it blocks the
+out-of-the-box experience: a bare (asdf:find-system ...) or
+(asdf:initialize-source-registry '(:source-registry (:directory D)
+:inherit-configuration)) sits at 99% CPU for many minutes.
+
+== Symptom ==
+With the inherited (default) source-registry configuration, ASDF walks the
+standard config locations via UIOP COLLECT-SUB*DIRECTORIES, which recurses
+SUBDIRECTORIES (a CL:DIRECTORY "*/" glob per level).  On this host the inherited
+roots include the user home, so the walk descends the entire
+/home/claude tree (.claude/worktrees/ — full repo copies —, modules/asdf-src,
+bootstrap/sacla, ...): tens of thousands of directories.  Observed: the bocl
+process pegs one core at 99% for 7+ minutes and was killed before finishing.
+
+It is NOT an infinite loop: bocl's DIRECTORY subdir globbing terminates correctly
+per level (verified: (directory ".../tree/*/") returns only the immediate
+subdirs, no self/".."/"." entries).  It is sheer volume + per-directory cost.
+
+== Likely contributing factors (to investigate) ==
+1. CL:DIRECTORY cost per call in bocl (each level re-globs and builds pathnames;
+   if it stats/allocates heavily this dominates over tens of thousands of dirs).
+2. No caching: ASDF caches directory listings within a session via
+   UIOP:*WILD-DIRECTORY* + the source-registry cache; verify bocl isn't defeating
+   that (e.g. pathname EQUALity / hashing so the cache keys collide or never hit).
+3. The bocl ASDF port should, after loading asdf.lisp, set a sane default that
+   does not recursively tree-walk $HOME — e.g. register already-loaded systems as
+   immutable and default the source-registry to ignore-inherited unless the user
+   opts in (see uiop-bocl-porting.issue notes).
+
+== Repro ==
+  (load "modules/asdf/asdf.lisp")
+  (asdf:initialize-source-registry
+    '(:source-registry (:directory "/tmp/x/") :inherit-configuration))
+  ;; -> 99% CPU for minutes (walks inherited roots incl. $HOME tree)
+
+Workaround that works today:
+  (asdf:initialize-source-registry '(:source-registry :ignore-inherited-configuration))
+  ;; instant; explicit systems registered via DEFSYSTEM/LOAD-ASD are then found.
+
+== Fix direction ==
+- Profile CL:DIRECTORY / SUBDIRECTORIES under a deep tree; reduce per-dir cost.
+- Ensure ASDF's in-session directory cache is effective on bocl (pathname hashing).
+- In the #+bocl porting layer, provide an init that registers already-loaded
+  systems immutable and picks a non-tree-walking default source-registry.

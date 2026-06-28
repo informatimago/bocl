@@ -258,3 +258,65 @@ merging, COMPILE-FILE* condition capture (Tier-2, run-program for some ops), and
 plan/perform machinery.  Expect more pathname (truename/ensure-directories-exist) and
 compile-path gaps.  A trivial in-memory system + (asdf:operate 'load-op ...) is the next
 test to drive.
+
+----------------------------------------------------------------------
+PROGRESS (v1.4.10 -> v1.4.18) — USING ASDF: DEFSYSTEM now FULLY works; OPERATE
+reached the plan/perform machinery.  Driven with a trivial 2-file system
+(pkg.lisp + main.lisp :depends-on pkg) under
+  (asdf:initialize-source-registry '(:source-registry :ignore-inherited-configuration))
+  (asdf:defsystem "hello" :pathname D :components ((:file "pkg") (:file "main" ...)))
+A diagnostic backtrace facility (BOCL:BACKTRACE / %PRINT-BACKTRACE :type :call) made
+each blocker fast to localise even though every ASDF load is ~4 min.
+----------------------------------------------------------------------
+Each blocker below was a *general* CL conformance bug, fixed in the prelude/kernel,
+regression-tested (must-* unchanged) and committed+pushed independently:
+
+  - TYPEP: accept '*' bounds in (integer/float/real low high); add (unsigned-byte s),
+    (signed-byte s), (mod n), (rational ...) and atomic FUNCTION/BOOLEAN/KEYWORD/
+    ATOM/BIT/SIMPLE-*/BASE-CHAR/STANDARD-CHAR.                          (v1.4.10, .12)
+       blocked: UIOP (check-type n (integer 0 *)) in source-registry validation, and
+       ENSURE-FUNCTION's (etypecase fun (function ...) ((or boolean keyword ...) ...)).
+  - PARSE-NAMESTRING added (was exported but undefined).               (v1.4.11)
+       blocked: UIOP RESOLVE-ABSOLUTE-LOCATION.
+  - CLOS REINITIALIZE-INSTANCE added; SHARED-INITIALIZE fixed so a supplied initarg
+    always sets its slot regardless of SLOT-NAMES (CLHS 7.1.3).         (v1.4.13)
+       blocked: ASDF RESET-SYSTEM-CLASS ((apply 'reinitialize-instance system keys)).
+  - LOOP: ALWAYS/NEVER/THEREIS now tested at their textual position (in the body),
+    not before it — so a preceding WHILE/UNTIL or stepped FOR terminates first.  (v1.4.14)
+       blocked: (loop for p = parent then (component-parent p) while p
+                 thereis (module-default-component-class p)) in PARSE-COMPONENT-FORM.
+  - MAKE-PATHNAME: explicit :DIRECTORY NIL stays relative (supplied-p vs DEFAULTS). (v1.4.15)
+       blocked: UIOP PARSE-UNIX-NAMESTRING (make-pathname :directory nil :defaults <abs>)
+                + ENSURE-PATHNAME :WANT-RELATIVE on each component.
+  - CLOS: a method's &KEY lambda list accepts keywords named by sibling methods
+    (DEFMETHOD appends &ALLOW-OTHER-KEYS).                              (v1.4.16)
+       blocked: OPERATE dispatch passing :VERBOSE to PERFORM methods.
+  - WITH-COMPILATION-UNIT macro added (degenerate: PROGN body).         (v1.4.17)
+       blocked: ASDF PERFORM plan wraps actions in (with-compilation-unit () ...).
+  - CLOS: preserve MULTIPLE VALUES through generic-function dispatch (%CNM-CALL and the
+    primary-chain result now use MULTIPLE-VALUE-PROG1).                 (v1.4.18)
+       blocked: ASDF COMPONENT-OPERATION-TIME is a (gethash ...) method returning
+       (values stamp present-p); the truncated present-p made ACTION-STATUS see done-p
+       NIL, so MARK-AS-DONE's stamp/keep-p invariant failed on every system load-op.
+       (Also fixed ALREADY-LOADED-SYSTEMS, which now returns ("uiop" "asdf" ...).)
+
+STATUS after v1.4.18: (asdf:defsystem ...) succeeds for all option combinations
+(version/description/pathname/components/:depends-on).  (asdf:operate 'load-op "hello")
+now gets through find-system, the plan, with-compilation-unit and the stamp/mark-as-done
+invariant, and reaches PERFORM.
+
+CURRENT BLOCKER (next): OPERATE re-evaluates the in-progress top-level LOAD form of the
+driver file (a nested-LOAD / *load-pathname* / *default-pathname-defaults* re-entrancy),
+which under --on-error appease recurses into SIGSEGV.  Tracked separately in
+asdf-operate-reenters-toplevel-load.issue — that is the gating bug for actually compiling
+& loading a system's component files.  After it: PERFORM load-op on the cl-source-files
+(should reduce to (load file), since bocl COMPILE-FILE falls back to source), then verify
+hello:greet, then DEFSYSTEM-from-.asd via LOAD-ASD.
+
+ALSO FILED while here (non-blocking, both in index):
+  - asdf-source-registry-inherit-scan-slow.issue — the DEFAULT/inherited source-registry
+    tree-walks $HOME (tens of thousands of dirs) at 99% CPU for minutes; avoid via
+    :ignore-inherited-configuration.  The #+bocl port should register already-loaded
+    systems immutable + default to a non-tree-walking registry after loading asdf.lisp.
+  - ratio-floor-round-truncate.issue — single-arg FLOOR/ROUND/CEILING/TRUNCATE of a
+    RATIO signal a TYPE ERROR (ratio +-*/ and two-arg ROUND work).

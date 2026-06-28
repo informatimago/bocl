@@ -30,6 +30,8 @@ sockets.issue
 slow-apropos.issue
 stale-test-suite-failures.issue
 ratio-floor-round-truncate.issue
+asdf-operate-reenters-toplevel-load.issue
+asdf-source-registry-inherit-scan-slow.issue
 defstruct-conc-name-package.issue
 package-print-object-method.issue
 clos-condition-hierarchy-parents.issue

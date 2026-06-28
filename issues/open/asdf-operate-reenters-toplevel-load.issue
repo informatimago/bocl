@@ -1,0 +1,77 @@
+ASDF OPERATE re-evaluates the in-progress top-level LOAD form (→ SIGSEGV under appease).
+
+STATUS: open.  This is the current blocker for the USING-ASDF leg of
+uiop-bocl-porting.issue.  DEFSYSTEM works fully; (asdf:operate 'asdf:load-op
+"sys") then mis-behaves.
+
+== Symptom ==
+Load a file FOO.lisp (via `bocl -l FOO.lisp`) whose top-level forms are, in order:
+  (load "modules/asdf/asdf.lisp")                  ; form 1
+  ...initialise source-registry, register immutable...
+  (asdf:defsystem "hello" :pathname "/abs/dir/" :components ((:file "pkg") ...))
+  (asdf:operate 'asdf:load-op "hello")             ; form N
+
+When form N runs, bocl re-evaluates FORM 1 of the SAME file —
+  (load "modules/asdf/asdf.lisp")
+— but now with *DEFAULT-PATHNAME-DEFAULTS* changed (to the system's tree, e.g.
+/home/.../tmp/), so the relative path no longer resolves:
+
+  == about to operate ==
+  ;; Unhandled SIMPLE-ERROR: LOAD: file ".../tmp/modules/asdf/asdf.lisp" does not exist
+
+Under --on-error exit this errors out at the first re-entry and the process exits 1.
+Under --on-error appease the re-entry is "recovered" and the WHOLE driver re-runs
+(its banner / defsystem / operate print a second time), which re-enters OPERATE,
+which re-enters the load, ... → unbounded recursion → SIGSEGV (process dies 139).
+
+So the SIGSEGV is a secondary effect (stack overflow from the re-entry, with bocl's
+default signal trap + appease turning the fault into another recovery); the PRIMARY
+bug is that OPERATE causes the file's top-level form(s) to be evaluated again.
+
+== What is (probably) happening ==
+OPERATE's machinery (or a PERFORM/UPGRADE-ASDF step) appears to re-trigger the
+top-level LOAD of the file currently being loaded — i.e. the value of
+*LOAD-PATHNAME* / the current load stream — rather than (or in addition to)
+loading the system's own component files (.../dir/pkg.lisp, main.lisp).  Candidate
+mechanisms to check:
+  - bocl LOAD re-reading from the top after a deep nested LOAD (stream position /
+    *load-pathname* / *load-truename* not saved & restored across a nested LOAD
+    inside OPERATE's PERFORM (load-op -> (load component-file))).
+  - OPERATE / UPGRADE-ASDF using *LOAD-PATHNAME* (still = the driver) as a system
+    or component source.
+  - *DEFAULT-PATHNAME-DEFAULTS* being rebound by OPERATE and not restored, so a
+    later/re-run relative LOAD resolves against the wrong directory (the changed
+    DPD is directly observed in the error path above).
+
+== Repro (deterministic) ==
+  ;; /tmp/drv.lisp
+  (load "modules/asdf/asdf.lisp")
+  (asdf:initialize-source-registry '(:source-registry :ignore-inherited-configuration))
+  (asdf:defsystem "hello" :pathname "/abs/asdf-test/"
+    :components ((:file "pkg") (:file "main" :depends-on ("pkg"))))
+  (format t "about to operate~%") (finish-output)
+  (asdf:operate 'asdf:load-op "hello")
+  ;; run: bocl --no-init --batch --on-error exit -l /tmp/drv.lisp -quit
+  ;; observe the spurious re-load of drv.lisp's FIRST form during OPERATE.
+
+A minimal asdf-test/ system (pkg.lisp defines a package, main.lisp depends on it)
+is enough; the component files themselves are never reached because the re-entry
+happens first.
+
+== Next steps ==
+1. Instrument bocl LOAD / DO-LOAD to log (push/pop) *LOAD-PATHNAME* and the stream,
+   and confirm whether a nested LOAD inside PERFORM (load-op) corrupts the outer
+   load's position or *load-pathname* — strong suspect: nested LOAD not saving the
+   enclosing load's stream/pathname.
+2. Check whether OPERATE rebinds *DEFAULT-PATHNAME-DEFAULTS* without UNWIND-PROTECT
+   restoring it.
+3. Once the re-entry is gone, re-drive (asdf:operate 'load-op "hello") to reach the
+   actual component compile/load (PERFORM load-op on the cl-source-files) — the real
+   target of the USING-ASDF milestone.
+
+== Related ==
+- uiop-bocl-porting.issue (parent: USING ASDF / OPERATE).
+- asdf-source-registry-inherit-scan-slow.issue (separate; avoided here via
+  :ignore-inherited-configuration).
+- bocl traps signals by default (--no-sigtrap disables); the appease recovery of a
+  SIGSEGV compounds this — consider not "appeasing" a fatal memory signal.
