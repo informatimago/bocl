@@ -9456,6 +9456,14 @@ result array; return that array."
     (when (probe-file out) (ignore-errors (delete-file out)))
     (values (pathname out) nil nil)))
 
+;;; WITH-COMPILATION-UNIT (CLHS 3.2.2.3 / macro).  Its purpose is to batch
+;;; deferred compiler warnings across an extent.  bocl interprets and defers no
+;;; warnings, so this just evaluates BODY; the OPTIONS plist (e.g. :OVERRIDE) is
+;;; accepted and ignored.  ASDF wraps its PERFORM plan in WITH-COMPILATION-UNIT.
+(defmacro with-compilation-unit ((&rest options) &body body)
+  (declare (ignore options))
+  `(progn ,@body))
+
 ;;; ---- Multi-dimensional arrays (ranks 0..array-rank-limit-1 = 0..7) -------
 ;;; Rank-1 arrays stay kernel vectors (so VECTORP / SVREF and the existing code
 ;;; keep working).  Ranks 0 and >=2 are an %MD-ARRAY: a flat row-major storage
