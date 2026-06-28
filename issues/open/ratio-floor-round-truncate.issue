@@ -1,0 +1,53 @@
+Single-argument FLOOR / ROUND / CEILING / TRUNCATE of a RATIO signal a TYPE ERROR.
+
+STATUS: open.  Discovered while driving the ASDF DEFSYSTEM/OPERATE work
+(uiop-bocl-porting.issue): a diagnostic harness computed
+(round (/ elapsed internal-time-units-per-second)) — i.e. (round <ratio>) — and
+got "TYPE ERROR: expected INTEGER, got RATIO".  Non-blocking for ASDF (ASDF
+itself does not depend on it; only the test harness did).
+
+== Symptom ==
+Ratio arithmetic (+ - * /) works and ratios print correctly, and the TWO-argument
+divide-and-round forms work, but the ONE-argument rounding functions reject a
+ratio:
+
+  (/ 7 3)        => 7/3            ; ok
+  (+ 1/2 1/3)    => 5/6            ; ok
+  (* 1000 1/3)   => 1000/3         ; ok
+  (- 5/2 1)      => 3/2            ; ok
+  (round 7 3)    => 2              ; ok (two-arg)
+  (round 1/3)    => TYPE ERROR: expected INTEGER, got RATIO   ; BUG (want 0, 1/3)
+  (floor 1/3)    => TYPE ERROR: expected INTEGER, got RATIO   ; BUG (want 0, 1/3)
+
+CEILING and TRUNCATE almost certainly share the defect (same single-arg path).
+
+== Expected (CLHS 12.2 FLOOR/CEILING/TRUNCATE/ROUND) ==
+With a single REAL argument these return (values <integer-quotient> <remainder>):
+  (floor 1/3)   => 0, 1/3
+  (floor 7/3)   => 2, 1/3
+  (floor -1/3)  => -1, 2/3
+  (round 1/3)   => 0, 1/3
+  (round 5/2)   => 2, 1/2   ; round-half-to-even
+  (truncate 7/3)=> 2, 1/3
+  (ceiling 1/3) => 1, -2/3
+
+== Likely cause ==
+The single-argument FLOOR/ROUND/etc. path assumes an INTEGER (or FLOAT) operand
+and does not handle the RATIO case.  For a ratio N/D it can compute the integer
+quotient and remainder directly from (FLOOR N D) etc. on the numerator/denominator
+(D > 0 by ratio normalisation), then form the fractional remainder as
+(- ratio quotient).
+
+== Fix sketch ==
+In the prelude (or kernel) FLOOR/CEILING/TRUNCATE/ROUND single-arg handlers, add
+a RATIO branch:
+  (floor r)   = let q = (floor (numerator r) (denominator r))   -> (values q (- r q))
+  (truncate r)= toward zero;  (ceiling r) = (- (floor (- r)));  (round r) = nearest,
+  ties to even.
+The two-argument (round a b) path already works, so single-arg can delegate:
+e.g. (floor r) == (floor (numerator r) (denominator r)) returning the same two
+values (quotient + a REMAINDER scaled back to a ratio: (/ rem (denominator r))).
+
+== Repro ==
+  bocl --no-init --batch -x '(print (round 1/3))'
+  => TYPE ERROR: expected INTEGER, got RATIO
