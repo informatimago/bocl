@@ -4914,16 +4914,20 @@ the class object it denotes, so two specializers compare by class identity."
          (eslots (%cls-eslots cls)))
     (dolist (eslot eslots instance)
       (let ((name (getf eslot :name)))
-        (when (or (eq slot-names t) (member name slot-names))
-          (multiple-value-bind (ikey ivalue found)
-              (get-properties initargs (or (getf eslot :initargs) nil))
-            ikey  ; not used
-            (if found
-                (%eslot-set instance eslot ivalue)
-                (when (and (eq (%eslot-ref instance eslot) *%unbound*)
-                           (getf eslot :initfunction))
-                  (%eslot-set instance eslot
-                              (funcall (getf eslot :initfunction)))))))))
+        (multiple-value-bind (ikey ivalue found)
+            (get-properties initargs (or (getf eslot :initargs) nil))
+          ikey  ; not used
+          (cond
+            ;; A supplied initarg ALWAYS sets the slot, regardless of SLOT-NAMES
+            ;; (CLHS 7.1.3 step 1).
+            (found (%eslot-set instance eslot ivalue))
+            ;; Otherwise fill from the initform only when the slot is named by
+            ;; SLOT-NAMES (T = all) and is currently unbound (step 2/3).
+            ((and (or (eq slot-names t) (member name slot-names))
+                  (eq (%eslot-ref instance eslot) *%unbound*)
+                  (getf eslot :initfunction))
+             (%eslot-set instance eslot
+                         (funcall (getf eslot :initfunction))))))))
     instance))
 
 (defun make-instance (class-designator &rest initargs)
@@ -4997,6 +5001,17 @@ the class object it denotes, so two specializers compare by class identity."
 (ensure-method 'initialize-instance nil '(standard-object)
                (lambda (instance &rest initargs)
                  (apply #'shared-initialize instance t initargs)
+                 instance))
+
+;;; REINITIALIZE-INSTANCE (CLHS 7.3).  The system-supplied primary method calls
+;;; SHARED-INITIALIZE with slot-names NIL — no slots are initialised from their
+;;; initforms; only slots whose initargs were supplied are set — and returns the
+;;; instance.  A generic function so user / library code (e.g. ASDF, which
+;;; reinitialises a SYSTEM in RESET-SYSTEM-CLASS) can add :before/:after methods.
+(defgeneric reinitialize-instance (instance &rest initargs))
+(ensure-method 'reinitialize-instance nil '(standard-object)
+               (lambda (instance &rest initargs)
+                 (apply #'shared-initialize instance nil initargs)
                  instance))
 
 ;;; shared-initialize is kept as a plain function (not a GF) to avoid
