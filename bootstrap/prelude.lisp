@@ -7723,6 +7723,21 @@ change the count, but PREDICATE is called in that order (it may have effects)."
 ;;; ---- TYPEP with compound type specifiers ---------------------------------
 ;;; Overrides the Slice 19 definition with full compound-type support.
 
+(defun %num-lower-ok (object bound)
+  "Check OBJECT against the LOW bound of a numeric type-spec (CLHS 4.2.3).
+   BOUND is NIL or * (unbounded), a number N (inclusive: object >= N), or a
+   one-element list (N) (exclusive: object > N)."
+  (cond ((or (null bound) (eq bound '*)) t)
+        ((consp bound) (> object (car bound)))
+        (t (>= object bound))))
+
+(defun %num-upper-ok (object bound)
+  "Check OBJECT against the HIGH bound of a numeric type-spec: NIL/* unbounded,
+   N inclusive (object <= N), (N) exclusive (object < N)."
+  (cond ((or (null bound) (eq bound '*)) t)
+        ((consp bound) (< object (car bound)))
+        (t (<= object bound))))
+
 (defun typep (object type &optional environment)
   "Extended TYPEP with compound type specifiers."
   (declare (ignore environment))
@@ -7767,29 +7782,52 @@ change the count, but PREDICATE is called in that order (it may have effects)."
           (let ((pred (car args)))
             (not (null (funcall (if (symbolp pred) (symbol-function pred) pred)
                                 object)))))
-         ;; (integer low high) — integer in range
+         ;; (integer low high) — integer in range.  LOW/HIGH may be NIL or *
+         ;; (unbounded), N (inclusive), or (N) (exclusive); see CLHS 4.2.3.
          ((eq head 'integer)
           (and (integerp object)
-               (or (null (car args))    (>= object (if (consp (car args)) (1+ (car (car args))) (car args))))
-               (or (null (cadr args))   (<= object (if (consp (cadr args)) (1- (car (cadr args))) (cadr args))))))
+               (%num-lower-ok object (car args))
+               (%num-upper-ok object (cadr args))))
+         ;; (rational low high) — rational in range
+         ((eq head 'rational)
+          (and (rationalp object)
+               (%num-lower-ok object (car args))
+               (%num-upper-ok object (cadr args))))
          ;; (float low high) — float in range
          ((eq head 'float)
           (and (floatp object)
-               (or (null (car args))  (>= object (if (consp (car args)) (car (car args)) (car args))))
-               (or (null (cadr args)) (<= object (if (consp (cadr args)) (car (cadr args)) (cadr args))))))
+               (%num-lower-ok object (car args))
+               (%num-upper-ok object (cadr args))))
          ;; (real low high) — any real in range
          ((eq head 'real)
           (and (or (integerp object) (floatp object))
-               (or (null (car args))  (>= object (if (consp (car args)) (car (car args)) (car args))))
-               (or (null (cadr args)) (<= object (if (consp (cadr args)) (car (cadr args)) (cadr args))))))
-         ;; (string length) — string of given length
+               (%num-lower-ok object (car args))
+               (%num-upper-ok object (cadr args))))
+         ;; (unsigned-byte &optional s) — non-negative integer; with size S an
+         ;; integer in [0, 2^S - 1].  (mod n) — integer in [0, n-1].
+         ((eq head 'unsigned-byte)
+          (and (integerp object) (>= object 0)
+               (let ((s (car args)))
+                 (or (null s) (eq s '*) (< object (ash 1 s))))))
+         ((eq head 'signed-byte)
+          (and (integerp object)
+               (let ((s (car args)))
+                 (if (or (null s) (eq s '*))
+                     t
+                     (let ((lim (ash 1 (1- s))))
+                       (and (>= object (- lim)) (< object lim)))))))
+         ((eq head 'mod)
+          (and (integerp object) (>= object 0) (< object (car args))))
+         ;; (string length) — string of given length (* / NIL = any length)
          ((eq head 'string)
           (and (stringp object)
-               (or (null (car args)) (= (string-length object) (car args)))))
-         ;; (vector elt-type length) — vector
+               (or (null (car args)) (eq (car args) '*)
+                   (= (string-length object) (car args)))))
+         ;; (vector elt-type length) — vector (* / NIL length = any)
          ((eq head 'vector)
           (and (vectorp object)
-               (or (null (cadr args)) (= (vector-length object) (cadr args)))))
+               (or (null (cadr args)) (eq (cadr args) '*)
+                   (= (vector-length object) (cadr args)))))
          ;; (array ...) — array
          ((eq head 'array)
           (or (stringp object) (vectorp object)))
