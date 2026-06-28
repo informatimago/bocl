@@ -4598,9 +4598,12 @@ SETQ/INCF/DECF is left in place (sequential)."
         (old-nexts *%cnm-nexts*)
         (old-args  *%cnm-args*))
     (setq *%cnm-on* on *%cnm-nexts* nexts *%cnm-args* args)
-    (let ((result (funcall thunk)))
-      (setq *%cnm-on* old-on *%cnm-nexts* old-nexts *%cnm-args* old-args)
-      result)))
+    ;; MULTIPLE-VALUE-PROG1 so a method body's full values propagate through the
+    ;; dispatch (CLHS 7.6.6 — a generic function returns the values of the method);
+    ;; a plain (let ((r (funcall thunk))) r) would truncate to the primary value
+    ;; (e.g. breaks GETHASH-returning methods like ASDF COMPONENT-OPERATION-TIME).
+    (multiple-value-prog1 (funcall thunk)
+      (setq *%cnm-on* old-on *%cnm-nexts* old-nexts *%cnm-args* old-args))))
 
 (defun call-next-method (&rest explicit-args)
   "Within a method body: call the next applicable method.
@@ -4729,17 +4732,18 @@ SETQ/INCF/DECF is left in place (sequential)."
                    (%cnm-call t nil actual
                                (let ((mf (%mth-function m)))
                                  (lambda () (apply mf actual)))))
-                 ;; Run primary chain
-                 (let ((result
-                          (%cnm-call t (cdr primary-fns) actual
-                                     (let ((fn (car primary-fns)))
-                                       (lambda () (apply fn actual))))))
+                 ;; Run primary chain, preserving ALL its values (CLHS 7.6.6); the
+                 ;; afters run for effect afterwards, then the primary values are
+                 ;; returned — MULTIPLE-VALUE-PROG1 captures them across the afters.
+                 (multiple-value-prog1
+                     (%cnm-call t (cdr primary-fns) actual
+                                (let ((fn (car primary-fns)))
+                                  (lambda () (apply fn actual))))
                    ;; Run afters (reversed; no cnm)
                    (dolist (m afters)
                      (%cnm-call t nil actual
                                  (let ((mf (%mth-function m)))
-                                   (lambda () (apply mf actual)))))
-                   result)))))
+                                   (lambda () (apply mf actual))))))))))
 
       ;; Wrap with arounds: each around's next is the following around or core
       (if (null arounds)
