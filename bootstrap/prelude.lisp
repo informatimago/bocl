@@ -8258,6 +8258,30 @@ result array; return that array."
                  (funcall *%kernel-pathname-fn* designator))))))
     (t (funcall *%kernel-pathname-fn* designator))))
 
+(defun parse-namestring (thing &optional host default-pathname
+                                         &key (start 0) end junk-allowed)
+  "Parse THING into a pathname (CLHS 19.2.2); return (values pathname position).
+   bocl pathnames are namestring-backed, so a string THING is converted by
+   PATHNAME over its [START, END) substring and POSITION is END; a pathname /
+   stream THING is returned unchanged with POSITION = START.  HOST, when given,
+   must name a defined logical host (else an error, per the standard); DEFAULT-
+   PATHNAME is accepted and ignored.  JUNK-ALLOWED is accepted; this parser
+   consumes the whole substring, so it never reports junk."
+  (declare (ignore default-pathname junk-allowed))
+  (when (and host (not (gethash (string host) *logical-pathname-translations*)))
+    (error "PARSE-NAMESTRING: ~S does not name a defined logical host." host))
+  (cond
+    ((logical-pathname-p thing) (values thing start))
+    ((or (physical-pathname-p thing) (typep thing 'file-stream))
+     (values (pathname thing) start))
+    ((stringp thing)
+     (let* ((stop (or end (length thing)))
+            (sub  (if (and (eql start 0) (eql stop (length thing)))
+                      thing
+                      (subseq thing start stop))))
+       (values (pathname sub) stop)))
+    (t (values (pathname thing) start))))
+
 ;;; ---- Updated pathname component accessors --------------------------------
 
 (defun pathname-host (p)
