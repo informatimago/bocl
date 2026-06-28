@@ -222,10 +222,44 @@ STATUS: kernel hook DONE and validated (v1.4.4).  Implemented:
     3. error safety: an error signalled in the callback (previously crashed,
        EXIT 139) is now absorbed; the process survives and continues.
 
-NEXT (CL layer, pure Lisp on top of the hook):
-  - MAKE-BROADCAST-STREAM (fan-out via WRITE-STRING) + predicate + accessor;
-  - %MAKE-LINE-PREFIX-STREAM (prefix ";; O: "/";; E: ", track at-line-start,
-    force a newline when the partner stream interrupts mid-line);
-  - DRIBBLE (rebind *STANDARD-OUTPUT*/*ERROR-OUTPUT*; REPL writes input verbatim
-    + ";; C: " for conditions) and BOCL:DRIBBLE-FILE-PATHNAME;
-  - main.c: --dribble / --dribble=FILE.
+CL layer DONE (v1.4.5) — pure Lisp on top of the hook (bootstrap/prelude.lisp):
+  - MAKE-BROADCAST-STREAM is a real fan-out stream (callback stream writing each
+    chunk to every component) + BROADCAST-STREAM-STREAMS / BROADCAST-STREAM-P via
+    a side registry; FORCE-OUTPUT / FINISH-OUTPUT recurse into components.
+  - BOCL::%MAKE-LINE-PREFIX-STREAM: two streams sharing a state vector prefix
+    ";; O: " / ";; E: " per line and terminate the partner's line on interrupt.
+  - CL:DRIBBLE rebinds *STANDARD-OUTPUT*/*ERROR-OUTPUT* to broadcasts of {real
+    stream, line-prefix stream over the file}; header ";; H: bocl <version>";
+    appends if present; returns the absolute pathname, or NIL on close.
+  - BOCL:DRIBBLE-FILE-PATHNAME (&key type time-zone): ${XDG_STATE_HOME:-~/.local/
+    state}/bocl/dribbles/<ISO-8601>.log; NIL/:UTC/rational time-zone handled.
+
+REPL + CLI DONE (v1.4.6):
+  - sources/bocl.c bocl_repl: input forms recorded verbatim (via
+    BOCL::%DRIBBLE-NOTE-INPUT) before eval; the result echo prints to the live
+    *STANDARD-OUTPUT* so DRIBBLE tees it; the prompt is emitted to the saved real
+    output so it is NOT recorded.
+  - %REPL-EVAL handler records the condition on ";; C: " lines
+    (BOCL::%DRIBBLE-NOTE-CONDITION) in addition to the existing ";; E:" report.
+  - sources/main.c: --dribble (default pathname) and --dribble=FILE, activated
+    after the init/rc files, before -e forms and the REPL.
+
+Blocking bug fixed within this issue (bocl had no mkdir at all, so the default
+dribble path could not be created):
+  - sources/bocl.c: new COMMON-LISP::%MKDIR kernel primitive (mkdir(2), EEXIST-
+    tolerant); ENSURE-DIRECTORIES-EXIST (was a documented stub) rewritten to walk
+    and create the directory chain.
+
+Known minor fidelity caveats (the issue tolerates redundancy / impl-specifics):
+  - input is recorded in PRIN1 form (normalized), not byte-for-byte verbatim;
+  - only top-level REPL forms are recorded — debugger-loop command input is not;
+  - #\Newline is NEL (133) by bocl design while LF (10, #\Linefeed) is the actual
+    separator — the line-prefix logic uses #\Linefeed accordingly.
+
+Verified end-to-end via the standalone interpreter: programmatic DRIBBLE, the
+--dribble[=FILE] CLI, O/E prefixing + partial-line interleaving, ";; C:" capture,
+verbatim-input recording, start/stop return values, append-on-reopen, un-teeing
+after close, default XDG pathname creation, and all DRIBBLE-FILE-PATHNAME
+timezone variants.  No regression in the core smoke battery.
+
+STATUS: DONE (v1.4.6).

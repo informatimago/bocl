@@ -83,11 +83,28 @@ Ref bocl_repl(Ref inp,Ref out){
     set_symbol_value(vs1,NIL_Symbol); set_symbol_value(vs2,NIL_Symbol); set_symbol_value(vs3,NIL_Symbol);
     set_symbol_value(vl1,NIL_Symbol); set_symbol_value(vl2,NIL_Symbol); set_symbol_value(vl3,NIL_Symbol);
     while(true){
-        bocl_emit_prompt(out);
-        stream_finish_output(out);
+        /* The prompt is interaction chrome — keep it OFF the dribble file.  When
+           a DRIBBLE is active, *STANDARD-OUTPUT* (and the captured OUT) is the
+           teeing broadcast, so emit the prompt to the saved real output instead. */
+        Ref prompt_out=out;
+        {   Ref so=find_symbol(string_new_cstring("*DRIBBLE-SAVED-OUTPUT*"),
+                               BOCL_Package->slots->package.present);
+            if(so && symbol_boundp(so) && !nullp(symbol_value(so))){
+                prompt_out=symbol_value(so);}}
+        bocl_emit_prompt(prompt_out);
+        stream_finish_output(prompt_out);
         Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
         if((sexp==inp)||equal(sexp,list(S(QUIT),NULL))){
             return I(0);}
+        /* When dribbling, record the input form verbatim (no prefix) to the
+           dribble file before evaluating it (issue dribble).  %DRIBBLE-NOTE-INPUT
+           no-ops when not dribbling. */
+        {   Ref ni=find_symbol(string_new_cstring("%DRIBBLE-NOTE-INPUT"),
+                               BOCL_Package->slots->package.present);
+            if(ni && symbol_fboundp(ni)){
+                MultipleValues nmv={0};
+                kernel_apply(symbol_function(ni),
+                             cons(prin1_to_string(sexp),NIL_Symbol),&nmv);}}
         /* Shift the form history: + gets the form evaluated last time (old -). */
         set_symbol_value(vp3,symbol_value(vp2));
         set_symbol_value(vp2,symbol_value(vp1));
@@ -114,8 +131,12 @@ Ref bocl_repl(Ref inp,Ref out){
         set_symbol_value(vl3,symbol_value(vl2));
         set_symbol_value(vl2,symbol_value(vl1));
         set_symbol_value(vl1,vals);
-        print(primary,out);
-        terpri(out);}}
+        /* Print the result to the CURRENT *STANDARD-OUTPUT* (not the captured
+           OUT) so a DRIBBLE in effect tees the result echo to the dribble file;
+           the prompt stays on OUT so it is not recorded. */
+        {   Ref cur_out=variable_value(S(*STANDARD-OUTPUT*));
+            print(primary,cur_out);
+            terpri(cur_out);}}}
 
 Ref bocl_read_eval_loop_cstring(const char* text){
     Ref out=variable_value(S(*STANDARD-OUTPUT*));
@@ -418,6 +439,26 @@ static void kernel_DIRECTORY_P(unused Ref function, Ref arguments, MultipleValue
     bool isdir = (stat(path,&st)==0) && S_ISDIR(st.st_mode);
     free(path);
     results->count=1; results->values[0]=as_boolean(isdir);
+    close_live_pool(pool);}
+
+/* (%MKDIR path) -> T if PATH now names a directory (just created, or it already
+   existed), NIL on failure.  Creates a single level; intermediate directories
+   must already exist (ENSURE-DIRECTORIES-EXIST walks the chain). */
+static void kernel_MKDIR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref pathspec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    char* path;
+    if(typep(pathspec,STRING_Class)){ path=string_cstring(pathspec); }
+    else if(typep(pathspec,PHYSICAL_PATHNAME_Class)){ path=string_cstring(namestring(pathspec)); }
+    else { TYPE_ERROR(pathspec,STRING_Class); }
+    int rc=mkdir(path,0777);   /* umask applies; 0777 -> typically 0755 */
+    bool ok;
+    if(rc==0){ ok=true; }
+    else { struct stat st; ok=(stat(path,&st)==0)&&S_ISDIR(st.st_mode); }  /* EEXIST dir = ok */
+    free(path);
+    results->count=1; results->values[0]=as_boolean(ok);
     close_live_pool(pool);}
 
 /* APPEND is needed by backquote-expanded code; the kernel previously only
@@ -1091,7 +1132,9 @@ void bocl_register_load(void){
         s=symbol_intern_cstring("%COMMAND-LINE-ARGUMENTS");
         set_symbol_function(s,built_in_function_new(s,NIL_Symbol,kernel_COMMAND_LINE_ARGUMENTS));
         s=symbol_intern_cstring("%DIRECTORY-P");
-        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_DIRECTORY_P));}
+        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_DIRECTORY_P));
+        s=symbol_intern_cstring("%MKDIR");
+        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_MKDIR));}
     Ref af=S(APPEND);
     set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
     /* BOCL::%MAKE-OUTPUT-CALLBACK-STREAM — kernel hook for CL compound streams

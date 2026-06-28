@@ -5722,10 +5722,26 @@ the class object it denotes, so two specializers compare by class identity."
 ;;; ---- ENSURE-DIRECTORIES-EXIST --------------------------------------------
 
 (defun ensure-directories-exist (pathname &key verbose)
-  "Create all directories in PATHNAME's directory component if needed.
-  Returns (values pathname created-p).  Currently a stub — bocl has no mkdir."
-  verbose
-  (values pathname nil))
+  "Create any missing directories in PATHNAME's directory component, walking the
+   chain from the root.  Returns (values pathname created-p)."
+  (let* ((ns (namestring pathname))
+         (n  (length ns))
+         (created nil)
+         (last-slash -1))
+    (dotimes (i n) (when (char= (char ns i) #\/) (setq last-slash i)))
+    ;; Create each directory prefix ending at a slash up to and including the
+    ;; last slash (the directory part); skip a leading-slash root (i starts at 1).
+    (let ((i 1))
+      (loop while (<= i last-slash) do
+        (when (char= (char ns i) #\/)
+          (let ((dir (subseq ns 0 i)))
+            (when (and (plusp (length dir))
+                       (not (common-lisp::%directory-p dir)))
+              (when verbose (format *error-output* ";; Creating directory: ~A~%" dir))
+              (common-lisp::%mkdir dir)
+              (setq created t))))
+        (incf i)))
+    (values pathname created)))
 
 ;;; ---- DIRECTORY -----------------------------------------------------------
 
@@ -10236,6 +10252,9 @@ the rest take :INITIAL-ELEMENT."
         (handler-bind
             ((serious-condition
                (lambda (c)
+                 ;; Record the condition on ";; C: " lines in the dribble file
+                 ;; (issue dribble); no-ops when not dribbling.
+                 (bocl::%dribble-note-condition c)
                  (cond
                    ;; The control stack is exhausted: do NOT run the debugger here —
                    ;; it would execute on the near-exhausted stack.  Report and ABORT

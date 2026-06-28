@@ -48,6 +48,8 @@ static bool do_verbose=false;
 static bool do_batch=false;
 static bool do_print=false;
 static bool do_dump=false;
+static bool do_dribble=false;     /* --dribble : record the session (issue dribble) */
+static char* dribble_file=NULL;   /* --dribble=FILE : NULL => use dribble-file-pathname */
 static bool do_sigtrap=true;
 static char* on_error_action=NULL;
 typedef enum { on_error_debug, on_error_exit, on_error_abort, on_error_appease } on_error_action_t;
@@ -223,6 +225,7 @@ static struct {
     {{"--verbose",NULL},                    &do_verbose, none, {.name=NULL},                              "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
     {{"--print",NULL},                      &do_print,   none, {.name=NULL},                              "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
     {{"--dump",NULL},                       &do_dump,    none, {.name=NULL},                              "dumps the heap"},/* TODO: put that in expressions_and_loads */
+    {{"--dribble",NULL},                    &do_dribble, none, {.name=NULL},                              "record the session to a dribble file (or --dribble=FILE)"},
     {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {.name=NULL},                              "obscure option for running under GDB"},
     {{"--on-error","-on-error",NULL},       NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
     {{"-i","--init",NULL},                  NULL,        elst, {"file",{.list=&initfiles}},               "load initfile (can be repeated)"},
@@ -328,6 +331,10 @@ static void process_options(int argc,char** argv){
     pname=argv[0];
     int i=1;
     while(i<argc){
+        /* --dribble=FILE : the option parser matches variants by exact strcmp
+           and uses space-separated arguments, so handle the =FILE form here. */
+        if(strncmp(argv[i],"--dribble=",10)==0){
+            dribble_file=argv[i]+10; do_dribble=true; i++; continue;}
         int k=find_option(argv[i]);
         if(k==no_such_option){
             fprintf(stderr,"ERROR: Unknown option: %s\n",argv[i]);
@@ -443,6 +450,27 @@ static Ref run_session(void* ctx){
 
     /* BOCL:*INIT-HOOK* — after the init/rc files, before the main task. */
     bocl_read_eval_cstring("(BOCL::%RUN-INIT-HOOKS)");
+
+    /* --dribble[=FILE] : start recording the session (issue dribble) before any
+       -e expressions and the REPL.  With no FILE, use BOCL:DRIBBLE-FILE-PATHNAME. */
+    if(do_dribble){
+        if(dribble_file){
+            /* Build (common-lisp:dribble "ESCAPED-FILE") robustly. */
+            size_t n=strlen(dribble_file);
+            char* buf=(char*)malloc(2*n+40);
+            if(buf){
+                const char* pre="(common-lisp:dribble \"";
+                char* p=buf;
+                strcpy(p,pre); p+=strlen(pre);
+                for(size_t j=0;j<n;j++){
+                    char ch=dribble_file[j];
+                    if(ch=='"'||ch=='\\'){ *p++='\\'; }
+                    *p++=ch;}
+                *p++='"'; *p++=')'; *p='\0';
+                bocl_read_eval_cstring(buf);
+                free(buf);}}
+        else{
+            bocl_read_eval_cstring("(common-lisp:dribble (bocl:dribble-file-pathname))");}}
 
     {do_string_list(expression,expressions_and_loads){
             bocl_read_eval_cstring(expression);}}
