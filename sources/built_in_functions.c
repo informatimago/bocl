@@ -7,6 +7,7 @@
 #include "stream.h"
 #include "reader.h"
 #include "printer.h"
+#include "packages.h"
 
 /* char_ref/char_set/bit/bit_set/svref/svref_set (defined in bostring.c /
    bit_vector.c / vector.c) are declared in the generated kernel_functions.h. */

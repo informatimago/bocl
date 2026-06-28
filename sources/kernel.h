@@ -149,6 +149,10 @@ BuiltInFunction* BuiltInFunction_slots(Ref lisp_name,Ref lambda_list,KernelFunct
 Ref built_in_function_new(Ref lisp_name,Ref lambda_list,KernelFunctionPtr kernel_function);
 
 void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results);
+/* Boundary-protected apply: absorbs any non-local exit that tries to unwind
+   past this call (returns false), so Lisp invoked from inside C library code
+   cannot longjmp through the C frame.  See eval.c. */
+bool kernel_apply_at_boundary(Ref function,Ref arguments,MultipleValues* results);
 void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results);
 void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results);
 void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,MultipleValues* results);

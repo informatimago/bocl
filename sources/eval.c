@@ -298,6 +298,38 @@ Ref bocl_run_with_toplevel_catch(Ref (*body)(void*), void* ctx){
         UWCLEANUP{ result = (mv.count>0) ? mv.values[0] : integer_from_word(0); }}
     return result;}
 
+/* Apply FUNCTION to ARGUMENTS at a hard boundary: a frame_protect with its own
+   setjmp ABSORBS any non-local exit (unhandled error, THROW, GO/RETURN-FROM)
+   that tries to unwind PAST this point, returning false instead of letting the
+   longjmp propagate.  This is for Lisp callbacks invoked from inside C library
+   code — e.g. a custom stdio write callback (callback_stream.c), where a
+   longjmp crossing the C frame would corrupt the library mid-operation.
+
+   On normal completion RESULTS is filled and true is returned.  On an absorbed
+   exit false is returned: by the time the unwind cascade reaches our frame
+   every frame above it has already popped itself, so we pop ours and stop —
+   the frames below (the caller's) stay intact and consistent, so the
+   interrupted C operation can finish and the caller continue.  Legitimate
+   CATCH/THROW/BLOCK *inside* FUNCTION resolve within kernel_apply and never
+   reach here; only exits aimed past the boundary are caught. */
+bool kernel_apply_at_boundary(Ref function,Ref arguments,MultipleValues* results){
+    Ref environment = eval_global_environment();
+    Frame frame;
+    frame.frame = NULL;
+    frame.target = NULL;
+    frame.type = frame_protect;
+    frame.parameters.catch.object = NIL_Symbol;   /* zero the union member */
+    frame.results = results;
+    int sel = setjmp(frame.non_local_exit);
+    if(sel == non_local_exit_initial){
+        push_frame(&frame,environment);
+        kernel_apply(function,arguments,results);
+        pop_frame(&frame,environment);
+        return true;}
+    /* sel is non_local_exit_unwind / _target: a cascade reached us — absorb it. */
+    pop_frame(&frame,environment);
+    return false;}
+
 static eval_counters_t eval_counters={0};
 
 Ref get_eval_counters(void){

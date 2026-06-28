@@ -205,5 +205,27 @@ STREAM and print through it (incl. a GC during the callback) before building the
 rest; if re-entrancy proves unsafe, keep only the line-prefix tee in C and the
 control/path logic in CL.
 
-STATUS: design agreed (CL-first); ready to implement, starting with the kernel
-callback-stream + real MAKE-BROADCAST-STREAM and a re-entrancy/GC smoke test.
+STATUS: kernel hook DONE and validated (v1.4.4).  Implemented:
+  - sources/callback_stream.c: BOCL::%MAKE-OUTPUT-CALLBACK-STREAM (write-fn) ->
+    an output FILE-STREAM backed by fopencookie (glibc) / funopen (BSD/macOS),
+    unbuffered; the write callback builds a string from the bytes and funcalls
+    WRITE-FN.  WRITE-FN is rooted in the FileStream `string` slot (objcount=4).
+  - sources/eval.c: kernel_apply_at_boundary() — a frame_protect with its own
+    setjmp that ABSORBS any non-local exit (error / throw / go) trying to unwind
+    past the callback, so Lisp invoked from inside libc's stdio flush cannot
+    longjmp through the C frame.  The callback uses it.
+  Validated via the standalone interpreter (the CUnit suite can't run here:
+  31/43 tests hardcode a macOS prelude path; the rest fail identically on the
+  1.4.2 baseline — no regression from this change):
+    1. functional: princ/format/print redirect through the Lisp write-fn;
+    2. GC safety: forced real GCs *inside* the callback — output intact;
+    3. error safety: an error signalled in the callback (previously crashed,
+       EXIT 139) is now absorbed; the process survives and continues.
+
+NEXT (CL layer, pure Lisp on top of the hook):
+  - MAKE-BROADCAST-STREAM (fan-out via WRITE-STRING) + predicate + accessor;
+  - %MAKE-LINE-PREFIX-STREAM (prefix ";; O: "/";; E: ", track at-line-start,
+    force a newline when the partner stream interrupts mid-line);
+  - DRIBBLE (rebind *STANDARD-OUTPUT*/*ERROR-OUTPUT*; REPL writes input verbatim
+    + ";; C: " for conditions) and BOCL:DRIBBLE-FILE-PATHNAME;
+  - main.c: --dribble / --dribble=FILE.

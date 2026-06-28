@@ -1094,6 +1094,11 @@ void bocl_register_load(void){
         set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_DIRECTORY_P));}
     Ref af=S(APPEND);
     set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
+    /* BOCL::%MAKE-OUTPUT-CALLBACK-STREAM — kernel hook for CL compound streams
+       and DRIBBLE (registered here: BOCL_Package exists only after packages init). */
+    {   Ref mcs=package_intern_cstring_in("%MAKE-OUTPUT-CALLBACK-STREAM",BOCL_Package);
+        set_symbol_function(mcs,built_in_function_new(mcs,list(S(WRITE-FUNCTION),NULL),
+                            kernel_MAKE_OUTPUT_CALLBACK_STREAM));}
     /* Helper for CLOS: detect C NULL (returned by kernel find-class for unknown names). */
     Ref cn=symbol_intern_cstring("%CLOS-NULL-P");
     set_symbol_function(cn,built_in_function_new(cn,list(S(X),NULL),kernel_CLOS_NULL_P));
