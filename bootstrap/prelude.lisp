@@ -4856,6 +4856,21 @@ tation, :method-combination, ...) are ignored."
         (push `(defmethod ,name ,@(cdr opt)) forms)))
     `(progn ,@(nreverse forms) ',name)))
 
+(defun %method-ll-allow-other-keys (ll)
+  "If method lambda-list LL has &KEY but not &ALLOW-OTHER-KEYS, insert
+   &ALLOW-OTHER-KEYS (before any &AUX).  CLHS 7.6.5: a method must accept the
+   keyword arguments accepted by the generic function as a whole — i.e. those
+   named by ANY applicable method — even ones it does not itself name.  bocl
+   validates a method lambda's keywords individually, so without this an
+   otherwise-valid call (e.g. ASDF passing :VERBOSE to a PERFORM method whose
+   sibling method declares :VERBOSE) is wrongly rejected as an unknown keyword."
+  (if (and (member '&key ll) (not (member '&allow-other-keys ll)))
+      (let ((aux (position '&aux ll)))
+        (if aux
+            (append (subseq ll 0 aux) '(&allow-other-keys) (subseq ll aux))
+            (append ll '(&allow-other-keys))))
+      ll))
+
 (defmacro defmethod (name &rest args)
   "Define a method for generic function NAME.
   Syntax: (defmethod name [qualifier*] (specialised-lambda-list) body...)"
@@ -4870,7 +4885,7 @@ tation, :method-combination, ...) are ignored."
       (multiple-value-bind (plain-ll spec-names)
           (%parse-spec-ll specialized-ll)
         `(ensure-method ',name ',qualifiers ',spec-names
-                         (lambda ,plain-ll ,@body))))))
+                         (lambda ,(%method-ll-allow-other-keys plain-ll) ,@body))))))
 
 ;;; DEFINE-METHOD-COMBINATION — bocl supports only the standard method
 ;;; combination, so this records nothing operational; it accepts the syntax and
