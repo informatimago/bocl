@@ -5936,12 +5936,62 @@ the class object it denotes, so two specializers compare by class identity."
             (write-char elem stream)
             (write-byte elem stream))))))
 
-;;; ---- Broadcast / compound stream constructors (stubs) ------------------
+;;; ---- Broadcast / compound stream constructors -------------------------
+;;; MAKE-BROADCAST-STREAM is a real output stream built on the kernel hook
+;;; BOCL::%MAKE-OUTPUT-CALLBACK-STREAM: its write-function fans every emitted
+;;; chunk out to each component stream.  CL-level metadata (kind + components)
+;;; lives in a side registry keyed by the stream object, so the predicate and
+;;; accessor below can recover it, and FORCE-OUTPUT / FINISH-OUTPUT can recurse
+;;; into the components (the callback stream itself is unbuffered).
+;;; The input-side compound streams (concatenated, and the read half of
+;;; two-way / echo) still need a kernel read-callback and remain stubs.
+
+(defvar bocl::*%compound-stream-registry* (make-hash-table :test 'eq)
+  "Maps a compound output stream to (KIND . COMPONENTS) where KIND is one of
+   :BROADCAST :TWO-WAY :ECHO :SYNONYM and COMPONENTS is its component list.")
+
+(defun bocl::%register-compound-stream (stream kind components)
+  (setf (gethash stream bocl::*%compound-stream-registry*) (cons kind components))
+  stream)
+
+(defun bocl::%compound-stream-info (stream)
+  "(KIND . COMPONENTS) for a compound STREAM, or NIL if STREAM is not one."
+  (and (streamp stream) (gethash stream bocl::*%compound-stream-registry*)))
 
 (defun make-broadcast-stream (&rest streams)
-  "Return a stream that broadcasts output to all STREAMS.
-  In bocl: returns *standard-output* if no streams, else the first stream."
-  (if streams (car streams) (make-string-output-stream)))
+  "Return an output stream that writes everything written to it to each of
+   STREAMS, in order (CLHS MAKE-BROADCAST-STREAM)."
+  (let ((targets streams))
+    (bocl::%register-compound-stream
+     (bocl::%make-output-callback-stream
+      (lambda (chunk) (dolist (s targets) (write-string chunk s))))
+     :broadcast targets)))
+
+(defun broadcast-stream-streams (broadcast-stream)
+  "The ordered list of component streams of BROADCAST-STREAM."
+  (let ((info (bocl::%compound-stream-info broadcast-stream)))
+    (if (eq (car info) :broadcast)
+        (cdr info)
+        (error 'type-error :datum broadcast-stream
+                           :expected-type 'broadcast-stream))))
+
+;;; FORCE-OUTPUT / FINISH-OUTPUT must recurse into a compound stream's
+;;; components (the kernel primitive only flushes the stream's own FILE*).
+;;; Capture the kernel primitives, then redefine.
+(setf (symbol-function 'bocl::%kernel-force-output)  (symbol-function 'force-output)
+      (symbol-function 'bocl::%kernel-finish-output) (symbol-function 'finish-output))
+
+(defun force-output (&optional (stream *standard-output*))
+  (let ((info (bocl::%compound-stream-info stream)))
+    (if info
+        (progn (dolist (s (cdr info)) (force-output s)) nil)
+        (bocl::%kernel-force-output stream))))
+
+(defun finish-output (&optional (stream *standard-output*))
+  (let ((info (bocl::%compound-stream-info stream)))
+    (if info
+        (progn (dolist (s (cdr info)) (finish-output s)) nil)
+        (bocl::%kernel-finish-output stream))))
 
 (defun make-concatenated-stream (&rest streams)
   "Return a stream that reads from STREAMS in sequence.
@@ -6364,8 +6414,8 @@ SUBTYPEP round-trips)."
   (declare (ignore stream)) nil)
 
 (defun broadcast-stream-p (stream)
-  "Return T if STREAM is a broadcast stream.  In bocl: always NIL."
-  (declare (ignore stream)) nil)
+  "Return T if STREAM is a broadcast stream."
+  (eq :broadcast (car (bocl::%compound-stream-info stream))))
 
 (defun concatenated-stream-p (stream)
   "Return T if STREAM is a concatenated stream.  In bocl: always NIL."
@@ -10243,6 +10293,191 @@ the rest take :INITIAL-ELEMENT."
 (export '(bocl::getenv bocl::setenv bocl::unsetenv bocl::getcwd bocl::chdir
           bocl::command-line-arguments bocl::*command-line-arguments*)
         "BOCL")
+
+;;; ---- DRIBBLE (issue dribble) ---------------------------------------------
+;;; CL:DRIBBLE records the REPL interaction to a file: each output line is
+;;; prefixed ";; O: " (standard output) or ";; E: " (error output); conditions
+;;; ";; C: "; the user's input verbatim with no prefix; a header ";; H: bocl
+;;; <version>".  Built on real compound streams: *STANDARD-OUTPUT* / *ERROR-
+;;; OUTPUT* are rebound to broadcasts of {the real stream, a line-prefix stream
+;;; over the dribble file}.  The two prefix streams share one state object so an
+;;; interrupting source terminates the current line (CLHS-ish: "a new-line is
+;;; deemed separating them").
+
+;; Dribble state is a 3-slot simple-vector #(file mid-line last-source) rather
+;; than a DEFSTRUCT: bocl's DEFSTRUCT interns its accessors in *PACKAGE* (CL at
+;; load time) regardless of a package-qualified struct name, which would not
+;; match BOCL::%DS-* references.  (See issue defstruct-conc-name-package.issue.)
+;;   slot 0 = file        the open dribble FILE-STREAM (appended to)
+;;   slot 1 = mid-line    T when the last char written had no trailing newline
+;;   slot 2 = last-source :O or :E — the source currently mid-line
+(defun bocl::%make-dribble-state (file) (vector file nil nil))
+(defun bocl::%ds-file        (st) (svref st 0))
+(defun bocl::%ds-mid-line    (st) (svref st 1))
+(defun bocl::%ds-last-source (st) (svref st 2))
+
+(defun bocl::%dribble-prefix (source)
+  (if (eq source :e) ";; E: " ";; O: "))
+
+(defun bocl::%make-line-prefix-stream (source state)
+  "An output stream that writes every line it receives to STATE's file,
+   prefixed per SOURCE (:O / :E), coordinating with the partner stream via STATE
+   so that a source interrupting the other mid-line first terminates that line."
+  (bocl::%make-output-callback-stream
+   (lambda (chunk)
+     (let ((file (bocl::%ds-file state)))
+       (loop for ch across chunk do
+         (when (and (bocl::%ds-mid-line state)
+                    (not (eq (bocl::%ds-last-source state) source)))
+           (write-char #\linefeed file)
+           (setf (svref state 1) nil))
+         (unless (bocl::%ds-mid-line state)
+           (write-string (bocl::%dribble-prefix source) file)
+           (setf (svref state 1) t
+                 (svref state 2) source))
+         (write-char ch file)
+         (when (char= ch #\linefeed)
+           (setf (svref state 1) nil)
+           (force-output file)))))))
+
+;;; --- DRIBBLE-FILE-PATHNAME ------------------------------------------------
+;;; Zero-padding done by hand (FORMAT ~mincol,'padchar D is the subject of a
+;;; separate open issue and not relied on here).
+
+(defun bocl::%zp (n width)
+  "N as a decimal string, left-padded with #\\0 to at least WIDTH digits."
+  (let ((s (princ-to-string n)))
+    (if (< (length s) width)
+        (concatenate 'string
+                     (make-string (- width (length s)) :initial-element #\0) s)
+        s)))
+
+(defun bocl::%dribble-tz-suffix (time-zone)
+  ;; CL time zone = hours west of UTC; the ISO-8601 suffix is east-positive,
+  ;; i.e. offset = -TIME-ZONE.  (TIME-ZONE 0 -> \"+0000\".)
+  (let* ((off  (- (round (* time-zone 60))))   ; minutes east of UTC
+         (sign (if (minusp off) "-" "+"))
+         (a    (abs off)))
+    (concatenate 'string sign (bocl::%zp (floor a 60) 2) (bocl::%zp (mod a 60) 2))))
+
+(defun bocl::%dribble-directory-namestring ()
+  "Absolute namestring of the dribbles directory:
+   ${XDG_STATE_HOME:-~/.local/state}/bocl/dribbles/ (with trailing slash)."
+  (let ((xdg (bocl::getenv "XDG_STATE_HOME")))
+    (concatenate 'string
+      (if (and xdg (plusp (length xdg)))
+          (if (char= (char xdg (1- (length xdg))) #\/)
+              xdg (concatenate 'string xdg "/"))
+          (concatenate 'string (namestring (user-homedir-pathname)) ".local/state/"))
+      "bocl/dribbles/")))
+
+(defun bocl::dribble-file-pathname (&key (type "log") (time-zone nil))
+  "An absolute physical pathname for the next dribble file, named after the
+   current time in ISO-8601 basic format YYYYMMDDThhmmss with a TYPE file type.
+   TIME-ZONE NIL = local (bocl has no local-TZ primitive, so UTC digits with no
+   suffix); :UTC = UTC with a trailing Z; a rational = that zone with a ±hhmm
+   suffix."
+  (multiple-value-bind (sec min hour day month year)
+      (decode-universal-time (get-universal-time)
+                             (if (eq time-zone :utc) 0 (or time-zone 0)))
+    (let ((stamp (concatenate 'string
+                   (bocl::%zp year 4) (bocl::%zp month 2) (bocl::%zp day 2) "T"
+                   (bocl::%zp hour 2) (bocl::%zp min 2) (bocl::%zp sec 2)
+                   (cond ((eq time-zone :utc) "Z")
+                         ((null time-zone) "")
+                         (t (bocl::%dribble-tz-suffix time-zone))))))
+      (pathname (concatenate 'string
+                  (bocl::%dribble-directory-namestring) stamp "." type)))))
+
+;;; --- The DRIBBLE function -------------------------------------------------
+
+(defvar bocl::*dribble-stream*       nil "Open dribble FILE-STREAM, or NIL.")
+(defvar bocl::*dribble-state*        nil)
+(defvar bocl::*dribble-pathname*     nil "Absolute pathname of the dribble file.")
+(defvar bocl::*dribble-saved-output* nil)
+(defvar bocl::*dribble-saved-error*  nil)
+
+(defun bocl::dribbling-p () (and bocl::*dribble-stream* t))
+
+(defun bocl::%dribble-note-input (text)
+  "Record a verbatim input line TEXT (no prefix) to the dribble file."
+  (when bocl::*dribble-stream*
+    (let ((st bocl::*dribble-state*))
+      ;; close any line the previous output left open before the bare input
+      (when (bocl::%ds-mid-line st)
+        (write-char #\linefeed bocl::*dribble-stream*)
+        (setf (svref st 1) nil)))
+    (write-string text bocl::*dribble-stream*)
+    (unless (and (plusp (length text))
+                 (char= (char text (1- (length text))) #\linefeed))
+      (write-char #\linefeed bocl::*dribble-stream*))
+    (force-output bocl::*dribble-stream*)))
+
+(defun bocl::%dribble-note-condition (condition)
+  "Record CONDITION's report on ';; C: '-prefixed lines in the dribble file."
+  (when bocl::*dribble-stream*
+    (let ((st bocl::*dribble-state*))
+      (when (bocl::%ds-mid-line st)
+        (write-char #\linefeed bocl::*dribble-stream*)
+        (setf (svref st 1) nil)))
+    (dolist (line (bocl::%split-lines
+                   (handler-case (princ-to-string condition)
+                     (error () "<error printing condition>"))))
+      (write-string ";; C: " bocl::*dribble-stream*)
+      (write-string line bocl::*dribble-stream*)
+      (write-char #\linefeed bocl::*dribble-stream*))
+    (force-output bocl::*dribble-stream*)))
+
+(defun bocl::%split-lines (string)
+  (let ((lines '()) (start 0))
+    (dotimes (i (length string))
+      (when (char= (char string i) #\linefeed)
+        (push (subseq string start i) lines)
+        (setf start (1+ i))))
+    (push (subseq string start) lines)
+    (nreverse lines)))
+
+(defun dribble (&optional pathname)
+  "Without PATHNAME, stop dribbling, close the dribble file and return NIL.
+   With PATHNAME, (re)start recording the REPL interaction to that file
+   (appending if it exists) and return its absolute pathname."
+  (cond
+    (pathname
+     (when bocl::*dribble-stream* (dribble))      ; close any current dribble
+     (let ((path (merge-pathnames (pathname pathname) (bocl::getcwd))))
+       (ensure-directories-exist path)
+       (let* ((file  (open path :direction :output
+                                :if-exists :append :if-does-not-exist :create))
+              (state (bocl::%make-dribble-state file)))
+         (format file ";; H: bocl ~A~%" (lisp-implementation-version))
+         (force-output file)
+         (setf bocl::*dribble-saved-output* *standard-output*
+               bocl::*dribble-saved-error*  *error-output*
+               *standard-output*
+                 (make-broadcast-stream bocl::*dribble-saved-output*
+                                        (bocl::%make-line-prefix-stream :o state))
+               *error-output*
+                 (make-broadcast-stream bocl::*dribble-saved-error*
+                                        (bocl::%make-line-prefix-stream :e state))
+               bocl::*dribble-stream*   file
+               bocl::*dribble-state*    state
+               bocl::*dribble-pathname* (truename path))
+         bocl::*dribble-pathname*)))
+    (bocl::*dribble-stream*
+     (force-output *standard-output*)
+     (force-output *error-output*)
+     (setf *standard-output* bocl::*dribble-saved-output*
+           *error-output*    bocl::*dribble-saved-error*)
+     (close bocl::*dribble-stream*)
+     (setf bocl::*dribble-stream*       nil
+           bocl::*dribble-state*        nil
+           bocl::*dribble-pathname*     nil
+           bocl::*dribble-saved-output* nil
+           bocl::*dribble-saved-error*  nil)
+     nil)
+    (t nil)))
+
+(export '(bocl::dribble-file-pathname) "BOCL")
 
 ;;; ---- Module system (issue asdf) ------------------------------------------
 ;;; Installed "system" modules live under <libexec>/bocl/modules/<dir>/, each with a

@@ -32,6 +32,7 @@ uiop-bocl-porting.issue
 sockets.issue
 
 slow-apropos.issue
+defstruct-conc-name-package.issue
 package-print-object-method.issue
 clos-condition-hierarchy-parents.issue
 precise-condition-subclasses.issue

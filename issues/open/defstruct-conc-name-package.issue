@@ -1,0 +1,46 @@
+DEFSTRUCT: accessor / constructor / predicate / copier names are interned in
+*PACKAGE* instead of the home package of the structure NAME, and BOA constructor
+arglists are ignored.
+
+STATUS: open.  Found 2026-06-28 while implementing DRIBBLE (issue dribble): a
+package-qualified struct name produced accessors that could not be referenced
+from the intended package, so dribble-state was switched to a plain vector.
+
+== Symptom ==
+With *PACKAGE* = COMMON-LISP (as during the prelude load):
+
+    (defstruct (bocl::%foo (:constructor bocl::%make-foo)) bar)
+    (bocl::%foo-bar (bocl::%make-foo))   ; => Undefined function: %FOO-BAR
+                                         ;    (BOCL::%FOO-BAR is unbound; the
+                                         ;     accessor is CL::%FOO-BAR instead)
+
+    ;; BOA constructor arglist ignored — constructor is keyword-based:
+    (defstruct (baz (:constructor make-baz (x))) x)
+    (make-baz 1)        ; => error: "keyword-argument key is not a symbol: 1"
+    (make-baz :x 1)     ; works — the (x) arglist was dropped
+
+== Cause ==
+bootstrap/prelude.lisp, the DEFSTRUCT macro (around the conc-name / accessor
+generation):
+  - conc-name and the default constructor/predicate/copier names are built with
+    (intern (%string-append ...)), i.e. interned in the current *PACKAGE*, not in
+    (symbol-package name).  Per CLHS 3.4.4 / the DEFSTRUCT description, these
+    symbols are created in the package of the structure name.
+  - the :constructor option reads only (cadr option) — the constructor NAME — and
+    ignores any third element (the BOA lambda list), so every constructor is the
+    default keyword constructor.
+
+== Fix sketch ==
+  - intern accessor/constructor/predicate/copier symbols in (symbol-package name)
+    (e.g. (intern str (symbol-package name))), so a package-qualified struct name
+    yields accessors in that same package;
+  - honour a BOA constructor arglist: when the :constructor option has a third
+    element, generate a constructor with that ordinary lambda list (binding the
+    named slots positionally / by &optional / &key as written, others to their
+    initforms) instead of the all-keyword constructor.
+
+== Impact ==
+Low for existing prelude code (it defines structs with unqualified names while
+*PACKAGE* is the intended package, so accessors land correctly, and it uses the
+keyword constructor).  Bites any code that uses a package-qualified struct name or
+a BOA constructor.
