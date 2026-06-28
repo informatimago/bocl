@@ -1,0 +1,52 @@
+Several CUnit test suites fail or abort against the current implementation —
+not for portability reasons (those are fixed in posix-neutral-tests) but because
+the tests have drifted from the implementation.  These failures are identical on
+every POSIX system.
+
+STATUS: open.  Found 2026-06-28 after fixing posix-neutral-tests: once the
+prelude loads portably, the suites actually run and expose three independent
+categories of staleness.
+
+== Category 1: "kernel-only" suites expect builtins that are now prelude-defined ==
+test_arithmetic, test_eval, test_reader, test_packages, test_hash_table,
+test_conditions, test_sequences, test_reader_macros and others call only
+kernel_initialize() (they do NOT load the prelude), then evaluate forms such as
+(+ 2 3), QUOTE, FUNCALL, DEFPARAMETER, PACKAGEP.  Those operators now live in
+the prelude, so the bare kernel no longer provides them and the first such form
+signals "Undefined function: +" (etc.).
+  Fix options: (a) have these suites load the prelude via
+  bocl_test_load_prelude() like the others; or (b) restrict them to operators
+  the kernel really still provides.  Decide per suite based on intent.
+
+== Category 2: a single unhandled error aborts the whole suite binary ==
+When a test form signals a Lisp error, the test process terminates (prints
+"ERROR: ..." and exits) instead of recording one failed assertion and
+continuing.  Result: one missing function hides every other result in that
+binary (these show up as "ABORTED — no summary").
+  Fix sketch: wrap the per-form evaluator e()/bocl_read_eval_cstring in an
+  error barrier (handler / toplevel catch) in the test harness, returning a
+  sentinel on error so the assertion fails but the suite continues to the next
+  case and still prints its CUnit summary.
+
+== Category 3: genuine behavioural mismatches in suites that DO complete ==
+With the prelude loaded, these suites run to completion but have real failures:
+  - test_strings (6): string<, string<=, string>, string/=, string-lessp,
+    string-greaterp return 2 (a mismatch index?) where T is expected — the
+    comparison predicates' truth value / return convention is off.
+  - test_setf (4), test_list_utils (2), test_control (1), test_seq_lib (1),
+    test_restarts (1), test_slice27 (1): assorted single failures to triage.
+  - test_format etc. reference STRING-LENGTH / VECTOR-LENGTH, which exist in the
+    prelude but are not accessible from CL-USER where the test forms evaluate
+    (not exported / wrong package).  Either export them or have the tests use
+    the CL-visible name (LENGTH).  May overlap missing-functions.issue.
+
+== Note ==
+Suites already passing clean after the portability fix: test_destructuring,
+test_loop, test_numeric_extras, test_structures, test_slice23 (0 failures).
+
+== Acceptance ==
+  - No suite ABORTs: every test binary prints a CUnit summary even when some
+    forms error (Category 2).
+  - Category 1 suites either load the prelude or test only real kernel builtins.
+  - Category 3 mismatches are fixed or split into their own issues with a clear
+    triage note here.

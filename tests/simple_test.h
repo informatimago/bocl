@@ -24,6 +24,13 @@
 typedef bool (*eq_pr)(Ref,Ref);
 void simple_test_assert(const char* file, int line, const char* expression, eq_pr eq,Ref expected, Ref value, bool result);
 
+/* Locate and load bootstrap/prelude.lisp portably (see issue
+   posix-neutral-tests).  Tries, in order: $BOCL_PRELUDE, the compile-time
+   BOCL_TEST_PRELUDE_PATH (set by the Makefile from the build tree), then the
+   relative fallbacks "../bootstrap/prelude.lisp" and "bootstrap/prelude.lisp".
+   Picks the first that is readable; exits with a clear message if none is. */
+void bocl_test_load_prelude(void);
+
 
 #if 0 // def GITLAB_CI
 

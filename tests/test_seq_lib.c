@@ -16,7 +16,7 @@
 
 TEST_SUITE_SETUP(seq_lib_init){
     kernel_initialize();
-    bocl_load_cstring("/Users/pjb/src/public/bocl/bootstrap/prelude.lisp");
+    bocl_test_load_prelude();
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(seq_lib_clean){

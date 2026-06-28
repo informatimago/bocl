@@ -104,7 +104,10 @@ INCLUDES    += -I../sources
 # does not need this — it keeps the lib regardless.)
 LIBRARIES   += -Wl,--no-as-needed -lcunit -Wl,--as-needed
 endif
-CFLAGS  	+=
+# Build-tree path to prelude.lisp, so tests load it portably without any
+# hardcoded home directory (see issue posix-neutral-tests).  Overridable at
+# run time via $BOCL_PRELUDE.
+CFLAGS  	+= -DBOCL_TEST_PRELUDE_PATH='"$(abspath ../bootstrap/prelude.lisp)"'
 LDFLAGS 	+=
 RUNLIBS     += $(shell echo $$(pwd)/../sources)
 

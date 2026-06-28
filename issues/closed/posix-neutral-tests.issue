@@ -1,0 +1,85 @@
+The CUnit test suite hardcodes a macOS-specific absolute path to prelude.lisp,
+so the tests only run on the original developer's machine. They must be as
+portable as bocl itself: build and run on every POSIX system without editing.
+
+STATUS: open.  Found 2026-06-28 while validating the DRIBBLE work in a Linux
+container: 31 of the CUnit tests could not run because their suite-setup loads
+the prelude from a path that does not exist off the author's Mac.
+
+== Symptom ==
+Every prelude-dependent test does, in its TEST_SUITE_SETUP:
+
+    bocl_load_cstring("/Users/pjb/src/public/bocl/bootstrap/prelude.lisp");
+
+On any machine where that absolute path does not exist the prelude fails to
+load, so the whole suite errors out (undefined functions etc.).  Affected
+files (31): test_clos, test_control, test_destructuring, test_format,
+test_list_utils, test_loop, test_misc, test_numeric_extras, test_restarts,
+test_seq_lib, test_setf, test_strings, test_structures, and
+test_slice15..18,20..33.
+
+== Cause ==
+The prelude path is a literal string baked into each test's source, pointing at
+the author's home directory layout.  Nothing derives it from the build tree, an
+environment variable, or a compile-time setting.
+
+== Non-issues (do NOT "fix") ==
+  - The "/usr/local/..." strings in test_slice17 and test_slice32 are pathname
+    *parsing* test data (string literals fed to PATHNAME-NAME, MERGE-PATHNAMES,
+    logical-pathname translations).  They never touch the filesystem and are
+    portable as-is.
+  - The Makefile's -I/opt/local (macOS/MacPorts) and -I/usr/local (FreeBSD
+    ports) CUnit search paths are already guarded by $(UNAME) conditionals;
+    that is the correct, portable way to locate a platform's CUnit.
+
+== Policy ==
+Tests must not hardcode anything that breaks on a different system: no absolute
+home paths, no OS-specific assumptions outside properly-guarded Makefile
+conditionals.  Prefer (in order): an environment-variable override, a
+compile-time path derived from the build tree, then a sensible relative
+fallback.
+
+== Fix sketch ==
+  - Add a shared helper bocl_test_load_prelude() in tests/simple_test.c
+    (already linked into every test) that locates prelude.lisp by trying, in
+    order: getenv("BOCL_PRELUDE"); a compile-time BOCL_TEST_PRELUDE_PATH define; the
+    relative paths "../bootstrap/prelude.lisp" and "bootstrap/prelude.lisp";
+    using access(R_OK) to pick the first that exists, and erroring clearly if
+    none do.
+  - Have tests/Makefile pass the build-tree path:
+        CFLAGS += -DBOCL_TEST_PRELUDE_PATH='"$(abspath ../bootstrap/prelude.lisp)"'
+  - Replace all 31 hardcoded bocl_load_cstring("/Users/pjb/.../prelude.lisp")
+    calls with bocl_test_load_prelude().
+
+== Acceptance ==
+  - A fresh checkout builds and runs `make -C tests test` on Linux/*BSD/macOS
+    with no source edits and no machine-specific path.
+  - BOCL_PRELUDE=/path/to/prelude.lisp overrides the location at run time.
+
+== DONE (2026-06-28, v1.4.7) ==
+Implemented exactly as in the fix sketch:
+  - tests/simple_test.c: new bocl_test_load_prelude() — tries $BOCL_PRELUDE,
+    then compile-time BOCL_TEST_PRELUDE_PATH, then "../bootstrap/prelude.lisp"
+    and "bootstrap/prelude.lisp"; picks the first readable via access(R_OK);
+    exits EX_NOINPUT with a clear message if none found.  It calls
+    bocl_load_prelude() (NOT bocl_load_cstring): binds *PACKAGE* to COMMON-LISP
+    and loads cl-exports.lisp first, so the reader's bare symbols match eval.c's
+    S(DEFMACRO)/S(...) caches.  (The 31 tests had used the raw loader, so they
+    were doubly broken: wrong path AND wrong loader.)
+  - tests/simple_test.h: declaration + doc.
+  - tests/Makefile: CFLAGS += -DBOCL_TEST_PRELUDE_PATH='"$(abspath
+    ../bootstrap/prelude.lisp)"' (distinct from the install-path macro
+    BOCL_PRELUDE_PATH in sources/common.mk — do not confuse them).
+  - Replaced all 31 hardcoded bocl_load_cstring("/Users/pjb/.../prelude.lisp")
+    with bocl_test_load_prelude().
+
+Validated on Linux (this container has libcunit): clean compile (no warnings);
+prelude now loads; ~12 suites produce real CUnit summaries where before none of
+the 31 could even load (5 pass clean: test_destructuring, test_loop,
+test_numeric_extras, test_structures, test_slice23).  Confirmed cwd-independent
+(ran from /tmp — compile-time abspath resolved it) and $BOCL_PRELUDE override
+honoured.
+
+Residual per-suite failures (ABORTs, behavioural mismatches) are NOT portability
+issues — they are identical on every platform and are tracked separately in
+stale-test-suite-failures.issue.

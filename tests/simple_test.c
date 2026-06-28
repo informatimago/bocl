@@ -1,8 +1,32 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <sysexits.h>
 
 #include "simple_test.h"
 #include "variable.h"
+#include "bocl.h"
+
+void bocl_test_load_prelude(void){
+    const char* candidates[4];
+    int n=0;
+    const char* env=getenv("BOCL_PRELUDE");
+    if(env&&*env){ candidates[n++]=env; }
+#ifdef BOCL_TEST_PRELUDE_PATH
+    candidates[n++]=BOCL_TEST_PRELUDE_PATH;
+#endif
+    candidates[n++]="../bootstrap/prelude.lisp";
+    candidates[n++]="bootstrap/prelude.lisp";
+    for(int i=0;i<n;i++){
+        if(access(candidates[i],R_OK)==0){
+            /* bocl_load_prelude (not bocl_load_cstring): binds *PACKAGE* to
+               COMMON-LISP and loads cl-exports.lisp first, so the reader's
+               bare symbols match eval.c's S(DEFMACRO) caches. */
+            bocl_load_prelude(candidates[i]);
+            return;}}
+    fprintf(stderr,
+            "bocl test: cannot locate prelude.lisp; set BOCL_PRELUDE to its path\n");
+    exit(EX_NOINPUT);}
 
 #if 1 // ndef GITLAB_CI
 
