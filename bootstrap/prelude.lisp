@@ -8382,7 +8382,7 @@ result array; return that array."
         ((symbolp c)            (string-downcase (symbol-name c)))
         (t                      (princ-to-string c))))
 
-(defun make-pathname (&key host device directory name type version
+(defun make-pathname (&key host device (directory nil directory-p) name type version
                            (defaults nil defaults-p) case)
   "Construct a pathname from components."
   (declare (ignore case))
@@ -8406,14 +8406,20 @@ result array; return that array."
                              ""))
                (dir-s
                 (cond
-                  ((null directory)
+                  ;; DIRECTORY not supplied: inherit from DEFAULTS (CLHS make-pathname).
+                  ((and (not directory-p) defaults-p)
                    (let ((dd (funcall (symbol-function 'pathname-directory) def-s)))
                      (if (listp dd)
                          (apply #'concatenate 'string
                                 (let ((abs (eq (car dd) :absolute)))
                                   (cons (if abs "/" "")
-                                        (mapcar (lambda (d) (concatenate 'string d "/")) (cdr dd)))))
+                                        (mapcar (lambda (d) (concatenate 'string (%pn-comp-string d) "/")) (cdr dd)))))
                          (or dd ""))))
+                  ;; DIRECTORY explicitly NIL (or no defaults): no directory — this
+                  ;; keeps an explicit :directory nil RELATIVE, rather than wrongly
+                  ;; inheriting an absolute directory from DEFAULTS (UIOP relies on
+                  ;; (make-pathname :directory nil :defaults <abs>) staying relative).
+                  ((null directory) "")
                   ((stringp directory) directory)
                   ((listp directory)
                    (let* ((abs  (eq (car directory) :absolute))
