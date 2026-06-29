@@ -1,6 +1,23 @@
 ASDF OPERATE re-evaluates the in-progress top-level LOAD form (→ SIGSEGV under appease).
 
-STATUS: open.  This is the current blocker for the USING-ASDF leg of
+STATUS: CLOSED (v1.4.19) — NOT a bocl bug; a test-harness artifact.  The re-load
+of the driver was caused by calling (asdf:defsystem "hello" ...) DIRECTLY in the
+driver file: REGISTER-SYSTEM-DEFINITION records the system's source-file as
+(resolve-symlinks* (load-pathname)) = the driver, and a direct DEFSYSTEM never
+marks DEFINE-OP done (only LOAD-ASD does, via
+  (setf (component-operation-time define-op sys) t)).
+So OPERATE planned (DEFINE-OP hello) and re-LOADed the driver, merging the now-
+changed *default-pathname-defaults*; under --on-error appease that recursed into
+SIGSEGV.  The CONFORMING flow — a .asd located through the source-registry and
+loaded by LOAD-ASD — does not hit this (hello's source-file is hello.asd and
+DEFINE-OP is already done), and (asdf:load-system "hello") now works end to end.
+Confirmed by a form-level LOAD trace (BOCL_DBG_LOAD): with a real .asd the driver
+is never re-read.  See uiop-bocl-porting.issue (MILESTONE v1.4.19), blocker #1.
+The residual robustness note below (appease "recovering" a fatal memory signal)
+remains valid but is a separate concern, not specific to ASDF.
+
+--- original report (for reference) ---
+This was the suspected blocker for the USING-ASDF leg of
 uiop-bocl-porting.issue.  DEFSYSTEM works fully; (asdf:operate 'asdf:load-op
 "sys") then mis-behaves.
 

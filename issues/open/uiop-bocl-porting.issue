@@ -320,3 +320,65 @@ ALSO FILED while here (non-blocking, both in index):
     systems immutable + default to a non-tree-walking registry after loading asdf.lisp.
   - ratio-floor-round-truncate.issue — single-arg FLOOR/ROUND/CEILING/TRUNCATE of a
     RATIO signal a TYPE ERROR (ratio +-*/ and two-arg ROUND work).
+
+======================================================================
+MILESTONE (v1.4.19): USING ASDF — (asdf:load-system "hello") LOADS A REAL
+SYSTEM AND RUNS IT.  (asdf:load-system "hello") -> hello:greet returns
+"Hello from ASDF on bocl!".
+======================================================================
+Driven the *proper* way (a .asd on an explicit source-registry, NOT a bare
+DEFSYSTEM in the driver):
+  (asdf:initialize-source-registry
+    '(:source-registry (:directory D) :ignore-inherited-configuration))
+  (map () 'asdf:register-immutable-system (asdf:already-loaded-systems))
+  (asdf:load-system "hello")   ; find-system -> load-asd -> define-op -> load-op
+with D/hello.asd = (defsystem "hello" :components ((:file "pkg")
+                                                   (:file "main" :depends-on ("pkg")))).
+
+Three blockers, each diagnosed with the :call-frame backtrace facility:
+
+  1. (RESOLVED — was a TEST-HARNESS ARTIFACT, not a bocl bug) The
+     "OPERATE re-evaluates the driver's top-level LOAD form" symptom recorded in
+     asdf-operate-reenters-toplevel-load.issue came from calling
+     (asdf:defsystem "hello" ...) DIRECTLY in the driver file.  REGISTER-SYSTEM-
+     DEFINITION then records the system's source-file as (resolve-symlinks*
+     (load-pathname)) = the driver itself, and never marks DEFINE-OP done (only
+     LOAD-ASD does, via (setf (component-operation-time define-op sys) t)).  So
+     OPERATE planned DEFINE-OP and re-LOADed the driver.  The conforming flow —
+     a .asd found through the source-registry and loaded by LOAD-ASD — does not
+     hit this: hello's source-file is hello.asd and DEFINE-OP is already done.
+     => issue closed (moved to issues/closed/).
+
+  2. MAKE-PATHNAME did not inherit NAME/TYPE from :DEFAULTS (only DIRECTORY/DEVICE).
+     So (make-pathname :type "fasl" :defaults #P".../pkg.lisp") -> #P".../.fasl"
+     (name dropped), and ASDF's OUTPUT-FILES :around (ensure-absolute-pathname +
+     *output-translation-function*) collapsed it to the bare directory.  LOAD-OP
+     then tried to LOAD that directory -> getc() EISDIR -> STREAM-ERROR.
+     FIX (prelude): make-pathname now fills unsupplied NAME/TYPE from DEFAULTS
+     (supplied-p flags, so an explicit :NAME NIL — the directory-pathname idiom —
+     still strips the file part).  CLHS-conformant and general.            (v1.4.19)
+
+  3. FILE-WRITE-DATE signalled a generic SIMPLE-ERROR for a missing file; UIOP's
+     SAFE-FILE-WRITE-DATE does (handler-case (file-write-date p) (file-error () nil))
+     while planning (generated outputs — the fasls bocl never writes — don't exist
+     yet), so the error escaped and aborted planning.
+     FIX (prelude): file-write-date now signals FILE-ERROR (CLHS) for a missing
+     file (wraps the kernel primitive; probe-file first).                  (v1.4.19)
+
+  4. Interpreter compile/load model: bocl writes no fast-load file, so UIOP's
+     COMPILE-FILE* temp-file -> rename -> load-the-fasl machinery is meaningless
+     (it opens a temp with :ELEMENT-TYPE :DEFAULT — which bocl rejects — and would
+     then rename a non-existent fasl).  FIX (asdf.lisp #+bocl): override PERFORM so
+     COMPILE-OP on a CL-SOURCE-FILE is a no-op and LOAD-OP loads the component's
+     SOURCE directly via CL:LOAD (bocl interprets the forms in order — IN-PACKAGE /
+     DEFMACRO / EVAL-WHEN honoured — which is exactly what loading the would-be
+     fasl achieves).  This bypasses COMPILE-FILE* entirely.               (v1.4.19)
+
+NON-BLOCKING, filed while here (in index):
+  - open-element-type-default.issue — OPEN/WITH-OPEN-FILE reject :ELEMENT-TYPE
+    :DEFAULT (convert_element_type in kernel.c).  No longer on the ASDF path after
+    blocker #4, but any WITH-TEMPORARY-FILE user hits it.
+
+USING-ASDF leg is COMPLETE.  Remaining work in this (large, multi-tier) issue is the
+broader UIOP surface — Tier-2 RUN-PROGRAM / real COMPILE-FILE* condition capture,
+Tier-3 launch-program — exercised only by systems whose build ops need subprocesses.

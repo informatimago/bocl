@@ -1,0 +1,33 @@
+OPEN / WITH-OPEN-FILE rejects :ELEMENT-TYPE :DEFAULT.
+
+STATUS: open.  Discovered driving the ASDF OPERATE work (uiop-bocl-porting.issue).
+Non-blocking for that milestone: the bocl ASDF port now loads component sources
+directly (a #+bocl PERFORM override for COMPILE-OP / LOAD-OP on CL-SOURCE-FILE),
+which bypasses UIOP's COMPILE-FILE* temporary-file path that triggered this.  But
+it blocks any code that opens a stream with the standard :ELEMENT-TYPE :DEFAULT,
+e.g. UIOP:CALL-WITH-TEMPORARY-FILE / WITH-TEMPORARY-FILE.
+
+== Symptom ==
+  (with-open-file (s "/tmp/x" :direction :output :element-type :default) ...)
+  ;; -> ERROR: Invalid element-type :DEFAULT
+
+== Cause ==
+sources/kernel.c convert_element_type() accepts only CHARACTER, BIT, and
+(UNSIGNED-BYTE 8); anything else (including the standard :DEFAULT) hits
+  ERROR("Invalid element-type %s", ...).
+Per CLHS (OPEN, :element-type): :DEFAULT means the stream chooses a type based on
+the file contents — in practice CHARACTER for a normal text open.
+
+== Fix direction ==
+In convert_element_type(), map :DEFAULT to type_character (the conforming default
+for a freshly opened character stream).  Optionally also accept BASE-CHAR and a
+bare (UNSIGNED-BYTE) / (SIGNED-BYTE n) as the tests require.  C change -> rebuild.
+
+== Repro ==
+  (with-open-file (s "/tmp/bocl-et-test" :direction :output
+                     :if-exists :supersede :element-type :default)
+    (write-char #\x s))
+  ;; signals "Invalid element-type :DEFAULT" instead of creating the file.
+
+== Related ==
+- uiop-bocl-porting.issue (parent).

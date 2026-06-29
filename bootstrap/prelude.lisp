@@ -8401,7 +8401,8 @@ result array; return that array."
         ((symbolp c)            (string-downcase (symbol-name c)))
         (t                      (princ-to-string c))))
 
-(defun make-pathname (&key host device (directory nil directory-p) name type version
+(defun make-pathname (&key host device (directory nil directory-p)
+                           (name nil name-p) (type nil type-p) version
                            (defaults nil defaults-p) case)
   "Construct a pathname from components."
   (declare (ignore case))
@@ -8447,8 +8448,20 @@ result array; return that array."
                             (cons (if abs "/" "")
                                   (mapcar (lambda (d) (concatenate 'string (%pn-comp-string d) "/")) parts)))))
                   (t "")))
-               (name-s (%pn-comp-string name))
-               (type-s (let ((ts (%pn-comp-string type)))
+               ;; NAME / TYPE: when not supplied, inherit from DEFAULTS (CLHS
+               ;; make-pathname); an EXPLICIT NIL is honoured as "no component"
+               ;; (this is how the directory-pathname idiom
+               ;; (make-pathname :name nil :type nil :defaults p) strips the file
+               ;; part).  ASDF relies on (make-pathname :type "fasl" :defaults
+               ;; "foo.lisp") -> "foo.fasl" (name inherited from DEFAULTS).
+               (name-s (%pn-comp-string
+                        (cond (name-p     name)
+                              (defaults-p (funcall (symbol-function 'pathname-name) def-s))
+                              (t          nil))))
+               (type-s (let ((ts (%pn-comp-string
+                                  (cond (type-p     type)
+                                        (defaults-p (funcall (symbol-function 'pathname-type) def-s))
+                                        (t          nil)))))
                          (if (string= ts "") "" (concatenate 'string "." ts)))))
           (funcall *%kernel-pathname-fn*
                    (concatenate 'string dev-pref dir-s name-s type-s))))))
@@ -8830,6 +8843,23 @@ result array; return that array."
 (defvar *%kernel-load* (symbol-function 'load)
   "The bare kernel LOAD: opens an explicit namestring and binds
    *LOAD-PATHNAME* / *LOAD-TRUENAME* for the duration of the load.")
+
+;;; FILE-WRITE-DATE: the kernel primitive signals a generic SIMPLE-ERROR when
+;;; the file does not exist; CLHS requires FILE-ERROR (a missing file is a
+;;; file-system operation that cannot be performed).  UIOP's SAFE-FILE-WRITE-DATE
+;;; relies on this — it does (handler-case (file-write-date p) (file-error () nil))
+;;; while planning, since generated outputs (e.g. fasls bocl never writes) do not
+;;; yet exist.  Wrap the primitive so a missing file raises a proper FILE-ERROR.
+(defvar *%kernel-file-write-date* (symbol-function 'file-write-date)
+  "The bare kernel FILE-WRITE-DATE (stats the namestring; errors if absent).")
+
+(defun file-write-date (filespec)
+  "FILE-WRITE-DATE per CLHS: universal time of FILESPEC's last write, signalling
+   FILE-ERROR if the file does not exist."
+  (let ((pathname (pathname filespec)))
+    (if (probe-file pathname)
+        (funcall *%kernel-file-write-date* pathname)
+        (error 'file-error :pathname pathname))))
 
 (defun load (filespec &key (verbose *load-verbose*) (print *load-print*)
                            (if-does-not-exist t) (external-format :default))

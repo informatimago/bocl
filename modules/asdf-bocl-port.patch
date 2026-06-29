@@ -1,3 +1,32 @@
+diff --git a/lisp-action.lisp b/lisp-action.lisp
+index e304876..954cf9b 100644
+--- a/lisp-action.lisp
++++ b/lisp-action.lisp
+@@ -209,7 +209,23 @@ an OPERATION and a COMPONENT."
+   (defmethod perform ((o load-op) (c cl-source-file))
+     (perform-lisp-load-fasl o c))
+   (defmethod perform ((o load-op) (c static-file))
+-    nil))
++    nil)
++  #+bocl
++  (progn
++    ;; bocl is an interpreter: there is no separate fast-load file.  Replace the
++    ;; default compile-then-load-the-fasl dance (which routes through UIOP's
++    ;; COMPILE-FILE* temporary-file / rename machinery, meaningless without a
++    ;; real compiler output) with: COMPILE-OP is a no-op, and LOAD-OP loads the
++    ;; component's SOURCE directly.  bocl's LOAD interprets the forms in order
++    ;; (IN-PACKAGE / DEFMACRO / EVAL-WHEN are honoured), which is exactly what a
++    ;; load of the would-be fasl is meant to achieve.
++    (defmethod perform ((o compile-op) (c cl-source-file))
++      (declare (ignorable o c))
++      nil)
++    (defmethod perform ((o load-op) (c cl-source-file))
++      (declare (ignorable o))
++      (let ((*package* (find-package '#:common-lisp-user)))
++        (load (component-pathname c))))))
+ 
+ 
+ ;;;; prepare-source-op, load-source-op
 diff --git a/uiop/common-lisp.lisp b/uiop/common-lisp.lisp
 index c76cb47..34c04fd 100644
 --- a/uiop/common-lisp.lisp
