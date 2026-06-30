@@ -184,6 +184,40 @@ build:freebsd:
     - when: on_success
       allow_failure: true
 
+# Phase 4 — native macOS on the thalassa shell runner. macOS cannot run in a
+# container, so jobs that must run on macOS carry the `macos` runner tag and
+# execute directly on the host; `.macos` is the shared anchor that selects the
+# thalassa runner — any future macOS job just `extends: .macos`. The host
+# provides the toolchain (Apple clang) directly, so there is no ccache PATH shim
+# and no toolchain image. thalassa is intermittent (it is not always online), so
+# the build job is allow_failure: it reports native-macOS portability status
+# without blocking the deliverable pipeline when the runner is offline.
+.macos:
+  tags:
+    - macos
+
+build:macos:
+  extends: .macos
+  stage: build
+  variables:
+    # macOS base ships gzip but not zstd; gzip keeps packaging dependency-free.
+    # (This job is not gathered by collect, so it needs no release compressor.)
+    COMPRESS: "gzip"
+  script:
+    - sh ci/build.sh
+    - sh ci/package.sh
+  artifacts:
+    name: "$CI_JOB_NAME"
+    when: always
+    paths:
+      - dist/
+    reports:
+      junit: tests/*-Results.xml
+    expire_in: 7 days
+  rules:
+    - when: on_success
+      allow_failure: true
+
 # ----------------------------------------------------------------------
 # Collect every environment's tarball, write a combined SHA256SUMS, and on a
 # v* tag upload the set to the generic Package Registry and cut a Release.
