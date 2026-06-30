@@ -119,14 +119,16 @@ INSTALL_HEADERS = $(wildcard *.h)
 
 # The "system" Lisp files the installed executable loads at run time: the prelude
 # and its siblings (cl-exports.lisp loaded by bocl_load_prelude(), bignum*.lisp
-# loaded by the prelude itself).  They install together into $(bocllibexecdir) so
-# the runtime sibling-resolution keeps working.  Add new system files (e.g. ASDF)
-# here as they appear.
+# and socket.lisp loaded by the prelude itself).  They install together into
+# $(bocllibexecdir) so the runtime sibling-resolution keeps working.  Add new
+# system files (e.g. ASDF) here as they appear — a prelude hook that LOADs a
+# sibling will abort the whole boot if that sibling was not installed.
 SYSTEM_LISP = \
 	../bootstrap/prelude.lisp \
 	../bootstrap/cl-exports.lisp \
 	../bootstrap/bignum.lisp \
-	../bootstrap/bignum-integration.lisp
+	../bootstrap/bignum-integration.lisp \
+	../bootstrap/socket.lisp
 
 # Manual page (committed roff) and Texinfo source/output for the info manual.
 MAN_PAGE  = ../man/bocl.1
