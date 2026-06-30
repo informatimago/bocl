@@ -28,14 +28,18 @@
  *   right layout can be handed to %BIND / %CONNECT / %SENDTO.
  */
 
-/* NI_MAXHOST / NI_MAXSERV and the BSD sockaddr fields are exposed only when a
-   feature-test macro selects the default/GNU namespace.  Define it before any
-   system header is pulled in (transitively via bocl.h). */
-#ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE 1
-#endif
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE 1
+/* NI_MAXHOST / NI_MAXSERV, EHOSTDOWN, MSG_DONTWAIT and the BSD sockaddr fields
+   live outside strict ISO/POSIX, so they are exposed only when a platform
+   feature-test macro selects the default/GNU (glibc) or Darwin/BSD namespace.
+   These must precede every system header (pulled in transitively via bocl.h).
+   Compiled under -std=c11, __STRICT_ANSI__ is set, so on Darwin/BSD the
+   extensions stay hidden unless _DARWIN_C_SOURCE/_BSD_SOURCE are defined here. */
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#  define _DARWIN_C_SOURCE 1
+#  define _BSD_SOURCE 1
+#else
+#  define _DEFAULT_SOURCE 1
+#  define _GNU_SOURCE 1
 #endif
 
 #include "bocl.h"
@@ -294,7 +298,7 @@ static void kernel_RECV(Ref function, Ref arguments, MultipleValues* results){
     int flags = arg_int(pop_mandatory_argument(function,&current));
     check_no_more_arguments(function,current);
     if(want<0) want=0;
-    octet* buf = (octet*)malloc(want?want:1);
+    octet* buf = (octet*)malloc((size_t)(want?want:1));
     ssize_t n = recv(fd,buf,(size_t)want,flags);
     if(n<0){ save_errno(); ret1(results,NIL_Symbol); }
     else if(n==0){ ret1(results,K(EOF)); }
@@ -329,7 +333,7 @@ static void kernel_RECVFROM(Ref function, Ref arguments, MultipleValues* results
     int flags = arg_int(pop_mandatory_argument(function,&current));
     check_no_more_arguments(function,current);
     if(want<0) want=0;
-    octet* buf = (octet*)malloc(want?want:1);
+    octet* buf = (octet*)malloc((size_t)(want?want:1));
     struct sockaddr_storage ss; socklen_t slen=sizeof(ss);
     ssize_t n = recvfrom(fd,buf,(size_t)want,flags,(struct sockaddr*)&ss,&slen);
     results->count=2;
@@ -624,7 +628,11 @@ static void kernel_ERRNO_KEYWORD(Ref function, Ref arguments, MultipleValues* re
 #define E(sym) case sym: name=#sym; break;
         E(EACCES) E(EADDRINUSE) E(EADDRNOTAVAIL) E(EAFNOSUPPORT) E(EAGAIN)
         E(EALREADY) E(EBADF) E(ECONNABORTED) E(ECONNREFUSED) E(ECONNRESET)
-        E(EDESTADDRREQ) E(EHOSTDOWN) E(EHOSTUNREACH) E(EINPROGRESS) E(EINTR)
+        E(EDESTADDRREQ)
+#ifdef EHOSTDOWN
+        E(EHOSTDOWN)
+#endif
+        E(EHOSTUNREACH) E(EINPROGRESS) E(EINTR)
         E(EINVAL) E(EISCONN) E(EMFILE) E(EMSGSIZE) E(ENETDOWN) E(ENETRESET)
         E(ENETUNREACH) E(ENFILE) E(ENOBUFS) E(ENOPROTOOPT) E(ENOTCONN)
         E(ENOTSOCK) E(EOPNOTSUPP) E(EPERM) E(EPIPE) E(EPROTONOSUPPORT)
@@ -676,7 +684,10 @@ static void kernel_SOCKET_CONSTANTS(Ref function, Ref arguments, MultipleValues*
     /* TCP options */
     SC(TCP_NODELAY);
     /* message flags */
-    SC(MSG_OOB); SC(MSG_PEEK); SC(MSG_DONTROUTE); SC(MSG_WAITALL); SC(MSG_DONTWAIT);
+    SC(MSG_OOB); SC(MSG_PEEK); SC(MSG_DONTROUTE); SC(MSG_WAITALL);
+#ifdef MSG_DONTWAIT
+    SC(MSG_DONTWAIT);
+#endif
 #ifdef MSG_NOSIGNAL
     SC(MSG_NOSIGNAL);
 #endif
