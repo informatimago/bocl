@@ -10754,3 +10754,15 @@ the rest take :INITIAL-ELEMENT."
              (dir (if pos (subseq ns 0 pos) "")))
         (load (concatenate 'string dir "bignum.lisp"))
         (load (concatenate 'string dir "bignum-integration.lisp"))))))
+
+;;; ---- SOCKET support -------------------------------------------------------
+;;; When the kernel was built with BSD-socket support (the %SOCKET primitive is
+;;; bound), load the usocket-compatible BOCL-SOCKET package (bootstrap/socket.lisp),
+;;; a sibling of this prelude.  *LOAD-TRUENAME* is bound to this file by the loader.
+(when (fboundp 'bocl::%socket)
+  (let ((here (or *load-truename* *load-pathname*)))
+    (when here
+      (let* ((ns  (if (stringp here) here (namestring here)))
+             (pos (search "prelude.lisp" ns :from-end t))
+             (dir (if pos (subseq ns 0 pos) "")))
+        (load (concatenate 'string dir "socket.lisp"))))))

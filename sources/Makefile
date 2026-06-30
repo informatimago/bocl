@@ -10,6 +10,7 @@ common_SRCS = \
 	variable.c cons.c data.c \
 	structure.c kernel_structure_functions.c structure_functions.c \
 	stream.c callback_stream.c reader.c printer.c filename.c \
+	socket.c \
 	character.c bostring.c bit_vector.c vector.c \
 	integer.c float.c \
 	\

@@ -2898,6 +2898,7 @@ void kernel_initialize(void){
     kernel_initialize_conditions();
     kernel_initialize_sequences();
     bocl_register_load();
+    bocl_register_socket();
 
     kernel_initialize_rootset();
     set_rootset((Block*)kernel_rootset());

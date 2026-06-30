@@ -18,6 +18,7 @@ Ref bocl_load_cstring(const char* path);
 Ref bocl_load_prelude(const char* prelude_path);
 
 void bocl_register_load(void);
+void bocl_register_socket(void);   /* BSD-socket kernel primitives (sources/socket.c) */
 void bocl_call(Ref fname,Ref arguments);
 void bocl_test(void);
 

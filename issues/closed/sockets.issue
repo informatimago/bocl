@@ -1,0 +1,162 @@
+Title: What Quicklisp requires from an implementation (networking / sockets)
+
+Summary
+-------
+Question: to make Quicklisp (http://quicklisp.org/) work on a Lisp
+implementation, what must the implementation provide? In particular, do we
+need to supply networking through a socket portability library?
+
+Answer: No socket portability library (usocket etc.) is needed. Quicklisp
+carries its OWN thin per-implementation socket shim plus its own pure-CL
+HTTP client, gunzip, and untar, so it has essentially zero external
+dependencies. Everything is bootstrapped from (unsigned-byte 8) streams.
+
+Portability mechanism
+---------------------
+Each portability point is a `ql-impl:definterface` (impl.lisp:77): a
+defgeneric dispatching on a singleton instance of an implementation class,
+with an optional `(:implementation t)` portable default. To port to a new
+implementation you:
+
+  1. Add a `define-implementation-package` clause in impl.lisp: a feature
+     keyword, a `:class`, and `:reexport-from` / `:prep` forms exposing that
+     Lisp's socket primitives.
+  2. Supply methods for the few interfaces that have NO portable `t`
+     default.
+
+The only two interfaces with no portable default — MUST be provided
+--------------------------------------------------------------------
+  1. open-connection (host port)            -- network.lisp:13
+     The critical one. Must return an open, bidirectional, BINARY
+     (unsigned-byte 8) stream to a TCP host/port. The default `t` method
+     just signals "quicklisp in implementation ... is not supported yet."
+     This is the single piece of real OS networking Quicklisp needs.
+
+  2. directory-entries (directory)          -- impl-util.lisp:200
+     Directory listing. Wild-pathname conventions and symlink handling vary
+     too much for a portable default.
+
+Everything else already has a working (:implementation t) default
+-----------------------------------------------------------------
+Networking (network.lisp), override only if the default is wrong:
+  - host-address   (returns the host as-is; override only if your socket
+                    layer wants a resolved address rather than a name)
+  - read-octets    (read-sequence)
+  - write-octets   (write-sequence + finish-output)
+  - close-connection (close)
+  - call-with-connection
+
+Filesystem (impl-util.lisp), portable defaults provided:
+  - rename-directory, probe-directory, native-namestring,
+    directory-write-date, directoryp, delete-directory,
+    delete-directory-tree, call-with-quiet-compilation
+  - init-file-name is per-impl but only powers the optional
+    ql:add-to-init-file convenience.
+
+Pure-CL — no implementation or external-tool support needed
+-----------------------------------------------------------
+  - HTTP client (http.lisp): a self-contained HTTP/1.0 GET-with-redirects
+    client built directly on octet streams. `*fetch-scheme-functions*` only
+    registers "http" -> http-fetch (http.lisp:795); proxy supported. No
+    https in the client itself.
+  - Gunzip (deflate.lisp, RFC 1951, Pierre Mai's portable deflate), untar
+    (minitar.lisp), and the CDB index reader (cdb.lisp) are all 100%
+    portable CL.
+  - Confirmed: NO run-program / curl / wget / zlib / libtar shell-out
+    anywhere in the client.
+
+Baseline the implementation must meet
+-------------------------------------
+  - ANSI CL with CLOS (the whole shim is generic functions / methods).
+  - Binary streams with :element-type '(unsigned-byte 8), plus
+    read-sequence / write-sequence.
+  - Working directory / probe-file / pathnames.
+  - ASDF (Quicklisp drives ASDF).
+  - Some way to load native sockets at bootstrap (the :prep `(require ...)`
+    forms, e.g. sb-bsd-sockets on SBCL).
+
+Bottom line
+-----------
+To bring up Quicklisp on a new implementation you write roughly ONE function
+of real substance — open-connection returning a binary TCP stream — plus
+directory-entries, plus a package clause exposing your Lisp's socket
+symbols. No socket portability library, no external gzip/tar, no curl.
+
+
+========================================================================
+RESOLUTION (2026-06-30)
+========================================================================
+
+Scope was extended beyond the original analysis: rather than only the one
+`open-connection` function Quicklisp strictly needs, bocl now ships a full,
+exhaustive BSD-socket layer with a usocket-compatible Lisp API, which both
+satisfies the Quicklisp requirement and provides a general networking facility.
+
+What was implemented
+--------------------
+1. C kernel primitives (sources/socket.c, registered via bocl_register_socket()
+   in sources/kernel.c, declared in sources/bocl.h, built via sources/Makefile).
+   Thin, non-signalling wrappers over the POSIX/BSD sockets API:
+
+     %SOCKET %BIND %CONNECT %LISTEN %ACCEPT %CLOSE-FD %SHUTDOWN
+     %GETSOCKNAME %GETPEERNAME %SETSOCKOPT-INT %GETSOCKOPT-INT
+     %SETSOCKOPT %GETSOCKOPT %SEND %RECV %SENDTO %RECVFROM %SOCKETPAIR
+     %GETADDRINFO %GETNAMEINFO %SOCKADDR-FAMILY %MAKE-SOCKADDR-UN
+     %INET-PTON %INET-NTOP %SET-NONBLOCKING %SELECT %MAKE-SOCKET-STREAM
+     %SOCKET-ERRNO %GAI-ERRNO %STRERROR %GAI-STRERROR %ERRNO-KEYWORD
+     %SOCKET-CONSTANTS
+
+   - All socket domains/types/protocols are reachable: the (DOMAIN TYPE
+     PROTOCOL) triple and raw sockaddr octet strings are passed through
+     verbatim, so AF_INET / AF_INET6 / AF_UNIX / AF_PACKET / ... and
+     SOCK_STREAM / SOCK_DGRAM / SOCK_RAW / SOCK_SEQPACKET all work.
+   - Errors are never signalled from C: a sentinel is returned and errno is
+     stashed for (%SOCKET-ERRNO); the Lisp layer maps errno -> condition via
+     (%ERRNO-KEYWORD).  Constant values (AF_*, SOCK_*, IPPROTO_*, SO_*, MSG_*,
+     SHUT_*, AI_*, NI_*, EAI_*) come straight from the platform headers via
+     (%SOCKET-CONSTANTS) so the port hard-codes no numbers.
+   - A connected socket is given a CL stream by fdopen()-ing the fd unbuffered
+     into an ordinary FILE-STREAM (%MAKE-SOCKET-STREAM), so READ-BYTE /
+     WRITE-BYTE / READ-CHAR / READ-SEQUENCE / WRITE-SEQUENCE all work through
+     the existing stream machinery.
+
+2. usocket-compatible Lisp package (bootstrap/socket.lisp), package
+   "BOCL-SOCKET" nicknamed "USOCKET", auto-loaded by the prelude when the
+   kernel exposes %SOCKET (guard added at the end of bootstrap/prelude.lisp).
+   It implements the usocket public API:
+     - classes USOCKET / STREAM-USOCKET / STREAM-SERVER-USOCKET /
+       DATAGRAM-USOCKET and their accessors;
+     - SOCKET-CONNECT (TCP & UDP, with timeout/nodelay/local-host/local-port),
+       SOCKET-LISTEN, SOCKET-ACCEPT, SOCKET-CLOSE, SOCKET-SHUTDOWN;
+     - SOCKET-SEND / SOCKET-RECEIVE (datagram);
+     - GET-LOCAL/PEER-ADDRESS/PORT/NAME;
+     - WAIT-FOR-INPUT + MAKE-WAIT-LIST / ADD-WAITER / REMOVE-WAITER /
+       REMOVE-ALL-WAITERS (select-based);
+     - the full condition hierarchy (SOCKET-CONDITION / SOCKET-ERROR and the
+       ~20 specific subclasses, plus the NS-* name-resolution conditions) with
+       errno/EAI_* mapping and WITH-MAPPED-CONDITIONS;
+     - the WITH-CONNECTED-SOCKET / WITH-CLIENT-SOCKET / WITH-SERVER-SOCKET /
+       WITH-SOCKET-LISTENER macros;
+     - the address utilities (DOTTED-QUAD-TO-VECTOR-QUAD,
+       VECTOR-QUAD-TO-DOTTED-QUAD, HOST-BYTE-ORDER, HBO-TO-DOTTED-QUAD,
+       HBO-TO-VECTOR-QUAD, VECTOR-TO-IPV6-HOST, IPV6-HOST-TO-VECTOR, IP=, ...).
+
+Relation to Quicklisp
+---------------------
+The one interface Quicklisp has no portable default for, open-connection — "an
+open, bidirectional, BINARY (unsigned-byte 8) TCP stream" — is now a one-liner:
+  (socket-stream (socket-connect host port :element-type '(unsigned-byte 8)))
+read-sequence / write-sequence on that stream are verified working.  The
+BOCL-SOCKET internals (%MAKE-SOCKET-STREAM and the connect/listen operators)
+are exactly the basis a ql-impl socket clause would re-export.
+
+Verification
+------------
+End-to-end loopback tests pass: TCP client/server (char + byte + sequence I/O,
+local/peer name lookup), UDP datagram both directions (send + sendto/recvfrom),
+AF_UNIX stream sockets and socketpair, WAIT-FOR-INPUT readiness, and condition
+mapping (connection-refused-error against a dead port).  Regression baselines
+(must-condition 142/147, must-data-and-control 309/310, must-array 330,
+must-sequence 3851, ...) are unchanged.
+
+Closed: implemented.  Version bumped to 1.4.20.
