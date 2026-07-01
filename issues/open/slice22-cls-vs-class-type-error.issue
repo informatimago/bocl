@@ -1,0 +1,41 @@
+test_slice22 aborts: "TYPE ERROR: got an object of class %CLS, expected an
+object of class CLASS"
+
+Status
+------
+After tests/test_slice22.c was wired to load the prelude and run in the
+COMMON-LISP package (1.4.28), it runs past the earlier INT-CHAR abort and now
+aborts with a TYPE-ERROR: some C primitive receives a %CLS (the internal CLOS
+class-metaobject representation) where it expects a CLASS object.
+
+What is known
+-------------
+- Every e("...") form in the suite, run standalone, passes in BOTH CL-USER and
+  the COMMON-LISP package: type-of on symbol/char/cons/integer/stream/pathname,
+  int-char, close, read-byte, write-byte, probe-file, array-dimensions,
+  array-total-size, simple-vector-p, copy-alist, set-exclusive-or,
+  nintersection, nset-difference, char-name/code-char/name-char,
+  wild-pathname-p, with-output-to-string.  None reproduce the %CLS error in
+  isolation.
+- So the failure is state- or ordering-dependent inside the suite binary (an
+  earlier test leaves state, or a form not isolated above), not a single
+  obviously-broken call.
+
+Repro
+-----
+  cd tests && LD_LIBRARY_PATH=../sources ./test_slice22
+  => "TYPE ERROR: got an object of class %CLS, expected an object of class CLASS"
+     (aborts the binary before any CUnit summary)
+
+Next step
+---------
+Bisect the suite: add per-case markers (or temporarily split test cases) to find
+the exact form that signals, then fix the primitive that fails to accept a %CLS
+(or coerce %CLS<->CLASS) at that call site.  Likely a CLASS-OF / class-metaobject
+path that hands a %CLS to a C primitive type-checking for CLASS.
+
+Related
+-------
+test_slice25 aborts on (compile nil '(lambda (x) (* x 2))) — "FUNCTION: invalid
+function name (FUNCTION (LAMBDA ...))"; that is the COMPILE-of-a-lambda-expression
+gap tracked by minimal-compilation.issue, not this issue.
