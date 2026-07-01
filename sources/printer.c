@@ -178,7 +178,13 @@ static bool gensym_p(Ref obj){
 
 static void circle_scan(Ref obj,int depth){
     if(depth>PRIN1_MAX_DEPTH){ return; }
-    bool is_cons=consp(obj), is_vec=vectorp(obj), is_gensym=gensym_p(obj);
+    /* Only GENERAL (T-element) vectors hold child Refs in elements->elements[].
+       Strings and bit-vectors are VECTORP too, but store PACKED characters/bits;
+       walking their raw storage as Refs dereferences garbage (SIGSEGV — seen when
+       the debugger, which binds *PRINT-CIRCLE* = T, printed a string).  Their
+       printers emit no #n= label anyway, so treat them as atoms here. */
+    bool is_cons=consp(obj), is_gensym=gensym_p(obj);
+    bool is_vec=vectorp(obj) && !stringp(obj) && !bit_vector_p(obj);
     bool is_arr=false;
     if(!is_cons && !is_vec && !is_gensym){
         is_arr=md_array_p(obj);
