@@ -7,7 +7,10 @@
 #include "variable.h"
 #include "bocl.h"
 
-void bocl_test_load_prelude(void){
+/* Locate a readable prelude.lisp (its cl-exports.lisp sibling is derived from
+   it): $BOCL_PRELUDE, then the compile-time BOCL_TEST_PRELUDE_PATH, then the
+   relative fallbacks.  Exits with a clear message if none is found. */
+static const char* bocl_test_find_prelude(void){
     const char* candidates[4];
     int n=0;
     const char* env=getenv("BOCL_PRELUDE");
@@ -18,17 +21,25 @@ void bocl_test_load_prelude(void){
     candidates[n++]="../bootstrap/prelude.lisp";
     candidates[n++]="bootstrap/prelude.lisp";
     for(int i=0;i<n;i++){
-        if(access(candidates[i],R_OK)==0){
-            /* bocl_load_prelude (not bocl_load_cstring): binds *PACKAGE* to
-               COMMON-LISP and loads cl-exports.lisp first, so the reader's
-               bare symbols match eval.c's S(DEFMACRO) caches. */
-            bocl_load_prelude(candidates[i]);
-            return;}}
+        if(access(candidates[i],R_OK)==0){ return candidates[i]; }}
     fprintf(stderr,
             "bocl test: cannot locate prelude.lisp; set BOCL_PRELUDE to its path\n");
     exit(EX_NOINPUT);}
 
-#if 1 // ndef GITLAB_CI
+void bocl_test_load_prelude(void){
+    /* bocl_load_prelude (not bocl_load_cstring): binds *PACKAGE* to COMMON-LISP
+       and loads cl-exports.lisp first, so the reader's bare symbols match
+       eval.c's S(DEFMACRO) caches. */
+    bocl_load_prelude(bocl_test_find_prelude());}
+
+/* Minimal reader setup for KERNEL-only suites: load cl-exports.lisp only, NOT
+   the prelude, so bare symbols resolve to the kernel's registered CL symbols
+   (else even (+ 2 3) / (quote a) read as "undefined") while keeping the suite
+   focused on the bare kernel. */
+void bocl_test_load_cl_exports(void){
+    bocl_load_cl_exports(bocl_test_find_prelude());}
+
+#ifndef GITLAB_CI
 
 void simple_test_initialize(const char* name){
     CU_set_error_action(CUEA_ABORT);

@@ -14,6 +14,7 @@
 
 TEST_SUITE_SETUP(arith_init){
     kernel_initialize();
+    bocl_test_load_prelude();   /* uses RATIONALP (prelude-level) */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(arith_clean){
@@ -49,7 +50,7 @@ static void test_div_int_to_float(void){
        (/ 5 2) => 5/2, whose numerator/denominator are 5 and 2. */
     TEST_EQ(eql, I(5), e("(numerator (/ 5 2))"));
     TEST_EQ(eql, I(2), e("(denominator (/ 5 2))"));
-    TEST_EQ(eql, T_Symbol, e("(if (ratiop (/ 5 2)) t nil)"));
+    TEST_EQ(eql, T_Symbol, e("(if (rationalp (/ 5 2)) t nil)"));
     /* Mixing in a float still promotes to float. */
     TEST_EQ(float_eq, F(2.5), e("(/ 5.0 2)"));}
 
@@ -161,7 +162,7 @@ static void test_mod_rem(void){
 
 static void test_bitwise(void){
     TEST_EQ(eql, I(0x08), e("(logand 12 10)"));   /* 1100 & 1010 = 1000 */
-    TEST_EQ(eql, I(0x0E), e("(logor  12 10)"));   /* 1100 | 1010 = 1110 */
+    TEST_EQ(eql, I(0x0E), e("(logior 12 10)"));   /* 1100 | 1010 = 1110 */
     TEST_EQ(eql, I(0x06), e("(logxor 12 10)"));   /* 1100 ^ 1010 = 0110 */
     TEST_EQ(eql, I(-13),  e("(lognot 12)"));      /* ~12 = -13 */
     TEST_EQ(eql, I(8),    e("(ash 1 3)"));        /*  1 << 3 = 8     */

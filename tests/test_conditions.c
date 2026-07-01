@@ -13,6 +13,7 @@
 
 TEST_SUITE_SETUP(cond_init){
     kernel_initialize();
+    bocl_test_load_prelude();   /* uses prelude-level operators (HANDLER-CASE/…) */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(cond_clean){

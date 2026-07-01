@@ -12,6 +12,7 @@
 
 TEST_SUITE_SETUP(ht_init){
     kernel_initialize();
+    bocl_test_load_prelude();   /* uses prelude-level operators (DEFPARAMETER/…) */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(ht_clean){

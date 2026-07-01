@@ -12,6 +12,7 @@
 
 TEST_SUITE_SETUP(rm_init){
     kernel_initialize();
+    bocl_test_load_cl_exports();   /* kernel-only: reader symbol match, no prelude */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(rm_clean){

@@ -304,6 +304,28 @@ Ref bocl_load_prelude(const char* prelude_path){
     set_symbol_value(S(*PACKAGE*), COMMON_LISP_USER_Package);
     return result;}
 
+/* Load ONLY cl-exports.lisp (the sibling of PRELUDE_PATH), not the prelude.
+   cl-exports makes the standard COMMON-LISP symbols external, so the reader's
+   bare NAMEs resolve to the very symbols the kernel registered via S(...) —
+   without it, a fresh CL-USER::+ / CL-USER::QUOTE is interned that does not
+   match the kernel's CL:+ / CL:QUOTE and every kernel operator reads as
+   "undefined".  This is the minimal environment a KERNEL-only test needs for a
+   working reader; it deliberately does NOT pull in the prelude.  *PACKAGE* is
+   bound to COMMON-LISP during the load and restored to CL-USER (as main.c). */
+Ref bocl_load_cl_exports(const char* prelude_path){
+    Ref result = NIL_Symbol;
+    set_symbol_value(S(*PACKAGE*), COMMON_LISP_Package);
+    const char* p = strstr(prelude_path, "prelude.lisp");
+    if(p){
+        size_t base=(size_t)(p-prelude_path);
+        char* exports=(char*)malloc(base+sizeof("cl-exports.lisp"));
+        memcpy(exports,prelude_path,base);
+        strcpy(exports+base,"cl-exports.lisp");
+        result = bocl_load_cstring(exports);
+        free(exports);}
+    set_symbol_value(S(*PACKAGE*), COMMON_LISP_USER_Package);
+    return result;}
+
 /* Kernel-visible (LOAD filespec) — minimal: no &key :verbose / :print /
    :if-does-not-exist yet. Those go on the Lisp side. */
 static void kernel_LOAD(unused Ref function, Ref arguments, MultipleValues* results){

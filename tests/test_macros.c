@@ -15,6 +15,7 @@
 
 TEST_SUITE_SETUP(macros_init){
     kernel_initialize();
+    bocl_test_load_prelude();   /* uses prelude-level operators (DEFMACRO/DEFPARAMETER/…) */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(macros_clean){

@@ -1,7 +1,7 @@
 #ifndef simple_test_h
 #define simple_test_h
 
-#if 0 // def GITLAB_CI
+#ifdef GITLAB_CI
 
 /* https://cunity.gitlab.io/cunit/ */
 
@@ -31,8 +31,13 @@ void simple_test_assert(const char* file, int line, const char* expression, eq_p
    Picks the first that is readable; exits with a clear message if none is. */
 void bocl_test_load_prelude(void);
 
+/* Minimal reader setup for kernel-only suites: loads cl-exports.lisp only (not
+   the prelude), so the reader's bare symbols resolve to the kernel's registered
+   COMMON-LISP symbols. */
+void bocl_test_load_cl_exports(void);
 
-#if 0 // def GITLAB_CI
+
+#ifdef GITLAB_CI
 
 #define TEST_SUITE_SETUP(name)    CU_SUITE_SETUP()
 #define TEST_SUITE_TEARDOWN(name) CU_SUITE_TEARDOWN()

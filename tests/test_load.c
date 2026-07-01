@@ -17,6 +17,7 @@ static const char* fixture_path = "/tmp/bocl-test-load.lisp";
 
 TEST_SUITE_SETUP(load_init){
     kernel_initialize();
+    bocl_test_load_prelude();   /* uses prelude-level operators (DEFPARAMETER/DEFUN/…) */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(load_clean){

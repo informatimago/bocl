@@ -16,6 +16,7 @@
 
 TEST_SUITE_SETUP(hb_init){
     kernel_initialize();
+    bocl_test_load_prelude();   /* uses prelude-level operators (DEFPARAMETER/HANDLER-BIND/…) */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(hb_clean){
