@@ -23,7 +23,10 @@ echo "== bocl build: CC=$CC BUILD=$BUILD MAKE=$MAKE =="
 "$MAKE" -C sources build CC="$CC" BUILD="$BUILD"
 
 # 2. Unit tests (fast C tests that link the shared lib — also proves -lbocl).
-"$MAKE" -C tests test CC="$CC" BUILD="$BUILD" || {
+# -k so EVERY suite runs and reports even after one fails; the test target then
+# exits non-zero if any non-quarantined suite failed (XFAIL_TESTS in
+# tests/Makefile lists the known, tracked failures that do not fail the build).
+"$MAKE" -k -C tests test CC="$CC" BUILD="$BUILD" || {
     echo "!! unit tests failed" >&2
     exit 1
 }
