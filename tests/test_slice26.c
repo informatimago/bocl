@@ -83,14 +83,16 @@ static void test_standard_char_p(void){
     TEST_EQ(eql, T_Symbol,   e("(standard-char-p #\\Space)"));
     /* bocl #\Newline = code 133; standard-char-p accepts it */
     TEST_EQ(eql, T_Symbol,   e("(standard-char-p (code-char 133))"));
-    TEST_EQ(eql, NIL_Symbol, e("(graphic-char-p #\\Space)"));
+    /* CLHS 13.1.4.3: #\Space IS a graphic character. */
+    TEST_EQ(eql, T_Symbol,   e("(graphic-char-p #\\Space)"));
     TEST_EQ(eql, T_Symbol,   e("(graphic-char-p #\\A)"));}
 
 /* ---- PRINC keyword fix --------------------------------------------------- */
 
 static void test_princ_keyword(void){
-    /* princ on a keyword must include the colon */
-    TEST_EQ(equal, e("\":FOO\""),
+    /* PRINC is aesthetic (*print-escape* nil): a keyword prints as its name with
+       no package marker, so :FOO -> "FOO" (PRIN1 would give ":FOO"). */
+    TEST_EQ(equal, e("\"FOO\""),
             e("(with-output-to-string (s) (princ :foo s))"));
     /* prin1 on keyword also includes colon */
     TEST_EQ(equal, e("\":FOO\""),

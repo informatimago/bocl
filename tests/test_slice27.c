@@ -91,7 +91,8 @@ static void test_string_eq_bounds(void){
             e("(string= \"foo\" \"foo\")"));}
 
 static void test_string_compare_bounds(void){
-    TEST_EQ(eql, T_Symbol,
+    /* CLHS: STRING< returns the mismatch index (integer), not T. */
+    TEST_EQ(eql, I(2),
             e("(string< \"abc\" \"abd\")"));
     TEST_EQ(eql, NIL_Symbol,
             e("(string< \"abd\" \"abc\")"));

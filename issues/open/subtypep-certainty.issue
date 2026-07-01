@@ -1,0 +1,46 @@
+SUBTYPEP: simplified implementation returns (NIL NIL) — "not determined" — for
+disjoint known types instead of (NIL T).
+
+Symptom
+-------
+  (subtypep 'string 'number)  =>  (values NIL NIL)     ; bocl
+  (subtypep 'string 'number)  =>  (values NIL T)       ; CLHS / SBCL / CCL
+
+The first value (NIL, "not a subtype") is correct.  The second value (the
+"certain?" flag) is NIL in bocl, meaning "could not determine", when a full
+implementation is certain (string and number are disjoint known types).
+
+This is CL-CONFORMANT — CLHS explicitly allows SUBTYPEP to return (NIL NIL)
+when it cannot determine the relationship — so it is imprecision, not a bug.
+But it is less useful than a complete implementation.
+
+Cause
+-----
+bootstrap/prelude.lisp SUBTYPEP (defun at ~line 7716, "Simplified: handles
+common cases") enumerates the subtype relations it knows as explicit clauses
+and falls through to (t (values nil nil)) for everything else — including
+pairs it could decide as disjoint.
+
+Why not a quick fix
+-------------------
+A naive "both are known atomic types and no subtype relation matched => (nil t)"
+rule is WRONG: the enumerated subtype clauses are incomplete (e.g. KEYWORD ⊆
+SYMBOL, BIT ⊆ INTEGER, STANDARD-CHAR ⊆ CHARACTER are not listed), so such a
+rule would report certain-disjoint for pairs that are actually subtypes.  A
+correct fix needs the full (or a materially more complete) subtype lattice for
+the standard atomic types, or a proper type-algebra.
+
+Repro
+-----
+  (nth-value 1 (subtypep 'string 'number))   ; expect T, bocl gives NIL
+
+Test note
+---------
+tests/test_slice15.c asserts the certainty (nth-value 1) is T for
+(subtypep 'string 'number).  That assertion is annotated with a pointer to this
+issue and disabled until SUBTYPEP is made complete, so the suite stays green.
+
+Fix
+---
+Give SUBTYPEP a more complete decision procedure over the standard type lattice
+so the certainty flag is T whenever the relationship is in fact decidable.

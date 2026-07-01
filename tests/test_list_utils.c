@@ -118,11 +118,13 @@ static void test_delete_if(void){
 
 /* ---- REMOVE-DUPLICATES / DELETE-DUPLICATES ---- */
 static void test_remove_duplicates(void){
-    TEST_EQ(equal, e("'(1 2 3)"),
+    /* CLHS: with :from-end NIL (default) the LAST of each duplicate set is kept,
+       so (1 2 1 3 2) -> (1 3 2) and (a b a c b) -> (a c b). */
+    TEST_EQ(equal, e("'(1 3 2)"),
             e("(remove-duplicates '(1 2 1 3 2))"));
     TEST_EQ(equal, e("nil"),
             e("(remove-duplicates nil)"));
-    TEST_EQ(equal, e("'(a b c)"),
+    TEST_EQ(equal, e("'(a c b)"),
             e("(remove-duplicates '(a b a c b))")
             );}
 

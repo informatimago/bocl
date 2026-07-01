@@ -8815,6 +8815,13 @@ result array; return that array."
    (lambda (object type &optional environment)
      (declare (ignore environment))
      (cond
+       ;; User DEFTYPE abbreviation (a no-arg type name): expand and recurse
+       ;; through the full TYPEP.  Later TYPEP redefinitions (this one and the
+       ;; DEFUN above) had dropped the *%DEFTYPE-EXPANDERS* lookup installed
+       ;; earlier, so (typep x 'my-deftype) silently stopped working.
+       ((and (symbolp type) (gethash type *%deftype-expanders*))
+        (funcall (symbol-function 'typep) object
+                 (funcall (gethash type *%deftype-expanders*))))
        ((eq type 'ratio)    (funcall ktp object 'ratio))
        ((eq type 'rational) (or (funcall ktp object 'integer) (funcall ktp object 'ratio)))
        ((eq type 'complex)  (funcall ktp object 'complex))
