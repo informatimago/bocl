@@ -46,10 +46,10 @@ static void test_format_tilde_S(void){
 
 static void test_format_tilde_percent(void){
     /* (format nil "~%") should be a 1-char string whose char is #\Newline. */
-    TEST_EQ(eql, I(1),  e("(string-length (format nil \"~%\"))"));
+    TEST_EQ(eql, I(1),  e("(length (format nil \"~%\"))"));
     TEST_EQ(eql, I(10), e("(char-code (char (format nil \"~%\") 0))"));
     /* ~2% gives two newlines. */
-    TEST_EQ(eql, I(2),  e("(string-length (format nil \"~2%\"))"));}
+    TEST_EQ(eql, I(2),  e("(length (format nil \"~2%\"))"));}
 
 /* --- ~~ literal tilde --------------------------------------------------- */
 
@@ -95,7 +95,7 @@ static void test_format_tilde_R(void){
 
 static void test_format_tilde_C(void){
     TEST_EQ(equal, e("\"A\""), e("(format nil \"~C\" #\\A)"));
-    TEST_EQ(eql,   I(1),       e("(string-length (format nil \"~C\" #\\Space))"));}
+    TEST_EQ(eql,   I(1),       e("(length (format nil \"~C\" #\\Space))"));}
 
 /* --- ~P plural ---------------------------------------------------------- */
 

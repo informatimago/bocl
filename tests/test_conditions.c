@@ -62,9 +62,9 @@ static void test_make_condition_and_conditionp(void){
     Ref c = e("(make-condition 'simple-error :format-control \"hi\")");
     TEST_EQ(eql, T_Symbol, as_boolean(typep(c, CONDITION_Class)));
     TEST_EQ(eql, T_Symbol,
-            e("(conditionp (make-condition 'simple-error :format-control \"hi\"))"));
-    TEST_EQ(eql, NIL_Symbol, e("(conditionp 42)"));
-    TEST_EQ(eql, NIL_Symbol, e("(conditionp nil)"));}
+            e("(typep (make-condition 'simple-error :format-control \"hi\") 'condition)"));
+    TEST_EQ(eql, NIL_Symbol, e("(typep 42 'condition)"));
+    TEST_EQ(eql, NIL_Symbol, e("(typep nil 'condition)"));}
 
 static void test_signal_existing_condition(void){
     /* SIGNAL/ERROR accept an already-built condition. */

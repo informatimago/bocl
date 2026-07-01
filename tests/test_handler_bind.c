@@ -46,7 +46,7 @@ static void test_handler_bind_receives_condition(void){
       "    (error \"test-msg\"))"
       "  (error (c) nil))");
     TEST_EQ(eql, T_Symbol,
-            e("(conditionp *hb-cond*)"));}
+            e("(typep *hb-cond* 'condition)"));}
 
 /* handler-bind: non-local exit from the handler prevents outer handler-case
    from running; instead the block named 'escape captures the exit. */

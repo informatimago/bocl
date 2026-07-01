@@ -33,13 +33,13 @@ static void test_default_test_is_eql(void){
 static void test_get_set_count(void){
     e("(defparameter th-h2 (make-hash-table))");
     TEST_EQ(eql, I(0),  e("(hash-table-count th-h2)"));
-    TEST_EQ(eql, I(7),  e("(sethash 1 th-h2 7)"));
-    TEST_EQ(eql, I(8),  e("(sethash 2 th-h2 8)"));
+    TEST_EQ(eql, I(7),  e("(setf (gethash 1 th-h2) 7)"));
+    TEST_EQ(eql, I(8),  e("(setf (gethash 2 th-h2) 8)"));
     TEST_EQ(eql, I(2),  e("(hash-table-count th-h2)"));
     TEST_EQ(eql, I(7),  e("(gethash 1 th-h2)"));
     TEST_EQ(eql, I(8),  e("(gethash 2 th-h2)"));
     /* Overwriting an existing key does not bump count. */
-    TEST_EQ(eql, I(70), e("(sethash 1 th-h2 70)"));
+    TEST_EQ(eql, I(70), e("(setf (gethash 1 th-h2) 70)"));
     TEST_EQ(eql, I(2),  e("(hash-table-count th-h2)"));
     TEST_EQ(eql, I(70), e("(gethash 1 th-h2)"));}
 
@@ -50,8 +50,8 @@ static void test_gethash_missing_default(void){
 
 static void test_remhash(void){
     e("(defparameter th-h4 (make-hash-table))");
-    e("(sethash :a th-h4 1)");
-    e("(sethash :b th-h4 2)");
+    e("(setf (gethash :a th-h4) 1)");
+    e("(setf (gethash :b th-h4) 2)");
     TEST_EQ(eql, I(2),       e("(hash-table-count th-h4)"));
     TEST_EQ(eql, T_Symbol,   e("(remhash :a th-h4)"));
     TEST_EQ(eql, I(1),       e("(hash-table-count th-h4)"));
@@ -62,9 +62,9 @@ static void test_remhash(void){
 
 static void test_clrhash(void){
     e("(defparameter th-h5 (make-hash-table))");
-    e("(sethash :a th-h5 1)");
-    e("(sethash :b th-h5 2)");
-    e("(sethash :c th-h5 3)");
+    e("(setf (gethash :a th-h5) 1)");
+    e("(setf (gethash :b th-h5) 2)");
+    e("(setf (gethash :c th-h5) 3)");
     TEST_EQ(eql, I(3), e("(hash-table-count th-h5)"));
     e("(clrhash th-h5)");
     TEST_EQ(eql, I(0), e("(hash-table-count th-h5)"));
@@ -73,29 +73,29 @@ static void test_clrhash(void){
 static void test_test_eq(void){
     /* :test EQ: only object-identity equal keys collide. */
     e("(defparameter th-eq (make-hash-table :test 'eq))");
-    e("(sethash 'foo th-eq 1)");
+    e("(setf (gethash 'foo th-eq) 1)");
     /* The same symbol is interned in KERNEL_obarray so EQ holds. */
     TEST_EQ(eql, I(1), e("(gethash 'foo th-eq)"));}
 
 static void test_test_equal_strings(void){
     /* :test EQUAL: two STRING objects with the same characters collide. */
     e("(defparameter th-equal (make-hash-table :test 'equal))");
-    e("(sethash \"hello\" th-equal 1)");
+    e("(setf (gethash \"hello\" th-equal) 1)");
     TEST_EQ(eql, I(1), e("(gethash \"hello\" th-equal)"));
     /* The literal "hello" in the source is a fresh STRING each time, so
        only EQUAL (not EQL) can find it. */}
 
 static void test_test_equalp_case_insensitive(void){
     e("(defparameter th-equalp (make-hash-table :test 'equalp))");
-    e("(sethash \"Hello\" th-equalp 1)");
+    e("(setf (gethash \"Hello\" th-equalp) 1)");
     TEST_EQ(eql, I(1), e("(gethash \"HELLO\" th-equalp)"));
     TEST_EQ(eql, I(1), e("(gethash \"hello\" th-equalp)"));}
 
 static void test_maphash_visits_all(void){
     e("(defparameter th-map (make-hash-table))");
-    e("(sethash 1 th-map 10)");
-    e("(sethash 2 th-map 20)");
-    e("(sethash 3 th-map 30)");
+    e("(setf (gethash 1 th-map) 10)");
+    e("(setf (gethash 2 th-map) 20)");
+    e("(setf (gethash 3 th-map) 30)");
     e("(defparameter th-sum 0)");
     e("(maphash (lambda (k v) (setq th-sum (+ th-sum k v))) th-map)");
     /* 1+10 + 2+20 + 3+30 = 66 */

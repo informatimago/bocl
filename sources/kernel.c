@@ -2755,6 +2755,24 @@ static void kernel_initialize_features(void){
     define_variable(S(*LOAD-TRUENAME*),          NIL_Symbol);
     define_variable(S(*COMPILE-FILE-PATHNAME*),  NIL_Symbol);
     define_variable(S(*COMPILE-FILE-TRUENAME*),  NIL_Symbol);
+
+    /* Standard printer control variables (CLHS 22.3.3).  The kernel PRINTER
+       (printer.c) reads these directly via variable_value, so they must be
+       bound with their CL standard initial values even on the bare kernel —
+       before the prelude, which re-defvars them to the SAME values (a no-op via
+       define_variable semantics).  Without this, printing on a prelude-less
+       kernel (e.g. a kernel-only test suite) signals "*PRINT-CIRCLE* is not
+       bound" the moment any object is printed. */
+    define_variable(S(*PRINT-ARRAY*),            S(T));
+    define_variable(S(*PRINT-BASE*),             integer_from_word(10));
+    define_variable(S(*PRINT-CASE*),             keyword_intern_cstring("UPCASE"));
+    define_variable(S(*PRINT-CIRCLE*),           NIL_Symbol);
+    define_variable(S(*PRINT-ESCAPE*),           S(T));
+    define_variable(S(*PRINT-GENSYM*),           S(T));
+    define_variable(S(*PRINT-LENGTH*),           NIL_Symbol);
+    define_variable(S(*PRINT-LEVEL*),            NIL_Symbol);
+    define_variable(S(*PRINT-RADIX*),            NIL_Symbol);
+    define_variable(S(*PRINT-READABLY*),         NIL_Symbol);
 }
 
 /* Debug aid: when BOCL_BACKTRACE is set, dump a native backtrace on a fatal
