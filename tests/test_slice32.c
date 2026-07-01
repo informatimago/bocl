@@ -9,12 +9,14 @@
 
 #include "simple_test.h"
 #include "kernel.h"
+#include "packages.h"
 #include "bocl.h"
 #include "macros.h"
 
 TEST_SUITE_SETUP(s32_init){
     kernel_initialize();
     bocl_test_load_prelude();
+    bocl_in_package(COMMON_LISP_Package);   /* bocl-internal names live in CL */
     /* Register a logical host used by several tests. */
     bocl_read_eval_cstring(
         "(set-logical-pathname-translations \"APP\""

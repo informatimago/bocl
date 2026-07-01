@@ -10,12 +10,14 @@
 
 #include "simple_test.h"
 #include "kernel.h"
+#include "packages.h"
 #include "bocl.h"
 #include "macros.h"
 
 TEST_SUITE_SETUP(s18_init){
     kernel_initialize();
     bocl_test_load_prelude();
+    bocl_in_package(COMMON_LISP_Package);   /* bocl-internal names live in CL */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(s18_fini){
