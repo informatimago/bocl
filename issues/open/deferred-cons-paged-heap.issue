@@ -43,3 +43,11 @@ remaining single memory lever).
 Safety note: prefer this paged-arena approach over tagged-pointer fixnums/conses
 — it does not rely on pointer-bit availability and works across C compilers and
 target machines.
+
+----------------------------------------------------------------------
+AUDIT 2026-06-20 (v1.1.3) — VERDICT: INTENTIONALLY DEFERRED (no change)
+----------------------------------------------------------------------
+"Option A" (the 32-byte single-block inlined cons) IS done (kernel_types.h:105,
+kernel.c:1154-1192). The separate paged 16-byte cons heap (this issue's subject)
+is NOT implemented anywhere — no arena/paged/header-free code exists. Correctly
+deferred ("if memory/throughput still warrants it"). Keep open.

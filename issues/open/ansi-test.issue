@@ -26,3 +26,15 @@ apparently. Anyways, I'll let your run these ansi-test in loop until
 you've corrected all the errors (you can leave the conforming problems
 alone for now, just ensure that the ansi-test can execute to
 completion and print out their report.
+
+----------------------------------------------------------------------
+AUDIT 2026-06-20 (v1.1.3) — STATUS: ONGOING (keep open)
+----------------------------------------------------------------------
+Ongoing conformance/harness task (not a single feature). The suite now LOADS
+end-to-end (doit.lsp -> gclload1/2, ~50 files) and reaches
+(regression-test:do-tests) (~21000 tests). Full to-completion runs are bounded
+by a non-generational-GC performance limit (~5GB heap re-mark); the generational
+collector is tracked separately (new-gc branch). Run from the REAL repo root
+(../ansi-test is the sibling of the repo, not of this worktree); the entry file
+is doit.lsp (not .lisp):
+  sources/bocl --no-init --batch --print -on-error appease -l ../ansi-test/doit.lsp --quit | tee test.out
