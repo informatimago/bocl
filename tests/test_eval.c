@@ -9,6 +9,7 @@
 #include "bocl.h"
 #include "macros.h"
 #include "eval.h"
+#include "packages.h"
 
 /* Phase 1 special-operator + apply tests. Each case round-trips a source
    string through bocl_read_eval_cstring and asserts the result. */
@@ -16,6 +17,10 @@
 TEST_SUITE_SETUP(eval_init){
     kernel_initialize();
     bocl_test_load_prelude();   /* uses prelude-level operators (DEFMACRO/DEFPARAMETER/…) */
+    /* Compare against COMMON-LISP symbols (the expected values are built with
+       symbol_intern_cstring, which interns in CL); the prelude leaves *PACKAGE*
+       = CL-USER, where read/eval'd bare symbols would be CL-USER::FOO. */
+    bocl_in_package(COMMON_LISP_Package);
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(eval_clean){

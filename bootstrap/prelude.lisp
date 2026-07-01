@@ -1301,6 +1301,8 @@ identity."
 
 (defun last (list &optional (n 1))
   "Return the last N cons cells of LIST (default 1).  Works on dotted lists."
+  (unless (listp list)
+    (error 'type-error :datum list :expected-type 'list))
   (let ((lead list))
     (dotimes (i n) (when (consp lead) (setq lead (cdr lead))))
     (let ((trail list))

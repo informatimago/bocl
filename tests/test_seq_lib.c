@@ -5,6 +5,7 @@
 #include "simple_test.h"
 
 #include "kernel.h"
+#include "packages.h"
 #include "bocl.h"
 #include "macros.h"
 
@@ -17,6 +18,7 @@
 TEST_SUITE_SETUP(seq_lib_init){
     kernel_initialize();
     bocl_test_load_prelude();
+    bocl_in_package(COMMON_LISP_Package);   /* expected symbols are CL (symbol_intern_cstring) */
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(seq_lib_clean){

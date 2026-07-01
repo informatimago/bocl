@@ -69,15 +69,18 @@ static void test_string_case(void){
 /* ---- string ordering ---- */
 
 static void test_string_ordering(void){
-    TEST_EQ(eql, T_Symbol,   e("(string< \"abc\" \"abd\")"));
+    /* CLHS: STRING<, STRING> etc. return the INDEX of the first differing
+       character (an integer) when the predicate holds, else NIL — not T.
+       For equal strings STRING<= returns the common length. */
+    TEST_EQ(eql, I(2),       e("(string< \"abc\" \"abd\")"));
     TEST_EQ(eql, NIL_Symbol, e("(string< \"abd\" \"abc\")"));
     TEST_EQ(eql, NIL_Symbol, e("(string< \"abc\" \"abc\")"));
-    TEST_EQ(eql, T_Symbol,   e("(string<= \"abc\" \"abc\")"));
-    TEST_EQ(eql, T_Symbol,   e("(string> \"abd\" \"abc\")"));
-    TEST_EQ(eql, T_Symbol,   e("(string/= \"abc\" \"abd\")"));
+    TEST_EQ(eql, I(3),       e("(string<= \"abc\" \"abc\")"));
+    TEST_EQ(eql, I(2),       e("(string> \"abd\" \"abc\")"));
+    TEST_EQ(eql, I(2),       e("(string/= \"abc\" \"abd\")"));
     /* Case-insensitive forms. */
-    TEST_EQ(eql, T_Symbol,   e("(string-lessp \"ABC\" \"abd\")"));
-    TEST_EQ(eql, T_Symbol,   e("(string-greaterp \"abd\" \"ABC\")"));}
+    TEST_EQ(eql, I(2),       e("(string-lessp \"ABC\" \"abd\")"));
+    TEST_EQ(eql, I(2),       e("(string-greaterp \"abd\" \"ABC\")"));}
 
 /* ---- trim ---- */
 #ifdef BOCL_GC59_TESTS

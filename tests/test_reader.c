@@ -20,11 +20,16 @@
 #include "printer.h"
 #include "reader.h"
 #include "variable.h"
+#include "packages.h"
 
 
 TEST_SUITE_SETUP(reader_init){
     kernel_initialize();
     bocl_test_load_cl_exports();   /* kernel-only: reader symbol match, no prelude */
+    /* Read bare symbols into COMMON-LISP, matching this suite's expected values
+       built with symbol_intern_cstring() (which intern in CL).  cl-exports leaves
+       *PACKAGE* = CL-USER, where a fresh token would intern as CL-USER::FOO. */
+    bocl_in_package(COMMON_LISP_Package);
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(reader_clean){
