@@ -16,9 +16,6 @@ Ref bocl_in_package(Ref package_designator);
 Ref bocl_load_cstring(const char* path);
 /* Load cl-exports.lisp (sibling) then the prelude — use in test setups. */
 Ref bocl_load_prelude(const char* prelude_path);
-/* Load ONLY cl-exports.lisp (sibling) — the minimal reader setup a kernel-only
-   test needs so bare symbols resolve to the kernel's registered CL symbols. */
-Ref bocl_load_cl_exports(const char* prelude_path);
 
 void bocl_register_load(void);
 void bocl_register_socket(void);   /* BSD-socket kernel primitives (sources/socket.c) */
