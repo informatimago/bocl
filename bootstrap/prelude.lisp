@@ -8879,7 +8879,13 @@ result array; return that array."
    \"foo.lsp\" — this is what makes the COMPILE-AND-LOAD idiom work without
    writing any compiled files."
   (declare (ignore verbose print external-format))
-  (let* ((merged (merge-pathnames filespec *default-pathname-defaults*))
+  ;; CLHS LOAD: bind *PACKAGE* and *READTABLE* to their pre-load values so that an
+  ;; IN-PACKAGE (or readtable change) inside the loaded file is local to the load
+  ;; and does not leak into the caller.  (*LOAD-PATHNAME* / *LOAD-TRUENAME* are
+  ;; already saved and restored around the load by the kernel loader.)
+  (let ((*package* *package*)
+        (*readtable* *readtable*))
+   (let* ((merged (merge-pathnames filespec *default-pathname-defaults*))
          (ns     (namestring merged))
          (type   (pathname-type merged)))
     (flet ((do-load (path) (funcall *%kernel-load* path))
@@ -8913,7 +8919,7 @@ result array; return that array."
                   (do-load source)))
              (compiled (do-load compiled))
              (source   (do-load source))
-             (t (missing)))))))))
+             (t (missing))))))))))
 
 ;;; ---- PROCLAIM / DECLAIM --------------------------------------------------
 ;;; Global declarations are advisory in bocl (an interpreter that does no

@@ -67,6 +67,17 @@ static void test_load_via_lisp(void){
     TEST_EQ(eql, T_Symbol, e(form));
     TEST_EQ(eql, I(99), e("*tl-z*"));}
 
+static void test_load_binds_package(void){
+    /* CLHS: LOAD binds *PACKAGE* (and *READTABLE*) to their pre-load values, so
+       an IN-PACKAGE inside the loaded file must NOT leak into the caller. */
+    write_fixture("(in-package \"KEYWORD\")\n");
+    e("(defparameter *tl-pkg-before* (package-name *package*))");
+    char form[256];
+    snprintf(form,sizeof(form),"(load \"%s\")",fixture_path);
+    e(form);
+    /* *PACKAGE* is the same after the load as before it. */
+    TEST_EQ(equal, e("*tl-pkg-before*"), e("(package-name *package*)"));}
+
 static void test_load_missing_file_errors(void){
     /* bocl_load_cstring exits via error() on a missing file (if-does-not-exist
        is :error). Calling it in-process would terminate the test, so we just
@@ -81,5 +92,6 @@ TEST_SUITE(test_load, load_init, load_clean)
     TEST_CASE( "defines functions",   test_load_defines_functions)
     TEST_CASE( "multiple forms",      test_load_multiple_forms_in_order)
     TEST_CASE( "(load ...) via Lisp", test_load_via_lisp)
+    TEST_CASE( "LOAD binds *PACKAGE*", test_load_binds_package)
     TEST_CASE( "missing-file marker", test_load_missing_file_errors)
     TEST_FINALIZE()
