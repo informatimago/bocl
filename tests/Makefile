@@ -12,9 +12,9 @@ RUN_TARGETS = $(PROGRAMS:%=run_%)
 # failure does NOT fail `make test` (so CI stays green for regressions to stand
 # out).  Remove a suite from this list the moment its issue is fixed, so any
 # recurrence re-reds CI.
-#   test_slice22 -> issues/open/slice22-cls-vs-class-type-error.issue
-#   test_slice25 -> issues/open/minimal-compilation.issue (COMPILE of a lambda)
-XFAIL_TESTS = test_slice22 test_slice25
+#   test_slice25 -> issues/open/minimal-compilation.issue (COMPILE-FILE does not
+#                   yet fire an EVAL-WHEN :COMPILE-TOPLEVEL at compile time)
+XFAIL_TESTS = test_slice25
 
 
 test_reader_SRCS = test_reader.c simple_test.c

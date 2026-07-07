@@ -1793,8 +1793,9 @@ Ref find_class(Ref name){
     return NULL;}
 
 /* Name of a class designator that may be either a kernel CLASS object or a CLOS
-   %cls structure. */
-static Ref class_designator_name(Ref class){
+   %cls structure.  Exposed (via kernel.h) so the unhandled-condition reporting
+   path can name a CLOS condition class without tripping check_type(CLASS). */
+Ref class_designator_name(Ref class){
     if(class == NULL){ return NIL_Symbol; }
     if(clos_class_p(class)){
         return sym_class_name != NULL ? structure_get(class, sym_class_name) : NIL_Symbol;}

@@ -52,3 +52,19 @@ STILL REMAINING (kept open):
   corruption.issue (the MACROEXPAND-ALL + package-qualified PRIN1 write path).
 - MACROEXPAND-ALL for the local-macro forms MACROLET / SYMBOL-MACROLET (these
   need local-macro environment tracking during the walk).
+
+----------------------------------------------------------------------
+PROGRESS (v1.4.31):
+- FIXED: (compile nil '(lambda (x) ...)) signalled "FUNCTION: invalid function
+  name: (FUNCTION (LAMBDA ...))".  %compile-definition wrapped the lambda in
+  (function ...) *after* MACROEXPAND-ALL, but LAMBDA is itself a macro, so the
+  walk already yields (function (lambda ...)); the extra wrap double-wrapped to
+  (function (function (lambda ...))).  Now wraps BEFORE walking:
+  (eval (macroexpand-all (list 'function definition))).  test_slice25's COMPILE
+  cases (functionp / funcall / nth-value / compile 'name / compile #'fn) pass.
+- STILL REMAINING (why test_slice25 stays in XFAIL_TESTS): COMPILE-FILE does not
+  fire EVAL-WHEN (:COMPILE-TOPLEVEL ...) at compile time.  bocl's COMPILE-FILE is
+  deliberately a no-op that returns the fast-load pathname and defers all form
+  processing to LOAD-of-source (see its docstring + the GC-rooting blocker in
+  deferred-compile-file-rt-gc-corruption.issue), so a :compile-toplevel form is
+  never evaluated during COMPILE-FILE.  test_slice25.c:147 asserts it is.

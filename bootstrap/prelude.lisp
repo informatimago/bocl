@@ -9353,7 +9353,12 @@ result array; return that array."
   (cond
     ((functionp definition) definition)                  ; already a function
     ((and (consp definition) (eq (car definition) 'lambda))
-     (eval (list 'function (macroexpand-all definition))))
+     ;; Wrap in FUNCTION *before* walking: LAMBDA is itself a macro, so
+     ;; MACROEXPAND-ALL of a bare (lambda ...) already yields (function
+     ;; (lambda ...)).  Wrapping the walked result in another FUNCTION would
+     ;; double-wrap into (function (function (lambda ...))), which the FUNCTION
+     ;; special operator rejects as an invalid function name.
+     (eval (macroexpand-all (list 'function definition))))
     ((and (consp definition) (eq (car definition) 'function))
      (eval (macroexpand-all definition)))
     (t (eval definition))))

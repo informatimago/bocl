@@ -39,3 +39,31 @@ Related
 test_slice25 aborts on (compile nil '(lambda (x) (* x 2))) — "FUNCTION: invalid
 function name (FUNCTION (LAMBDA ...))"; that is the COMPILE-of-a-lambda-expression
 gap tracked by minimal-compilation.issue, not this issue.
+
+======================================================================
+RESOLVED (v1.4.31)
+------------------
+Root cause (found by breaking on type_error under gdb): the %CLS error was
+NOT in a CLASS-OF / metaobject path as first guessed, but in the UNHANDLED-
+CONDITION reporting fallback.  reader_signal() (reader.c) raises a typed CLOS
+condition (END-OF-FILE / READER-ERROR) via the Lisp ERROR function; when no
+handler matches, kernel_ERROR()'s fallback (conditions.c) named the condition
+with class_name(class_of(cond)).  For a CLOS condition, class_of returns a
+%cls struct, and class_name() does check_type(CLASS_Class) — which rejects the
+%cls: "got %CLS, expected CLASS".  So ANY unhandled CLOS condition crashed the
+process with this confusing type error instead of printing its report.
+
+The suite only tripped it because two test forms were MALFORMED (a dropped
+closing paren for the outer LET in hash-table-keys / hash-table-values), so the
+reader hit END-OF-FILE mid-list and signalled — landing in the broken path.
+
+Fix:
+- conditions.c: the unhandled-error fallback now names the condition class with
+  class_designator_name() (CLOS-aware — accepts a kernel CLASS *or* a %cls),
+  exposed from kernel.c via kernel.h.  Unhandled CLOS conditions now report
+  cleanly (e.g. "Unhandled END-OF-FILE: #<END-OF-FILE>").
+- tests/test_slice22.c: fixed the two dropped-paren forms; also corrected a
+  stale (name-char "NEWLINE") assertion — in bocl #\Newline is NEL (code 133)
+  and #\Linefeed is code 10 (deliberate; see the prelude char-name comment).
+
+test_slice22 now passes fully and has been removed from XFAIL_TESTS.

@@ -67,8 +67,12 @@ static void test_rational(void){
     /* For integers, rational is identity */
     TEST_EQ(eql, I(42),  e("(rational 42)"));
     TEST_EQ(eql, I(-7),  e("(rational -7)"));
-    /* For floats, bocl returns the float as-is (no ratio type) */
+    /* For floats, RATIONAL returns an exact rational (a ratio) equal in value
+       to the float — bocl grew a real ratio type in slice 71 — so the result
+       is RATIONALP, not FLOATP. */
     TEST_EQ(eql, T_Symbol,
+            e("(rationalp (rational 3.14))"));
+    TEST_EQ(eql, NIL_Symbol,
             e("(floatp (rational 3.14))"));}
 
 static void test_rationalize(void){
@@ -225,15 +229,17 @@ static void test_with_hash_table_iterator(void){
               "  (sethash 'k h 1)"
               "  (with-hash-table-iterator (nxt h)"
               "    (nxt)"
-              "    (nth-value 0 (nxt))  ; second call => more-p = NIL"
+              "    (nth-value 0 (nxt))  ; second call => more-p = NIL\n"
               "    ))"));}
 
 /* ---- SHORT-SITE-NAME / LONG-SITE-NAME ------------------------------------ */
 
 static void test_site_names(void){
-    /* Both return NIL per stub */
-    TEST_EQ(eql, NIL_Symbol, e("(short-site-name)"));
-    TEST_EQ(eql, NIL_Symbol, e("(long-site-name)"));}
+    /* bocl maps the site name to the host identity (see issues/closed/
+       platform-identification.issue): both now return the host name string,
+       not the earlier NIL stub.  ANSI permits a string or NIL. */
+    TEST_EQ(eql, T_Symbol, e("(stringp (short-site-name))"));
+    TEST_EQ(eql, T_Symbol, e("(stringp (long-site-name))"));}
 
 /* ---- *LOAD-PATHNAME* etc. ------------------------------------------------ */
 

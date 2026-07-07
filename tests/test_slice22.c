@@ -125,13 +125,13 @@ static void test_hash_table_keys(void){
     TEST_EQ(eql, I(2),
             e("(let ((h (make-hash-table)))"
               "  (sethash 'a h 1) (sethash 'b h 2)"
-              "  (length (hash-table-keys h))")); }
+              "  (length (hash-table-keys h)))")); }
 
 static void test_hash_table_values(void){
     TEST_EQ(eql, I(2),
             e("(let ((h (make-hash-table)))"
               "  (sethash 'x h 10) (sethash 'y h 20)"
-              "  (length (hash-table-values h))")); }
+              "  (length (hash-table-values h)))")); }
 
 /* ---- CHAR-NAME / NAME-CHAR ------------------------------------------------ */
 
@@ -142,7 +142,11 @@ static void test_char_name(void){
 
 static void test_name_char(void){
     TEST_EQ(eql, e("(code-char 32)"),  e("(name-char \"Space\")"));
-    TEST_EQ(eql, e("(code-char 10)"),  e("(name-char \"NEWLINE\")"));
+    /* In bocl #\Newline is NEL (code 133), the internal line separator; ASCII
+       LF (code 10) is #\Linefeed (see the char-name/name-char comment in the
+       prelude, kept consistent with the reader so char-name round-trips). */
+    TEST_EQ(eql, e("(code-char 133)"), e("(name-char \"NEWLINE\")"));
+    TEST_EQ(eql, e("(code-char 10)"),  e("(name-char \"LINEFEED\")"));
     TEST_EQ(eql, NIL_Symbol,           e("(name-char \"XYZ\")"));}
 
 /* ---- WRITE-SEQUENCE / READ-SEQUENCE --------------------------------------- */

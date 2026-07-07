@@ -158,4 +158,7 @@ void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleVa
 void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,MultipleValues* results);
 /* The CLOS bridge predicates clos_instance_p / clos_class_p (declared in the
    generated kernel_functions.h) are set after (%clos-register …). */
+/* CLOS-aware class-name: accepts a kernel CLASS object OR a CLOS %cls struct
+   (unlike class_name, which check_type-rejects a %cls). */
+Ref class_designator_name(Ref class);
 #endif

@@ -37,7 +37,6 @@ clos-condition-hierarchy-parents.issue
 precise-condition-subclasses.issue
 should-tests-type-errors.issue
 subtypep-certainty.issue
-slice22-cls-vs-class-type-error.issue
 
 deferred-bignum-ops.issue
 deferred-cons-paged-heap.issue

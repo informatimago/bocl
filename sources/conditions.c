@@ -166,8 +166,11 @@ static void kernel_ERROR(Ref function, Ref arguments, MultipleValues* results){
        format-arguments) via PRINC, not the raw format-control — otherwise an
        unhandled "LOAD: file ~S does not exist" prints the literal ~S. */
     char* report = string_cstring(princ_to_string(cond));
+    /* class_of(cond) is a CLOS %cls for make-condition'd / CLOS-defined
+       conditions (e.g. the reader's END-OF-FILE / READER-ERROR); class_name
+       would check_type-reject it.  class_designator_name accepts both. */
     ERROR("Unhandled %s: %s",
-          string_cstring(symbol_name(class_name(class_of(cond)))),
+          string_cstring(symbol_name(class_designator_name(class_of(cond)))),
           report);
     /* unreachable */
     (void)results;
