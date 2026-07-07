@@ -1,0 +1,76 @@
+bocl 1.4.30 still can't access asdf modules.
+
+I don't see any module operator in BOCL either.
+
+Note: the only modules listed in *modules* are not plain modules,
+they're just socket.lisp loaded with the preambule that called
+PROVIDE.
+
+
+~/src/public/bocl
+master
+22:23[pjb@thalassa org.xquartz:0 bocl 18Gi]$ bocl
+
+Welcome to BOCL Version 1.4.30
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+
+Welcome to BOCL
+
+
+Have fun!
+
+bocl> (require :asdf)
+
+
+Debugger invoked on condition of type UNDEFINED-MODULE-ERROR:
+  #<UNDEFINED-MODULE-ERROR>
+
+Backtrace (innermost frame first):
+   0: (LAMBDA COMMON-LISP::C)
+   1: (REQUIRE COMMON-LISP::MODULE-NAME COMMON-LISP::PATHNAME-LIST)
+   2: HANDLER-BIND
+   3: restart ABORT
+   4: BLOCK COMMON-LISP::DONE
+   5: (COMMON-LISP::%REPL-EVAL COMMON-LISP::FORM)
+   6: CATCH BOCL::%QUIT-CATCH-TAG
+
+Available restarts:
+   0: [ABORT]
+
+debug> 0
+
+NIL
+
+bocl> *modules*
+
+("USOCKET" "BOCL-SOCKET")
+bocl> (time (apropos "MODULE"))
+
+*MODULES* [variable]
+COMMON-LISP::MODULE
+COMMON-LISP::MODULE-DIR
+COMMON-LISP::MODULE-NAME
+COMMON-LISP::MODULE-PLIST
+COMMON-LISP::MODULES-DIR
+;; Elapsed: 19.993 s
+
+NIL
+bocl> (quit)
+
+Bye, bye, cruel world! (with status 0)
+
+~/src/public/bocl
+master
+22:28[pjb@thalassa org.xquartz:0 bocl 18Gi]$ ls -l /opt/local/libexec/bocl/modules/
+total 0
+drwxr-xr-x 3 root wheel  96 Jun 26 18:39 ./
+drwxr-xr-x 8 root wheel 256 Jul  7 21:07 ../
+drwxr-xr-x 4 root wheel 128 Jul  7 21:07 asdf/
+
+~/src/public/bocl
+master
+22:29[pjb@thalassa org.xquartz:0 bocl 18Gi]$ 
