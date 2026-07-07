@@ -1,0 +1,45 @@
+APROPOS is very slow:
+
+Welcome to BOCL Version 1.3.6
+
+bocl> (time (apropos "MODULE"))
+
+*MODULES* [variable]
+COMMON-LISP::MODULE-NAME
+;; Elapsed: 17.352 s
+
+NIL
+bocl> 
+
+----------------------------------------------------------------------
+STILL PRESENT (v1.4.30/1.4.31): (time (apropos "MODULE")) ~= 20 s.  Same root
+cause suspected as the slow interpreted load of large systems (ASDF's 14k-line
+single file takes ~4-5 min to LOAD).  Referenced from asdf-modules.issue.
+
+======================================================================
+FIXED (v1.4.35)
+---------------
+Two distinct bugs, both fixed:
+
+1. CORRECTNESS: (apropos "FACT") returned NIL even with FACTORIAL:FACT etc.
+   loaded.  APROPOS-LIST only iterated (find-package "COMMON-LISP") and ignored
+   its PACKAGE argument, so symbols in any other package were invisible.  It now
+   searches every registered package (CLHS: no package => all packages) or the
+   accessible symbols of the given PACKAGE.
+
+2. SPEED: ~28 s came from the generic SEARCH/MISMATCH used per symbol — the Lisp
+   CHAR accessor alone is ~15 us/call, so a naive substring scan over ~3200
+   symbols took tens of seconds; the sort's generic STRING< (~5 ms/call) piled
+   on for larger result sets.  Fixes:
+   - new kernel primitive %STRING-CONTAINS-CI does the case-insensitive substring
+     test directly on the string octet data (no per-char CHAR, no allocation);
+   - APROPOS-LIST is a single dedup pass (EQ hash set) and sorts with the fast
+     %STRING-COMPARE primitive instead of generic STRING<.
+   Now: apropos "FACT" 0.29 s, "MODULE" 0.32 s, "LIST" 0.83 s, "STRING" 0.89 s
+   (were all 28 s+).
+
+NOTE (separate, still open): the underlying generic sequence/string primitives
+are slow in the interpreter — CHAR ~15 us, STRING< ~5 ms, generic SEARCH
+~14 ms/call, and merge SORT ~3.8 s for 3200 elements (interpreter cons/funcall
+overhead).  These affect other code (large-system loads, etc.) and warrant their
+own optimization pass (fast paths for simple-strings; a less alloc-heavy SORT).

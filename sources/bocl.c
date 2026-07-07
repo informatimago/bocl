@@ -1171,6 +1171,29 @@ static void kernel_DEFAULT_MODULES_DIRECTORY(unused Ref function, unused Ref arg
     results->count=1; results->values[0]=string_new_cstring(buf);
     close_live_pool(pool);}
 
+/* (%STRING-CONTAINS-CI needle haystack) → T if NEEDLE occurs in HAYSTACK as a
+   case-insensitive substring, else NIL.  Operates directly on the string octet
+   data (no per-character CHAR calls, no allocation), so APROPOS over the whole
+   image is fast — the Lisp CHAR accessor costs ~15 us/call, which made the naive
+   substring scan take tens of seconds. */
+static inline int bocl_ci_fold(int c){ return (c>='A'&&c<='Z') ? c+('a'-'A') : c; }
+static void kernel_STRING_CONTAINS_CI(unused Ref function, Ref arguments, MultipleValues* results){
+    Ref needle   = car(arguments);
+    Ref haystack = cadr(arguments);
+    check_class(needle,  STRING_Class);
+    check_class(haystack,STRING_Class);
+    const unsigned char* n = (const unsigned char*)needle->slots->octet_array.elements->elements;
+    const unsigned char* h = (const unsigned char*)haystack->slots->octet_array.elements->elements;
+    size_t nlen = needle->slots->octet_array.dimensions[0];
+    size_t hlen = haystack->slots->octet_array.dimensions[0];
+    bool found = (nlen==0);
+    if(!found && nlen<=hlen){
+        for(size_t i=0, last=hlen-nlen; i<=last && !found; i++){
+            size_t j=0;
+            while(j<nlen && bocl_ci_fold(h[i+j])==bocl_ci_fold(n[j])){ j++; }
+            if(j==nlen){ found=true; }}}
+    results->count=1; results->values[0]= found ? T_Symbol : NIL_Symbol;}
+
 /* ---- end Slice 25 C functions --------------------------------------------*/
 
 void bocl_register_load(void){
@@ -1180,6 +1203,8 @@ void bocl_register_load(void){
     set_symbol_function(ld,built_in_function_new(ld,list(S(PATH),NULL),kernel_LIST_DIRECTORY));
     {   Ref md=symbol_intern_cstring("%DEFAULT-MODULES-DIRECTORY");
         set_symbol_function(md,built_in_function_new(md,list(NULL),kernel_DEFAULT_MODULES_DIRECTORY)); }
+    {   Ref sc=symbol_intern_cstring("%STRING-CONTAINS-CI");
+        set_symbol_function(sc,built_in_function_new(sc,list(S(NAME),S(VALUE),NULL),kernel_STRING_CONTAINS_CI)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

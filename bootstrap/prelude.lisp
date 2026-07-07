@@ -5695,21 +5695,32 @@ the class object it denotes, so two specializers compare by class identity."
 ;;; ---- Exploration utilities ------------------------------------------------
 
 (defun apropos-list (string &optional package)
-  "Return a list of symbols whose names contain STRING.
-  NOTE: In bocl, package isolation is limited; this searches the kernel obarray."
-  package   ; ignored — all symbols share one obarray
-  (let ((result nil)
-        (target (string-upcase (string string))))
-    ;; Iterate over obarray symbols via do-symbols with COMMON-LISP package
-    (handler-case
-        (do-symbols (sym (find-package "COMMON-LISP"))
-          (when (search target (symbol-name sym))
-            (pushnew sym result)))
-      (error () nil))
-    (sort result (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
+  "Return a list of distinct symbols whose names contain STRING (as a
+   case-insensitive substring), sorted by name.  With PACKAGE, only symbols
+   accessible in that package are examined; otherwise every registered package
+   is searched (CLHS APROPOS-LIST)."
+  (let ((target (string string))
+        ;; A symbol present in several packages must appear once (dedup O(1)).
+        (seen   (make-hash-table :test 'eq))
+        (result '()))
+    (flet ((scan (syms)
+             (dolist (sym syms)
+               (unless (gethash sym seen)
+                 (setf (gethash sym seen) t)
+                 (when (%string-contains-ci target (symbol-name sym))
+                   (push sym result))))))
+      (if package
+          (scan (%pkg-accessible-symbols (%designated-package package)))
+          (dolist (p (list-all-packages))
+            (scan (package-symbols p)))))
+    ;; Order by name using the fast kernel comparison primitive directly — the
+    ;; generic STRING< is ~5 ms/call and would dominate for a large result set.
+    (sort result (lambda (a b)
+                   (< (%string-compare (symbol-name a) (symbol-name b) nil) 0)))))
 
 (defun apropos (string &optional package)
-  "Print all symbols whose names contain STRING."
+  "Print, to *STANDARD-OUTPUT*, every symbol whose name contains STRING (see
+   APROPOS-LIST), one per line, annotated when bound as a function/variable."
   (dolist (sym (apropos-list string package))
     (format t "~&~S" sym)
     (when (fboundp sym) (format t " [function]"))

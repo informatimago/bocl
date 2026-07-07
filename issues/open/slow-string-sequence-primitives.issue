@@ -1,0 +1,26 @@
+Several generic string/sequence primitives are very slow in the interpreter,
+enough to dominate real workloads (APROPOS, large-system LOAD, sorting).
+
+Measured (v1.4.34, ~3200-symbol image):
+- CHAR (string accessor): ~15 us per call.
+- STRING< (generic, keyword-arg version at prelude ~7171): ~5 ms per call.
+- SEARCH / MISMATCH (generic): ~14 ms per call (substring of a short pattern in
+  a ~15-char target).
+- SORT (list merge sort): ~3.8 s for 3200 integers with (function <); the merge
+  sort is O(n log n) but the per-op cons/funcall overhead is huge; a large SORT
+  with a STRING< comparator times out (minutes).
+
+These made APROPOS take ~28 s (worked around in v1.4.35 with a %STRING-CONTAINS-CI
+kernel primitive and %STRING-COMPARE-based sort — see slow-apropos.issue), but the
+underlying primitives are still slow for everything else.
+
+Directions:
+- Fast paths for SIMPLE-STRING in CHAR/SCHAR/STRING</STRING=/etc. (kernel byte
+  access, skip the generic dispatch + character-object boxing).
+- A less allocation-heavy SORT (or a kernel sort primitive for the common
+  list/vector-of-comparable case).
+- Consider why the generic SEARCH/MISMATCH constant is so high (keyword parsing,
+  per-element funcall of TEST/KEY, ELT dispatch).
+
+Note: two STRING< definitions exist (prelude ~1545 using %STRING-COMPARE, and
+~7171 the generic one that overrides it); the fast one is shadowed.
