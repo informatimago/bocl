@@ -25,6 +25,7 @@ Current list of issues to resolve:
 
 structured-pathnames.issue
 uiop-bocl-porting.issue
+asdf-modules.issue
 
 slow-apropos.issue
 stale-test-suite-failures.issue

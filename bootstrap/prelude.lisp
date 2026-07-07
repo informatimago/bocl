@@ -10682,12 +10682,32 @@ the rest take :INITIAL-ELEMENT."
   "Module plists (:name string :files (absolute-namestrings...)) discovered at boot
    under <libexec>/bocl/modules/.")
 
+(defvar bocl::*modules-directory* nil
+  "The <prelude-dir>/modules/ directory scanned at boot for module manifests, or
+   NIL in an in-tree run / when the prelude location is unknown.  Recorded so a
+   failed REQUIRE can report where it looked.")
+
 (define-condition bocl::invalid-module-plist (error)
   ((object :initarg :object :reader bocl::invalid-module-plist-object)
    (reason :initarg :reason :reader bocl::invalid-module-plist-reason)))
 
 (define-condition bocl::undefined-module-error (error)
-  ((module-name :initarg :module-name :reader bocl::undefined-module-name)))
+  ((module-name :initarg :module-name :reader bocl::undefined-module-name))
+  (:report
+   (lambda (condition stream)
+     (let* ((name  (bocl::undefined-module-name condition))
+            (avail (ignore-errors (mapcar #'bocl::module-name bocl::*module-list*))))
+       (format stream "REQUIRE: module ~S is not defined.~%" name)
+       (format stream "  Modules directory searched: ~A~%"
+               (or bocl::*modules-directory*
+                   "(none - in-tree run, or bocl was not installed with a modules/ dir)"))
+       (format stream "  Modules found there / already provided: ~A~%"
+               (if avail (format nil "~{~A~^, ~}" avail) "none"))
+       (when (string-equal (string name) "ASDF")
+         (format stream "  The ASDF module is built from a git submodule; to install it:~%")
+         (format stream "      git submodule update --init modules/asdf-src~%")
+         (format stream "      make modules && make install~%")
+         (format stream "  (see modules/README.org).~%"))))))
 
 (defun bocl::module-name (module-plist)
   "The :NAME of a module plist (a string), or signal INVALID-MODULE-PLIST."
@@ -10730,6 +10750,7 @@ the rest take :INITIAL-ELEMENT."
 (let ((here (or *load-truename* *load-pathname*)))
   (when here
     (let ((modules-dir (concatenate 'string (directory-namestring here) "modules/")))
+      (setq bocl::*modules-directory* modules-dir)
       (setq bocl::*module-list* (bocl::%scan-modules modules-dir)))))
 
 ;;; Enhanced REQUIRE (CLHS 24): MODULE-NAME is a string designator.  With no

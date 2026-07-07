@@ -1,0 +1,118 @@
+bocl 1.4.30 still can't access asdf modules.
+
+I don't see any module operator in BOCL either.
+
+Note: the only modules listed in *modules* are not plain modules,
+they're just socket.lisp loaded with the preambule that called
+PROVIDE.
+
+
+~/src/public/bocl
+master
+22:23[pjb@thalassa org.xquartz:0 bocl 18Gi]$ bocl
+
+Welcome to BOCL Version 1.4.30
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+
+Welcome to BOCL
+
+
+Have fun!
+
+bocl> (require :asdf)
+
+
+Debugger invoked on condition of type UNDEFINED-MODULE-ERROR:
+  #<UNDEFINED-MODULE-ERROR>
+
+Backtrace (innermost frame first):
+   0: (LAMBDA COMMON-LISP::C)
+   1: (REQUIRE COMMON-LISP::MODULE-NAME COMMON-LISP::PATHNAME-LIST)
+   2: HANDLER-BIND
+   3: restart ABORT
+   4: BLOCK COMMON-LISP::DONE
+   5: (COMMON-LISP::%REPL-EVAL COMMON-LISP::FORM)
+   6: CATCH BOCL::%QUIT-CATCH-TAG
+
+Available restarts:
+   0: [ABORT]
+
+debug> 0
+
+NIL
+
+bocl> *modules*
+
+("USOCKET" "BOCL-SOCKET")
+bocl> (time (apropos "MODULE"))
+
+*MODULES* [variable]
+COMMON-LISP::MODULE
+COMMON-LISP::MODULE-DIR
+COMMON-LISP::MODULE-NAME
+COMMON-LISP::MODULE-PLIST
+COMMON-LISP::MODULES-DIR
+;; Elapsed: 19.993 s
+
+NIL
+bocl> (quit)
+
+Bye, bye, cruel world! (with status 0)
+
+~/src/public/bocl
+master
+22:28[pjb@thalassa org.xquartz:0 bocl 18Gi]$ ls -l /opt/local/libexec/bocl/modules/
+total 0
+drwxr-xr-x 3 root wheel  96 Jun 26 18:39 ./
+drwxr-xr-x 8 root wheel 256 Jul  7 21:07 ../
+drwxr-xr-x 4 root wheel 128 Jul  7 21:07 asdf/
+
+~/src/public/bocl
+master
+22:29[pjb@thalassa org.xquartz:0 bocl 18Gi]$ 
+
+======================================================================
+DIAGNOSIS & RESOLUTION (v1.4.32)
+--------------------------------
+The module SYSTEM is not broken.  Verified end-to-end in a worktree:
+
+- REQUIRE / PROVIDE and the boot-time module scan work.  At boot the prelude
+  scans <prelude-dir>/modules/*/module.manifest into BOCL:*MODULE-LIST*; REQUIRE
+  looks a module up there by its manifest :NAME (case-insensitive) and LOADs its
+  files.  A dummy module dropped in <prelude-dir>/modules/ is found and loaded.
+- With the ASDF module actually built and present, (require :asdf) SUCCEEDS:
+  asdf.lisp loads and "ASDF" is pushed on *MODULES*.  It is just SLOW in the
+  interpreter (~4-5 min to load the 14k-line single-file asdf.lisp).
+
+Why the user hit UNDEFINED-MODULE-ERROR: the ASDF module was not built/installed
+on that machine, so no modules/asdf/module.manifest existed to scan.  ASDF is
+built from the modules/asdf-src git submodule (gitlink + .gitmodules ARE committed
+at master, pinned to 91dacfd) via `make modules`, then `make install` copies
+modules/asdf/ next to the prelude.  A plain `make build && make install` that
+skips the submodule init silently produces NO asdf module (the modules/Makefile
+asdf target no-ops when asdf-src/ is absent) — and the failure was then a
+contentless "#<UNDEFINED-MODULE-ERROR>" with no message, a dead end.
+
+Fix shipped:
+- bocl::undefined-module-error now has a :REPORT (it printed as a bare
+  #<UNDEFINED-MODULE-ERROR> before).  REQUIRE of a missing module now prints the
+  module name, the modules directory that was searched (new BOCL:*MODULES-
+  DIRECTORY*, set by the boot scan), the modules that WERE found there, and —
+  for ASDF specifically — the exact commands to build and install it.
+
+To actually get (require :asdf) working on an install:
+    git submodule update --init modules/asdf-src
+    make modules && make install     # needs a host CL (sbcl/ccl/clisp) to build
+                                      # ASDF's single-file release
+Then `(require :asdf)` loads it (slowly).  See modules/README.org.
+
+Still rough (tracked separately, NOT blockers for this issue):
+- Interpreter speed: loading asdf.lisp takes minutes; apropos over the image is
+  ~20 s (see slow-apropos.issue).
+- Making ASDF turnkey without the manual submodule step is a packaging decision
+  (committing the 700 KB generated asdf.lisp vs. the current build-from-submodule
+  design); left as-is per modules/README.org.
