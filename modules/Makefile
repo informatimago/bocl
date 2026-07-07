@@ -11,7 +11,7 @@ LISP ?= $(firstword $(shell command -v ccl 2>/dev/null) \
 .PHONY: all build modules asdf clean
 
 all build: modules
-modules: asdf
+modules: asdf factorial
 
 # ---- ASDF -----------------------------------------------------------------
 # Source submodule in asdf-src/ (added on authorization; see README.org).  Build
@@ -45,6 +45,9 @@ asdf:
 	    printf "#   add it:  git submodule add -b release \\\\\n" ; \
 	    printf "#            https://gitlab.common-lisp.net/asdf/asdf.git modules/asdf-src\n" ; \
 	  fi
+
+factorial:
+	: nothing to do
 
 clean:
 	-rm -rf asdf
