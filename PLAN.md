@@ -17,58 +17,53 @@ by exactly one. PR descriptions and commit messages should reference the
 resulting version. MAJOR and MINOR only move on intentional milestone
 bumps (e.g. ansi-test passing, first self-host).
 
-## 1. Audit (current state, 2026-05-24)
+## 1. Audit (current state, 2026-07-07 — v1.4.30)
 
-bocl follows a two-layer bootstrap: a small **C kernel** plus a **Lisp library** under [bootstrap/](bootstrap/) loaded on top of it. Per the project's own design notes (README.org, design/design.org, bootstrap/TODO), the kernel is intentionally minimal — just enough to LOAD the Lisp side.
+bocl follows a two-layer bootstrap: a small **C kernel** plus a **Lisp library** under [bootstrap/](bootstrap/) loaded on top of it. The original audit (2026-05-24, v0.0.10 era) estimated 30–40 % of the bootstrap target; master (v1.4.30) is now at roughly **88 %** by CL-external-symbol coverage — see [CL-STATUS.md](CL-STATUS.md).
 
 ### Working in the kernel
 
 | Subsystem | Files | Notes |
 |---|---|---|
-| Mark-sweep GC, multi-zone heap, live-pool roots | [sources/memory.c](sources/memory.c) | Solid |
-| Tagged Refs, 62 declared class objects | [sources/kernel_types.h](sources/kernel_types.h), [sources/kernel_objects.c](sources/kernel_objects.c) | Type tags only; no CLOS metaclass behaviour |
-| Cons / list ops | [sources/cons.c](sources/cons.c) | ~90 % |
-| Symbols (intern, value, plist, fboundp) | [sources/kernel.c](sources/kernel.c) | ~85 %, single obarray, no real packages |
-| Characters, strings, vectors, bit-vectors | [sources/character.c](sources/character.c), [sources/bostring.c](sources/bostring.c), [sources/vector.c](sources/vector.c), [sources/bit_vector.c](sources/bit_vector.c) | 50–70 % |
-| Structures (DEFSTRUCT runtime) | [sources/structure.c](sources/structure.c), [sources/structure_functions.c](sources/structure_functions.c), [sources/kernel_structure_functions.c](sources/kernel_structure_functions.c) | ~85 % — best covered chapter |
-| Reader | [sources/reader.c](sources/reader.c) | ~70 %; no reader macros, no `#=`/`#.` |
-| Printer | [sources/printer.c](sources/printer.c) | ~60 %; no `*print-*` control vars wired up |
-| Streams (string + fd) | [sources/stream.c](sources/stream.c) | ~50 % |
-| Pathnames | [sources/filename.c](sources/filename.c) | ~60 % |
-| Environments + frames | [sources/environment.c](sources/environment.c), [sources/eval.c](sources/eval.c) | Frame model in place |
-| Special operators in `evale` | [sources/eval.c](sources/eval.c) | QUOTE IF PROGN LOCALLY LET PROGV M-V-CALL M-V-PROG1 THE EVAL-WHEN UNWIND-PROTECT BLOCK RETURN-FROM CATCH THROW TAGBODY GO — but call path broken (see below) |
-| 197 generated `kernel_*` built-ins | [sources/built_in_functions.c](sources/built_in_functions.c) | Wrappers compile |
+| Mark-sweep + **generational nursery GC**, multi-zone heap, write barrier | [sources/memory.c](sources/memory.c) | Solid (v1.0.x nursery landed Slices 168–174) |
+| Tagged Refs, ~80 declared class objects incl. `Bignum` / `Ratio` / `Complex` / `Condition` / `Package` / `Restart` | [sources/kernel_types.h](sources/kernel_types.h), [sources/kernel_objects.c](sources/kernel_objects.c) | Type tags + CLOS metaclass behaviour |
+| Cons / list ops | [sources/cons.c](sources/cons.c) | Solid |
+| Symbols + **true per-package obarrays** (present + external) | [sources/kernel.c](sources/kernel.c), [sources/packages.c](sources/packages.c) | Full ANSI package semantics (Slice 46 v0.0.71; must-package = 0 at Slice 113) |
+| Characters, strings, vectors, bit-vectors, multi-dim arrays, displaced/adjustable/fill-pointer | [sources/character.c](sources/character.c), [sources/bostring.c](sources/bostring.c), [sources/vector.c](sources/vector.c), [sources/bit_vector.c](sources/bit_vector.c) | Solid (Slices 94–104) |
+| Structures + full CLOS (`DEFCLASS`, `DEFGENERIC`, `DEFMETHOD`, `MAKE-INSTANCE`, `:before`/`:after`/`:around`, `:allocation :class`, `CHANGE-CLASS`, `REINITIALIZE-INSTANCE`, `SHARED-INITIALIZE`) | [sources/structure.c](sources/structure.c) + [bootstrap/prelude.lisp](bootstrap/prelude.lisp) | Core covered; MOP hooks + user-defined method combinations still stubbed |
+| Reader — full macro set (`#'`, `#\`, `#+`/`#-`, `#\|…\|#`, `pkg:sym`, `#=`/`##`, `#.`, `SET-MACRO-CHARACTER`, `#C`, `#S`, `#nA`, `\|…\|`, `READTABLE-CASE`) | [sources/reader.c](sources/reader.c) | Complete for ANSI conforming code |
+| Printer — every `*PRINT-*` control var wired up (`*PRINT-CIRCLE*` includes `#n=`/`#n#`) | [sources/printer.c](sources/printer.c) | Solid; pretty printer not implemented |
+| Streams (string + fd + broadcast/concatenated/synonym/two-way + callback) | [sources/stream.c](sources/stream.c) | Solid |
+| Pathnames + **logical pathnames** (`TRANSLATE-LOGICAL-PATHNAME`, `PATHNAME-MATCH-P`, `WILD-PATHNAME-P`) + `PARSE-NAMESTRING` | [sources/filename.c](sources/filename.c) | Slice 33 v0.0.57; core done (`structured-pathnames` issue tracks refinements) |
+| BSD sockets kernel + `BOCL-SOCKET` usocket-compatible package | [sources/socket.c](sources/socket.c), [bootstrap/socket.lisp](bootstrap/socket.lisp) | v1.4.20–23 |
+| Environments + frames + special operators (all 25) + minimal debugger with backtrace | [sources/environment.c](sources/environment.c), [sources/eval.c](sources/eval.c) | Solid |
+| Full arithmetic tower (integer / bignum / ratio / complex / float) + transcendentals | [sources/arithmetic.c](sources/arithmetic.c), [bootstrap/bignum.lisp](bootstrap/bignum.lisp) | Auto-promotion; edge cases tracked in [deferred-bignum-ops](issues/open/deferred-bignum-ops.issue) and [ratio-floor-round-truncate](issues/open/ratio-floor-round-truncate.issue) |
+| Hash tables — O(1) bucket-backed | [sources/hash_table.c](sources/hash_table.c) | Solid (Slice 166) |
+| Conditions + restart machinery + full ANSI condition hierarchy + `DEFINE-CONDITION` on top of CLOS | [sources/conditions.c](sources/conditions.c) + [sources/eval.c](sources/eval.c) + [bootstrap/prelude.lisp](bootstrap/prelude.lisp) | Solid; [precise-condition-subclasses](issues/open/precise-condition-subclasses.issue) tracks where kernel still signals `SIMPLE-ERROR` |
+| ~200+ generated `kernel_*` built-ins + hand-registered arithmetic / socket / package / hash-table primitives | [sources/built_in_functions.c](sources/built_in_functions.c) + others | Solid |
 
 ### Missing or broken in the kernel
 
 | Gap | Where | Severity |
 |---|---|---|
-| `bocl_eval` is a no-op stub | [sources/bocl.c:14](sources/bocl.c:14) | **Blocker** |
-| `kernel_apply_function`, `kernel_apply_closure` are `NOT_IMPLEMENTED_YET` | [sources/kernel.c](sources/kernel.c) ~1555/1561 | **Blocker** — no user-defined fn can be called |
-| `evale` dispatches through a placeholder `static Ref f(...){return NULL;}` | [sources/eval.c:232](sources/eval.c:232) | **Blocker** |
-| `SETQ`, `LABELS`, `FLET` (real), `MACROLET`, `SYMBOL-MACROLET` | [sources/eval.c](sources/eval.c) | Blocker / required |
-| `bocl_load_cstring` returns early; `STREAM-OPEN` not done | [sources/bocl.c:58](sources/bocl.c:58) | Blocker for `LOAD` |
-| Packages: `*PACKAGE*`, `INTERN` in a named pkg, `IN-PACKAGE`, `EXPORT`, `USE-PACKAGE` | kernel symbol table, [sources/bocl.c](sources/bocl.c) | Blocker |
-| Arithmetic: `+ - * / = < > MOD REM TRUNCATE FLOOR ABS EXPT …` | absent | Blocker |
-| Hash tables (class declared, no impl) | — | Required |
-| Condition system, `HANDLER-CASE`, restarts (frames declared, body stubbed) | [sources/eval.c:62](sources/eval.c:62) | Required |
-| CLOS / MOP (only class scaffolding) | — | Required |
-| FORMAT, LOOP, sequence functions | expected on Lisp side | Required |
-| Multi-dim arrays, `:initial-offset`, displaced | [sources/kernel.c:1012](sources/kernel.c) | Required |
-| Reader macros (`set-macro-character`, `#=`, `#.`, `#+`/`#-`) | [sources/reader.c](sources/reader.c) | Required for ansi-test corpus |
-| Numeric tower (ratios, complex, bignum) | bignum present as Lisp draft only | Required |
+| Real `COMPILE` and eager `MACROEXPAND-ALL` at `LOAD` time (currently `COMPILE` is minimal, `LOAD` interprets) | [minimal-compilation issue](issues/open/minimal-compilation.issue) | Deferred |
+| `DEFINE-METHOD-COMBINATION` full support (only standard combination) | [bootstrap/prelude.lisp](bootstrap/prelude.lisp) | Required for full CLOS |
+| Pretty printer (`PPRINT-LOGICAL-BLOCK`, dispatch table) | — | Required |
+| MOP hooks (`FIND-METHOD` variants, `METHOD-QUALIFIERS`, `COMPUTE-APPLICABLE-METHODS-USING-CLASSES`, class-precedence-list finalisation) | — | Required |
+| `UPDATE-INSTANCE-FOR-REDEFINED-CLASS` (class-redefinition path) | — | Required |
+| A handful of edge-case type errors and stubs — see [issues/open/](issues/open/) | | Bug fixes |
 
 ### Lisp side
 
-[bootstrap/](bootstrap/) contains drafts (`minimal-compiler.lisp`, `tiny-eval.lisp`, `tiny-reader.lisp`, `tiny-printer.lisp`, `tiny-repl.lisp`, `bootstrap-packages.lisp`, `bootstrap-cl-package.lisp`, `operators.lisp`, `bignum.lisp`). None is loaded today because `LOAD` and `EVAL` are stubbed.
+[bootstrap/prelude.lisp](bootstrap/prelude.lisp) is ~10 700 lines and is loaded on every startup unless `--no-prelude`. [bootstrap/socket.lisp](bootstrap/socket.lisp) (~720 lines) provides the `BOCL-SOCKET` package. ASDF 3.3.7 is shipped as a submodule at [modules/asdf-src/](modules/asdf-src) and built into a single-file `asdf.lisp` by [modules/Makefile](modules/Makefile) — `(require :asdf)` and `(asdf:load-system :some-system)` both work (v1.4.19).
 
 ### Tests
 
-Only [tests/test_reader.c](tests/test_reader.c) is active (CUnit, links libbocl). No kernel-eval, no built-in, no GC tests.
+47 `test_*.c` CUnit suites under [tests/](tests/) linked against `libbocl`, plus the SACLA `must-*` and `should-*` suites under `bootstrap/sacla/lisp/tests/`. `must-*` is GREEN at v1.3.0; `should-*` remains partially failing per [should-tests-type-errors](issues/open/should-tests-type-errors.issue). CI at [.gitlab-ci.yml](.gitlab-ci.yml) runs a matrix (Debian gcc/clang/tcc + Alpine musl + FreeBSD + macOS) plus a dedicated ASan/UBSan sanitiser job.
 
 ### Overall
 
-≈ 30–40 % of the bootstrap target. The two single-points-of-failure are `bocl_eval` and `kernel_apply_function`; fix those and most of the rest is breadth, not design.
+**~88 %** of the bootstrap target. Phase 5 (Lisp library bring-up) is essentially complete: CLOS, LOOP, FORMAT, full sequence/string/numeric libraries, conditions, restarts, ASDF, sockets, dribble, debugger. The remaining large item is [ansi-test integration](issues/open/ansi-test.issue) — see §3.
 
 ---
 
@@ -517,40 +512,204 @@ re-enabled under load from this slice's prelude):
   character, making the test suite hang. Fixed by calling `stream_close`
   after each use.
 
-### Phase 6 — exhaustive C-level kernel test suite
+#### Phase 5 progress after Slice 18
 
-Independent of ansi-test, a CUnit suite per kernel subsystem under `tests/`:
+Between v0.0.42 and v1.4.30 a further 150+ slices landed. Rather than
+one entry per slice, grouped by theme:
 
-- `test_memory.c` — GC stress: ≫ zone-size allocation, force collect, root survival, live-pool overflow.
-- `test_kernel_objects.c` — `class-of` per type; `SUBCLASSP` transitivity.
+**v0.0.42 – v0.0.60 (Slices 19–35)**
+
+- **Slice 19** — minimal CLOS: `DEFCLASS`, `DEFMETHOD`, `MAKE-INSTANCE`.
+- **Slice 20** — function utilities, `DEFTYPE`, compound `TYPEP`.
+- **Slice 21** — `DEFINE-CONDITION` + CLOS-based conditions.
+- **Slices 22–33** — I/O built-ins; `MAKE-LIST` / `AREF-SET` / `RANDOM`;
+  `FORMAT` extensions (`~^` / `~@D` / `~[…~]` / `~?` / `EVAL` /
+  `MACROEXPAND`); string bounds/base; multi-seq predicates;
+  `DO-HASH-TABLE`; `&AUX` / `PRINT-UNREADABLE-OBJECT`; compound
+  `TYPEP` / `FORMAT ~F`; `APPLY` on a symbol / `COERCE` on a char;
+  GC live-pool + `CHANGE-CLASS`; **logical pathnames** (Slice 33
+  v0.0.57).
+- **Slice 35** (v0.0.60) — GC-rooting audit + full condition system
+  for user code + installable static + shared libs + `make install` /
+  `make dist` layout.
+
+**v0.0.61 – v0.9.x (Slices 36–164)**
+
+- GC-rooting long-tail (Slices 36, 71, 76, 82, 96, 100, 117–120, 146,
+  173).
+- **CI Phases 0–4**: cached x86_64 base images, tcc matrix job, Alpine
+  musl job, FreeBSD QEMU job.
+- **True packages phase A/B/C** with **per-package symbol tables**
+  (Slices 46–49, v0.0.71–75) — the "single global obarray" limitation
+  from Phase 3 is gone.
+- Fill-pointer / adjustable / displaced arrays (Slices 94–104).
+- Multi-dim + bit arrays (Slices 100–102).
+- Reader completeness: `READTABLE-CASE`, `|…|`, `#C`,
+  `#\Newline` and named-char syntax, package-qualified symbol
+  printing (Slice 57), `#nA` array literal (Slices 62–114).
+- Restart machinery: `RESTART-BIND`, `COMPUTE-RESTARTS`,
+  `HANDLER-CASE :no-error` (Slices 84–88).
+- **Bignum engine** ([bootstrap/bignum.lisp](bootstrap/bignum.lisp))
+  + kernel `Bignum` type (Slices 72–75, 122).
+- ansi-test prereqs: `*QUERY-IO*`, `DEFINE-METHOD-COMBINATION` (stub),
+  `FIND-METHOD` (Slice 159); `(SETF foo)` functions (Slice 161);
+  `*LOAD-TRUENAME*` (Slice 163); `DEFGENERIC (:method …)` (Slice
+  164); O(1) bucketed hash tables (Slice 166).
+
+**v1.0.x (Slices 165–174)** — release + **generational nursery GC**
+with write barrier + proactive default. Kernel becomes production-
+grade in memory management.
+
+**v1.1.x – v1.2.x (Slices 45–113)** — SACLA `must-*` suite driven
+green. Print control vars, `*PRINT-CIRCLE*` `#n=`/`#n#`, print
+case/gensym/base/level/length/radix (Slices 55–74); bignum-aware
+bitwise (Slice 53); aggregate `#nA` printing; `*STOP-HOOK*` /
+`*CONT-HOOK*` (Slice 54); minimal debugger (Slice 51); minimal
+`COMPILE` (Slice 49); missing math + util functions (Slice 50);
+`&KEY` validation. `must-character` green (75), `must-string` (77),
+`must-do` (78), `must-eval` (79), `must-hash-table` (80),
+`must-data-and-control` (82, 109); reader complete (85–101);
+`SETF` eval-order (103); `MACRO-FUNCTION` env (105); condition/
+restart ordering (108–112); **package-system ANSI conformance**
+(Slice 113 → must-package 31 → 0, GREEN). Slice 114 finished the
+debugger backtrace. **v1.3.0 = must-\* GREEN.**
+
+**v1.3.x (Slices 115–125)** — ASDF + modules.
+
+- `make install PREFIX=/opt/local` FHS layout (Slices 114–116).
+- `--on-error` split: REPL debug, batch exit (Slice 118).
+- Package `PRINT-OBJECT` (Slice 119).
+- `SORT` segfault fix: iterative `%merge` (Slice 120).
+- Control-stack overflow → catchable `STORAGE-CONDITION` (Slice
+  121).
+- Module system: `BOCL:*MODULE-LIST*` + manifest `REQUIRE` (Slice
+  122).
+- Module install plumbing + `modules/` (Slice 123).
+- ASDF as git submodule [modules/asdf-src/](modules/asdf-src) (Slice
+  124).
+- UIOP Tier-1 portability (Slice 125).
+- v1.3.14: structured pathnames + `DEFGENERIC` / `DEFMETHOD (setf
+  name)` + `(setf DOCUMENTATION)`.
+- v1.3.15: CLOS-aware `SUBTYPEP` / `TYPEP`.
+- v1.3.16: computed `:initform` per-instance.
+- v1.3.17: `:allocation :class` (shared class storage).
+- **v1.4.0 = ASDF 3.3.7 loads and runs.**
+
+**v1.4.x** — sockets, ASDF using, printer specials, CI hardening.
+
+- Clang / gcc warning cleanup (v1.4.1–3).
+- Callback stream + `DRIBBLE` (v1.4.4–6).
+- `FORMAT ~D` mincol/padchar/comma-params on `~D`/`~B`/`~O`/`~X`/`~R`
+  (v1.4.8).
+- `--on-error` command-line-ordered (v1.4.9).
+- `PARSE-NAMESTRING` (CLHS 19.2.2).
+- `TYPEP` compound types with `:*` bounds + `FUNCTION` / `BOOLEAN`
+  / `KEYWORD` / `ATOM` / `BIT` / `(un)signed-byte` / `mod`.
+- `REINITIALIZE-INSTANCE` + `SHARED-INITIALIZE` fix.
+- `LOOP ALWAYS` / `NEVER` / `THEREIS` timing fix (textual position).
+- `MAKE-PATHNAME :DIRECTORY NIL` supplied-p vs defaults.
+- `WITH-COMPILATION-UNIT` (CLHS 3.2.2.3).
+- CLOS preserves multiple values through generic-function dispatch.
+- Method's `&KEY` lambda-list accepts keywords named by sibling
+  methods.
+- BSD sockets kernel + `BOCL-SOCKET` package (v1.4.20–21) — macOS/
+  BSD build fixes.
+- ASDF USING-ASDF: `(asdf:load-system)` loads + runs a real system
+  (v1.4.19).
+- Install ships `bootstrap/socket.lisp` (v1.4.23).
+- UIOP patch idempotent + self-healing (v1.4.22).
+- CI: native macOS job on the thalassa shell runner.
+- `*PRINT-CIRCLE*` SIGSEGV fix on strings/bit-vectors (v1.4.24).
+- Wire test suites to the correct environment; honest `GITLAB_CI`
+  guards (v1.4.25).
+- Printer specials bound in kernel; standardize test operator names
+  (v1.4.26).
+- Category-3 behavioural failures in core suites; `LAST` type-check
+  (v1.4.27).
+- Run bocl-internal test suites in `COMMON-LISP` (v1.4.28).
+- `TYPEP` restore `DEFTYPE` expansion (v1.4.29).
+- Test cl-exports loader self-contained (v1.4.30).
+- ci/tests: fail the build on test failure.
+
+**Milestone summary at v1.4.30**: 25 special operators / most macros
+/ ~90 % of CL functions / full numeric tower / true packages / full
+CLOS core / condition system with restarts / full reader macros / all
+`*PRINT-*` specials wired / logical pathnames / sockets / ASDF 3.3.7
+loading / SACLA must-\* GREEN. See [CL-STATUS.md](CL-STATUS.md) for
+the symbol-level view and [issues/open/](issues/open/) for the live
+queue.
+
+### Phase 6 — exhaustive C-level kernel test suite (**partial**)
+
+Present under [tests/](tests/) (47 CUnit files linking `libbocl`):
+`test_reader`, `test_eval`, `test_arithmetic`, `test_load`,
+`test_packages`, `test_hash_table`, `test_conditions`,
+`test_reader_macros`, `test_setf`, `test_control`, `test_sequences`,
+`test_seq_lib`, `test_strings`, `test_numeric_extras`,
+`test_destructuring`, `test_structures`, `test_handler_bind`,
+`test_restarts`, `test_loop`, `test_list_utils`, `test_format`,
+`test_macros`, `test_misc`, `test_clos`, `test_ci`, plus a
+`test_slice{15,16,17,18,20,21,22,23,24,25,26,27,28,29,30,31,32,33}.c`
+series scoped to individual slices.
+
+Still to add per the original per-subsystem plan:
+
+- `test_memory.c` — GC stress: ≫ zone-size allocation, force
+  collect, root survival, live-pool overflow, nursery vs old-gen
+  promotion.
+- `test_kernel_objects.c` — `class-of` per type; `SUBCLASSP`
+  transitivity.
 - `test_cons.c` — accessors on dotted / proper / circular lists.
-- `test_symbol.c` — intern identity, plist, value/function cells, makunbound, fboundp.
-- `test_integer.c`, `test_float.c` — arithmetic edges (Phase 2).
-- `test_character.c`, `test_string.c`, `test_vector.c`, `test_bit_vector.c`.
+- `test_symbol.c` — intern identity, plist, value/function cells,
+  `MAKUNBOUND`, `FBOUNDP`.
+- `test_integer.c`, `test_float.c` — arithmetic edges + bignum /
+  ratio / complex promotion.
+- `test_character.c`, `test_string.c`, `test_vector.c`,
+  `test_bit_vector.c`.
 - `test_structure.c` — define / accessors / inheritance.
-- `test_reader.c` — extend existing.
 - `test_printer.c` — `(read (print x))` round-trip.
-- `test_stream.c` — string + file streams, EOF.
-- `test_filename.c` — pathname parsing.
+- `test_stream.c` — string + file + broadcast / concatenated / two-
+  way streams, EOF.
+- `test_filename.c` — pathname parsing + logical pathname
+  translation.
 - `test_environment.c` — lexical / dynamic / non-local exits.
-- `test_eval.c` — every special operator, multiple values, tail position.
-- `test_built_in.c` — every entry in [sources/built_in_functions.h](sources/built_in_functions.h) called via `bocl_call`, results checked.
+- `test_built_in.c` — every entry in
+  [sources/built_in_functions.h](sources/built_in_functions.h)
+  called via `bocl_call`, results checked.
 
-`make test` runs them all with a combined JUnit XML report; failures fail CI.
+`make test` runs the suite; CI now fails on any test failure
+(v1.4.30). Combined JUnit XML report not yet emitted.
 
-### Phase 7 — sanitiser + portability
+### Phase 7 — sanitiser + portability (**partial**)
 
-- ASan + UBSan run nightly.
-- Build matrix Linux (gcc, clang), macOS, OpenBSD; POSIX + C99 surface only.
-- Valgrind clean on Linux.
+Done:
+- ASan + UBSan gated behind `SANITIZE=yes` in
+  [sources/common.mk](sources/common.mk); dedicated CI job
+  `sanitise:debian-gcc` in [.gitlab-ci.yml](.gitlab-ci.yml).
+- Build matrix: Debian gcc / clang / tcc, Alpine musl, FreeBSD (via
+  QEMU), macOS (thalassa shell runner).
+
+Still to do:
+- Valgrind-clean Linux job.
+- OpenBSD in the matrix.
+- Explicit "nightly" cadence for the sanitiser job.
 
 ### Effort estimate
 
-≈ **10–12 weeks** of focused work. Phases 1–3 are gating, 4–5 are bulk, 6–7 are quality.
+The original 10–12 week estimate has been consumed. Remaining work is
+now concentrated in three areas: ansi-test integration (§3), the last
+~120 CL symbols in [CL-STATUS.md](CL-STATUS.md), and the 22 open
+issues in [issues/open/](issues/open/).
 
 ---
 
-## 3. ansi-test integration
+## 3. ansi-test integration (**not yet started at v1.4.30**)
+
+Phase 5 is done — the "do not point bocl at ansi-test until Phase 5"
+caveat below no longer holds. This is the next quality gate. Tracked
+in [ansi-test.issue](issues/open/ansi-test.issue). On master today
+there is no `ansi-test/` submodule, no `tests/ansi-test-harness/`, no
+`make ansi-test` target.
 
 Use Paul Dietz' ansi-test (https://gitlab.common-lisp.net/ansi-test/ansi-test) — `deftest`/`regression-test` framework, organised by CLHS section.
 
@@ -593,7 +752,7 @@ Match the kernel phases:
 5. `iteration.lsp`, `sequences.lsp`, `evaluation-and-compilation.lsp`, `environment.lsp` — after Phase 5.
 6. `clos.lsp` — last.
 
-Until Phase 5 lands, every section is in `expected-failures.lisp`. CI gate: pass count only goes up.
+Phase 5 has now landed; all six enablement steps can be attempted at once. Any section still failing at first-run enablement goes in `expected-failures.lisp`. CI gate: pass count only goes up.
 
 ### Reporting
 
@@ -603,5 +762,5 @@ Until Phase 5 lands, every section is in `expected-failures.lisp`. CI gate: pass
 
 ### Caveats
 
-- ansi-test needs reader, packages, CLOS, conditions, format — do not point bocl at it until Phase 5.
+- Phase 5 (reader, packages, CLOS, conditions, format) is done as of v1.4.30, so the harness can now be brought up.
 - The project's own license to exploit "undefined" or "implementation-defined" behaviour (per [README.org](README.org)) will produce justified mismatches; those go in `expected-failures.lisp` with a comment, not silently ignored.

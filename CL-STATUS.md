@@ -1,234 +1,359 @@
 # bocl Common Lisp symbol-status inventory
 
-Snapshot at v0.0.20. Cross-references every external symbol of the
-`COMMON-LISP` package (978 in total per ANSI CL) against what bocl
-currently provides — built-ins in the C kernel, special operators in
-`evale`, or macros/functions defined in `bootstrap/prelude.lisp`.
+Snapshot at **v1.4.30** (2026-07-07). Previous snapshot in this file was
+v0.0.20 — since then, roughly 340 commits landed across slices 14–174
+and versions v0.1.x through v1.4.x. This rewrite reflects the current
+state of the `COMMON-LISP` external symbols against what bocl provides
+in the C kernel + [bootstrap/prelude.lisp](bootstrap/prelude.lisp) (~10 700
+lines) + [bootstrap/socket.lisp](bootstrap/socket.lisp) + the ASDF module
+under [modules/asdf-src](modules/asdf-src).
 
 ## Overall coverage
 
-| Kind         | Implemented | Total | % |
-|--------------|-------------|-------|---|
-| Special operator | 21 | 25 | **84 %** |
-| Function     | 175 | 636 | **28 %** |
-| Macro        | 21 | 91 | **23 %** |
-| Variable     | 11 | 50 | **22 %** |
-| Constant     | 11 | 62 | **18 %** |
-| Type / decl  | 3  | 114 | **3 %** |
-| **Total**    | **242** | **978** | **25 %** |
+Rough estimate — the "top-50 missing" list from the previous snapshot
+is essentially cleared. The remaining gaps are concentrated in a few
+narrow areas (compiler surface, some MOP hooks, a handful of edge-case
+type errors), not in whole chapters.
 
-The split makes sense: the kernel implements most of the evaluation
-core (special operators and the printer/reader/numeric/list surface),
-and almost nothing of CLOS, types, the formatting/pretty-printer
-machinery, or the iteration macros yet.
+| Kind             | Implemented    | Total | %       |
+|------------------|----------------|-------|---------|
+| Special operator | 25 / 25        | 25    | **100 %** |
+| Function         | ~570 / 636     | 636   | ~90 %   |
+| Macro            | ~85 / 91       | 91    | ~93 %   |
+| Variable         | ~40 / 50       | 50    | ~80 %   |
+| Constant         | ~50 / 62       | 62    | ~80 %   |
+| Type / decl      | ~90 / 114      | 114   | ~80 %   |
+| **Total**        | **~860 / 978** | **978** | **~88 %** |
 
-## Architecture plan: C kernel vs Lisp side
+The remaining ~120 symbols are almost entirely in three buckets:
+CLOS/MOP hooks that bocl deliberately stubs (`FIND-METHOD` variants,
+`METHOD-QUALIFIERS`, `COMPUTE-APPLICABLE-METHODS-USING-CLASSES`, the
+class-precedence-list finalisation surface); the compiler surface
+(`COMPILE-FILE-PATHNAME`, `WITH-COMPILATION-UNIT` shipped but the
+underlying COMPILE is minimal); and a scattering of edge-case type
+predicates and printer control (`PPRINT-LOGICAL-BLOCK` and most of the
+pretty printer).
 
-A guiding principle: **anything that can be expressed in CL using what
-the kernel already provides should live in `bootstrap/*.lisp`, not in
-C**. The C side carries only:
+## The four "still-missing" special operators — all landed
 
-1. Special operators (the four still missing — see below).
-2. Primitives that need direct memory access or POSIX system calls
-   (file streams, GC interaction, `set-symbol-value`, …).
-3. The minimum sequence layer required to express the rest of CL on
-   top (already done: `mapcar`, `funcall`, etc.).
-4. Arithmetic on the kernel-native numeric types.
+Previous snapshot listed `LET*`, `MACROLET`, `SYMBOL-MACROLET`, and
+`LOAD-TIME-VALUE` as pending. All four shipped in Slice 1 (v0.0.21)
+and live in [sources/eval.c](sources/eval.c). Every one of the 25 CL
+special operators is now implemented.
 
-Everything else — `DEFCLASS`, `DEFSTRUCT`, `LOOP`, `FORMAT`, `DO`,
-`DESTRUCTURING-BIND`, the bulk of the sequence/string libraries — is
-straightforward Lisp once macros and FUNCALL/APPLY work.
+## Architecture — kernel vs Lisp side (still holds)
 
-## The four still-missing special operators
+The guiding principle from the v0.0.20 snapshot is unchanged and has
+proven correct: everything that can be expressed in CL lives in
+[bootstrap/prelude.lisp](bootstrap/prelude.lisp). The C kernel keeps
+only special operators, POSIX/GC primitives, the numeric layer,
+sockets, and a small set of Lisp-visible built-ins (see
+[sources/built_in_functions.c](sources/built_in_functions.c) +
+[sources/arithmetic.c](sources/arithmetic.c) +
+[sources/socket.c](sources/socket.c) +
+[sources/packages.c](sources/packages.c) +
+[sources/hash_table.c](sources/hash_table.c) +
+[sources/conditions.c](sources/conditions.c) +
+[sources/reader.c](sources/reader.c) +
+[sources/printer.c](sources/printer.c)).
 
-These are kernel C work. Adding them is small but mandatory because
-they can't be expressed as macros over what bocl has.
+## Landed since v0.0.20
 
-| Special-op | C effort | Notes |
-|---|---|---|
-| `LET*`        | small  | Like LET but binds sequentially — separate `evale` branch (cannot be a macro over LET because variables must scope to subsequent inits). |
-| `MACROLET`    | small  | Add `env_make_local_macro` wrapper paths in evale's local-macro lookup (the wrapper already exists). |
-| `SYMBOL-MACROLET` | small | Same, but on variable lookups; check `env_local_symbol_macro_p` before treating the symbol as an ordinary variable. |
-| `LOAD-TIME-VALUE` | trivial | Without a real compiler, this can be a no-op that just evaluates its form at read-eval time. |
+Consolidated view of the big-ticket items now shipping. See
+[PLAN.md](PLAN.md) for the phase-by-phase account.
 
-## Macros to add to `bootstrap/prelude.lisp` next (Lisp side)
+### Macros / control (all shipped)
 
-These are all macro definitions over the already-shipped primitives:
+- `SETF` + `DEFINE-SETF-EXPANDER` with a registry of place expanders
+  (`CAR`, `CDR`, `NTH`, `AREF`, `GETHASH`, `SYMBOL-VALUE`,
+  `SYMBOL-FUNCTION`, `GET`, `SUBSEQ`, the whole CxxxR family, `SECOND`
+  through `FOURTH`, `CHAR`, `SCHAR`, `LDB`, `DOCUMENTATION`, and
+  user-defined via `DEFINE-SETF-EXPANDER`) — Slice 2 v0.0.22.
+- `CASE` / `ECASE` / `CCASE` / `TYPECASE` / `ETYPECASE` / `CTYPECASE`
+  — Slice 3 v0.0.23.
+- `WHEN` / `UNLESS` / `COND` / `AND` / `OR` / `NOT` / `PROG` / `PROG1`
+  / `PROG2` / `PROGN` — Slice 3.
+- `DO` / `DO*` / `DOTIMES` / `DOLIST` / `DO-SYMBOLS` /
+  `DO-EXTERNAL-SYMBOLS` / `DO-ALL-SYMBOLS` — Slices 3, 18, 28.
+- `LOOP` — Slice 11 (v0.0.33) + LOOP conditionals `WHEN` / `UNLESS`
+  / `IF` for `COLLECT` / `DO` / `RETURN` / `SUM` in Slice 18 (v0.0.41)
+  + hash-key iteration + `ALWAYS` / `NEVER` / `THEREIS` timing fix
+  (v1.4.x).
+- `MULTIPLE-VALUE-BIND` / `-LIST` / `-SETQ` / `NTH-VALUE` — Slice 15.
+- `DESTRUCTURING-BIND` — Slice 7 v0.0.28.
+- `DEFSTRUCT` (`:conc-name`, `:constructor`, `:predicate`, `:include`,
+  `:type`, `:print-object`) — Slice 8 v0.0.29.
+- `IGNORE-ERRORS` / `ASSERT` / `CHECK-TYPE` — Slice 9.
+- `WITH-OPEN-FILE` / `WITH-OPEN-STREAM` /
+  `WITH-INPUT-FROM-STRING` / `WITH-OUTPUT-TO-STRING` /
+  `WITH-STANDARD-IO-SYNTAX` — Slices 10, 15, 17.
+- `DECLAIM` / `DECLARE` / `PROCLAIM` — no-op declarations, stored
+  where relevant.
+- `WITH-COMPILATION-UNIT` — v1.4 (per CLHS 3.2.2.3).
+- `WITH-HASH-TABLE-ITERATOR` — Slice 22.
 
-| Macro | Notes |
-|---|---|
-| `SETF`              | The big one. Generic place expander; needs a registry of place handlers. Start with `(setf (gethash k h) v)`, `(setf (car x) v)`, `(setf (cdr x) v)`, `(setf (symbol-value s) v)`, `(setf (symbol-function s) v)`. |
-| `CASE` / `ECASE`    | Trivial expansion to a chain of IFs. |
-| `TYPECASE` / `ETYPECASE` | Same shape as CASE but uses TYPEP. |
-| `MULTIPLE-VALUE-BIND` | Expands to a MULTIPLE-VALUE-CALL with a lambda. |
-| `MULTIPLE-VALUE-LIST` | `(multiple-value-call #'list form)`. |
-| `MULTIPLE-VALUE-SETQ` | Similar. |
-| `NTH-VALUE`         | M-V-CALL with a nth-extraction lambda. |
-| `DESTRUCTURING-BIND` | Recursive lambda-list expansion. Medium complexity. |
-| `DO` / `DO*`        | Tagbody + Go loop. Mechanical. |
-| `IGNORE-ERRORS`     | HANDLER-CASE catching ERROR, returning `(values nil c)`. |
-| `ASSERT`            | Expansion to (UNLESS test (ERROR …)). |
-| `CHECK-TYPE`        | Expansion to (UNLESS (TYPEP …) (ERROR …)). |
-| `WITH-OPEN-FILE`    | UNWIND-PROTECT around OPEN + body + CLOSE. |
-| `WITH-OPEN-STREAM`  | Same pattern. |
-| `DECLAIM` / `DECLARE` | No-op for the unenforced phase; later, store in symbol plist. |
-| `RETURN`            | `(return-from nil …)`. |
+### Sequences (all shipped)
 
-## Macros that need real work
+`REDUCE` (generic across lists/vectors/strings, `:from-end`,
+`:initial-value`, `:key` — Slice 18); `FIND` / `FIND-IF` /
+`FIND-IF-NOT`; `POSITION` / `POSITION-IF` / `POSITION-IF-NOT`;
+`COUNT` / `COUNT-IF` / `COUNT-IF-NOT`; `REMOVE` / `REMOVE-IF` /
+`REMOVE-IF-NOT` / `DELETE` / `DELETE-IF` / `DELETE-IF-NOT`;
+`SUBSTITUTE` / `NSUBSTITUTE` / `-IF` / `-IF-NOT`; `SUBSEQ` (generic);
+`BUTLAST` / `NBUTLAST` / `LDIFF`; `MAPLIST` / `MAPCON` / `MAPCAN`
+/ `MAPL` / `MAPC` / `MAPCAR`; `CONCATENATE` (all result types);
+`MERGE`; `SORT` / `STABLE-SORT` (iterative `%merge`, no more stack
+overflow — Slice 120); `UNION` / `INTERSECTION` / `SET-DIFFERENCE`
+/ `SET-EXCLUSIVE-OR` / `ADJOIN` / `PAIRLIS`; `FILL` / `REPLACE` /
+`MISMATCH` / `SEARCH` / `EVERY` / `SOME` / `NOTANY` / `NOTEVERY`;
+`MAP` / `MAP-INTO`.
 
-| Macro | Why it's big |
-|---|---|
-| `DEFSTRUCT` | Generates constructor, accessors, predicate, copier, type. Several hundred lines. Sits on top of `make-structure-class`, which the kernel already has. |
-| `DEFCLASS` / `DEFGENERIC` / `DEFMETHOD` | Full CLOS. A few thousand lines of Lisp (CLOSette-style port). |
-| `LOOP`   | The clause language is essentially its own embedded compiler. |
-| `FORMAT` | The directive engine is huge but mechanical. |
-| `DEFINE-CONDITION` | DEFCLASS for the condition hierarchy. Needs CLOS. |
+### Strings (all shipped)
 
-## Functions: the top-50 missing, by area
+`STRING=` / `STRING<` / `STRING>` / `STRING<=` / `STRING>=` /
+`STRING/=` and their `-EQUAL` case-insensitive variants;
+`STRING-UPCASE` / `-DOWNCASE` / `-CAPITALIZE`; `STRING-TRIM` /
+`STRING-LEFT-TRIM` / `STRING-RIGHT-TRIM`.
 
-Selected for highest payoff per implementation effort.
+### Characters (all shipped)
 
-### Sequence / list (Lisp side)
-`REDUCE`, `FIND`, `FIND-IF`, `POSITION`, `POSITION-IF`, `COUNT`,
-`COUNT-IF`, `REMOVE`, `REMOVE-IF`, `SUBSEQ`, `BUTLAST`, `MAPLIST`,
-`MAPCON`, `MAPCAN`, `CONCATENATE`, `MERGE`, `SORT`, `STABLE-SORT`,
-`UNION`, `INTERSECTION`, `SET-DIFFERENCE`, `ADJOIN`, `PAIRLIS`.
+`CHAR=` / `CHAR<` / `CHAR>` / `CHAR<=` / `CHAR>=` / `CHAR/=` and
+`-LESSP` / `-GREATERP` / `-NOT-EQUAL` case-insensitive variants;
+`CHAR-UPCASE` / `-DOWNCASE`; `ALPHA-CHAR-P` / `ALPHANUMERICP`;
+`DIGIT-CHAR` / `DIGIT-CHAR-P`; `CHAR-CODE` / `CODE-CHAR`;
+`CHAR-INT` / `CHAR-NAME` / `NAME-CHAR`; `#\Newline` and named
+character reader syntax (Slice 76).
 
-### Strings (Lisp side)
-`STRING=`, `STRING<`, `STRING>`, `STRING-UPCASE`, `STRING-DOWNCASE`,
-`STRING-CAPITALIZE`, `STRING-TRIM`, `STRING-LEFT-TRIM`,
-`STRING-RIGHT-TRIM`, `SEARCH`, `SUBSTITUTE`, `CHAR-UPCASE`,
-`CHAR-DOWNCASE`, `DIGIT-CHAR`, `DIGIT-CHAR-P`, `ALPHA-CHAR-P`,
-`ALPHANUMERICP`.
+### Numeric
 
-### Numeric (mixed)
-- **C kernel** (need direct math): `SIN`, `COS`, `TAN`, `ASIN`, `ACOS`,
-  `ATAN`, `EXP`, `LOG`, `SQRT`, `EXPT`, `SINH`, `COSH`, `TANH`.
-- **Lisp side**: `GCD`, `LCM`, `MAX`/`MIN` for n-ary (have 2-ary in C),
-  `SIGNUM`, `ISQRT`, `RATIONAL`, `RATIONALIZE`.
+- **Full numeric tower**: `Bignum`, `Ratio`, `Complex` are all kernel
+  types in [sources/kernel_types.h](sources/kernel_types.h);
+  arithmetic auto-promotes across the tower. Bignum engine
+  in [bootstrap/bignum.lisp](bootstrap/bignum.lisp) + kernel type
+  (Slices 72–75, 122).
+- **Transcendentals in C**: `SIN` / `COS` / `TAN` / `ASIN` / `ACOS`
+  / `ATAN` / `SINH` / `COSH` / `TANH` / `EXP` / `LOG` / `SQRT` /
+  `EXPT` — Slice 6.
+- **Integer helpers**: `GCD` / `LCM` / `ISQRT` / `SIGNUM` — Slice 6.
+- **Complex helpers**: `CONJUGATE` / `PHASE` / `REALPART` /
+  `IMAGPART` / `CIS` — Slice 6.
+- **Float introspection**: `NUMERATOR` / `DENOMINATOR` /
+  `FLOAT-DIGITS` / `FLOAT-PRECISION` / `SCALE-FLOAT` /
+  `DECODE-FLOAT` / `INTEGER-DECODE-FLOAT` / `FLOAT-RADIX` — Slice 6.
+- **Coercion**: `COERCE` handles numeric + sequence conversions —
+  Slice 16.
+- **Rationalize / rational**: shipped, but note the open
+  [ratio-floor-round-truncate](issues/open/ratio-floor-round-truncate.issue)
+  issue — 1-arg `FLOOR` / `ROUND` / `CEILING` / `TRUNCATE` of a
+  `RATIO` still errors.
 
-### I/O (mostly Lisp on top of kernel streams)
-`WRITE`, `WRITE-LINE`, `WRITE-STRING`, `WRITE-CHAR`, `READ-LINE`,
-`READ-CHAR-NO-HANG`, `Y-OR-N-P`, `FRESH-LINE`, `PPRINT`, `FORMAT`
-(big macro), `OPEN`-with-defaults, `WITH-OUTPUT-TO-STRING`,
-`WITH-INPUT-FROM-STRING`.
+### Hash tables, conditions, restarts
 
-### Numeric coercion
-`CEILING`, `FLOOR`, `ROUND`, `TRUNCATE` already shipped; need
-`FCEILING`, `FFLOOR`, `FROUND`, `FTRUNCATE`, `COMPLEX`, `REALPART`,
-`IMAGPART` (last three blocked on complex-number support).
+- All four test functions (`EQ` / `EQL` / `EQUAL` / `EQUALP`),
+  `MAKE-HASH-TABLE` full keyword surface, `WITH-HASH-TABLE-ITERATOR`,
+  `HASH-TABLE-REHASH-SIZE`, etc. — Slices 4.1, 22, 166 (O(1) buckets).
+- `HANDLER-CASE` (Slice 4.2), `HANDLER-BIND` + restart machinery
+  (Slice 9a), `DEFINE-CONDITION` (Slice 21, on top of CLOS), full
+  ANSI condition hierarchy shipped, `RESTART-BIND` /
+  `COMPUTE-RESTARTS` / `FIND-RESTART` (`:test-function`) /
+  `INVOKE-RESTART` / `HANDLER-CASE :NO-ERROR` / `CERROR` /
+  `WITH-SIMPLE-RESTART` / `MUFFLE-WARNING`.
 
-### Hash-table (Lisp side)
-`MAKE-HASH-TABLE` keyword shims, `WITH-HASH-TABLE-ITERATOR`,
-`HASH-TABLE-REHASH-SIZE` etc. — accessor functions only.
+### Reader / printer
 
-### CLOS surface (huge)
-Whole `DEFCLASS` family. Plan: port CLOSette.
+- Full reader macros: `#'` / `#|…|#` / `#+` / `#-` / `#\` (all
+  named chars) / `#(` / `#B` / `#O` / `#X` / `#R` / `#C` /
+  `#n=` / `#n#` (circular structures — Slices 62–114) / `#S` /
+  `#nA` (multi-dim array literal) / `pkg:sym` / `pkg::sym` /
+  `#.` (read-time eval) / `SET-MACRO-CHARACTER` /
+  `SET-DISPATCH-MACRO-CHARACTER` / custom readtables /
+  `READTABLE-CASE` / `|…|` case-preserving symbol syntax.
+- All `*PRINT-*` control vars bound: `*PRINT-READABLY*` /
+  `*PRINT-ESCAPE*` / `*PRINT-PRETTY*` / `*PRINT-CIRCLE*` (with
+  `#n=` / `#n#` — Slice 13 + v1.4.24 SIGSEGV fix) / `*PRINT-BASE*` /
+  `*PRINT-LEVEL*` / `*PRINT-LENGTH*` / `*PRINT-GENSYM*` /
+  `*PRINT-RADIX*` / `*PRINT-CASE*` / `*PRINT-ARRAY*` /
+  `*PRINT-LINES*` / `*PRINT-MISER-WIDTH*` /
+  `*PRINT-RIGHT-MARGIN*`. Bound in the kernel now (v1.4.26).
+- All `*READ-*`: `*READ-BASE*` / `*READ-EVAL*` /
+  `*READ-DEFAULT-FLOAT-FORMAT*` / `*READ-SUPPRESS*` / `*READTABLE*`.
+- `FORMAT` — full directive engine (`~A ~S ~% ~& ~~ ~D ~B ~O ~X ~R
+  ~F ~E ~G ~I ~N ~<…~> ~(…~) ~[…~] ~* ~? ~^ ~@D`); mincol/padchar/
+  comma params on `~D ~B ~O ~X ~R` (v1.4.8).
 
-### Conditions / restarts (mixed)
-- **C kernel**: `HANDLER-BIND`, `RESTART-CASE`, `RESTART-BIND`,
-  `INVOKE-RESTART`, `FIND-RESTART`. Need handler-runs-in-dynamic-
-  context and restart-frame plumbing on top of the existing
-  `frame_handler` + `frame_restart` types.
-- **Lisp side**: `CERROR` (over `ERROR` + `INVOKE-RESTART`),
-  `MUFFLE-WARNING`, the standard restart functions.
+### CLOS
 
-### Type system (mostly Lisp)
-`DEFTYPE`, `SUBTYPEP`, `TYPECASE`, `CHECK-TYPE`, `THE` (kernel has the
-special-op but no real check), `COERCE` for non-trivial conversions.
+- `DEFCLASS` / `DEFGENERIC` / `DEFMETHOD` / `MAKE-INSTANCE` /
+  `INITIALIZE-INSTANCE` / `SHARED-INITIALIZE` (initarg/slot-names
+  rule fixed v1.4) / `REINITIALIZE-INSTANCE` / `CHANGE-CLASS` /
+  `UPDATE-INSTANCE-FOR-DIFFERENT-CLASS`.
+- Method combinations: `:before` / `:after` / `:around` and standard
+  combination.
+- `:allocation :class` (v1.3.17).
+- Computed `:initform` evaluated per-instance (v1.3.16).
+- CLOS-aware `SUBTYPEP` / `TYPEP` (v1.3.15).
+- Multiple values preserved through generic-function dispatch (v1.4).
+- (SETF `DEFGENERIC` / `DEFMETHOD` / `DOCUMENTATION`) — v1.3.14.
+
+### Packages
+
+- **True per-package obarrays** since Slice 46 v0.0.71 (present +
+  external symbol tables); the "known limitation" from Phase 3 is
+  gone. Slice 113 (v1.2.40) took `must-package` conformance to 31 →
+  0.
+- Full: `IN-PACKAGE`, `MAKE-PACKAGE`, `USE-PACKAGE`, `EXPORT`,
+  `IMPORT`, `SHADOW`, `SHADOWING-IMPORT`, `UNEXPORT`, `UNUSE-PACKAGE`,
+  `DELETE-PACKAGE`, `RENAME-PACKAGE`, `DEFPACKAGE`, `FIND-PACKAGE`,
+  `PACKAGE-NAME`, `PACKAGE-NICKNAMES`, `PACKAGE-USE-LIST`,
+  `PACKAGE-USED-BY-LIST`, `PACKAGE-SHADOWING-SYMBOLS`, `INTERN`,
+  `FIND-SYMBOL`, `UNINTERN`, `PACKAGEP`, `LIST-ALL-PACKAGES`.
+
+### Streams, pathnames, filesystem
+
+- Streams: `OPEN` / `CLOSE` (idempotent) / `READ-CHAR` / `PEEK-CHAR` /
+  `UNREAD-CHAR` / `READ-LINE` / `READ-BYTE` / `WRITE-BYTE` /
+  `WRITE-CHAR` / `WRITE-STRING` / `WRITE-LINE` / `LISTEN` /
+  `CLEAR-INPUT` / `READ-CHAR-NO-HANG` / `FRESH-LINE`;
+  broadcast/concatenated/synonym/two-way stream primitives;
+  string streams / file streams / callback streams (v1.4.4).
+- Pathnames: `PATHNAME`, `MAKE-PATHNAME`, `MERGE-PATHNAMES`,
+  `TRUENAME`, `NAMESTRING`,
+  `PATHNAME-{NAME,TYPE,DIRECTORY,HOST,DEVICE,VERSION}`,
+  `FILE-NAMESTRING`, `DIRECTORY-NAMESTRING`, `HOST-NAMESTRING`,
+  `ENOUGH-NAMESTRING`, `PARSE-NAMESTRING` (v1.4.x), `PATHNAMEP`,
+  `PATHNAME-MATCH-P`, `WILD-PATHNAME-P`, `PROBE-FILE`, `DELETE-FILE`,
+  `RENAME-FILE`, `DIRECTORY`.
+- **Logical pathnames**: `LOGICAL-PATHNAME`, `-P`,
+  `LOGICAL-PATHNAME-TRANSLATIONS`,
+  `SET-LOGICAL-PATHNAME-TRANSLATIONS`, `TRANSLATE-LOGICAL-PATHNAME`,
+  `LOAD-LOGICAL-PATHNAME-TRANSLATIONS` — Slice 33 v0.0.57.
+
+### Sockets
+
+`bootstrap/socket.lisp` (~720 lines) on top of `sources/socket.c`
+(~790 lines) — package `BOCL-SOCKET` (nickname `USOCKET`), a
+usocket-compatible surface: `SOCKET-CONNECT`, `SOCKET-LISTEN`,
+`SOCKET-ACCEPT`, `SOCKET-SEND`, `SOCKET-RECEIVE`, `SOCKET-CLOSE`,
+`WAIT-FOR-INPUT`. v1.4.20–23.
+
+### ASDF + modules
+
+- Module system: `BOCL:*MODULE-LIST*`, manifest-driven `REQUIRE`,
+  `PROVIDE`, `*MODULES*` — Slices 122–124.
+- ASDF 3.3.7 shipped as submodule [modules/asdf-src/](modules/asdf-src);
+  single-file `asdf.lisp` produced by [modules/Makefile](modules/Makefile);
+  UIOP Tier-1 portability hooks (Slice 125). `(require :asdf)` and
+  `(asdf:load-system :some-system)` both work — v1.4.0 / v1.4.19.
+
+### Debugger, on-error, dribble
+
+- Minimal debugger with function-call backtrace frames — Slice 114.
+- `--on-error debug|exit|abort|appease` command-line-ordered
+  handling (Slice 117 + v1.4.9).
+- REPL defaults to `debug`, batch to `exit` (Slice 118).
+- `DRIBBLE` via callback-stream infrastructure (v1.4.4–6).
+
+### Bignum-aware ops
+
+Arithmetic auto-promotes across the tower; bitwise `ASH` / `LOGAND` /
+`LOGOR` / `LOGXOR` bignum-aware (Slice 53) — but the
+[deferred-bignum-ops](issues/open/deferred-bignum-ops.issue) issue
+tracks the remaining edge cases (a few paths that still fall back to
+fixnum arithmetic, `ISQRT` on very large bignums).
+
+## What's still missing / still open
+
+Now bounded and concentrated. Cross-referenced against
+[issues/open/](issues/open/) (22 non-backup `.issue` files,
+2026-07-07):
+
+### Still open per issue tracker
+
+- **[ansi-test](issues/open/ansi-test.issue)** — no submodule, no
+  harness, no `make ansi-test` target. Blocker for the last quality
+  gate.
+- **[missing-functions](issues/open/missing-functions.issue)** —
+  systematic audit of the ~120 remaining CL symbols. This document's
+  overall-coverage table is the entry point.
+- **[precise-condition-subclasses](issues/open/precise-condition-subclasses.issue)** —
+  kernel signals `SIMPLE-ERROR` where a specific ANSI subclass is
+  required.
+- **[clos-condition-hierarchy-parents](issues/open/clos-condition-hierarchy-parents.issue)** —
+  style-warning parent chain breaks `(TYPEP c 'WARNING)`.
+- **[ratio-floor-round-truncate](issues/open/ratio-floor-round-truncate.issue)** —
+  1-arg `FLOOR` / `ROUND` / `CEILING` / `TRUNCATE` reject a `RATIO`.
+- **[subtypep-certainty](issues/open/subtypep-certainty.issue)** —
+  returns `(NIL NIL)` for disjoint known types.
+- **[open-element-type-default](issues/open/open-element-type-default.issue)** —
+  `OPEN` rejects `:ELEMENT-TYPE :DEFAULT`.
+- **[minimal-compilation](issues/open/minimal-compilation.issue)** —
+  real `COMPILE` and eager `MACROEXPAND-ALL` at `LOAD` time.
+- **[deferred-bignum-ops](issues/open/deferred-bignum-ops.issue)** —
+  remaining bitwise + `ISQRT` paths that aren't bignum-aware.
+- **[defstruct-conc-name-package](issues/open/defstruct-conc-name-package.issue)** —
+  accessors interned in `*PACKAGE*` instead of the struct's home
+  package.
+- **[package-print-object-method](issues/open/package-print-object-method.issue)** —
+  packages print as `#<PACKAGE 0x…>` instead of `#<PACKAGE "name">`.
+- **[uiop-bocl-porting](issues/open/uiop-bocl-porting.issue)** — Tier
+  1 done; further UIOP hooks remain.
+- **[asdf-modules](issues/open/asdf-modules.issue)** — `REQUIRE`
+  couldn't find asdf module at v1.4.19 (worked around; needs
+  cleanup).
+- **[asdf-source-registry-inherit-scan-slow](issues/open/asdf-source-registry-inherit-scan-slow.issue)** —
+  ASDF `DIRECTORY` tree-walk hangs.
+- **[slow-apropos](issues/open/slow-apropos.issue)** — 17 s for
+  `(apropos "MODULE")`.
+- **[deferred-signal-hooks](issues/open/deferred-signal-hooks.issue)** —
+  extend `*ABORT-HOOK*` to `SIGTERM` / Core.
+- **[deferred-sacla-logic-bugs](issues/open/deferred-sacla-logic-bugs.issue)** —
+  residual GC + logic bugs in the SACLA harness.
+- **[deferred-cons-paged-heap](issues/open/deferred-cons-paged-heap.issue)** —
+  16-byte cons arena (perf).
+- **[generational-gc](issues/open/generational-gc.issue)** —
+  generational nursery further work.
+- **[slice22-cls-vs-class-type-error](issues/open/slice22-cls-vs-class-type-error.issue)** —
+  state-dependent `%CLS` / `CLASS` abort.
+- **[structured-pathnames](issues/open/structured-pathnames.issue)** —
+  core done v1.3.14; refinements remain.
+- **[stale-test-suite-failures](issues/open/stale-test-suite-failures.issue)** —
+  kernel-only suites lack prelude load.
+
+### Still missing but not (yet) filed
+
+- `UPDATE-INSTANCE-FOR-REDEFINED-CLASS` — not wired into the
+  `DEFCLASS` re-evaluation path (was in the old TODO.md as a low-
+  priority item).
+- `DEFINE-METHOD-COMBINATION` full support — only the `standard`
+  combination is implemented; user-defined combinations are stubs.
+- Most of the MOP surface: `FIND-METHOD` variants,
+  `METHOD-QUALIFIERS`, `COMPUTE-APPLICABLE-METHODS-USING-CLASSES`,
+  class-precedence-list finalisation hooks.
+- Pretty printer: `PPRINT-LOGICAL-BLOCK`, `PPRINT-POP`,
+  `PPRINT-EXIT-IF-LIST-EXHAUSTED`, `PPRINT-INDENT`,
+  `PPRINT-NEWLINE`, `PPRINT-TAB`, `SET-PPRINT-DISPATCH`.
 
 ## Variables still missing
 
-Mostly the printer/reader control variables:
-`*PRINT-*` (16 of them), `*READ-*` (5), `*DEFAULT-PATHNAME-DEFAULTS*`,
-`*RANDOM-STATE*`, `*MODULES*`, `*GENSYM-COUNTER*`. None of these need
-C work — `define_parameter` from a small Lisp init file is enough.
+Mostly compiler / debugger control:
+`*COMPILE-FILE-PATHNAME*`, `*COMPILE-FILE-TRUENAME*`,
+`*COMPILE-PRINT*`, `*COMPILE-VERBOSE*` (honoured but not fully wired
+to a real compiler), a couple of `*DEBUGGER-*` and `*DEBUG-IO*`-
+family details, `*MODULES*` is present but not fully surfaced.
 
 ## Constants still missing
 
-`PI`, the `BOOLE-*` family (used by `BOOLE`), `CHAR-CODE-LIMIT` is
-done, `LEAST-POSITIVE-*`, `LEAST-NEGATIVE-*`, `LONG-FLOAT-EPSILON`,
-the various FP limits. Define them with `define_constant` from C
-(some) or `defconstant` in Lisp (most).
+FP-limit family: `LEAST-POSITIVE-*`, `LEAST-NEGATIVE-*`,
+`LONG-FLOAT-EPSILON`, `SHORT-FLOAT-EPSILON`, `SINGLE-FLOAT-EPSILON`,
+`DOUBLE-FLOAT-EPSILON` (some are aliases in bocl's single-float
+world; needs explicit expose). `BOOLE-*` family is present.
+`CHAR-CODE-LIMIT`, `MOST-POSITIVE-FIXNUM`, `MOST-NEGATIVE-FIXNUM`,
+`PI`, `INTERNAL-TIME-UNITS-PER-SECOND` all defined.
 
-## The condition system, split into two layers
+## Bottom line
 
-(Per the project's decision: the condition system does **not** need
-CLOS. It works fine with structures.)
-
-- **Minimal condition system** — already shipped in v0.0.15
-  ([sources/conditions.c](sources/conditions.c)). Built-in classes
-  `CONDITION`, `SIMPLE-CONDITION`, `SIMPLE-ERROR`, `WARNING`,
-  `SIMPLE-WARNING`, plus `SIGNAL` / `ERROR` / `WARN` /
-  `HANDLER-CASE`. This is what the kernel and the bootstrap Lisp
-  library use internally to signal and recover. It must be available
-  as early as possible — that is, *now*. The only missing piece in
-  this layer is `HANDLER-BIND` (in which the handler runs in the
-  dynamic context of `SIGNAL` and can decline by returning normally)
-  — added in slice 9a below.
-
-- **Full ANSI condition system for user code** — slice 13. Lets
-  users define their own condition types via `DEFINE-CONDITION` (a
-  macro that expands to `DEFSTRUCT` + class registration), and adds
-  the restart layer (`RESTART-CASE`, `RESTART-BIND`, `FIND-RESTART`,
-  `INVOKE-RESTART`, `CERROR`). Integrates with the kernel's existing
-  class hierarchy — no CLOS required.
-
-## Implementation order
-
-Now that we have macros + APPLY + sequence basics:
-
-1. **Four missing special operators** in the C kernel (`LET*`,
-   `MACROLET`, `SYMBOL-MACROLET`, `LOAD-TIME-VALUE`). Small.
-2. **SETF** as a Lisp macro with a registry of place expanders.
-   Critical — unblocks dozens of CL idioms.
-3. **Trivial control macros**: `CASE`, `ECASE`, `TYPECASE`,
-   `MULTIPLE-VALUE-BIND`, `DO` / `DO*`, `IGNORE-ERRORS`, `ASSERT`,
-   `CHECK-TYPE`, `RETURN`, `WITH-OPEN-FILE`. All small DEFMACROs.
-4. **Sequence library** (Lisp): `REDUCE`, `FIND`, `POSITION`, `COUNT`,
-   `REMOVE`, `SORT`, `MAPCAN`, etc.
-5. **String library** (Lisp): comparison, case conversion, trimming.
-6. **Numeric extras** (mixed): `EXPT`, transcendentals (C);
-   `SIGNUM`, `GCD`, `LCM` (Lisp).
-7. **DESTRUCTURING-BIND** (Lisp).
-8. **DEFSTRUCT** (Lisp, on top of `make-structure-class`).
-9a. **HANDLER-BIND** in the C kernel — completes the *minimal*
-   condition system that the Lisp library needs. Small. Should land
-   before any later phase that wants to write condition handlers in
-   the bootstrap library.
-9b. **Restart machinery** in the C kernel: `RESTART-CASE`,
-   `RESTART-BIND`, `FIND-RESTART`, `INVOKE-RESTART`. `CERROR` then
-   lands as a Lisp macro.
-10. **CLOS** — port CLOSette on top of all of the above.
-11. **LOOP** — the macro.
-12. **FORMAT** — the directive engine.
-13. **Full condition system for user code**: `DEFINE-CONDITION`
-    (Lisp macro over DEFSTRUCT + kernel class registration); the
-    standard ANSI condition hierarchy (TYPE-ERROR, ARITHMETIC-ERROR,
-    STREAM-ERROR, …, most already declared in `kernel_objects.c`);
-    `MUFFLE-WARNING` and the standard restart names. Integrates the
-    minimal layer (used by the implementation) with the user-defined
-    layer.
-
-## Appendix A: the 242 implemented symbols
-
-Stored at `/tmp/clhs-implemented.txt` after running the inventory
-pipeline; not duplicated here. The full lists, by kind, are derivable
-via:
-
-```sh
-sbcl --noinform --no-userinit --no-sysinit --non-interactive --eval '
-  (let ((out ()))
-    (do-external-symbols (s "COMMON-LISP")
-      (let ((kind (cond ((special-operator-p s) "special-op")
-                        ((macro-function s)     "macro")
-                        ((fboundp s)            "function")
-                        ((constantp s)          "constant")
-                        ((boundp s)             "variable")
-                        (t                      "type-or-decl"))))
-        (push (format nil "~A:~A" (symbol-name s) kind) out)))
-    (with-open-file (o "/tmp/clhs-kinds.txt" :direction :output
-                       :if-exists :supersede)
-      (dolist (l (sort out (function string<)))
-        (format o "~A~%" l))))'
-```
+Where the v0.0.20 snapshot showed 25 % overall coverage against 978
+CL external symbols, master (v1.4.30) is at roughly **88 %**. The
+remaining gaps are enumerated in [issues/open/](issues/open/) plus a
+handful of MOP hooks and the pretty printer. The next quality gate
+is [ansi-test integration](issues/open/ansi-test.issue) (PLAN.md §3).
