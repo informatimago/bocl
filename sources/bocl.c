@@ -1132,6 +1132,45 @@ static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues*
     results->count=1; results->values[0]=NIL_Symbol;
     close_live_pool(pool);}
 
+/* (%DEFAULT-MODULES-DIRECTORY) → the directory REQUIRE scans for installed
+   modules, as an absolute namestring with a trailing slash.  Resolved WITHOUT
+   reference to argv[0] / the current directory / where the prelude was found
+   (all of which are unreliable — a prelude found relative to the CWD would scan
+   the wrong place).  Order:
+     1. $BOCL_MODULES_DIR                       (explicit runtime override)
+     2. <dir of the compiled-in BOCL_PRELUDE_PATH>/modules/
+        BOCL_PRELUDE_PATH is set by `make install` to $(bocllibexecdir)/
+        prelude.lisp, so it already carries the install PREFIX (e.g.
+        /opt/local/libexec/bocl/prelude.lisp -> /opt/local/libexec/bocl/modules/).
+     3. a last-resort default for the conventional PREFIX=/opt/local install.
+   (Later this can consult XDG paths and a generated install-paths module; kept
+   deliberately small for now.) */
+static void kernel_DEFAULT_MODULES_DIRECTORY(unused Ref function, unused Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    char buf[4096];
+    const char* env=getenv("BOCL_MODULES_DIR");
+    if(env && env[0]){
+        size_t n=strlen(env);
+        if(n && env[n-1]=='/'){ snprintf(buf,sizeof(buf),"%s",env); }
+        else                  { snprintf(buf,sizeof(buf),"%s/",env); }
+    }else{
+        const char* pp=
+#ifdef BOCL_PRELUDE_PATH
+            BOCL_PRELUDE_PATH;
+#else
+            NULL;
+#endif
+        const char* slash=(pp?strrchr(pp,'/'):NULL);
+        if(slash){
+            int base=(int)(slash-pp)+1;            /* keep the trailing slash */
+            snprintf(buf,sizeof(buf),"%.*smodules/",base,pp);
+        }else{
+            snprintf(buf,sizeof(buf),"/opt/local/libexec/bocl/modules/");
+        }
+    }
+    results->count=1; results->values[0]=string_new_cstring(buf);
+    close_live_pool(pool);}
+
 /* ---- end Slice 25 C functions --------------------------------------------*/
 
 void bocl_register_load(void){
@@ -1139,6 +1178,8 @@ void bocl_register_load(void){
     set_symbol_function(fname,built_in_function_new(fname,list(S(FILESPEC),NULL),kernel_LOAD));
     Ref ld=symbol_intern_cstring("%LIST-DIRECTORY");
     set_symbol_function(ld,built_in_function_new(ld,list(S(PATH),NULL),kernel_LIST_DIRECTORY));
+    {   Ref md=symbol_intern_cstring("%DEFAULT-MODULES-DIRECTORY");
+        set_symbol_function(md,built_in_function_new(md,list(NULL),kernel_DEFAULT_MODULES_DIRECTORY)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

@@ -116,3 +116,43 @@ Still rough (tracked separately, NOT blockers for this issue):
 - Making ASDF turnkey without the manual submodule step is a packaging decision
   (committing the 700 KB generated asdf.lisp vs. the current build-from-submodule
   design); left as-is per modules/README.org.
+
+======================================================================
+REAL ROOT CAUSE & FIX (v1.4.33)
+-------------------------------
+The v1.4.32 diagnosis was incomplete.  The actual reason (require :asdf) /
+(require :factorial) failed even after a correct `make install` is that the
+MODULES DIRECTORY was derived from where the PRELUDE happened to be found at
+runtime, and prelude-finding is CWD-dependent:
+
+  find_prelude() (main.c) uses program_path = argv[0].  When bocl is run by bare
+  name ("bocl"), argv[0] has no '/', so the exe-relative search strips it to "."
+  (the CURRENT directory) and tries "./bootstrap/prelude.lisp".  pjb runs bocl
+  from inside the source checkout (~/src/public/bocl), so that path EXISTS and
+  wins over the installed /opt/local/libexec/bocl/prelude.lisp.  The boot scan
+  then looked in <that dir>/modules/ = ~/src/public/bocl/bootstrap/modules/,
+  which does not exist (built modules live in <repo>/modules/ and installed ones
+  in <prefix>/libexec/bocl/modules/).  Hence "Modules found there: none", even
+  though the modules were installed correctly.  `which bocl` = /opt/local/bin/bocl
+  is a red herring: argv[0] stays "bocl" and the real exe path is never recovered.
+
+Fix (per the agreed design — do NOT locate resources from the executable path):
+the modules directory is now resolved by a kernel primitive,
+%DEFAULT-MODULES-DIRECTORY, INDEPENDENT of argv[0]/CWD/where the prelude was
+found:
+  1. $BOCL_MODULES_DIR                         (explicit runtime override)
+  2. <dir of the compiled-in BOCL_PRELUDE_PATH>/modules/  — BOCL_PRELUDE_PATH is
+     set by `make install` to $(bocllibexecdir)/prelude.lisp, so it carries the
+     install PREFIX (e.g. /opt/local/libexec/bocl/modules/).
+  3. a last-resort default (/opt/local/libexec/bocl/modules/).
+The boot scan (prelude) now calls this instead of (directory-namestring
+*load-truename*)/modules/.  BOCL:*MODULES-DIRECTORY* holds the resolved value.
+
+Verified: with no env, the dir resolves to the install path regardless of CWD;
+$BOCL_MODULES_DIR overrides it; pointing it at <repo>/modules/ makes
+(require :factorial) load and (factorial:fact 10) => 3628800.
+
+FUTURE (not done, deliberately kept simple now): have `make install` compile a
+generated install-paths module so a `make install PREFIX=/foo/bar` that differs
+from the build-time PREFIX still bakes the right paths; and consult XDG dirs
+before the compiled-in default.

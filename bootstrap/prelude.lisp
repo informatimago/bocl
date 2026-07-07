@@ -10683,9 +10683,10 @@ the rest take :INITIAL-ELEMENT."
    under <libexec>/bocl/modules/.")
 
 (defvar bocl::*modules-directory* nil
-  "The <prelude-dir>/modules/ directory scanned at boot for module manifests, or
-   NIL in an in-tree run / when the prelude location is unknown.  Recorded so a
-   failed REQUIRE can report where it looked.")
+  "The directory scanned at boot for module manifests, as resolved by the kernel
+   %DEFAULT-MODULES-DIRECTORY ($BOCL_MODULES_DIR, else the install-configured
+   location, else a default).  Recorded so a failed REQUIRE can report where it
+   looked.")
 
 (define-condition bocl::invalid-module-plist (error)
   ((object :initarg :object :reader bocl::invalid-module-plist-object)
@@ -10745,13 +10746,18 @@ the rest take :INITIAL-ELEMENT."
           (let ((m (bocl::%read-manifest manifest mdir)))
             (when m (push m result))))))))
 
-;;; Populate the module list from <prelude-dir>/modules/ at boot (best effort: no
-;;; modules directory in an in-tree run, so this is simply NIL there).
-(let ((here (or *load-truename* *load-pathname*)))
-  (when here
-    (let ((modules-dir (concatenate 'string (directory-namestring here) "modules/")))
-      (setq bocl::*modules-directory* modules-dir)
-      (setq bocl::*module-list* (bocl::%scan-modules modules-dir)))))
+;;; Populate the module list at boot (best effort: NIL when the resolved modules
+;;; directory does not exist, e.g. an uninstalled in-tree run).
+;;; The modules directory is resolved by the kernel (%DEFAULT-MODULES-DIRECTORY):
+;;; $BOCL_MODULES_DIR, else the install-time-configured location (derived from the
+;;; compiled-in prelude path, so it carries the install PREFIX), else a default.
+;;; It is deliberately NOT derived from where THIS prelude file was found — that
+;;; can be a stray CWD-relative match when bocl is run from a source checkout.
+(let ((modules-dir (ignore-errors (common-lisp::%default-modules-directory))))
+  (when modules-dir
+    (setq bocl::*modules-directory* modules-dir)
+    ;; %scan-modules safely returns NIL when the directory is absent.
+    (setq bocl::*module-list* (bocl::%scan-modules modules-dir))))
 
 ;;; Enhanced REQUIRE (CLHS 24): MODULE-NAME is a string designator.  With no
 ;;; PATHNAME-LIST, look the module up by name in BOCL:*MODULE-LIST* and load its
