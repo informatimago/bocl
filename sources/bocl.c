@@ -359,6 +359,127 @@ static void kernel_LIST_DIRECTORY(unused Ref function, Ref arguments, MultipleVa
     results->values[0]=out;
     close_live_pool(pool);}
 
+/* Fast DIRECTORY: run the whole recursive glob walk in C.  The Lisp %GLOB did
+   this with a CHAR-by-CHAR %WILD-MATCH, a %DIRECTORY-P stat() syscall per entry,
+   a %LIST-DIRECTORY per level, and an O(n^2) APPEND — every step an interpreter
+   funcall (~150us), so DIRECTORY of a real tree took tens of seconds.  Here the
+   walk is pure C: opendir/readdir once per level, readdir's d_type instead of a
+   per-entry stat (stat only for symlinks / DT_UNKNOWN), and a byte-wise glob
+   matcher.  Matches are collected into a C string vector during the walk (NO
+   Lisp allocation, hence no GC and no longjmp risk mid-walk); the Lisp result
+   list is built once at the end. */
+
+/* Glob match: '*' matches any (possibly empty) run, '?' one char — same as the
+   old %WILD-MATCH (no char classes / escapes). */
+static bool bocl_glob_match(const char* pat, const char* str){
+    const char* star=NULL; const char* ss=NULL;
+    while(*str){
+        if(*pat=='?' || *pat==*str){ pat++; str++; }
+        else if(*pat=='*'){ star=pat++; ss=str; }
+        else if(star){ pat=star+1; str=++ss; }
+        else{ return false; }}
+    while(*pat=='*'){ pat++; }
+    return *pat=='\0';}
+
+/* dir + name (+ optional trailing '/'); caller frees. */
+static char* bocl_path_join(const char* dir, const char* name, bool add_slash){
+    size_t ld=strlen(dir), ln=strlen(name);
+    bool need_sep = (ld>0 && dir[ld-1]!='/');
+    char* p=(char*)malloc(ld + (need_sep?1:0) + ln + (add_slash?1:0) + 1);
+    size_t k=0;
+    memcpy(p+k,dir,ld); k+=ld;
+    if(need_sep){ p[k++]='/'; }
+    memcpy(p+k,name,ln); k+=ln;
+    if(add_slash){ p[k++]='/'; }
+    p[k]='\0';
+    return p;}
+
+typedef struct { char** items; size_t count, cap; } bocl_strvec;
+static void bocl_sv_push(bocl_strvec* v, char* owned){
+    if(v->count==v->cap){ v->cap = v->cap ? v->cap*2 : 64;
+        v->items=(char**)realloc(v->items, v->cap*sizeof(char*)); }
+    v->items[v->count++]=owned;}
+
+static bool bocl_entry_is_dir(unused struct dirent* e, const char* full){
+#if defined(DT_DIR) && defined(DT_UNKNOWN)
+    if(e->d_type==DT_DIR){ return true; }
+    if(e->d_type!=DT_UNKNOWN && e->d_type!=DT_LNK){ return false; }
+#endif
+    struct stat st;
+    return stat(full,&st)==0 && S_ISDIR(st.st_mode);}
+
+/* DIR ends with '/'. COMPS[ci..nc) are the remaining glob components. */
+static void bocl_glob_walk(const char* dir, char** comps, int nc, int ci, bocl_strvec* out){
+    if(ci>=nc){ return; }
+    const char* comp=comps[ci];
+    bool last=(ci==nc-1);
+    if(strcmp(comp,"**")==0){
+        bocl_glob_walk(dir,comps,nc,ci+1,out);          /* zero levels: match rest here */
+        DIR* d=opendir(dir);
+        if(d){ struct dirent* e;
+            while((e=readdir(d))!=NULL){
+                if(!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")){ continue; }
+                char* sub=bocl_path_join(dir,e->d_name,true);
+                if(bocl_entry_is_dir(e,sub)){ bocl_glob_walk(sub,comps,nc,ci,out); }  /* ** stays */
+                free(sub);}
+            closedir(d);}}
+    else if(strchr(comp,'*')||strchr(comp,'?')){
+        DIR* d=opendir(dir);
+        if(d){ struct dirent* e;
+            while((e=readdir(d))!=NULL){
+                if(!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")){ continue; }
+                if(bocl_glob_match(comp,e->d_name)){
+                    if(last){ bocl_sv_push(out, bocl_path_join(dir,e->d_name,false)); }
+                    else{ char* sub=bocl_path_join(dir,e->d_name,true);
+                          if(bocl_entry_is_dir(e,sub)){ bocl_glob_walk(sub,comps,nc,ci+1,out); }
+                          free(sub);}}}
+            closedir(d);}}
+    else{
+        if(last){
+            char* full=bocl_path_join(dir,comp,false);
+            struct stat st;
+            if(stat(full,&st)==0){ bocl_sv_push(out, full); } else { free(full); }}
+        else{
+            char* sub=bocl_path_join(dir,comp,true);
+            struct stat st;
+            if(stat(sub,&st)==0 && S_ISDIR(st.st_mode)){ bocl_glob_walk(sub,comps,nc,ci+1,out); }
+            free(sub);}}}
+
+/* (%DIRECTORY-GLOB base-dir components) -> list of matching path strings.
+   BASE-DIR is an (absolute) directory namestring; COMPONENTS is a list of glob
+   component strings ("**" = wild-inferiors). */
+static void kernel_DIRECTORY_GLOB(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref basespec=pop_mandatory_argument(function,&current);
+    Ref compspec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_class(basespec,STRING_Class);
+    /* Extract the components into a C array (pure-C walk afterwards). */
+    int nc=0;
+    for(Ref p=compspec; consp(p); p=cons_cdr(p)){ nc++; }
+    char** comps=(char**)malloc((size_t)(nc>0?nc:1)*sizeof(char*));
+    { int i=0; for(Ref p=compspec; consp(p); p=cons_cdr(p)){
+            Ref c=cons_car(p); check_class(c,STRING_Class);
+            comps[i++]=string_cstring(c); } }
+    char* base=string_cstring(basespec);
+    bocl_strvec out={0,0,0};
+    if(nc>0){ bocl_glob_walk(base, comps, nc, 0, &out); }
+    /* Build the Lisp result list (reverse iteration -> forward order). */
+    Ref lst=NIL_Symbol;
+    for(size_t i=out.count; i-->0; ){
+        Ref s=string_new_cstring(out.items[i]);
+        add_to_live_pool(s);
+        push(s,&lst);
+        add_to_live_pool(lst);
+        free(out.items[i]);}
+    free(out.items);
+    free(base);
+    for(int i=0;i<nc;i++){ free(comps[i]); }
+    free(comps);
+    results->count=1; results->values[0]=lst;
+    close_live_pool(pool);}
+
 /* ---- OS environment / cwd / argv (UIOP/ASDF portability primitives) ------- */
 
 /* Process command-line argv, captured by main() for %COMMAND-LINE-ARGUMENTS. */
@@ -1412,7 +1533,9 @@ void bocl_register_load(void){
         s=symbol_intern_cstring("%DIRECTORY-P");
         set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_DIRECTORY_P));
         s=symbol_intern_cstring("%MKDIR");
-        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_MKDIR));}
+        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_MKDIR));
+        s=symbol_intern_cstring("%DIRECTORY-GLOB");
+        set_symbol_function(s,built_in_function_new(s,list(S(BASE),S(COMPONENTS),NULL),kernel_DIRECTORY_GLOB));}
     Ref af=S(APPEND);
     set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
     /* BOCL::%MAKE-OUTPUT-CALLBACK-STREAM — kernel hook for CL compound streams

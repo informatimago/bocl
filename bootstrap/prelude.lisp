@@ -5808,12 +5808,20 @@ the class object it denotes, so two specializers compare by class identity."
 
 (defun directory (pathspec &key)
   "List of pathnames matching PATHSPEC.  Supports #\\* / #\\? glob components and
-   '**' for recursive (wild-inferiors) directory matching."
+   '**' for recursive (wild-inferiors) directory matching.  The recursive walk
+   runs in the %DIRECTORY-GLOB kernel primitive (a Lisp-level walk was ~100x
+   slower — a CHAR-loop match, a stat() per entry and interpreter funcalls all
+   the way down; see issues/open/speed-directory.issue)."
   (let* ((ns    (if (pathnamep pathspec) (namestring pathspec) (string pathspec)))
          (abs   (and (> (length ns) 0) (char= (char ns 0) #\/)))
          (base  (if abs "/" (namestring (bocl::getcwd))))
          (comps (%split-path ns)))
-    (mapcar #'pathname (%glob base comps))))
+    ;; The matches are absolute physical namestrings, so build them with the
+    ;; kernel pathname constructor directly: the CL-level PATHNAME first runs
+    ;; logical-pathname host/device probes (%LP-PARSE-HOST/DEVICE) that can never
+    ;; match a filesystem path — ~80x of the per-result cost — then calls this
+    ;; same constructor anyway, so the result is identical.
+    (mapcar *%kernel-pathname-fn* (%directory-glob base comps))))
 
 ;;; ---- Missing numeric utilities -------------------------------------------
 
@@ -10308,39 +10316,47 @@ the rest take :INITIAL-ELEMENT."
       (loop
         (format out "~&debug> ")
         (force-output out)
-        (let ((forms (%debugger-read-line-forms in)))
-          (cond
-            ((eq forms :eof) (return nil))
-            ((null forms)    nil)          ; blank line — re-prompt
-            (t
-             (let ((cmd (car forms)) (args (cdr forms)))
-               (cond
-                 ((eq cmd :continue) (return nil))
-                 ((eq cmd :abort)
-                  (let ((r (find-restart 'abort condition)))
-                    (if r (invoke-restart r) (return nil))))
-                 ((eq cmd :quit)     (bocl:quit))
-                 ((eq cmd :help)     (%debugger-help out))
-                 ((eq cmd :restarts)
-                  (setq restarts (compute-restarts condition))
-                  (%print-restart-menu out restarts))
-                 ((eq cmd :restart)
-                  (%invoke-selected-restart out restarts (car args) condition))
-                 ((eq cmd :backtrace)
-                  (apply #'%print-backtrace out (%parse-backtrace-options args)))
-                 ((integerp cmd)
-                  (%invoke-selected-restart out restarts cmd condition))
-                 (t
-                  ;; Not a debugger command — evaluate each form on the line as Lisp
-                  ;; in the error's dynamic context.
-                  (dolist (form forms)
-                    (handler-case
-                        (let ((vals (multiple-value-list (eval form))))
-                          (if vals
-                              (dolist (v vals) (format out "~&~S~%" v))
-                              (format out "~&; No values~%")))
-                      (serious-condition (e)
-                        (format out "~&; Error during debugger eval: ~A~%" e))))))))))))))
+        (handler-case
+            (let ((forms (%debugger-read-line-forms in)))
+              (cond
+                ((eq forms :eof) (return nil))
+                ((null forms)    nil)          ; blank line — re-prompt
+                (t
+                 (let ((cmd (car forms)) (args (cdr forms)))
+                   (cond
+                     ((eq cmd :continue) (return nil))
+                     ((eq cmd :abort)
+                      (let ((r (find-restart 'abort condition)))
+                        (if r (invoke-restart r) (return nil))))
+                     ((eq cmd :quit)     (bocl:quit))
+                     ((eq cmd :help)     (%debugger-help out))
+                     ((eq cmd :restarts)
+                      (setq restarts (compute-restarts condition))
+                      (%print-restart-menu out restarts))
+                     ((eq cmd :restart)
+                      (%invoke-selected-restart out restarts (car args) condition))
+                     ((eq cmd :backtrace)
+                      (apply #'%print-backtrace out (%parse-backtrace-options args)))
+                     ((integerp cmd)
+                      (%invoke-selected-restart out restarts cmd condition))
+                     (t
+                      ;; Not a debugger command — evaluate each form on the line as
+                      ;; Lisp in the error's dynamic context.
+                      (dolist (form forms)
+                        (handler-case
+                            (let ((vals (multiple-value-list (eval form))))
+                              (if vals
+                                  (dolist (v vals) (format out "~&~S~%" v))
+                                  (format out "~&; No values~%")))
+                          (serious-condition (e)
+                            (format out "~&; Error during debugger eval: ~A~%" e))))))))))
+          ;; A READ error (e.g. an unknown package in a typed form) or an error
+          ;; while handling a debugger command must NOT escape %RUN-DEBUGGER — that
+          ;; would unwind past the REPL and abort the whole process (issue
+          ;; error-in-debugger).  Debug it in a NESTED debugger level instead
+          ;; (CLHS 9.1 recursive debugging); then fall through and re-prompt.
+          (serious-condition (e)
+            (invoke-debugger e)))))))
 
 (defun invoke-debugger (condition)
   "Enter the debugger on CONDITION (CLHS 9.1.4.2).  Honours *DEBUGGER-HOOK*, binds

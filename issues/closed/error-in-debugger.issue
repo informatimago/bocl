@@ -1,0 +1,56 @@
+Recursive debugging.
+
+    bocl> (quit)
+
+
+    Debugger invoked on condition of type SIMPLE-ERROR:
+      In evale: ERROR: Undefined function: QUIT
+
+    Backtrace (innermost frame first):
+       0: (LAMBDA COMMON-LISP::C)
+       1: HANDLER-BIND
+       2: restart ABORT
+       3: BLOCK COMMON-LISP::DONE
+       4: (COMMON-LISP::%REPL-EVAL COMMON-LISP::FORM)
+       5: CATCH BOCL::%QUIT-CATCH-TAG
+
+    Available restarts:
+       0: [ABORT]
+
+Normal error handling so far.
+
+    debug> (boc:quit) 
+
+    In scan_symbol:
+    ERROR: READ: there is no package named BOC
+
+    ~/src/public/bocl/issues/open
+    master
+    13:51[pjb@thalassa org.xquartz:0 open 17Gi]$ echo $?
+    65
+
+The debugger must handle errors and call INVOKE-DEBUGGER recursively.
+We cannot exit just for a small error (only crash would justify it).
+
+
+----------------------------------------------------------------------------
+FIXED in v1.4.38.
+
+Root cause: in %RUN-DEBUGGER (bootstrap/prelude.lisp) only the *eval* branch of a
+debugger command line was wrapped in HANDLER-CASE.  The command line is first
+READ by %DEBUGGER-READ-LINE-FORMS, and that READ was unprotected — so a reader
+error (e.g. `(boc:quit)` -> "READ: there is no package named BOC", a catchable
+kernel ERROR()) propagated out of %RUN-DEBUGGER, past the REPL's handler-bind
+(whose own cluster is disabled while its handler runs), to the kernel's unhandled
+fallback, which aborted the process (exit 65).
+
+Fix: wrap the whole read-and-dispatch body of the debugger loop in a
+HANDLER-CASE for SERIOUS-CONDITION; on a hit, call INVOKE-DEBUGGER recursively on
+the new condition (CLHS 9.1 nested/recursive debugging), then fall through and
+re-prompt.  A small error in the debugger now opens a nested debugger level
+instead of killing the process; only a genuine crash exits.  (The existing inner
+handler that reports eval errors as "; Error during debugger eval" is kept.)
+
+Verified A/B with *debug-io* bound to a string stream feeding `(boc:quit)` then
+`:continue`: unmodified prelude -> "BUG (escaped): SIMPLE-ERROR ... no package
+named BOC"; fixed -> "OK (reader error did not escape)".

@@ -1,0 +1,48 @@
+Without trying to reach the same times as C on POSIX:
+
+$ time find ~/src/public/lisp/ -type f -name \*.asd > /tmp/asd-files
+
+real	0m0.016s
+user	0m0.002s
+sys	0m0.013s
+
+
+bocl> (time (defparameter *asd-files* (directory #P"~/src/public/lisp/**/*.asd")))
+
+;; Elapsed: 86.970 s
+
+*ASD-FILES*
+
+
+reducing the time by two order of magnitude when the difference is
+four should be feasible easily enough, and is a reasonable expectation.
+
+
+
+----------------------------------------------------------------------------
+FIXED in v1.4.38.
+
+The Lisp DIRECTORY walked the tree with %GLOB, which per directory entry paid
+interpreter-funcall overhead (~150 us each) many times over: a CHAR-by-CHAR
+%WILD-MATCH, a %DIRECTORY-P stat() syscall, string CONCATENATE, an O(n^2) APPEND,
+and %LIST-DIRECTORY twice per level.  Two changes:
+
+1. New kernel primitive %DIRECTORY-GLOB (sources/bocl.c) runs the whole recursive
+   glob walk in C: opendir/readdir once per level, readdir's d_type (stat only
+   for symlinks / DT_UNKNOWN), a byte-wise glob matcher, matches collected into a
+   C string vector during the walk (no Lisp allocation -> no GC / longjmp
+   mid-walk), and the Lisp result list built once at the end.  DIRECTORY now calls
+   it instead of the Lisp %GLOB.
+
+2. DIRECTORY built each result with the CL-level PATHNAME, which first runs
+   logical-pathname host/device probes (%LP-PARSE-HOST/DEVICE) that can never
+   match a filesystem path — ~80x of the per-result cost — before calling the
+   kernel pathname constructor anyway.  DIRECTORY results are always physical
+   absolute paths, so it now maps *%KERNEL-PATHNAME-FN* directly (identical
+   result, no logical probing).
+
+Measured (A/B, same synthetic tree, 123 matches):
+  OLD (%glob + #'pathname)   55.9 s
+  NEW (directory)             0.011 s      (~5000x)
+Of the new 0.011 s the C walk is ~0.015 s on a larger 4417-file tree and the
+pathname construction ~0.006 s; both now scale like `find`.
