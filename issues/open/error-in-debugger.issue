@@ -1,0 +1,33 @@
+Recursive debugging.
+
+    bocl> (quit)
+
+
+    Debugger invoked on condition of type SIMPLE-ERROR:
+      In evale: ERROR: Undefined function: QUIT
+
+    Backtrace (innermost frame first):
+       0: (LAMBDA COMMON-LISP::C)
+       1: HANDLER-BIND
+       2: restart ABORT
+       3: BLOCK COMMON-LISP::DONE
+       4: (COMMON-LISP::%REPL-EVAL COMMON-LISP::FORM)
+       5: CATCH BOCL::%QUIT-CATCH-TAG
+
+    Available restarts:
+       0: [ABORT]
+
+Normal error handling so far.
+
+    debug> (boc:quit) 
+
+    In scan_symbol:
+    ERROR: READ: there is no package named BOC
+
+    ~/src/public/bocl/issues/open
+    master
+    13:51[pjb@thalassa org.xquartz:0 open 17Gi]$ echo $?
+    65
+
+The debugger must handle errors and call INVOKE-DEBUGGER recursively.
+We cannot exit just for a small error (only crash would justify it).
