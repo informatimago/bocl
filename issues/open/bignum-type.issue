@@ -1,0 +1,7 @@
+type of bignums should be integer, not T.
+
+(type-of (fact 100))
+--> T ; too vague
+
+(type-of (fact 100))
+--> INTEGER ; better
