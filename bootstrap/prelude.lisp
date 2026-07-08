@@ -5039,6 +5039,19 @@ the class object it denotes, so two specializers compare by class identity."
                      (format stream "#<~A ~S>" (type-of p) (package-name p)))
                  p))
 
+;;; Default PRINT-OBJECT method (T T).  The C printer now routes EVERY non-CLOS
+;;; kernel object (streams, hash-tables, readtables, random-states, classes, ...)
+;;; through PRINT-OBJECT so a user method can dispatch on any object type.  Objects
+;;; with no more specific method fall back here, which re-enters the kernel printer;
+;;; its recursion guard is active while this method runs, so PRIN1/PRINC reach the
+;;; raw #<CLASS id> form (with the object's identity) rather than re-dispatching.
+(ensure-method 'print-object nil '(t t)
+               (lambda (object stream)
+                 (if *print-escape*
+                     (prin1 object stream)
+                     (princ object stream))
+                 object))
+
 ;;; Register the standard CONDITION class hierarchy as CLOS classes, so that
 ;;; (DEFCLASS foo (ERROR) ...) and DEFINE-CONDITION can inherit them (FIND-CLASS
 ;;; and ENSURE-CLOS-CLASS resolve superclasses from *%classes*).  These are SEPARATE
@@ -5398,10 +5411,13 @@ the class object it denotes, so two specializers compare by class identity."
 ;;; ---- I/O: FRESH-LINE and related ----------------------------------------
 
 (defun fresh-line (&optional (stream *standard-output*))
-  "Output a newline unless already at the start of a line.
-  In bocl, always outputs a newline (no column tracking yet)."
-  (terpri stream)
-  t)
+  "Output a newline unless already at the start of a line; return T if a newline
+  was output, NIL otherwise (CLHS FRESH-LINE).  %STREAM-LINE-START-P detects the
+  start of a line reliably for in-memory string streams; for a device stream bocl
+  does not column-track, so it conservatively outputs a newline."
+  (if (%stream-line-start-p stream)
+      nil
+      (progn (terpri stream) t)))
 
 (defun pprint-newline (kind &optional (stream *standard-output*))
   "Pretty-printer newline.  In bocl: stub that may output a newline."

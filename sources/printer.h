@@ -6,6 +6,7 @@
 
 /* Output primitives added for Slice 10. */
 Ref bocl_write_char(Ref ch, Ref stream);
+Ref stream_line_start_p(Ref stream);
 Ref bocl_write_string(Ref string, Ref stream, Ref start_ref, Ref end_ref);
 Ref bocl_fresh_line(Ref stream);
 

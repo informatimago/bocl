@@ -187,9 +187,13 @@ static void test_integer_decode_float(void){
 /* ---- I/O ----------------------------------------------------------------- */
 
 static void test_fresh_line(void){
-    /* The output from fresh-line contains exactly one newline. */
-    TEST_EQ(eql, I(1),
-            e("(length (with-output-to-string (s) (fresh-line s)))"));}
+    /* FRESH-LINE on a fresh (empty) stream is already at line start, so it emits
+       nothing (issue "newline and I/O"). */
+    TEST_EQ(eql, I(0),
+            e("(length (with-output-to-string (s) (fresh-line s)))"));
+    /* After some content it emits exactly one newline. */
+    TEST_EQ(eql, I(2),
+            e("(length (with-output-to-string (s) (princ \"x\" s) (fresh-line s)))"));}
 
 
 TEST_INITIALIZE(test_slice20);

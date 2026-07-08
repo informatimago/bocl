@@ -13,6 +13,61 @@
 
 /* Printer */
 
+/* ---- Newline handling ----------------------------------------------------
+   bocl's #\Newline is the internal line separator NEL (0x85 = 133).  Strings
+   (and in-memory string streams) hold that internal code; a real device / file
+   stream translates it to the stream's newline encoding on output — LF (:unix),
+   CR (:mac) or CRLF (:dos) — mirroring the reader, which maps LF/CR/CRLF on input
+   back to NEL.  (issue "newline and I/O".) */
+#define BOCL_NEL 0x85
+
+/* Resolve an output stream designator (T -> *STANDARD-OUTPUT*) to a stream. */
+static Ref resolve_output_stream(Ref stream){
+    if(eql(stream,T_Symbol)){
+        Ref so=S(*STANDARD-OUTPUT*);
+        if(symbol_boundp(so)){ return variable_value(so); }}
+    return stream;}
+
+/* True for a real device/file stream (translate NEL); false for an in-memory
+   string stream (keep the internal NEL). */
+static bool stream_translates_newline(Ref stream){
+    Ref s=resolve_output_stream(stream);
+    return typep(s,FILE_STREAM_Class) && !typep(s,STRING_STREAM_Class);}
+
+/* Write the internal character CODE to STREAM (OUT is its cstream) as literal
+   content, translating #\Newline (NEL) to the device newline encoding on a file
+   stream.  Use for all *content* output (write-char/string, princ, ~C, ~%, ~&,
+   terpri, fresh-line) — NOT for prin1's structural bytes ("#<", quotes, digits). */
+static void put_content_char(Ref stream, FILE* out, int code){
+    if(code==BOCL_NEL && stream_translates_newline(stream)){
+        Ref s=resolve_output_stream(stream);
+        switch((new_line_t)s->slots->file_stream.new_line){
+          case new_line_crlf: fputc('\r',out); fputc('\n',out); return;
+          case new_line_cr:   fputc('\r',out);                  return;
+          case new_line_lf:
+          default:            fputc('\n',out);                  return;}}
+    fputc(code,out);}
+
+/* True when STREAM is already at the start of a line.  For a string (in-memory)
+   stream we can inspect the buffer: the last written octet is NEL, or nothing has
+   been written.  For a device stream bocl does not track the column, so we
+   conservatively answer NIL (FRESH-LINE then emits a newline, as before). */
+static bool stream_at_line_start(Ref stream){
+    Ref s=resolve_output_stream(stream);
+    if(typep(s,STRING_STREAM_Class)){
+        FILE* cs=s->slots->file_stream.stream;
+        if(!cs){ return true; }
+        fflush(cs);
+        long pos=ftell(cs);
+        if(pos<=0){ return true; }
+        octet* buf=s->slots->file_stream.buffer;
+        return buf && buf[pos-1]==BOCL_NEL;}
+    return false;}
+
+/* Predicate form of stream_at_line_start for the Lisp FRESH-LINE. */
+Ref stream_line_start_p(Ref stream){
+    return stream_at_line_start(stream) ? T_Symbol : NIL_Symbol;}
+
 Ref prin1_to_string(Ref object){
     Ref stream=stream_output_string(S(CHARACTER));
     prin1(object,stream);
@@ -63,15 +118,18 @@ static bool print_md_array(Ref object,FILE* out,bool escape){
 }
 
 static bool g_in_print_object = false;
-/* Route a kernel object that participates in the CLOS PRINT-OBJECT protocol — a
-   CONDITION or a PACKAGE — through the Lisp PRINT-OBJECT generic, so user methods
-   are honoured and packages print as #<PACKAGE "name"> (CLOS dispatch on these
-   kernel classes works).  CLOS %obj instances are dispatched by the Lisp PRIN1
-   wrapper instead.  The g_in_print_object guard breaks recursion: if a method
-   re-prints the object itself, this returns false and the raw #<…> path is used. */
+/* Route a kernel object through the Lisp PRINT-OBJECT generic so user methods can
+   dispatch on any object type — CONDITION, PACKAGE, STREAM, HASH-TABLE, READTABLE,
+   RANDOM-STATE, … — not just the few with dedicated C printing.  CLOS %obj
+   instances keep their own dispatch path below (excluded here).  A default (T T)
+   method re-enters the kernel printer; the g_in_print_object guard makes that
+   reach the raw #<CLASS id> fallback, so an object with no specific method prints
+   exactly as before, while one with a method gets that method's output.  (This is
+   reached only after all the self-printing types — conses, numbers, strings,
+   symbols, characters, vectors, pathnames — have already been handled.) */
 static bool print_via_print_object(Ref object,Ref stream,bool escape){
     if(g_in_print_object){ return false; }
-    if(!typep(object,CONDITION_Class) && !typep(object,PACKAGE_Class)){ return false; }
+    if(clos_instance_p(object)){ return false; }   /* handled by the CLOS path below */
     Ref po=S(PRINT-OBJECT);
     if(!symbol_fboundp(po)){ return false; }   /* before the prelude defines it */
     g_in_print_object=true;
@@ -625,7 +683,7 @@ static Ref prin1_inner(Ref object,Ref stream){
             switch(p[i]){
               case '\\': fprintf(out,"\\\\"); break;
               case '"': fprintf(out,"\\\""); break;
-              default: fprintf(out,"%c",(char)p[i]); break;}}
+              default: put_content_char(stream,out,(int)p[i]); break;}}
         fprintf(out,"\"");
         return object;}
 
@@ -718,7 +776,7 @@ Ref princ(Ref object,Ref stream){
 
     if(characterp(object)){
         octet code=(octet)integer_value(character_code(object));
-        fprintf(out,"%c",(char)code);
+        put_content_char(stream,out,(int)code);
         return object;}
 
     if(floatp(object)){
@@ -759,7 +817,7 @@ Ref princ(Ref object,Ref stream){
     if(stringp(object)){
         octet* p=string_octets(object);
         uword n=printed_length(object,string_length(object));   /* honor fill pointer */
-        for(uword i=0;i<n;i++){ fprintf(out,"%c",(char)p[i]); }
+        for(uword i=0;i<n;i++){ put_content_char(stream,out,(int)p[i]); }
         return object;}
 
     if(consp(object)){
@@ -852,7 +910,7 @@ Ref princ(Ref object,Ref stream){
 
 Ref terpri(Ref stream){
     FILE* out=stream_output_cstream(stream);
-    fprintf(out,"\n");
+    put_content_char(stream,out,BOCL_NEL);
     return NIL_Symbol;}
 
 /* ---- Slice 10 additions ------------------------------------------------- */
@@ -860,7 +918,7 @@ Ref terpri(Ref stream){
 Ref bocl_write_char(Ref ch, Ref stream){
     FILE* out = stream_output_cstream(stream);
     octet code = (octet)integer_value(character_code(ch));
-    fputc((int)code, out);
+    put_content_char(stream, out, (int)code);
     return ch;}
 
 Ref bocl_write_string(Ref string, Ref stream, Ref start_ref, Ref end_ref){
@@ -872,14 +930,15 @@ Ref bocl_write_string(Ref string, Ref stream, Ref start_ref, Ref end_ref){
     if(start > len) start = len;
     if(end   > len) end   = len;
     for(uword i = start; i < end; i++)
-        fputc((int)buf[i], out);
+        put_content_char(stream, out, (int)buf[i]);
     return string;}
 
 Ref bocl_fresh_line(Ref stream){
-    /* Simplified: always emits a newline.  A full implementation would track
-       the column and skip the newline when already at column 0. */
+    /* Emit a newline only when not already at the start of a line (CLHS
+       FRESH-LINE); return T if a newline was written, NIL otherwise. */
+    if(stream_at_line_start(stream)){ return NIL_Symbol; }
     FILE* out = stream_output_cstream(stream);
-    fprintf(out, "\n");
+    put_content_char(stream, out, BOCL_NEL);
     return T_Symbol;}
 
 /* ---- Slice 10: C-level FORMAT runner ------------------------------------ */
@@ -1036,7 +1095,7 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
     uword i=start;
     while(i<end){
         octet c=ctrl[i]; i++;
-        if(c!='~'){ fputc((int)c,out); continue;}
+        if(c!='~'){ put_content_char(stream,out,(int)c); continue;}
         /* --- parse comma-separated numeric parameters (~w,d,m,p,...X) --- */
         /* Up to 7 params; missing params flagged with WORD_MIN sentinel. */
 #define FMT_PARAMS_MAX 7
@@ -1162,7 +1221,7 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               if(colonp) prin1(ch,stream);
               else if(characterp(ch)){
                   octet code=(octet)integer_value(character_code(ch));
-                  fputc((int)code,out);}
+                  put_content_char(stream,out,(int)code);}
               break;}
           case 'F': case 'E': case 'G': {
               /* ~w,dF — fixed float: w=total width, d=decimal digits.
@@ -1196,10 +1255,12 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
                   princ(arg,stream);}
               break;}
           case '%': {
-              for(word k=0;k<count;k++) fputc('\n',out);
+              for(word k=0;k<count;k++) put_content_char(stream,out,BOCL_NEL);
               break;}
           case '&': {
-              for(word k=0;k<count;k++) fputc('\n',out);
+              /* ~n& : FRESH-LINE, then n-1 newlines (CLHS 22.3.1.3). */
+              if(count>0 && !stream_at_line_start(stream)) put_content_char(stream,out,BOCL_NEL);
+              for(word k=1;k<count;k++) put_content_char(stream,out,BOCL_NEL);
               break;}
           case '~': {
               for(word k=0;k<count;k++) fputc('~',out);
@@ -1222,7 +1283,7 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               break;}
           case 'N': {
               /* ~N — conditional newline (bocl: always emit one newline) */
-              for(word k=0;k<count;k++) fputc('\n',out);
+              for(word k=0;k<count;k++) put_content_char(stream,out,BOCL_NEL);
               break;}
           case '*': {
               for(word k=0;k<count;k++) fmt_pop(args_ptr);

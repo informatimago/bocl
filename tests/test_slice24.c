@@ -52,13 +52,17 @@ static void test_format_t_returns_nil(void){
 /* ---- ~& fresh-line -------------------------------------------------------- */
 
 static void test_format_fresh_line(void){
-    /* ~& emits a newline (simplified: always emits one newline) */
-    TEST_EQ(eql, I(1),
+    /* ~& is FRESH-LINE: on an empty stream (already at line start) it emits
+       nothing (issue "newline and I/O"). */
+    TEST_EQ(eql, I(0),
             e("(string-length (format nil \"~&\"))"));
-    TEST_EQ(eql, I(10),
-            e("(char-code (char (format nil \"~&\") 0))"));
-    /* ~2& gives two newlines */
+    /* After content, ~& emits one #\Newline; bocl's #\Newline is NEL = 133. */
     TEST_EQ(eql, I(2),
+            e("(string-length (format nil \"x~&\"))"));
+    TEST_EQ(eql, I(133),
+            e("(char-code (char (format nil \"x~&\") 1))"));
+    /* ~n& is fresh-line then n-1 newlines: on an empty stream ~2& = 1 newline. */
+    TEST_EQ(eql, I(1),
             e("(string-length (format nil \"~2&\"))"));}
 
 /* ---- ~T tab/spaces ------------------------------------------------------- */

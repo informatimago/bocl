@@ -45,11 +45,29 @@ static void test_format_tilde_S(void){
 /* --- ~% newline ---------------------------------------------------------- */
 
 static void test_format_tilde_percent(void){
-    /* (format nil "~%") should be a 1-char string whose char is #\Newline. */
-    TEST_EQ(eql, I(1),  e("(length (format nil \"~%\"))"));
-    TEST_EQ(eql, I(10), e("(char-code (char (format nil \"~%\") 0))"));
+    /* (format nil "~%") should be a 1-char string whose char is #\Newline.
+       bocl's #\Newline is NEL (code 133), so ~% to a string yields code 133
+       (issue "newline and I/O"; to a *device* it translates to LF/CR/CRLF). */
+    TEST_EQ(eql, I(1),   e("(length (format nil \"~%\"))"));
+    TEST_EQ(eql, I(133), e("(char-code (char (format nil \"~%\") 0))"));
     /* ~2% gives two newlines. */
-    TEST_EQ(eql, I(2),  e("(length (format nil \"~2%\"))"));}
+    TEST_EQ(eql, I(2),   e("(length (format nil \"~2%\"))"));}
+
+/* --- #\Newline representation (issue "newline and I/O") ------------------ */
+
+static void test_format_newline(void){
+    /* The newline #\Newline (NEL, 133) is the internal line separator; ~%,
+       TERPRI and a literal newline in a string all denote it. */
+    TEST_EQ(eql, T_Symbol,
+            e("(= (char-code #\\newline) (char-code (character (format nil \"~%\"))))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(char= #\\newline (character (format nil \"~%\")))"));
+    /* TERPRI to a string denotes #\Newline (133) as well. */
+    TEST_EQ(eql, I(133),
+            e("(char-code (char (with-output-to-string (s) (terpri s)) 0))"));
+    /* ~& does not add a newline right after a ~% newline (fresh-line). */
+    TEST_EQ(eql, T_Symbol,
+            e("(string= (format nil \"a:~%~&b~%\") (format nil \"a:~%b~%\"))"));}
 
 /* --- ~~ literal tilde --------------------------------------------------- */
 
@@ -171,6 +189,7 @@ TEST_SUITE(test_format, fmt_init, fmt_clean)
     TEST_CASE("format ~A",                       test_format_tilde_A)
     TEST_CASE("format ~S",                       test_format_tilde_S)
     TEST_CASE("format ~%",                       test_format_tilde_percent)
+    TEST_CASE("format newline (NEL)",            test_format_newline)
     TEST_CASE("format ~~",                       test_format_tilde_tilde)
     TEST_CASE("format ~D",                       test_format_tilde_D)
     TEST_CASE("format ~X",                       test_format_tilde_X)

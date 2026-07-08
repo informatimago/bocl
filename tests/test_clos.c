@@ -223,6 +223,26 @@ static void test_print_object(void){
             e("(with-output-to-string (s)"
               "  (prin1 (make-instance 'named :name \"Alice\") s))"));}
 
+/* PRINT-OBJECT dispatch on KERNEL object types, not just CLOS instances
+   (issue package-print-object-method). */
+static void test_print_object_kernel(void){
+    /* A package prints readably via its PRINT-OBJECT method. */
+    TEST_EQ(equal, T("#<PACKAGE \"KEYWORD\">"),
+            e("(prin1-to-string (find-package \"KEYWORD\"))"));
+    /* A user method can dispatch on a kernel class (READTABLE). */
+    e("(defmethod print-object ((rt readtable) s) (princ \"MY-RT\" s) rt)");
+    TEST_EQ(equal, T("MY-RT"),
+            e("(prin1-to-string *readtable*)"));
+    /* An object with no specific method falls back to the raw #<CLASS id> form. */
+    TEST_EQ(eql, T_Symbol,
+            e("(let ((s (prin1-to-string (make-string-output-stream))))"
+              "  (and (string= (subseq s 0 2) \"#<\") (search \"STREAM\" s) t))"));
+    /* *PRINT-READABLY* T on an unreadable object signals PRINT-NOT-READABLE. */
+    TEST_EQ(eql, T_Symbol,
+            e("(handler-case (let ((*print-readably* t))"
+              "                 (prin1-to-string (find-package \"KEYWORD\")) nil)"
+              "  (print-not-readable () t))"));}
+
 
 TEST_INITIALIZE(test_clos);
 TEST_SUITE(test_clos, clos_init, clos_clean)
@@ -246,4 +266,5 @@ TEST_SUITE(test_clos, clos_init, clos_clean)
     TEST_CASE("with-slots",               test_with_slots)
     TEST_CASE("initialize-instance :after", test_initialize_instance)
     TEST_CASE("print-object",             test_print_object)
+    TEST_CASE("print-object kernel types", test_print_object_kernel)
     TEST_FINALIZE()

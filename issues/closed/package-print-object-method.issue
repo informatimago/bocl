@@ -83,3 +83,21 @@ REMAINING (small, per-type):
   back to the raw #<CLASS id> form (the recursion guard already supports this).  Each
   type that wants a nicer/printed-readably representation then just needs its own
   PRINT-OBJECT method.  Deferred as a broader printer change; the mechanism is in place.
+
+----------------------------------------------------------------------------
+REMAINING done (v1.4.43).
+
+sources/printer.c print_via_print_object() now routes EVERY non-CLOS kernel object
+(streams, hash-tables, readtables, random-states, classes, ...) — not just
+CONDITION/PACKAGE — through the Lisp PRINT-OBJECT generic (CLOS %obj instances keep
+their own path).  bootstrap/prelude.lisp adds a default (T T) PRINT-OBJECT method
+that re-enters the kernel printer; the recursion guard is active while it runs, so
+an object with no more specific method reaches the raw #<CLASS id> fallback (with
+its identity) exactly as before, while any object type can now be given a user
+PRINT-OBJECT method that dispatches.
+
+Verified (tests/test_clos.c test_print_object_kernel): a user method dispatches on
+a READTABLE; a stream with no method still prints #<...STREAM id>; (find-package
+"KEYWORD") prints #<PACKAGE "KEYWORD"> and signals PRINT-NOT-READABLE under
+*PRINT-READABLY*; ordinary objects (conses, numbers, strings, symbols) unaffected.
+Full suite green.  Issue complete.

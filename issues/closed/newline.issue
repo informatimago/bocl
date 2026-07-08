@@ -1,0 +1,80 @@
+newline and I/O
+===============
+
+(list (char-code #\newline) (char-code (character (format nil "~%"))))
+--> (133 10) ; this is wrong.
+
+    (133 133) is expected.
+
+
+#\newline is control code NEL (NExt Line), #x85 = 133, in bocl.
+(format nil "~%") must produce NEL characters, like (string (code-char 133))
+
+(string (code-char 133)), (format nil "~%") should print:
+"
+"
+not:
+"\205"
+
+(format t "~%"), (terpri), (format t "~C" (code-char 133)), (format t "~C" #\newline)
+must send to the file or device, 10, 13, or 10 13 depending on the
+encoding of newlines in these files and devices.
+    10    = :unix
+    13    = :mac
+    10 13 = :dos
+
+
+Similarly, when reading from a file or device, depending on the
+encoding of newlines specified for these files and devices,
+
+:unix ->   10     must be read as #\newline
+:mac  ->   13     must be read as #\newline
+:dos  ->   10 13  must be read as #\newline
+
+Then, there may be an option to be lax on input newline, so that, on any system,
+any combination reads as #\newline.
+
+(If one wants to read #\return and #\linefeed, one would have to use
+newline format allowing raw ascii control codes. None is defined in
+bocl yet).
+
+
+(assert (= (char-code #\newline) (char-code (character (format nil "~%")))))
+(assert (char= #\newline (character "
+")))
+(assert (char= #\newline (character (format nil "~%"))))
+
+(assert (string= (format nil "only one newline:~%~&because ~~& doesn't put a newline after a newline.~%")
+"only one newline:
+because ~& doesn't put a newline after a newline.
+"))
+
+
+
+
+
+----------------------------------------------------------------------------
+FIXED in v1.4.43.
+
+The internal #\Newline is NEL (0x85 = 133); strings and in-memory string streams
+hold that code, and a real device/file stream now translates it on output to the
+stream's newline encoding (LF/CR/CRLF), mirroring the reader (which already maps
+LF/CR/CRLF on input to NEL).  sources/printer.c:
+  - new helper put_content_char(): all *content* output — write-char/string,
+    princ, ~C, ~%, ~&, ~N, terpri, and literal control-string chars — emits NEL as
+    the internal code to string streams and translates it to LF/CR/CRLF on a file
+    stream (via the previously-unused FileStream.new_line).  So
+    (format nil "~%") is now (code-char 133), while (format t "~%") still sends LF
+    on :unix (CR on :mac, CRLF on :dos).
+  - FRESH-LINE / ~& are now real fresh-lines: a new %STREAM-LINE-START-P kernel
+    primitive detects the start of a line (reliably for string streams by peeking
+    the buffer; conservatively NIL for device streams, which bocl does not
+    column-track), and the Lisp FRESH-LINE and the C ~& use it — so ~& adds no
+    newline right after a ~% (issue assertion), and (format nil "~&") is "".
+Tests updated: test_format.c (~% char is 133; new "format newline" case),
+test_slice24.c (~& fresh-line semantics), test_slice20.c (fresh-line on empty
+stream emits nothing).  All the issue's ASSERTs pass; full suite green.
+
+Not done (out of scope, noted): device-stream column tracking (so FRESH-LINE is
+exact on a terminal), and a raw-ASCII newline format to read #\Return/#\Linefeed
+literally.

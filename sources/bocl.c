@@ -646,6 +646,18 @@ static void kernel_WRITE_CHAR(unused Ref function, Ref arguments, MultipleValues
     results->values[0]=bocl_write_char(ch,stream);
     close_live_pool(pool);}
 
+/* (%STREAM-LINE-START-P stream) -> T if STREAM is at the start of a line (used by
+   the Lisp FRESH-LINE; reliable for in-memory string streams, conservative NIL
+   for device streams, which bocl does not column-track). */
+static void kernel_STREAM_LINE_START_P(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref stream=cons_car(current);
+    results->count=1;
+    results->values[0]=stream_line_start_p(stream);
+    close_live_pool(pool);}
+
 static void kernel_APPEND(unused Ref function, Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
     add_to_live_pool(arguments);
@@ -1611,6 +1623,8 @@ void bocl_register_load(void){
         Ref wc_ll = list(symbol_intern_cstring("CHARACTER"),
                          S(&OPTIONAL), symbol_intern_cstring("STREAM"), NULL);
         set_symbol_function(wc_fn,built_in_function_new(wc_fn,wc_ll,kernel_WRITE_CHAR));}
+    {   Ref sls = symbol_intern_cstring("%STREAM-LINE-START-P");
+        set_symbol_function(sls,built_in_function_new(sls,list(S(STREAM),NULL),kernel_STREAM_LINE_START_P));}
     /* Slice 22 — I/O, pathnames, type-of, array, stream predicates. */
     {   Ref ll_s=list(S(STREAM),NULL);
         Ref ll_s_opt=list(S(STREAM),S(&REST),symbol_intern_cstring("KEYS"),NULL);
