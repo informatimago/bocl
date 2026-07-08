@@ -12,6 +12,7 @@ bocl.pc
 *.[ld]x32fsl
 *.tex
 --version.lock
+tmp*
 
 sources/bocl
 sources/print_types
