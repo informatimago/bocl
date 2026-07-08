@@ -925,70 +925,29 @@
     (t (error "CONCATENATE: only :LIST result-type is supported"))))
 
 ;; -------------------------------------------------------------------- ;;
-;;  Sort — merge sort on lists.                                          ;;
+;;  Sort — stable merge sort whose loop runs in C (%KERNEL-SORT!).       ;;
 ;; -------------------------------------------------------------------- ;;
-
-(defun %merge (less a b)
-  ;; Stable merge of two ordered lists. LESS is the comparator.  On a tie
-  ;; (neither strictly less) take from A, the left run — whose elements precede
-  ;; B's in the original sequence — so equal elements keep their input order.
-  ;; ITERATIVE: a recursive merge would recurse to a depth equal to the total
-  ;; length being merged, overflowing the interpreter's C stack (SORT of a few
-  ;; hundred elements segfaulted).  We accumulate the picked elements and splice
-  ;; the remaining run with REVAPPEND, so the stack depth is O(1).
-  (let ((acc nil))
-    (do ()
-        ((or (null a) (null b))
-         (revappend acc (if (null a) b a)))
-      (if (funcall less (car b) (car a))     ; B strictly less than A: take B
-          (progn (push (car b) acc) (setq b (cdr b)))
-          (progn (push (car a) acc) (setq a (cdr a)))))))  ; A <= B: take A (stable)
-
-(defun %list-split (list)
-  ;; Tortoise/hare split. For (a b) returns (values (a) (b)).
-  ;; Pre-fix the loop never entered for 2-element lists, returning
-  ;; (NIL (a b)) and causing infinite recursion in SORT.
-  (let ((slow list) (fast list) (acc nil))
-    (do ()
-        ((or (null fast) (null (cdr fast))))
-      (push (car slow) acc)
-      (setq slow (cdr slow))
-      (setq fast (cddr fast)))
-    (values (nreverse acc) slow)))
-
-(defvar *%old-sort*
-  (lambda (sequence less &key (key #'identity))
-    ;; List-only merge sort (original implementation).  NB: a Lisp-level SORT is
-    ;; bounded by the interpreter's ~150us-per-op cost, and cons car/cdr is much
-    ;; cheaper here than vector AREF, so this list merge sort beats an array merge
-    ;; sort in bocl; a genuinely fast SORT needs a C kernel primitive (see
-    ;; issues/open/slow-string-sequence-primitives.issue).
-    (let ((cmp (if (eq key #'identity)
-                   less
-                   (lambda (x y) (funcall less (funcall key x) (funcall key y))))))
-      (labels ((rec (lst)
-                 (cond ((null lst) nil)
-                       ((null (cdr lst)) lst)
-                       (t
-                        (multiple-value-bind (l r) (%list-split lst)
-                          (%merge cmp (rec l) (rec r)))))))
-        (rec sequence)))))
+;;
+;; The merge loop lives in the %KERNEL-SORT! kernel primitive (sources/bocl.c),
+;; which reads the list/vector into a pinned scratch vector, bottom-up merge
+;; sorts it in C — calling back into Lisp only for the comparator — and writes
+;; the result back destructively.  A Lisp-level SORT is bounded by the
+;; interpreter's ~150 us-per-op cost; doing the element moves in C and paying it
+;; once per *comparison* is what makes SORT fast (an array merge sort written in
+;; Lisp was ~5x slower than the old list merge sort, because bocl AREF/MAKE-ARRAY
+;; cost far more than CONS car/cdr).  The primitive is stable, so STABLE-SORT is
+;; the same call.
 
 (defun sort (sequence less &key (key #'identity))
-  ;; Generic SORT: handles lists and vectors.
-  (cond
-    ((listp sequence)
-     (funcall *%old-sort* sequence less :key key))
-    ((vectorp sequence)
-     (let* ((n (vector-length sequence))
-            (lst (coerce sequence 'list))
-            (sorted (funcall *%old-sort* lst less :key key)))
-       (dotimes (i n sequence)
-         (setf (aref sequence i) (nth i sorted)))))
-    (t (error "SORT: not a sequence"))))
+  "Destructively sort SEQUENCE (a list or vector) by the strict comparator LESS
+applied to the KEYs of elements.  Stable."
+  (%kernel-sort! sequence
+                 (if (eq key #'identity)
+                     less
+                     (lambda (x y) (funcall less (funcall key x) (funcall key y))))))
 
 (defun stable-sort (sequence less &key (key #'identity))
-  ;; Merge sort is naturally stable.
+  ;; %KERNEL-SORT! is a stable merge sort.
   (sort sequence less :key key))
 
 ;; -------------------------------------------------------------------- ;;

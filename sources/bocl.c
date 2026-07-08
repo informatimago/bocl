@@ -1275,6 +1275,106 @@ static void kernel_STRING_SEARCH(unused Ref function, Ref arguments, MultipleVal
         if(k==np){ answer=integer_from_word(i); break; }}
     results->count=1; results->values[0]=answer;}
 
+/* Kernel SORT — a stable bottom-up merge sort whose loop runs in C, calling back
+   into Lisp only for the comparator.  A Lisp-level SORT is bounded by the
+   interpreter's ~150us-per-op cost (car/cdr, aref, funcall), so an in-C sort that
+   pays that cost once per COMPARISON (not several times per element move) is the
+   only way to make SORT fast; an array merge sort written in Lisp was measured
+   ~5x SLOWER than the list one because bocl AREF/MAKE-ARRAY dwarf CONS car/cdr.
+
+   GC discipline (this calls Lisp per comparison, so a GC — or a comparator error
+   longjmp — can happen at every kernel_apply):
+   - Scratch is two bocl simple-vectors (NOT malloc), pinned in the live pool, so
+     a comparator error that longjmps past this frame leaks nothing (the GC
+     reclaims them) and a skipped close_live_pool only briefly over-retains and
+     self-heals at the enclosing frame — the same contract FUNCALL/MAPCAR rely on.
+   - The element Refs held in the scratch vectors stay reachable from the pinned
+     input SEQUENCE throughout, and the collector is non-moving, so the raw
+     element pointers (a/b) stay valid across every kernel_apply (cf. the bucket
+     vector in hash_table.c).  The scratch vectors stay young (pinned), so raw
+     stores into them need no write barrier; only the final write-back into the
+     possibly-old input goes through cons_rplaca / gc_write_barrier. */
+extern Ref   Object_new(Ref class, Slots* slots);
+extern Array* Array_slots(Ref element_type, halfword rank, halfword* dimensions);
+
+/* (less src[j] < src[i]) ?  Reuses the pinned 2-cons ARGPAIR to avoid allocating
+   an argument list per comparison. */
+static inline bool sort_less(Ref less, Ref argpair, Ref* elems, word j, word i){
+    cons_rplaca(argpair, elems[j]);
+    cons_rplaca(cons_cdr(argpair), elems[i]);
+    MultipleValues r; r.count=0;
+    kernel_apply(less, argpair, &r);
+    return (r.count>0) && !nullp(r.values[0]);}
+
+/* Bottom-up stable merge sort of A[0,n) using scratch B[0,n); the sorted result
+   is left in A. */
+static void sort_merge_refs(Ref less, Ref argpair, Ref* a, Ref* b, word n){
+    Ref* src=a; Ref* dst=b;
+    for(word width=1; width<n; width*=2){
+        for(word lo=0; lo<n; lo+=2*width){
+            word mid=lo+width;      if(mid>n){ mid=n; }
+            word hi =lo+2*width;    if(hi>n){  hi=n;  }
+            word i=lo, j=mid, k=lo;
+            while(i<mid && j<hi){
+                /* stable: take the left run unless src[j] is strictly less */
+                if(sort_less(less,argpair,src,j,i)){ dst[k++]=src[j++]; }
+                else                               { dst[k++]=src[i++]; }}
+            while(i<mid){ dst[k++]=src[i++]; }
+            while(j<hi){  dst[k++]=src[j++]; }}
+        Ref* t=src; src=dst; dst=t;}
+    if(src!=a){ for(word i=0;i<n;i++){ a[i]=src[i]; } }}
+
+/* (%KERNEL-SORT! sequence less) — destructively sort a list or vector by the
+   strict 2-arg comparator LESS.  KEY handling stays in the Lisp SORT wrapper. */
+static void kernel_KERNEL_SORT(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    Ref current=arguments;
+    Ref seq  = pop_mandatory_argument(function,&current);
+    Ref less = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    add_to_live_pool(seq);
+    add_to_live_pool(less);
+
+    bool is_list;
+    word n;
+    if(nullp(seq)){ results->count=1; results->values[0]=seq; close_live_pool(pool); return; }
+    if(consp(seq)){       is_list=true;  n=(word)list_length(seq); }
+    else if(vectorp(seq)){is_list=false; n=(word)vector_length(seq); }
+    else { close_live_pool(pool); ERROR("SORT: %s","argument is not a proper list or vector"); return; }
+
+    if(n<2){ results->count=1; results->values[0]=seq; close_live_pool(pool); return; }
+
+    halfword dims[1]; dims[0]=(halfword)n;
+    Ref buf = Object_new(VECTOR_Class,(Slots*)Array_slots(T_Symbol,1,dims));
+    add_to_live_pool(buf);
+    Ref tmp = Object_new(VECTOR_Class,(Slots*)Array_slots(T_Symbol,1,dims));
+    add_to_live_pool(tmp);
+    Ref* a = buf->slots->array.elements->elements;
+    Ref* b = tmp->slots->array.elements->elements;
+
+    if(is_list){
+        Ref cell=seq;
+        for(word idx=0; idx<n; idx++){ a[idx]=cons_car(cell); cell=cons_cdr(cell); }}
+    else{
+        Ref* s = seq->slots->array.elements->elements;
+        for(word idx=0; idx<n; idx++){ a[idx]=s[idx]; }}
+
+    Ref argpair = list(NIL_Symbol,NIL_Symbol,NULL);
+    add_to_live_pool(argpair);
+
+    sort_merge_refs(less, argpair, a, b, n);   /* sorted result left in a (buf) */
+
+    if(is_list){
+        Ref cell=seq;
+        for(word idx=0; idx<n; idx++){ cons_rplaca(cell, a[idx]); cell=cons_cdr(cell); }}
+    else{
+        Ref* d = seq->slots->array.elements->elements;
+        for(word idx=0; idx<n; idx++){ d[idx]=a[idx]; }
+        gc_write_barrier(seq->slots->array.elements);}
+
+    results->count=1; results->values[0]=seq;
+    close_live_pool(pool);}
+
 /* ---- end Slice 25 C functions --------------------------------------------*/
 
 void bocl_register_load(void){
@@ -1292,6 +1392,9 @@ void bocl_register_load(void){
     {   Ref sc=symbol_intern_cstring("%STRING-SEARCH");
         set_symbol_function(sc,built_in_function_new(sc,
             list(S(PATTERN),S(TARGET),S(CI),S(START2),S(END2),NULL),kernel_STRING_SEARCH)); }
+    {   Ref sc=symbol_intern_cstring("%KERNEL-SORT!");
+        set_symbol_function(sc,built_in_function_new(sc,
+            list(S(SEQUENCE),S(LESS),NULL),kernel_KERNEL_SORT)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

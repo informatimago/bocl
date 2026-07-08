@@ -27,7 +27,6 @@ structured-pathnames.issue
 uiop-bocl-porting.issue
 asdf-modules.issue
 
-slow-string-sequence-primitives.issue
 stale-test-suite-failures.issue
 ratio-floor-round-truncate.issue
 asdf-source-registry-inherit-scan-slow.issue

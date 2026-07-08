@@ -57,25 +57,40 @@ Measured (~3200-symbol image), before -> after:
 A SORT with a STRING< comparator is ~15x cheaper per comparison as a result.
 
 ----------------------------------------------------------------------------
-STILL OPEN — SORT.
+RESOLVED in v1.4.37 — SORT.
 
 A Lisp-level SORT cannot be made fast in this interpreter: at ~150 us/op an
-O(n log n) sort of a few hundred elements costs seconds regardless of algorithm.
-An array-based bottom-up merge sort was tried and REJECTED — it measured ~29 s
-for 3000 integers vs ~5.5 s for the existing list merge sort, because bocl's
-AREF/MAKE-ARRAY are far costlier than CONS car/cdr.  The list merge sort
-(%merge/%list-split/*%old-sort*) is retained as the best Lisp-level option.
+O(n log n) sort of a few hundred elements costs seconds regardless of algorithm,
+and an array-based bottom-up merge sort written in Lisp was even worse (~29 s for
+3000 integers vs ~5.5 s for the list merge sort, because bocl AREF/MAKE-ARRAY are
+far costlier than CONS car/cdr).  So SORT moved into C.
 
-The real fix is a kernel SORT primitive.  Design (deferred — it calls back into
-Lisp per comparison, so it must be GC-safe; review before merging):
-  1. Pin the input list; count N; copy the element Refs into a malloc'd C array.
-     The elements stay reachable from the (unmodified) pinned input list, so the
-     non-moving GC will not collect them during comparator callbacks.
-  2. Bottom-up merge (or heap) sort the C array, comparing via kernel_apply(less,
-     args, &r) with args pinned in an open live pool across the call — follow the
-     rooting discipline in sources/sequences.c map_walk() (build args, add to
-     live pool, keep pool open across kernel_apply; heap corruption otherwise).
-  3. Write the sorted order back by RPLACA-ing the input list's conses in order
-     (destructive; no allocation, so no GC during write-back).
-Expected ~3-4x for integer/symbol sorts; string sorts are already comparator-
-bound and covered by %STRING-CMP2 above.
+New kernel primitive %KERNEL-SORT! (sources/bocl.c): a stable bottom-up merge
+sort whose loop runs in C, calling back into Lisp only for the comparator.  SORT
+and STABLE-SORT are now thin Lisp wrappers that build the KEY-composed comparator
+and call it; %merge / %list-split / *%old-sort* were removed.
+
+GC discipline (it calls Lisp per comparison, so GC — or a comparator error
+longjmp — can fire at every kernel_apply):
+  - Scratch is two bocl simple-vectors (NOT malloc), pinned in the live pool, so
+    a comparator error that longjmps past the frame leaks nothing and a skipped
+    close_live_pool only briefly over-retains, self-healing at the enclosing frame
+    (the same contract FUNCALL/APPLY/MAPCAR rely on).  Error propagation is
+    therefore correct: a signalling comparator unwinds normally to the caller.
+  - Element Refs stay reachable from the pinned input sequence throughout, and the
+    collector is non-moving, so the raw element pointers stay valid across every
+    kernel_apply (cf. the bucket vector in hash_table.c).  The scratch stays young
+    (pinned) so raw stores need no barrier; only the final write-back into the
+    possibly-old input goes through cons_rplaca / gc_write_barrier.
+  - The 2-element comparator argument list is one pinned cons pair, RPLACA'd per
+    call (no per-comparison allocation).
+Verified under BOCL_GCCHECK + BOCL_GCMINORSTRESS (no dangling survivors), plus
+stability, :key, vectors, consing comparators, young-element write-back, and
+error-propagation tests; full suite green.
+
+Measured (A/B, identical data, v1.4.36 list merge sort -> v1.4.37 kernel sort):
+  SORT 3000 integers (#'<)      5.09 s -> 0.010 s   (~500x)
+  SORT 500 strings (#'string<)  2.69 s -> 1.83 s    (1.5x; comparator-bound)
+Cheap comparators (numeric/EQ) get the full win as the sort machinery is now
+free; string sorts remain bounded by STRING<'s own per-call cost (a &key function
+at ~490 us/call — a separate, lower-priority target if ever needed).
