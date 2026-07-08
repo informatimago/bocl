@@ -73,7 +73,7 @@ drwxr-xr-x 4 root wheel 128 Jul  7 21:07 asdf/
 
 ~/src/public/bocl
 master
-22:29[pjb@thalassa org.xquartz:0 bocl 18Gi]$ 
+22:29[pjb@thalassa org.xquartz:0 bocl 18Gi]$
 
 ======================================================================
 DIAGNOSIS & RESOLUTION (v1.4.32)
@@ -156,3 +156,18 @@ FUTURE (not done, deliberately kept simple now): have `make install` compile a
 generated install-paths module so a `make install PREFIX=/foo/bar` that differs
 from the build-time PREFIX still bakes the right paths; and consult XDG dirs
 before the compiled-in default.
+
+The FUTURE point above seems to be implemented, but let's ammend it;
+it seems the prelude is searched in these 3 places by default:
+
+/opt/local/libexec/bocl/prelude.lisp
+/usr/local/libexec/bocl/prelude.lisp
+/usr/libexec/bocl/prelude.lisp
+
+Let's go and search the modules in the same 3 places by default.
+
+/opt/local/libexec/bocl/modules/
+/usr/local/libexec/bocl/modules/
+/usr/libexec/bocl/modules/
+
+Then this issue will be complete, and can be moved to issues/closed.
