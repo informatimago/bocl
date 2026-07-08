@@ -171,3 +171,23 @@ Let's go and search the modules in the same 3 places by default.
 /usr/libexec/bocl/modules/
 
 Then this issue will be complete, and can be moved to issues/closed.
+
+----------------------------------------------------------------------------
+AMENDMENT DONE (v1.4.39) — COMPLETE, issue closed.
+
+The modules directory now falls back to the SAME three standard install paths
+searched for the prelude (find_prelude in main.c).  %DEFAULT-MODULES-DIRECTORY
+(sources/bocl.c) resolves, independent of argv[0]/CWD:
+  1. $BOCL_MODULES_DIR                                    (explicit override)
+  2. <dir of the compiled-in BOCL_PRELUDE_PATH>/modules/  (build-time PREFIX)
+  3. the first of these that exists, as a directory:
+       /opt/local/libexec/bocl/modules/
+       /usr/local/libexec/bocl/modules/
+       /usr/libexec/bocl/modules/
+Candidates 2-3 are tried in order and the first existing directory wins; if none
+exists, candidate 2 (or /opt/local) is returned as the nominal default so
+REQUIRE's error report still names a sensible path.
+
+Verified: env override wins; with none of the standard paths present it returns
+the build-config path; with a directory present at /usr/local/... or /usr/... it
+is chosen; when several exist /opt/local takes precedence (search order).

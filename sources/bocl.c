@@ -1266,6 +1266,20 @@ static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues*
      3. a last-resort default for the conventional PREFIX=/opt/local install.
    (Later this can consult XDG paths and a generated install-paths module; kept
    deliberately small for now.) */
+static bool bocl_is_dir(const char* p){
+    struct stat st; return stat(p,&st)==0 && S_ISDIR(st.st_mode);}
+
+/* (%DEFAULT-MODULES-DIRECTORY) -> the modules directory namestring (trailing '/').
+   Resolution, INDEPENDENT of argv[0]/CWD (never derive resources from the exe):
+     1. $BOCL_MODULES_DIR                                   (explicit override).
+     2. <dir of the compiled-in BOCL_PRELUDE_PATH>/modules/ (carries the install
+        PREFIX from `make install`, e.g. a custom PREFIX=/foo).
+     3. the standard install paths, the SAME three searched for the prelude
+        (find_prelude in main.c): /opt/local, /usr/local, /usr under
+        libexec/bocl/modules/.
+   Candidates 2-3 are tried in order and the first that EXISTS (as a directory)
+   wins; if none exists, the first candidate is returned as the nominal default
+   so REQUIRE's error report names a sensible path. */
 static void kernel_DEFAULT_MODULES_DIRECTORY(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
     char buf[4096];
@@ -1275,19 +1289,29 @@ static void kernel_DEFAULT_MODULES_DIRECTORY(unused Ref function, unused Ref arg
         if(n && env[n-1]=='/'){ snprintf(buf,sizeof(buf),"%s",env); }
         else                  { snprintf(buf,sizeof(buf),"%s/",env); }
     }else{
-        const char* pp=
+        /* Candidate 2: derived from the build-time-configured prelude path. */
+        char cfg[4096]; cfg[0]='\0';
 #ifdef BOCL_PRELUDE_PATH
-            BOCL_PRELUDE_PATH;
-#else
-            NULL;
+        {   const char* pp=BOCL_PRELUDE_PATH;
+            const char* slash=strrchr(pp,'/');
+            if(slash){ int base=(int)(slash-pp)+1;   /* keep the trailing slash */
+                snprintf(cfg,sizeof(cfg),"%.*smodules/",base,pp); } }
 #endif
-        const char* slash=(pp?strrchr(pp,'/'):NULL);
-        if(slash){
-            int base=(int)(slash-pp)+1;            /* keep the trailing slash */
-            snprintf(buf,sizeof(buf),"%.*smodules/",base,pp);
-        }else{
-            snprintf(buf,sizeof(buf),"/opt/local/libexec/bocl/modules/");
-        }
+        /* Candidates 3: the standard install paths (mirror find_prelude). */
+        static const char* std_paths[]={
+            "/opt/local/libexec/bocl/modules/",
+            "/usr/local/libexec/bocl/modules/",
+            "/usr/libexec/bocl/modules/",
+            NULL};
+        const char* chosen=NULL;
+        const char* first=NULL;
+        if(cfg[0]){ first=cfg; if(bocl_is_dir(cfg)){ chosen=cfg; } }
+        if(!chosen){
+            for(int i=0; std_paths[i]; i++){
+                if(!first){ first=std_paths[i]; }
+                if(bocl_is_dir(std_paths[i])){ chosen=std_paths[i]; break; }}}
+        if(!chosen){ chosen = first ? first : "/opt/local/libexec/bocl/modules/"; }
+        snprintf(buf,sizeof(buf),"%s",chosen);
     }
     results->count=1; results->values[0]=string_new_cstring(buf);
     close_live_pool(pool);}
