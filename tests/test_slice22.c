@@ -77,6 +77,37 @@ static void test_probe_file(void){
     TEST_EQ(eql, NIL_Symbol,
             e("(probe-file \"/tmp/bocl-test-file-that-does-not-exist-12345\")")); }
 
+/* ---- OPEN :ELEMENT-TYPE (issue open-element-type-default) ----------------- */
+
+static void test_open_element_type(void){
+    /* :DEFAULT must be accepted as a character stream (CLHS OPEN): write #\x,
+       read it back.  Previously signalled "Invalid element-type :DEFAULT". */
+    TEST_EQ(eql, T_Symbol,
+            e("(progn"
+              "  (with-open-file (s \"/tmp/bocl-et-default\" :direction :output"
+              "                     :if-exists :supersede :element-type :default)"
+              "    (write-char #\\x s))"
+              "  (char= #\\x"
+              "         (with-open-file (s \"/tmp/bocl-et-default\" :direction :input"
+              "                            :element-type :default)"
+              "           (read-char s))))"));
+    /* BASE-CHAR is a character stream too. */
+    TEST_EQ(eql, T_Symbol,
+            e("(progn"
+              "  (with-open-file (s \"/tmp/bocl-et-bchar\" :direction :output"
+              "                     :if-exists :supersede :element-type (quote base-char))"
+              "    (write-char #\\y s))"
+              "  (char= #\\y (with-open-file (s \"/tmp/bocl-et-bchar\") (read-char s))))"));
+    /* Bare (UNSIGNED-BYTE) and (UNSIGNED-BYTE 8) are octet streams. */
+    TEST_EQ(eql, I(66),
+            e("(progn"
+              "  (with-open-file (s \"/tmp/bocl-et-ub\" :direction :output"
+              "                     :if-exists :supersede :element-type (quote (unsigned-byte)))"
+              "    (write-byte 66 s))"
+              "  (with-open-file (s \"/tmp/bocl-et-ub\" :direction :input"
+              "                     :element-type (quote (unsigned-byte 8)))"
+              "    (read-byte s)))"));}
+
 /* ---- ARRAY-DIMENSIONS ----------------------------------------------------- */
 
 static void test_array_dimensions(void){
@@ -171,6 +202,7 @@ TEST_SUITE(test_slice22, s22_init, s22_fini)
     TEST_CASE("read-byte",            test_read_byte)
     TEST_CASE("write-byte",           test_write_byte)
     TEST_CASE("probe-file",           test_probe_file)
+    TEST_CASE("open-element-type",    test_open_element_type)
     TEST_CASE("array-dimensions",     test_array_dimensions)
     TEST_CASE("array-total-size",     test_array_total_size)
     TEST_CASE("simple-vector-p",      test_simple_vector_p)

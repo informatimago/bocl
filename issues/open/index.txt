@@ -28,7 +28,6 @@ uiop-bocl-porting.issue
 
 stale-test-suite-failures.issue
 ratio-floor-round-truncate.issue
-open-element-type-default.issue
 defstruct-conc-name-package.issue
 package-print-object-method.issue
 clos-condition-hierarchy-parents.issue

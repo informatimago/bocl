@@ -2263,17 +2263,22 @@ Ref convert_from_direction(direction_t direction){
           FATAL("Invalid direction value %d",direction);}}
 
 type_t convert_element_type(Ref element_type){
-    /* CHARACTER or (UNSIGNED-BYTE 8) or BIT */
-    if(element_type==S(CHARACTER)){
+    /* CHARACTER / BASE-CHAR / :DEFAULT, BIT, or (UNSIGNED-BYTE [8]).
+       :DEFAULT (CLHS OPEN, :element-type) means the stream picks a type from the
+       file contents; for a freshly opened stream that is a character stream. */
+    if(element_type==S(CHARACTER)
+       ||element_type==S(BASE-CHAR)
+       ||element_type==K(DEFAULT)){
         return type_character;}
     if(element_type==S(BIT)){
         return type_bit;}
-    if((consp(element_type)
-        &&(car(element_type)==S(UNSIGNED-BYTE))
-        &&(consp(cdr(element_type)))
-        &&(integerp(cadr(element_type)))
-        &&(integer_value(cadr(element_type))==8)
-        &&(nullp(cddr(element_type))))){
+    if(consp(element_type)
+       &&(car(element_type)==S(UNSIGNED-BYTE))
+       &&(nullp(cdr(element_type))                    /* (UNSIGNED-BYTE) */
+          ||((consp(cdr(element_type)))
+             &&(integerp(cadr(element_type)))
+             &&(integer_value(cadr(element_type))==8)
+             &&(nullp(cddr(element_type)))))){        /* (UNSIGNED-BYTE 8) */
         return type_octet;}
     ERROR("Invalid element-type %s",
           string_cstring(prin1_to_string(element_type)));}

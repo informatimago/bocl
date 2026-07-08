@@ -31,3 +31,21 @@ bare (UNSIGNED-BYTE) / (SIGNED-BYTE n) as the tests require.  C change -> rebuil
 
 == Related ==
 - uiop-bocl-porting.issue (parent).
+
+----------------------------------------------------------------------------
+FIXED in v1.4.42.
+
+sources/kernel.c convert_element_type() now also accepts:
+  - :DEFAULT      -> character (the standard "let the stream choose"; a freshly
+                     opened stream is a character stream, CLHS OPEN),
+  - BASE-CHAR     -> character,
+  - (UNSIGNED-BYTE) bare, in addition to the existing (UNSIGNED-BYTE 8) -> octet.
+Anything else still signals "Invalid element-type ...".
+
+  (with-open-file (s "/tmp/x" :direction :output :element-type :default)
+    (write-char #\x s))   ; now creates the file, was: ERROR
+
+Regression test: tests/test_slice22.c test_open_element_type — :DEFAULT and
+BASE-CHAR round-trip a character, (UNSIGNED-BYTE)/(UNSIGNED-BYTE 8) round-trip a
+byte.  Full suite green.  Unblocks UIOP:WITH-TEMPORARY-FILE / CALL-WITH-TEMPORARY-
+FILE (see uiop-bocl-porting.issue).
