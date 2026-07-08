@@ -1194,6 +1194,87 @@ static void kernel_STRING_CONTAINS_CI(unused Ref function, Ref arguments, Multip
             if(j==nlen){ found=true; }}}
     results->count=1; results->values[0]= found ? T_Symbol : NIL_Symbol;}
 
+/* Fast bounded string comparison — the C engine behind %STRING-COMPARE,
+   %STRING-COMPARE-BOUNDED and %STRING-CMP (and thus every STRING</STRING=/... and
+   any SORT with a string comparator).  bocl strings are octet arrays with one
+   octet per character (char_ref indexes bytes directly), and case folding is
+   ASCII-only (see UPPER-CASE-P/LOWER-CASE-P), so a byte-wise scan reproduces the
+   Lisp semantics exactly while skipping ~15us-per-CHAR interpreter dispatch.
+
+   (%STRING-CMP2 a b ci start1 end1 start2 end2) compares A[start1,end1) with
+   B[start2,end2) (END* may be NIL = string length; CI non-NIL = fold case) and
+   returns two values: the absolute index in A of the first mismatch (or the end
+   of A's compared region when A is a prefix of B), and a relation -1 / 0 / 1. */
+static void kernel_STRING_CMP2(unused Ref function, Ref arguments, MultipleValues* results){
+    Ref current=arguments;
+    Ref a  = pop_mandatory_argument(function,&current);
+    Ref b  = pop_mandatory_argument(function,&current);
+    Ref ci = pop_mandatory_argument(function,&current);
+    Ref rs1= pop_mandatory_argument(function,&current);
+    Ref re1= pop_mandatory_argument(function,&current);
+    Ref rs2= pop_mandatory_argument(function,&current);
+    Ref re2= pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_class(a,STRING_Class);
+    check_class(b,STRING_Class);
+    const unsigned char* pa=(const unsigned char*)a->slots->octet_array.elements->elements;
+    const unsigned char* pb=(const unsigned char*)b->slots->octet_array.elements->elements;
+    word la=(word)a->slots->octet_array.dimensions[0];
+    word lb=(word)b->slots->octet_array.dimensions[0];
+    word i=integer_value(rs1);
+    word j=integer_value(rs2);
+    word e1=nullp(re1)?la:integer_value(re1);
+    word e2=nullp(re2)?lb:integer_value(re2);
+    bool fold=!nullp(ci);
+    if(i<0){ i=0; } if(j<0){ j=0; }
+    if(e1>la){ e1=la; } if(e2>lb){ e2=lb; }
+    word rel=0;
+    for(;;){
+        if(i>=e1 && j>=e2){ rel=0;  break; }
+        if(i>=e1){          rel=-1; break; }
+        if(j>=e2){          rel=1;  break; }
+        int ca=pa[i], cb=pb[j];
+        if(fold){ ca=bocl_ci_fold(ca); cb=bocl_ci_fold(cb); }
+        if(ca<cb){ rel=-1; break; }
+        if(ca>cb){ rel=1;  break; }
+        i++; j++;}
+    results->count=2;
+    results->values[0]=integer_from_word(i);
+    results->values[1]=integer_from_word(rel);}
+
+/* Fast substring search — the C engine behind SEARCH's string fast path.
+   (%STRING-SEARCH pattern target ci start2 end2) returns the smallest index in
+   TARGET[start2,end2) at which PATTERN occurs (whole of PATTERN, CI folds case),
+   or NIL.  An empty PATTERN matches at START2 (per CLHS SEARCH). */
+static void kernel_STRING_SEARCH(unused Ref function, Ref arguments, MultipleValues* results){
+    Ref current=arguments;
+    Ref pat = pop_mandatory_argument(function,&current);
+    Ref tgt = pop_mandatory_argument(function,&current);
+    Ref ci  = pop_mandatory_argument(function,&current);
+    Ref rs2 = pop_mandatory_argument(function,&current);
+    Ref re2 = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_class(pat,STRING_Class);
+    check_class(tgt,STRING_Class);
+    const unsigned char* p=(const unsigned char*)pat->slots->octet_array.elements->elements;
+    const unsigned char* t=(const unsigned char*)tgt->slots->octet_array.elements->elements;
+    word np=(word)pat->slots->octet_array.dimensions[0];
+    word nt=(word)tgt->slots->octet_array.dimensions[0];
+    word s=integer_value(rs2);
+    word e=nullp(re2)?nt:integer_value(re2);
+    bool fold=!nullp(ci);
+    if(s<0){ s=0; } if(e>nt){ e=nt; }
+    Ref answer=NIL_Symbol;
+    for(word i=s; i+np<=e; i++){
+        word k=0;
+        while(k<np){
+            int a=t[i+k], b=p[k];
+            if(fold){ a=bocl_ci_fold(a); b=bocl_ci_fold(b); }
+            if(a!=b){ break; }
+            k++;}
+        if(k==np){ answer=integer_from_word(i); break; }}
+    results->count=1; results->values[0]=answer;}
+
 /* ---- end Slice 25 C functions --------------------------------------------*/
 
 void bocl_register_load(void){
@@ -1205,6 +1286,12 @@ void bocl_register_load(void){
         set_symbol_function(md,built_in_function_new(md,list(NULL),kernel_DEFAULT_MODULES_DIRECTORY)); }
     {   Ref sc=symbol_intern_cstring("%STRING-CONTAINS-CI");
         set_symbol_function(sc,built_in_function_new(sc,list(S(NAME),S(VALUE),NULL),kernel_STRING_CONTAINS_CI)); }
+    {   Ref sc=symbol_intern_cstring("%STRING-CMP2");
+        set_symbol_function(sc,built_in_function_new(sc,
+            list(S(A),S(B),S(CI),S(START1),S(END1),S(START2),S(END2),NULL),kernel_STRING_CMP2)); }
+    {   Ref sc=symbol_intern_cstring("%STRING-SEARCH");
+        set_symbol_function(sc,built_in_function_new(sc,
+            list(S(PATTERN),S(TARGET),S(CI),S(START2),S(END2),NULL),kernel_STRING_SEARCH)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

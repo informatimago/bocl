@@ -958,7 +958,11 @@
 
 (defvar *%old-sort*
   (lambda (sequence less &key (key #'identity))
-    ;; List-only merge sort (original implementation).
+    ;; List-only merge sort (original implementation).  NB: a Lisp-level SORT is
+    ;; bounded by the interpreter's ~150us-per-op cost, and cons car/cdr is much
+    ;; cheaper here than vector AREF, so this list merge sort beats an array merge
+    ;; sort in bocl; a genuinely fast SORT needs a C kernel primitive (see
+    ;; issues/open/slow-string-sequence-primitives.issue).
     (let ((cmp (if (eq key #'identity)
                    less
                    (lambda (x y) (funcall less (funcall key x) (funcall key y))))))
@@ -1528,19 +1532,11 @@ identity."
 ;; ---- String ordering. ------------------------------------------------
 
 (defun %string-compare (a b case-fold)
-  ;; Return a < 0 / 0 / > 0 like memcmp; honour case-fold when t.
-  (let* ((a  (string a))
-         (b  (string b))
-         (na (string-length a))
-         (nb (string-length b))
-         (n  (if (< na nb) na nb)))
-    (do ((i 0 (1+ i)))
-        ((= i n) (- na nb))
-      (let* ((ca (char a i))
-             (cb (char b i))
-             (xa (if case-fold (char-code (char-upcase ca)) (char-code ca)))
-             (xb (if case-fold (char-code (char-upcase cb)) (char-code cb))))
-        (when (/= xa xb) (return (- xa xb)))))))
+  ;; Return < 0 / 0 / > 0 (sign only) like memcmp; honour CASE-FOLD when true.
+  ;; The scan runs in C via the %STRING-CMP2 kernel primitive rather than a
+  ;; CHAR-by-CHAR interpreter loop (each CHAR is a ~15us funcall), so every
+  ;; STRING</STRING>/... and any SORT with a string comparator is fast.
+  (nth-value 1 (%string-cmp2 (string a) (string b) case-fold 0 nil 0 nil)))
 
 (defun string<  (a b) (< (%string-compare a b nil) 0))
 (defun string>  (a b) (> (%string-compare a b nil) 0))
@@ -7128,22 +7124,9 @@ ties take from SEQUENCE1 first)."
 ;;; ---- STRING= / STRING< etc. with bounds ----------------------------------
 
 (defun %string-compare-bounded (a b case-fold start1 end1 start2 end2)
-  "Compare string subranges; returns <0, 0, or >0."
-  (let* ((a  (string a))
-         (b  (string b))
-         (na (min (or end1 (string-length a)) (string-length a)))
-         (nb (min (or end2 (string-length b)) (string-length b)))
-         (la (- na start1))
-         (lb (- nb start2))
-         (n  (if (< la lb) la lb)))
-    (do ((i 0 (1+ i)))
-        ((= i n) (- la lb))
-      (let* ((ca (char a (+ start1 i)))
-             (cb (char b (+ start2 i)))
-             (xa (if case-fold (char-code (char-upcase ca)) (char-code ca)))
-             (xb (if case-fold (char-code (char-upcase cb)) (char-code cb))))
-        (when (/= xa xb)
-          (return-from %string-compare-bounded (- xa xb)))))))
+  "Compare string subranges; returns <0, 0, or >0 (sign only).  Delegates to the
+%STRING-CMP2 kernel primitive so STRING=/STRING-EQUAL etc. avoid the CHAR loop."
+  (nth-value 1 (%string-cmp2 (string a) (string b) case-fold start1 end1 start2 end2)))
 
 ;;; Compare the substrings A[start1,end1) and B[start2,end2) (A and B are string
 ;;; designators; CI = case-insensitive).  Returns two values: the absolute index
@@ -7151,18 +7134,9 @@ ties take from SEQUENCE1 first)."
 ;;; prefix of B), and a relation -1 / 0 / 1.  CLHS string</string<=/... return
 ;;; that index (not just a boolean) when the relation holds, else NIL.
 (defun %string-cmp (a b ci start1 end1 start2 end2)
-  (let* ((sa (string a)) (sb (string b))
-         (e1 (or end1 (length sa)))
-         (e2 (or end2 (length sb))))
-    (do ((i start1 (1+ i)) (j start2 (1+ j)))
-        (nil)
-      (cond ((and (>= i e1) (>= j e2)) (return (values i 0)))
-            ((>= i e1)                 (return (values i -1)))
-            ((>= j e2)                 (return (values i 1)))
-            (t (let ((ca (char sa i)) (cb (char sb j)))
-                 (when ci (setq ca (char-downcase ca) cb (char-downcase cb)))
-                 (cond ((char< ca cb) (return (values i -1)))
-                       ((char> ca cb) (return (values i 1))))))))))
+  ;; The scan is done in C by %STRING-CMP2 (byte-wise; ASCII case fold matches
+  ;; CHAR-UPCASE/DOWNCASE), returning exactly (values mismatch-index relation).
+  (%string-cmp2 (string a) (string b) ci start1 end1 start2 end2))
 
 (defun string= (a b &key (start1 0) end1 (start2 0) end2)
   (zerop (%string-compare-bounded a b nil start1 end1 start2 end2)))
@@ -7331,6 +7305,17 @@ which binds *PRINT-BASE*/*PRINT-RADIX* from the keywords around the print."
                       from-end)
   "Return the index in SEQUENCE1 of the first (or, FROM-END, one past the last)
 position at which the two subranges differ, or NIL if they match."
+  ;; Fast path: two strings compared front-to-back with the default character
+  ;; test and no KEY — the whole scan runs in C via %STRING-CMP2, which returns
+  ;; exactly (values mismatch-index relation) for these subranges.
+  (when (and (not from-end) (null test-not) (eq key #'identity)
+             (stringp sequence1) (stringp sequence2)
+             (or (eq test #'eql) (eq test #'char=) (eq test #'char-equal)))
+    (return-from mismatch
+      (multiple-value-bind (idx rel)
+          (%string-cmp2 sequence1 sequence2 (eq test #'char-equal)
+                        start1 end1 start2 end2)
+        (if (zerop rel) nil idx))))
   (let* ((test  (if test-not (lambda (a b) (not (funcall test-not a b))) test))
          (len1  (length sequence1))
          (len2  (length sequence2))
@@ -7371,6 +7356,14 @@ position at which the two subranges differ, or NIL if they match."
                     from-end)
   "Return the start index in TARGET of a subsequence matching PATTERN, or NIL.
 FROM-END returns the rightmost such index."
+  ;; Fast path: search a string for a whole string pattern with the default
+  ;; character test and no KEY — the scan runs in C via %STRING-SEARCH.
+  (when (and (not from-end) (null test-not) (eq key #'identity)
+             (stringp pattern) (stringp target)
+             (eql start1 0) (or (null end1) (eql end1 (length pattern)))
+             (or (eq test #'eql) (eq test #'char=) (eq test #'char-equal)))
+    (return-from search
+      (%string-search pattern target (eq test #'char-equal) start2 end2)))
   (let* ((plen  (length pattern))
          (tlen  (length target))
          (pe    (min (or end1 plen) plen))

@@ -24,3 +24,58 @@ Directions:
 
 Note: two STRING< definitions exist (prelude ~1545 using %STRING-COMPARE, and
 ~7171 the generic one that overrides it); the fast one is shadowed.
+
+----------------------------------------------------------------------------
+PARTIALLY RESOLVED in v1.4.36 — string comparison, SEARCH and MISMATCH.
+
+Root cause confirmed: the cost is NOT in any single primitive but in the
+interpreter's per-funcall overhead (~150 us).  CHAR is a thin wrapper over
+char_ref; it is slow only because *calling* it from interpreted Lisp is slow.
+So the fix is to move whole loops into C, exactly as v1.4.35 did for APROPOS —
+not to speed up individual accessors.  bocl strings are octet arrays with one
+octet per character (char_ref indexes bytes) and case folding is ASCII-only
+(UPPER-CASE-P/LOWER-CASE-P), so a byte-wise C scan reproduces the Lisp semantics
+exactly.
+
+New kernel primitives (sources/bocl.c):
+- %STRING-CMP2 (a b ci start1 end1 start2 end2) -> (values mismatch-index rel)
+  the byte-wise bounded, optionally case-folded comparison.  %STRING-COMPARE,
+  %STRING-COMPARE-BOUNDED and %STRING-CMP now all delegate to it, so every
+  STRING</STRING>/STRING=/... and STRING-LESSP/... family and any SORT with a
+  string comparator is fast.  The shadowed/duplicate Lisp CHAR-loop bodies were
+  removed.
+- %STRING-SEARCH (pattern target ci start2 end2) -> index | NIL, wired into
+  SEARCH as a fast path for the common (string pattern, string target, default
+  char test, no KEY, whole pattern, not FROM-END) case.  MISMATCH got an
+  analogous fast path built on %STRING-CMP2.
+
+Measured (~3200-symbol image), before -> after:
+- STRING<   7217 us -> 475 us  (15x)
+- STRING=   3455 us -> 749 us  (4.6x)
+- SEARCH   33529 us -> 175 us  (192x)
+- MISMATCH 15212 us -> 376 us  (40x)
+A SORT with a STRING< comparator is ~15x cheaper per comparison as a result.
+
+----------------------------------------------------------------------------
+STILL OPEN — SORT.
+
+A Lisp-level SORT cannot be made fast in this interpreter: at ~150 us/op an
+O(n log n) sort of a few hundred elements costs seconds regardless of algorithm.
+An array-based bottom-up merge sort was tried and REJECTED — it measured ~29 s
+for 3000 integers vs ~5.5 s for the existing list merge sort, because bocl's
+AREF/MAKE-ARRAY are far costlier than CONS car/cdr.  The list merge sort
+(%merge/%list-split/*%old-sort*) is retained as the best Lisp-level option.
+
+The real fix is a kernel SORT primitive.  Design (deferred — it calls back into
+Lisp per comparison, so it must be GC-safe; review before merging):
+  1. Pin the input list; count N; copy the element Refs into a malloc'd C array.
+     The elements stay reachable from the (unmodified) pinned input list, so the
+     non-moving GC will not collect them during comparator callbacks.
+  2. Bottom-up merge (or heap) sort the C array, comparing via kernel_apply(less,
+     args, &r) with args pinned in an open live pool across the call — follow the
+     rooting discipline in sources/sequences.c map_walk() (build args, add to
+     live pool, keep pool open across kernel_apply; heap corruption otherwise).
+  3. Write the sorted order back by RPLACA-ing the input list's conses in order
+     (destructive; no allocation, so no GC during write-back).
+Expected ~3-4x for integer/symbol sorts; string sorts are already comparator-
+bound and covered by %STRING-CMP2 above.
