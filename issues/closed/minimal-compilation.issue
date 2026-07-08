@@ -68,3 +68,34 @@ PROGRESS (v1.4.31):
   processing to LOAD-of-source (see its docstring + the GC-rooting blocker in
   deferred-compile-file-rt-gc-corruption.issue), so a :compile-toplevel form is
   never evaluated during COMPILE-FILE.  test_slice25.c:147 asserts it is.
+
+----------------------------------------------------------------------
+PROGRESS (v1.5.0) — REMAINING ITEMS DONE, ISSUE CLOSED:
+- FUNCTION-LAMBDA-EXPRESSION: real implementation (was a stub).  New kernel
+  primitive %FUNCTION-LAMBDA-BODY (bocl.c) returns (available lambda-list body
+  name closure-p) from a Function's stored slots, unwrapping a Closure and
+  reporting closure-p when it has a non-empty environment; it checks
+  BUILT-IN-FUNCTION-P *before* FUNCTIONP (a built-in is a FUNCTION subclass whose
+  3rd slot is the C kernel_function pointer, not a Lisp body).  FLE reconstructs
+  (LAMBDA <ll> . <body>) — the body is the MACROEXPAND-ALL'd one for a COMPILE'd
+  function, so it is already macro-free — or (values NIL T name) for a built-in.
+- DISASSEMBLE: writes the function's FUNCTION-LAMBDA-EXPRESSION when available
+  (compiling a (LAMBDA ...) argument first), nothing for a built-in, returns NIL.
+- MACROEXPAND-ALL now understands MACROLET and SYMBOL-MACROLET: it walks their
+  bodies (and each macrolet expander body) instead of mishandling the definition
+  headers via the default branch, and PRESERVES the special operator so the
+  evaluator (eval.c) performs the lexical local-macro / symbol-macro expansion —
+  which also keeps inner-binding shadowing correct without the walker tracking a
+  local-macro environment itself.  This removes the "walker is intentionally
+  incomplete" caveat above.
+- COMPILE-FILE now fires EVAL-WHEN (:COMPILE-TOPLEVEL): it reads each top-level
+  form and evaluates the bodies of (EVAL-WHEN (:COMPILE-TOPLEVEL) ...) at compile
+  time (recursing through PROGN and top-level macro expansions), while still
+  writing no fasl so LOAD of the source performs :LOAD-TOPLEVEL / :EXECUTE /
+  ordinary forms.  A compile-time IN-PACKAGE is contained by a *PACKAGE* rebind.
+  The deferred-compile-file-rt-gc-corruption blocker is resolved on master (the
+  reader roots its input stream), so the earlier PRIN1-fasl GC concern no longer
+  applies; this lighter approach avoids the fasl write path entirely.
+- test_slice25 de-quarantined (removed from tests/Makefile XFAIL_TESTS); new
+  regression tests in test_slice25.c cover FLE, DISASSEMBLE, and MACROLET /
+  SYMBOL-MACROLET (via COMPILE).  Whole unit suite green.

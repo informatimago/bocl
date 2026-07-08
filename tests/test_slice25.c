@@ -254,6 +254,55 @@ static void test_compiler_macro_function(void){
     TEST_EQ(eql, NIL_Symbol,
             e("(compiler-macro-function '+)"));}
 
+/* ---- FUNCTION-LAMBDA-EXPRESSION / DISASSEMBLE (minimal-compilation) ------ */
+
+static void test_function_lambda_expression(void){
+    e("(defun s25-fle (x) (* x x))");
+    /* primary value is the reconstructed (LAMBDA (x) ...) expression */
+    TEST_EQ(eql, e("'lambda"),
+            e("(car (function-lambda-expression #'s25-fle))"));
+    TEST_EQ(equal, e("'(x)"),
+            e("(cadr (function-lambda-expression #'s25-fle))"));
+    /* third value NAME is the defun's name */
+    TEST_EQ(eql, e("'s25-fle"),
+            e("(nth-value 2 (function-lambda-expression #'s25-fle))"));
+    /* a closure reports closure-p (second value) true */
+    TEST_EQ(eql, T_Symbol,
+            e("(let ((n 1)) (nth-value 1 (function-lambda-expression"
+              "                            (compile nil (list 'lambda '() 'n)))))"));
+    /* the body of a COMPILE'd function is macroexpanded (WHEN -> IF, no WHEN) */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(let ((e (function-lambda-expression"
+              "           (compile nil '(lambda (y) (when y 7))))))"
+              "  (labels ((has (f s) (cond ((eq f s) t) ((consp f)"
+              "             (or (has (car f) s) (has (cdr f) s))) (t nil))))"
+              "    (has e 'when)))"));
+    /* a built-in has no lambda expression */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(function-lambda-expression #'car)"));}
+
+static void test_disassemble(void){
+    /* DISASSEMBLE returns NIL (CLHS) for a named function, a built-in, and a
+       lambda expression */
+    e("(defun s25-dis (x) (+ x 1))");
+    TEST_EQ(eql, NIL_Symbol, e("(disassemble 's25-dis)"));
+    TEST_EQ(eql, NIL_Symbol, e("(disassemble #'car)"));
+    TEST_EQ(eql, NIL_Symbol, e("(disassemble '(lambda (x) x))"));}
+
+static void test_macrolet_walk(void){
+    /* MACROEXPAND-ALL (via COMPILE) understands MACROLET: the local macro is
+       expanded and the compiled function behaves correctly. */
+    TEST_EQ(eql, I(10),
+            e("(funcall (compile nil"
+              "  '(lambda () (macrolet ((m (x) (list '+ x x))) (m 5)))))"));
+    /* SYMBOL-MACROLET likewise, including inner-LET shadowing */
+    TEST_EQ(eql, I(10),
+            e("(funcall (compile nil"
+              "  '(lambda () (symbol-macrolet ((z (+ 2 3))) (* z 2)))))"));
+    TEST_EQ(eql, I(7),
+            e("(funcall (compile nil"
+              "  '(lambda () (symbol-macrolet ((v 999)) (let ((v 7)) v)))))"));}
+
 
 TEST_INITIALIZE(test_slice25);
 TEST_SUITE(test_slice25, s25_init, s25_fini)
@@ -280,4 +329,7 @@ TEST_SUITE(test_slice25, s25_init, s25_fini)
     TEST_CASE("site-names",                test_site_names)
     TEST_CASE("load-pathname vars",        test_load_vars)
     TEST_CASE("compiler-macro-function",   test_compiler_macro_function)
+    TEST_CASE("function-lambda-expression", test_function_lambda_expression)
+    TEST_CASE("disassemble",               test_disassemble)
+    TEST_CASE("macrolet/symbol-macrolet",  test_macrolet_walk)
     TEST_FINALIZE()

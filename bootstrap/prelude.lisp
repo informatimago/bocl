@@ -6670,7 +6670,10 @@ places share structure."
    a fasl; it just reports the conventional output pathname.  LOAD of that
    (absent) pathname falls back to the source, so the COMPILE-AND-LOAD idiom in
    the ANSI suite still loads everything — without writing any files.
-   Returns (values output-truename warnings-p failure-p)."
+   Returns (values output-truename warnings-p failure-p).
+   NOTE: the real definition (which also fires EVAL-WHEN :COMPILE-TOPLEVEL) is the
+   later one near the COMPILE-FILE / lisp-file-types section; this early stub is
+   superseded at load time."
   (let* ((in  (merge-pathnames input-file *default-pathname-defaults*))
          (out (compile-file-pathname in :output-file output-file)))
     (values (pathname out) nil nil)))
@@ -9332,6 +9335,27 @@ result array; return that array."
                           b))
                     (cadr form))
             (mapcar #'macroexpand-all (cddr form))))
+    ((eq (car form) 'macrolet)
+     ;; (macrolet ((name macro-lambda-list body...) ...) body...): keep each local
+     ;; macro definition (walking its expander body, leaving the macro lambda list),
+     ;; and walk the main body.  The special operator is preserved so the evaluator
+     ;; performs the LEXICAL local-macro expansion (eval.c) — this understands the
+     ;; header instead of mishandling it, and keeps shadowing correct without
+     ;; tracking a local-macro environment in the walker itself.
+     (list* 'macrolet
+            (mapcar (lambda (d)
+                      (if (and (consp d) (consp (cdr d)))
+                          (list* (car d) (cadr d) (mapcar #'macroexpand-all (cddr d)))
+                          d))
+                    (cadr form))
+            (mapcar #'macroexpand-all (cddr form))))
+    ((eq (car form) 'symbol-macrolet)
+     ;; (symbol-macrolet ((symbol expansion) ...) body...): keep the definitions,
+     ;; walk the body; the evaluator expands the symbol-macros lexically (and knows
+     ;; when an inner binding shadows one), which the walker would have to re-derive.
+     (list* 'symbol-macrolet
+            (cadr form)
+            (mapcar #'macroexpand-all (cddr form))))
     (t                                                    ; special op or call
      (cons (car form) (mapcar #'macroexpand-all (cdr form))))))
 
@@ -9434,9 +9458,32 @@ result array; return that array."
   (declare (ignore object))
   nil)
 (defun function-lambda-expression (function)
-  "bocl keeps no source for functions; return (values nil t name)."
-  (declare (ignore function))
-  (values nil t nil))
+  "Return (values lambda-expression closure-p name) for FUNCTION (CLHS 3.8).  bocl
+   is an interpreter, so an ordinary FUNCTION object (or a closure over one) still
+   holds its lambda list and body — already MACROEXPAND-ALL'd for a COMPILE'd
+   function — from which (lambda <ll> . <body>) is reconstructed.  A built-in
+   function has no lambda expression, so LAMBDA-EXPRESSION is NIL there."
+  (multiple-value-bind (available lambda-list body name closurep)
+      (%function-lambda-body function)
+    (if available
+        (values (list* 'lambda lambda-list body) closurep name)
+        (values nil t name))))
+
+(defun disassemble (fn)
+  "bocl is an interpreter, not a native compiler.  DISASSEMBLE writes the
+   function's lambda expression (its macroexpanded source, via FUNCTION-LAMBDA-
+   EXPRESSION) to *STANDARD-OUTPUT* when one is available, and nothing when it is
+   not (e.g. a kernel built-in).  FN is a function designator or a lambda
+   expression (which is compiled first).  Returns NIL (CLHS 25.1)."
+  (let* ((f    (cond ((and (consp fn) (eq (car fn) 'lambda)) (compile nil fn))
+                     ((and (symbolp fn) (fboundp fn))        (symbol-function fn))
+                     (t                                       fn)))
+         (expr (function-lambda-expression f)))
+    (when expr
+      (fresh-line)
+      (prin1 expr)
+      (terpri))
+    nil))
 
 ;; File / time helpers.
 (defun truename (filespec)
@@ -9468,20 +9515,43 @@ result array; return that array."
 
 ;;; --- COMPILE-FILE -----------------------------------------------------
 ;;; (issues: compile-file-output, minimal-compilation)
-;;; bocl is an interpreter and writes no real fast-load file.  COMPILE-FILE just
-;;; returns the conventional output pathname WITHOUT writing it; LOAD of that
+;;; bocl is an interpreter and writes no real fast-load file.  COMPILE-FILE
+;;; performs the compile-time processing CLHS 3.2.3.1 requires — it reads each
+;;; top-level form and evaluates the bodies of (EVAL-WHEN (:COMPILE-TOPLEVEL) ...)
+;;; forms NOW, recursing through PROGN and top-level macro expansions — then
+;;; returns the conventional output pathname WITHOUT writing a fasl.  LOAD of that
 ;;; (missing) .fasl transparently falls back to the .lsp source (see LOAD), which
-;;; is exactly the COMPILE-AND-LOAD idiom.  This is correct (LOAD of the source
-;;; handles IN-PACKAGE / macros / EVAL-WHEN in order), instantaneous, and avoids
-;;; both the slow per-char copy and the MACROEXPAND-ALL + package-qualified PRIN1
-;;; path (which also exposes a GC-rooting bug — see issues/open/deferred-compile-
-;;; file-rt-gc-corruption).
+;;; is exactly the COMPILE-AND-LOAD idiom: :LOAD-TOPLEVEL / :EXECUTE / ordinary
+;;; forms run at LOAD, while :COMPILE-TOPLEVEL side effects have already happened.
+;;; This avoids the slow per-char copy and the MACROEXPAND-ALL + package-qualified
+;;; PRIN1 fasl-writing path.
+(defun %compile-file-toplevel (form)
+  "Process one top-level FORM for COMPILE-FILE's compile-time effects (CLHS
+   3.2.3.1): PROGN splices into several top-level forms; an
+   (EVAL-WHEN situations . body) whose SITUATIONS name :COMPILE-TOPLEVEL (or the
+   deprecated COMPILE) has its body evaluated NOW.  Ordinary forms and EVAL-WHEN
+   with only :LOAD-TOPLEVEL / :EXECUTE are NOT run here — LOAD of the source
+   performs them (bocl writes no separate fasl)."
+  (let ((form (macroexpand form)))              ; a top-level macro may yield PROGN/EVAL-WHEN
+    (when (consp form)
+      (cond
+        ((eq (car form) 'progn)
+         (dolist (f (cdr form)) (%compile-file-toplevel f)))
+        ((eq (car form) 'eval-when)
+         (let ((situations (cadr form)))
+           (when (or (member :compile-toplevel situations) (member 'compile situations))
+             (dolist (f (cddr form)) (eval f)))))
+        (t nil)))))
+
 (defun compile-file (input-file &key output-file &allow-other-keys)
-  "Return the conventional fast-load pathname for INPUT-FILE without writing any
-   file.  bocl interprets, so LOAD of the (absent) result falls back to the
-   source.  Any pre-existing (stale) fast-load file is deleted so it cannot
-   shadow the source.  Returns (values output-truename warnings-p failure-p);
-   failure-p is always NIL."
+  "Fire the compile-time effects of INPUT-FILE and return its conventional
+   fast-load pathname without writing any file.  Each top-level form is read and
+   handed to %COMPILE-FILE-TOPLEVEL, so (EVAL-WHEN (:COMPILE-TOPLEVEL) ...) bodies
+   run now; bocl interprets, so LOAD of the (absent) result falls back to the
+   source for everything else.  An IN-PACKAGE run at compile time is contained by
+   the *PACKAGE* rebinding.  Any pre-existing (stale) fast-load file is deleted so
+   it cannot shadow the source.  Returns (values output-truename warnings-p
+   failure-p); warnings-p and failure-p are always NIL."
   (let* ((merged (merge-pathnames input-file *default-pathname-defaults*))
          ;; Select the actual source file (issue lisp-file-types pseudocode):
          ;; an explicit type or an existing file is used as is; otherwise search
@@ -9492,7 +9562,16 @@ result array; return that array."
                    ((%find-source-file merged))
                    (t (error "COMPILE-FILE: no source file for ~S"
                              (namestring merged)))))
-         (out    (compile-file-pathname actual :output-file output-file)))
+         (out    (compile-file-pathname actual :output-file output-file))
+         (*package*   *package*)                ; contain a compile-time IN-PACKAGE
+         (*readtable* *readtable*))
+    ;; Perform the compile-time processing (EVAL-WHEN :COMPILE-TOPLEVEL, etc.).
+    (with-open-file (src actual :direction :input)
+      (let ((eof '#:eof))
+        (loop
+          (let ((form (read src nil eof)))
+            (when (eq form eof) (return))
+            (%compile-file-toplevel form)))))
     ;; LOAD only falls back to the .lsp source when the .fasl is ABSENT; remove a
     ;; stale .fasl (e.g. left by an older COMPILE-FILE) so the fresh source wins.
     (when (probe-file out) (ignore-errors (delete-file out)))

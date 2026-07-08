@@ -1291,6 +1291,42 @@ static void kernel_DISASSEMBLE(unused Ref function, unused Ref arguments, Multip
     results->count=1; results->values[0]=NIL_Symbol;
     close_live_pool(pool);}
 
+/* (%FUNCTION-LAMBDA-BODY funclo) -> (values available-p lambda-list body name
+   closure-p).  bocl functions are interpreted, so an ordinary FUNCTION object (or
+   a closure over one) still holds its lambda list and body (already MACROEXPAND-
+   ALL'd for a COMPILE'd function).  FUNCTION-LAMBDA-EXPRESSION / DISASSEMBLE
+   reconstruct (lambda <ll> . <body>) from these.  For a built-in or anything with
+   no interpreted body, AVAILABLE-P is NIL.  Reads slots only — no allocation. */
+static void kernel_FUNCTION_LAMBDA_BODY(unused Ref function, Ref arguments, MultipleValues* results){
+    Ref fn = cons_car(arguments);
+    if(symbolp(fn) && symbol_fboundp(fn)){ fn = symbol_function(fn); }
+    Ref closurep_v = NIL_Symbol;
+    if(closurep(fn)){
+        if(!nullp(fn->slots->closure.environment)){ closurep_v = T_Symbol; }
+        fn = fn->slots->closure.function;}
+    results->count=5;
+    if(built_in_function_p(fn)){
+        /* A BUILT-IN-FUNCTION has a kernel_function pointer, not a Lisp body
+           (and FUNCTIONP may report true for it), so check it FIRST — reading a
+           .body from its slots would return the code pointer as a bogus Ref. */
+        results->values[0]=NIL_Symbol;
+        results->values[1]=NIL_Symbol;
+        results->values[2]=NIL_Symbol;
+        results->values[3]=fn->slots->built_in_function.lisp_name;
+        results->values[4]=NIL_Symbol;
+    } else if(functionp(fn)){
+        results->values[0]=T_Symbol;
+        results->values[1]=fn->slots->function.lambda_list;
+        results->values[2]=fn->slots->function.body;
+        results->values[3]=fn->slots->function.lisp_name;
+        results->values[4]=closurep_v;
+    } else {
+        results->values[0]=NIL_Symbol;
+        results->values[1]=NIL_Symbol;
+        results->values[2]=NIL_Symbol;
+        results->values[3]=NIL_Symbol;
+        results->values[4]=NIL_Symbol;}}
+
 /* (ED &optional x) → NIL stub. */
 static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -1738,6 +1774,8 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("COMPILE-FILE"),ll_f,kernel_COMPILE_FILE));
         set_symbol_function(symbol_intern_cstring("DISASSEMBLE"),
             built_in_function_new(symbol_intern_cstring("DISASSEMBLE"),ll_x,kernel_DISASSEMBLE));
+        set_symbol_function(symbol_intern_cstring("%FUNCTION-LAMBDA-BODY"),
+            built_in_function_new(symbol_intern_cstring("%FUNCTION-LAMBDA-BODY"),ll_x,kernel_FUNCTION_LAMBDA_BODY));
         set_symbol_function(symbol_intern_cstring("ED"),
             built_in_function_new(symbol_intern_cstring("ED"),ll_x,kernel_ED));
         /* Slice 25b — EVAL, MACROEXPAND-1, MACROEXPAND */
