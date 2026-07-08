@@ -50,3 +50,4 @@ generational-gc.issue
 ansi-test.issue
 
 
+minor-gc-doomed-under-gcminorstress.issue

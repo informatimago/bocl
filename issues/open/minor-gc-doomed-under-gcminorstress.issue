@@ -1,0 +1,72 @@
+GCCHECK(minor) reports DOOMED young survivors under BOCL_GCMINORSTRESS — a
+remembered-set gap in the WIP generational minor collector (not any one caller).
+
+Part of the generational GC work (see generational-gc.issue / the new-gc branch).
+Filed from the v1.4.37 SORT work: the minor collector was used to stress-test the
+new %KERNEL-SORT! primitive, and the probe fired — but on structures unrelated to
+SORT (SORT's own scratch is never among the flagged survivors; see "Ruled out").
+
+== Symptom ==
+Under  BOCL_GCCHECK=1 BOCL_GCMINORSTRESS=1 ./bocl ...  the minor collector's
+post-mark verifier (verify_no_dangling_minor in sources/memory.c) prints many
+lines of the form:
+
+  GCCHECK(minor): survivor 0x… (marked objcount=1021 size=8184) slot N
+                  -> DOOMED YOUNG 0x… (objcount=3 size=32)
+
+i.e. a SURVIVOR (an old or marked block) directly references a YOUNG block that
+the minor mark did NOT reach — the invariant "every old->young edge is in the
+remembered set" is violated, so that young child would be swept while still
+reachable. Per the verifier's own comment this is "the primary correctness probe
+for step 2/3" of the generational collector, so a hit is a real invariant break
+in the minor path (a missing remembered-set entry / write barrier, or a remset
+rebuild that drops a still-needed entry).
+
+Observed on ~460 edges in one run; the dominant flagged survivor was a single
+large object vector (objcount=1021, size=8184 — a VectorOfObject of 1021 Refs)
+whose slots point to hundreds of unmarked young conses, plus ~15 stray cons
+(objcount=3) survivors with one DOOMED young child each.
+
+== Repro ==
+  BOCL_GCCHECK=1 BOCL_GCMINORSTRESS=1 ./sources/bocl --batch -q --quit </dev/null
+
+The warnings appear during BOOT (prelude load), independent of any user program —
+no SORT or user code is needed. Caveat: GCMINORSTRESS=1 forces a full minor GC on
+EVERY allocation, so booting the ~8500-line prelude under it is extremely slow and
+often does not complete within a normal timeout; use a larger interval
+(BOCL_GCMINORSTRESS=N for a minor GC every N allocs) to get further, at the cost of
+less coverage. NB: the minor collector only runs under this knob — normal
+operation uses the major garbage_collect, which is clean (BOCL_GCCHECK alone, no
+MINORSTRESS: a 2000-element sort ran with zero verify_no_dangling warnings).
+
+== Ruled out ==
+- NOT the SORT scratch. %KERNEL-SORT! (sources/bocl.c) allocates two scratch
+  simple-vectors of EXACTLY N slots; in the runs that produced these warnings N was
+  1500 and 800, and no objcount=1500/800 vector appears among the flagged
+  survivors. The 1021-slot survivor is some other structure (identity
+  unconfirmed — it is NOT a hash-table bucket vector: those start at
+  HT_INITIAL_BUCKETS=16 and double, so they are powers of two, never 1021).
+- NOT a naive missing barrier on hash-table insert. hash_table.c already barriers
+  its bucket stores: ht_remember_buckets() calls gc_write_barrier on the bucket
+  VectorOfObject after every raw st[bi]=node store (lines ~350/384) and after
+  resize (~210). So if a hash table is involved, the gap is subtler than "insert
+  forgot to barrier".
+
+== Hypothesis (needs confirmation) ==
+A remembered-set LIFECYCLE gap rather than a single missing barrier: a write
+barrier records a container, but gc_rebuild_remset() (run after each minor GC,
+sources/memory.c ~973) keeps only entries whose block_has_young_child() is
+currently true — so an old container that momentarily has no young child is
+DROPPED, and a later mutation that re-introduces a young child must re-barrier it.
+If any store into a large old object vector (or the object-vector case generally)
+misses that re-barrier, or if the container is written via a path that bypasses
+gc_write_barrier, its young children go untracked at the next minor GC. The
+1021-slot object vector is the concrete instance to chase first: identify what it
+is (instrument make_bucket_vector / Array_slots callers, or dump the class/first
+few slots when verify_no_dangling_minor fires), then find the store path that
+mutates it without a surviving remset entry.
+
+Note: could also be a false positive of the probe itself (e.g. the young child IS
+reachable via another root the minor mark should have followed but didn't). Either
+way it must be resolved before the generational (minor) collector is enabled by
+default.
