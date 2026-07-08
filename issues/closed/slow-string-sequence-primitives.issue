@@ -84,9 +84,25 @@ longjmp — can fire at every kernel_apply):
     possibly-old input goes through cons_rplaca / gc_write_barrier.
   - The 2-element comparator argument list is one pinned cons pair, RPLACA'd per
     call (no per-comparison allocation).
-Verified under BOCL_GCCHECK + BOCL_GCMINORSTRESS (no dangling survivors), plus
-stability, :key, vectors, consing comparators, young-element write-back, and
-error-propagation tests; full suite green.
+Verified: stability, :key, vectors, empty/singleton, large-random multiset
+preservation, consing comparators, young-element write-back, and error
+propagation all pass; full suite green.  Rooting was checked under BOCL_GCCHECK
+(the MAJOR collector — the only one active in normal operation): a 2000-element
+sort ran with ZERO dangling-survivor warnings.
+
+  NB (correction of an earlier overstated claim): BOCL_GCMINORSTRESS is NOT a
+  clean pass and cannot be — that knob exercises the WIP generational MINOR
+  collector (see generational-gc.issue / new-gc branch), which emits GCCHECK(minor)
+  "DOOMED" warnings for pre-existing structures (the flagged survivors are a
+  1021-slot = prime obarray/hash bucket vector and stray conses) during BOOT,
+  independent of SORT — and it is so slow (a minor GC per allocation) that boot of
+  the ~8500-line prelude does not even complete under it.  Crucially, the sort's
+  own scratch vectors (exactly N slots) NEVER appear among the flagged survivors,
+  and by construction the sort only MOVES existing elements (a major GC promotes
+  the scratch and its elements together), so it cannot create the un-remembered
+  old->young edge the minor check looks for.  So the sort is sound under the
+  production collector; the minor-GC DOOMED noise belongs to the generational-GC
+  WIP, not to this change.
 
 Measured (A/B, identical data, v1.4.36 list merge sort -> v1.4.37 kernel sort):
   SORT 3000 integers (#'<)      5.09 s -> 0.010 s   (~500x)
