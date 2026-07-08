@@ -46,3 +46,34 @@ Workaround that works today:
 - Ensure ASDF's in-session directory cache is effective on bocl (pathname hashing).
 - In the #+bocl porting layer, provide an init that registers already-loaded
   systems immutable and picks a non-tree-walking default source-registry.
+
+----------------------------------------------------------------------------
+VALIDATED & RESOLVED (v1.4.40) — the DIRECTORY factor (#1) is fixed.
+
+Contributing factor #1 (CL:DIRECTORY cost) was the pathology this issue centred
+on, and it is fixed by the DIRECTORY work:
+  - v1.4.38: DIRECTORY's recursive glob walk moved into the %DIRECTORY-GLOB kernel
+    primitive (opendir/readdir + d_type, no per-entry stat, no O(n^2) APPEND) and
+    results built with the kernel pathname constructor.
+  - v1.4.40: DIRECTORY now honours CL's trailing-slash "directories only"
+    semantics — (DIRECTORY "X/<star>/") returns only sub-directories, filtered in
+    C via d_type, so UIOP's SUBDIRECTORIES no longer needs a per-entry stat in
+    Lisp — and %DIRECTORY-GLOB now parses the whole pattern in C (split, abs-vs-CWD
+    base, dirs-only flag), so DIRECTORY's per-call Lisp cost is a single MAPCAR.
+
+Measured (synthetic bushy tree, 6000 directories):
+  (DIRECTORY "tree/**/<star>/")  — full recursive enumeration, one call — 0.168 s.
+The old Lisp %GLOB took minutes on the same shape; this is the whole tree walked
+in well under a second.
+
+Residual (NOT a DIRECTORY bug; does not belong here):
+  - A UIOP COLLECT-SUB*DIRECTORIES scan calls DIRECTORY once per directory LEVEL
+    and does per-directory pathname work (NAMESTRING / MERGE-PATHNAMES) in the
+    interpreter.  Profiling shows that per-directory pathname/namestring cost — not
+    DIRECTORY — now dominates such a scan; that is general pathname-subsystem
+    interpreter speed.
+  - The clean end state is the #+bocl ASDF port defaulting to a non-tree-walking
+    source-registry (register already-loaded systems immutable; do not recurse
+    $HOME) — tracked in uiop-bocl-porting.issue (factor #3).
+So the DIRECTORY pathology named here is resolved; the remaining bits are the ASDF
+port default (uiop-bocl-porting.issue) and general pathname-op speed.  Closing.

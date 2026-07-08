@@ -5812,16 +5812,17 @@ the class object it denotes, so two specializers compare by class identity."
    runs in the %DIRECTORY-GLOB kernel primitive (a Lisp-level walk was ~100x
    slower — a CHAR-loop match, a stat() per entry and interpreter funcalls all
    the way down; see issues/open/speed-directory.issue)."
-  (let* ((ns    (if (pathnamep pathspec) (namestring pathspec) (string pathspec)))
-         (abs   (and (> (length ns) 0) (char= (char ns 0) #\/)))
-         (base  (if abs "/" (namestring (bocl::getcwd))))
-         (comps (%split-path ns)))
-    ;; The matches are absolute physical namestrings, so build them with the
-    ;; kernel pathname constructor directly: the CL-level PATHNAME first runs
-    ;; logical-pathname host/device probes (%LP-PARSE-HOST/DEVICE) that can never
-    ;; match a filesystem path — ~80x of the per-result cost — then calls this
-    ;; same constructor anyway, so the result is identical.
-    (mapcar *%kernel-pathname-fn* (%directory-glob base comps))))
+  ;; %DIRECTORY-GLOB does ALL the parsing in C — splitting on '/', the absolute-
+  ;; vs-CWD-relative base, and the trailing-slash "directories only" flag (a
+  ;; pattern ending in '/' matches directories, e.g. "X/*/", per CL) — so the only
+  ;; per-call Lisp cost is this MAPCAR over the matches.  We build them with the
+  ;; kernel pathname constructor directly: results are absolute physical paths, and
+  ;; the CL-level PATHNAME would first run logical-pathname host/device probes
+  ;; (%LP-PARSE-HOST/DEVICE, ~80x the cost) that can never match a filesystem path
+  ;; before calling this same constructor.  (See speed-directory.issue and
+  ;; asdf-source-registry-inherit-scan-slow.issue.)
+  (let ((ns (if (pathnamep pathspec) (namestring pathspec) (string pathspec))))
+    (mapcar *%kernel-pathname-fn* (%directory-glob ns))))
 
 ;;; ---- Missing numeric utilities -------------------------------------------
 

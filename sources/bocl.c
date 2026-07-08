@@ -400,6 +400,9 @@ static void bocl_sv_push(bocl_strvec* v, char* owned){
         v->items=(char**)realloc(v->items, v->cap*sizeof(char*)); }
     v->items[v->count++]=owned;}
 
+static bool bocl_is_dir(const char* p){
+    struct stat st; return stat(p,&st)==0 && S_ISDIR(st.st_mode);}
+
 static bool bocl_entry_is_dir(unused struct dirent* e, const char* full){
 #if defined(DT_DIR) && defined(DT_UNKNOWN)
     if(e->d_type==DT_DIR){ return true; }
@@ -408,19 +411,24 @@ static bool bocl_entry_is_dir(unused struct dirent* e, const char* full){
     struct stat st;
     return stat(full,&st)==0 && S_ISDIR(st.st_mode);}
 
-/* DIR ends with '/'. COMPS[ci..nc) are the remaining glob components. */
-static void bocl_glob_walk(const char* dir, char** comps, int nc, int ci, bocl_strvec* out){
+/* DIR ends with '/'. COMPS[ci..nc) are the remaining glob components.  When
+   DIRS_ONLY, a terminal match is kept only if it is a directory and is emitted in
+   directory-pathname form (with a trailing '/') — this is CL's trailing-slash
+   pattern semantics: a DIRECTORY pattern ending in slash-star-slash returns the
+   sub-directories only, which also lets UIOP's SUBDIRECTORIES avoid a per-entry
+   stat in Lisp. */
+static void bocl_glob_walk(const char* dir, char** comps, int nc, int ci, bocl_strvec* out, bool dirs_only){
     if(ci>=nc){ return; }
     const char* comp=comps[ci];
     bool last=(ci==nc-1);
     if(strcmp(comp,"**")==0){
-        bocl_glob_walk(dir,comps,nc,ci+1,out);          /* zero levels: match rest here */
+        bocl_glob_walk(dir,comps,nc,ci+1,out,dirs_only);   /* zero levels: match rest here */
         DIR* d=opendir(dir);
         if(d){ struct dirent* e;
             while((e=readdir(d))!=NULL){
                 if(!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")){ continue; }
                 char* sub=bocl_path_join(dir,e->d_name,true);
-                if(bocl_entry_is_dir(e,sub)){ bocl_glob_walk(sub,comps,nc,ci,out); }  /* ** stays */
+                if(bocl_entry_is_dir(e,sub)){ bocl_glob_walk(sub,comps,nc,ci,out,dirs_only); }  /* ** stays */
                 free(sub);}
             closedir(d);}}
     else if(strchr(comp,'*')||strchr(comp,'?')){
@@ -429,42 +437,63 @@ static void bocl_glob_walk(const char* dir, char** comps, int nc, int ci, bocl_s
             while((e=readdir(d))!=NULL){
                 if(!strcmp(e->d_name,".")||!strcmp(e->d_name,"..")){ continue; }
                 if(bocl_glob_match(comp,e->d_name)){
-                    if(last){ bocl_sv_push(out, bocl_path_join(dir,e->d_name,false)); }
+                    if(last){
+                        if(dirs_only){
+                            char* sub=bocl_path_join(dir,e->d_name,true);
+                            if(bocl_entry_is_dir(e,sub)){ bocl_sv_push(out,sub); } else { free(sub); }}
+                        else{ bocl_sv_push(out, bocl_path_join(dir,e->d_name,false)); }}
                     else{ char* sub=bocl_path_join(dir,e->d_name,true);
-                          if(bocl_entry_is_dir(e,sub)){ bocl_glob_walk(sub,comps,nc,ci+1,out); }
+                          if(bocl_entry_is_dir(e,sub)){ bocl_glob_walk(sub,comps,nc,ci+1,out,dirs_only); }
                           free(sub);}}}
             closedir(d);}}
     else{
         if(last){
-            char* full=bocl_path_join(dir,comp,false);
-            struct stat st;
-            if(stat(full,&st)==0){ bocl_sv_push(out, full); } else { free(full); }}
+            if(dirs_only){
+                char* sub=bocl_path_join(dir,comp,true);
+                if(bocl_is_dir(sub)){ bocl_sv_push(out,sub); } else { free(sub); }}
+            else{
+                char* full=bocl_path_join(dir,comp,false);
+                struct stat st;
+                if(stat(full,&st)==0){ bocl_sv_push(out, full); } else { free(full); }}}
         else{
             char* sub=bocl_path_join(dir,comp,true);
-            struct stat st;
-            if(stat(sub,&st)==0 && S_ISDIR(st.st_mode)){ bocl_glob_walk(sub,comps,nc,ci+1,out); }
+            if(bocl_is_dir(sub)){ bocl_glob_walk(sub,comps,nc,ci+1,out,dirs_only); }
             free(sub);}}}
 
-/* (%DIRECTORY-GLOB base-dir components) -> list of matching path strings.
-   BASE-DIR is an (absolute) directory namestring; COMPONENTS is a list of glob
-   component strings ("**" = wild-inferiors). */
+/* (%DIRECTORY-GLOB pattern) -> list of matching path strings.  PATTERN is the
+   whole glob namestring; ALL parsing is done here in C — splitting on '/', the
+   absolute-vs-CWD-relative base (via getcwd), and the trailing-slash "directories
+   only" flag — so DIRECTORY's per-call Lisp cost is just one MAPCAR over the
+   results.  (Splitting in Lisp with %SPLIT-PATH was CHAR-by-CHAR and, called once
+   per directory, dominated a recursive SUBDIRECTORIES scan.) */
 static void kernel_DIRECTORY_GLOB(unused Ref function, Ref arguments, MultipleValues* results){
     uword pool=open_live_pool(); add_to_live_pool(arguments);
     Ref current=arguments;
-    Ref basespec=pop_mandatory_argument(function,&current);
-    Ref compspec=pop_mandatory_argument(function,&current);
+    Ref patspec=pop_mandatory_argument(function,&current);
     check_no_more_arguments(function,current);
-    check_class(basespec,STRING_Class);
-    /* Extract the components into a C array (pure-C walk afterwards). */
-    int nc=0;
-    for(Ref p=compspec; consp(p); p=cons_cdr(p)){ nc++; }
-    char** comps=(char**)malloc((size_t)(nc>0?nc:1)*sizeof(char*));
-    { int i=0; for(Ref p=compspec; consp(p); p=cons_cdr(p)){
-            Ref c=cons_car(p); check_class(c,STRING_Class);
-            comps[i++]=string_cstring(c); } }
-    char* base=string_cstring(basespec);
+    check_class(patspec,STRING_Class);
+    char* pat=string_cstring(patspec);
+    size_t plen=strlen(pat);
+    bool dirs_only=(plen>0 && pat[plen-1]=='/');
+    bool abs=(plen>0 && pat[0]=='/');
+    char cwdbuf[4096];
+    const char* base;
+    if(abs){ base="/"; }
+    else if(getcwd(cwdbuf,sizeof(cwdbuf))){ base=cwdbuf; }
+    else{ base="."; }
+    /* Split PAT on '/' into non-empty components (in place). */
+    int cap=8, nc=0;
+    char** comps=(char**)malloc((size_t)cap*sizeof(char*));
+    { size_t s=0;
+      for(size_t i=0;i<=plen;i++){
+          if(i==plen || pat[i]=='/'){
+              if(i>s){
+                  if(nc==cap){ cap*=2; comps=(char**)realloc(comps,(size_t)cap*sizeof(char*)); }
+                  comps[nc]=(char*)malloc(i-s+1);
+                  memcpy(comps[nc],pat+s,i-s); comps[nc][i-s]='\0'; nc++; }
+              s=i+1; } } }
     bocl_strvec out={0,0,0};
-    if(nc>0){ bocl_glob_walk(base, comps, nc, 0, &out); }
+    if(nc>0){ bocl_glob_walk(base, comps, nc, 0, &out, dirs_only); }
     /* Build the Lisp result list (reverse iteration -> forward order). */
     Ref lst=NIL_Symbol;
     for(size_t i=out.count; i-->0; ){
@@ -474,7 +503,7 @@ static void kernel_DIRECTORY_GLOB(unused Ref function, Ref arguments, MultipleVa
         add_to_live_pool(lst);
         free(out.items[i]);}
     free(out.items);
-    free(base);
+    free(pat);
     for(int i=0;i<nc;i++){ free(comps[i]); }
     free(comps);
     results->count=1; results->values[0]=lst;
@@ -1266,9 +1295,6 @@ static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues*
      3. a last-resort default for the conventional PREFIX=/opt/local install.
    (Later this can consult XDG paths and a generated install-paths module; kept
    deliberately small for now.) */
-static bool bocl_is_dir(const char* p){
-    struct stat st; return stat(p,&st)==0 && S_ISDIR(st.st_mode);}
-
 /* (%DEFAULT-MODULES-DIRECTORY) -> the modules directory namestring (trailing '/').
    Resolution, INDEPENDENT of argv[0]/CWD (never derive resources from the exe):
      1. $BOCL_MODULES_DIR                                   (explicit override).
@@ -1559,7 +1585,7 @@ void bocl_register_load(void){
         s=symbol_intern_cstring("%MKDIR");
         set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_MKDIR));
         s=symbol_intern_cstring("%DIRECTORY-GLOB");
-        set_symbol_function(s,built_in_function_new(s,list(S(BASE),S(COMPONENTS),NULL),kernel_DIRECTORY_GLOB));}
+        set_symbol_function(s,built_in_function_new(s,list(S(PATTERN),NULL),kernel_DIRECTORY_GLOB));}
     Ref af=S(APPEND);
     set_symbol_function(af,built_in_function_new(af,list(S(&REST),S(LISTS),NULL),kernel_APPEND));
     /* BOCL::%MAKE-OUTPUT-CALLBACK-STREAM — kernel hook for CL compound streams
