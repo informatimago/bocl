@@ -1,0 +1,23 @@
+type of bignums should be integer, not T.
+
+(type-of (fact 100))
+--> T ; too vague
+
+(type-of (fact 100))
+--> INTEGER ; better
+
+----------------------------------------------------------------------------
+FIXED in v1.4.44.
+
+sources/bocl.c kernel_TYPE_OF() handled fixnums (integerp -> (INTEGER lo hi)) but
+had no case for out-of-fixnum-range numbers, so a bignum, a ratio and a complex
+all fell through to the catch-all T.  Added:
+  - bignum  -> INTEGER
+  - ratio   -> RATIO
+  - complex -> COMPLEX
+consistent with TYPEP ((type-of x) is a type of which x is a member: a bignum is
+INTEGER/RATIONAL/NUMBER, a ratio is RATIO/RATIONAL, a complex is COMPLEX/NUMBER).
+
+  (type-of (fact 100))  =>  INTEGER   ; was T
+
+Regression test: tests/test_slice22.c test_type_of.  Full suite green.

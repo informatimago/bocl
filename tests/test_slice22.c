@@ -36,7 +36,13 @@ static void test_type_of(void){
     /* Integers return (INTEGER lo hi) as a proper list. */
     TEST_EQ(equal, e("'(integer 0 255)"),   e("(type-of 42)"));
     TEST_EQ(equal, e("'(integer 0 255)"),   e("(type-of 0)"));
-    TEST_EQ(eql,   S(INTEGER),              e("(first (type-of 42))")); }
+    TEST_EQ(eql,   S(INTEGER),              e("(first (type-of 42))"));
+    /* Out-of-fixnum-range numbers are typed too, not the catch-all T
+       (issue bignum-type): a bignum is INTEGER, a ratio RATIO, a complex COMPLEX. */
+    TEST_EQ(eql,   S(INTEGER),
+            e("(type-of (let ((f 1)) (dotimes (i 100 f) (setq f (* f (1+ i))))))"));
+    TEST_EQ(eql,   S(RATIO),                e("(type-of 1/2)"));
+    TEST_EQ(eql,   S(COMPLEX),              e("(type-of #c(1 2))")); }
 
 /* ---- INT-CHAR ------------------------------------------------------------- */
 

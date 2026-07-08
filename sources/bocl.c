@@ -866,6 +866,9 @@ static void kernel_TYPE_OF(unused Ref function, Ref arguments, MultipleValues* r
             /* Full signed-word range */
             lo=integer_from_word(WORD_MIN); hi=integer_from_word(WORD_MAX);}
         type=list(S(INTEGER),lo,hi,NULL); }
+    else if(bignump(obj)){           type=S(INTEGER); }   /* out of fixnum range */
+    else if(ratiop(obj)){            type=S(RATIO); }
+    else if(complexp(obj)){          type=S(COMPLEX); }
     else if(floatp(obj)){            type=symbol_intern_cstring("DOUBLE-FLOAT"); }
     else if(symbolp(obj)){
         if(keywordp(obj))             type=S(KEYWORD);
