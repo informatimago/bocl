@@ -962,6 +962,15 @@ Unicode and UTF-8 is out of scope for version 1.
 
 The REPL is a standard REPL.
 
+*** The prompt: BOCL:*PROMPT-FUNCTION*
+
+=BOCL:*PROMPT-FUNCTION*= is =NIL=, or a function designator of one argument (an
+output stream).  When it is non-=NIL= the REPL calls =(funcall
+bocl:*prompt-function* stream)= to write each prompt, instead of the default
+=bocl>= prompt.  Binding or setting it (typically from an init file) lets a
+program customise the prompt — e.g. show the current package, an input counter, or
+the debug level.
+
 *** Init (rc) files
 
 Unless =-n= / =-norc= / =--no-init= is given, bocl loads at most one init
@@ -1020,7 +1029,7 @@ Description:
 
 *** Extension hooks
 
-Three lists of function designators let user code (typically from the
+Five lists of function designators let user code (typically from the
 init/rc file, a -i file, the command line, or normal Lisp code) run
 code at well-defined points in the process life-cycle.  They live in
 the BOCL package and are never cleared (a function on a list serves
@@ -1034,6 +1043,10 @@ until removed by the user).  No locking is provided.
 |                   |                  | dynamic environment, just before the process exits     |
 | BOCL:*ABORT-HOOK* | (lambda (signum))| when the process is crashing on a fatal signal; the    |
 |                   |                  | GC is disabled and the heap may be corrupt             |
+| BOCL:*STOP-HOOK*  | (lambda ())      | on SIGTSTP (Ctrl-Z), before the process suspends —     |
+|                   |                  | e.g. reset the terminal out of raw/ncurses mode        |
+| BOCL:*CONT-HOOK*  | (lambda ())      | on SIGCONT, when the process resumes — e.g. re-enter   |
+|                   |                  | raw mode or re-open what *STOP-HOOK* released          |
 
 Each function on a hook list is called in turn, each wrapped in an
 IGNORE-ERRORS.  If a hook calls BOCL:QUIT, or a crash occurs, the
@@ -1055,11 +1068,48 @@ the INIT-HOOK functions have completed.
 
 ** The debugger
 
-A debugger will be specified later.
+When an unhandled =SERIOUS-CONDITION= reaches the REPL and =BOCL:*ON-ERROR*= is
+=:debug= (the default — see [[Error handling: the =--on-error= option]]), bocl
+enters an interactive debugger on =*DEBUG-IO*=.  It prints the condition, a
+backtrace (innermost frame first) and the menu of available restarts, then loops
+reading commands at a =debug>= prompt:
 
-At minimum, the debugger must print a backtrace and the bindings of
-the current frame, and allow the selection of the restarts, or abort
-to the toplevel or quit.
+| command           | effect                                                       |
+|-------------------+--------------------------------------------------------------|
+| =:backtrace=      | print the backtrace (accepts options, e.g. a frame count)    |
+| =:restarts=       | reprint the restart menu                                     |
+| =:restart N¦name= | invoke restart N (or by name); a bare number does the same   |
+| =:continue=       | return =NIL= from the debugger and resume                    |
+| =:abort=          | invoke the =ABORT= restart — unwind to the top-level REPL     |
+| =:quit=           | exit bocl (=BOCL:QUIT=)                                       |
+| =<form>=          | evaluate =<form>= in the error's dynamic context, print values |
+
+=INVOKE-DEBUGGER= honours =CL:*DEBUGGER-HOOK*=.  An error while /reading/ or
+handling a debugger command does not abort the process: it enters a *nested*
+debugger level (recursive debugging, CLHS 9.1), and =:abort= / =:continue= there
+return to the enclosing level.
+
+The debugger binds the standard printer variables around its own output from the
+=BOCL:*DEBUGGER-PRINT-…*= variables, so a huge or circular condition or backtrace
+prints readably without disturbing the user's =*PRINT-…*= settings:
+
+| variable                             | default  | binds                  |
+|--------------------------------------+----------+------------------------|
+| =BOCL:*DEBUGGER-PRINT-LENGTH*=        | 8        | =*PRINT-LENGTH*=       |
+| =BOCL:*DEBUGGER-PRINT-LEVEL*=         | 3        | =*PRINT-LEVEL*=        |
+| =BOCL:*DEBUGGER-PRINT-LINES*=         | 2        | =*PRINT-LINES*=        |
+| =BOCL:*DEBUGGER-PRINT-CIRCLE*=        | T        | =*PRINT-CIRCLE*=       |
+| =BOCL:*DEBUGGER-PRINT-RIGHT-MARGIN*=  | 72       | =*PRINT-RIGHT-MARGIN*= |
+| =BOCL:*DEBUGGER-PRINT-CASE*=          | :UPCASE  | =*PRINT-CASE*=         |
+| =BOCL:*DEBUGGER-PRINT-BASE*=          | 10       | =*PRINT-BASE*=         |
+| =BOCL:*DEBUGGER-PRINT-{ARRAY,ESCAPE,GENSYM}*= | T | the matching =*PRINT-…*= |
+| =BOCL:*DEBUGGER-PRINT-{PRETTY,RADIX,READABLY}*= | NIL | the matching =*PRINT-…*= |
+
+When =BOCL:*ON-ERROR*= is =:appease= or =:abort= the condition is reported and the
+=ABORT= restart is invoked instead of entering the debugger; =:exit= reports and
+exits with status 1.  A =STORAGE-CONDITION= (e.g. control-stack exhaustion) is
+always reported and aborted rather than debugged, since the debugger cannot run on
+a near-exhausted stack.
 
 ** The Meta-Object Protocol -- MOP
 
@@ -1069,17 +1119,63 @@ Not in the scope of version 1.
 
 Not in the scope of version 1.
 
+** Modules
+
+bocl provides the CL module facility (=PROVIDE= / =REQUIRE=) plus a small
+name-based registry, so that =(require :name)= finds and loads an installed module
+without the caller knowing its files.
+
+=(PROVIDE module-name)= records MODULE-NAME (a string designator) on =CL:*MODULES*=
+(also =BOCL:*MODULES*=) and returns it.  =(REQUIRE module-name &optional
+pathnames)= loads a module unless it is already present in =*MODULES*=:
+
+- with PATHNAMES (a pathname or list of pathnames), those files are loaded;
+- otherwise the module is looked up /by name/ in the boot-time registry
+  =BOCL:*MODULE-LIST*= and its files are loaded.  If no such module is known, an
+  error of type =BOCL:UNDEFINED-MODULE-ERROR= is signalled, whose report names the
+  module requested, the modules directory that was searched, and the modules that
+  /were/ found there.
+
+*** The module search path
+
+At start-up bocl scans a /modules directory/ for module manifests.  Every
+sub-directory that contains a =module.manifest= — a plist =(:name "NAME" :files
+("abs-namestring" …))= — contributes one entry to =BOCL:*MODULE-LIST*=.  The
+manifest =:name= selects the module; the sub-directory name is /not/ significant
+(so =modules/asdf3/= may provide the module ="ASDF"=).
+
+The modules directory is resolved by the kernel primitive
+=%DEFAULT-MODULES-DIRECTORY=, /independently/ of =argv[0]= or the current directory
+— bocl never derives resource locations from the executable path:
+
+1. the environment variable =$BOCL_MODULES_DIR=, if set; else
+2. =<dir of the build-configured prelude>/modules/= — this carries the install
+   =PREFIX=, so =make install PREFIX=/foo/bar= bakes =/foo/bar/…/bocl/modules/=;
+   else
+3. the first that exists of the three standard install locations — the same three
+   searched for the prelude: =/opt/local/libexec/bocl/modules/=,
+   =/usr/local/libexec/bocl/modules/=, =/usr/libexec/bocl/modules/=.
+
+The resolved value is kept in =BOCL:*MODULES-DIRECTORY*=.
+
 ** Another System Definition Facility -- ASDF
 
-ASDF 3 should be packaged and integrated with the bocl implementation.
 https://asdf.common-lisp.dev
 https://github.com/fare/asdf
 
-Normally, ASDF is mostly a conforming Common Lisp program, should it
-should be loadable and utilisable directly, but it has extensions that
-can wrap around implementations specific features and behavior, so it
-may be useful to provide some level of integration (#+bocl specific
-entries in asdf, and bocl extensions specific to better support asdf).
+ASDF 3 is provided as a bocl /module/ (see [[Modules]]): once built and installed
+it is loaded with =(require :asdf)=.
+
+ASDF is built from the =modules/asdf-src= git submodule and installed next to the
+prelude by =make modules && make install= (building ASDF's single-file release
+needs a host Common Lisp — sbcl / ccl / clisp).  A plain =make build && make
+install= that skips =git submodule update --init modules/asdf-src= produces /no/
+ASDF module, and =(require :asdf)= then signals =BOCL:UNDEFINED-MODULE-ERROR=
+(whose report lists the directory searched).  See =modules/README.org=.
+
+ASDF is mostly a conforming Common Lisp program, so it loads and runs directly;
+its =#+bocl= clauses use the bocl OS-portability primitives (getcwd / chdir /
+getenv / quit / …) for the UIOP layer.
 
 * Epilogue                                                         :noexport:
 
