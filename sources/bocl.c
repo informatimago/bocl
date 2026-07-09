@@ -1327,17 +1327,19 @@ static void kernel_FUNCTION_LAMBDA_BODY(unused Ref function, Ref arguments, Mult
         results->values[3]=NIL_Symbol;
         results->values[4]=NIL_Symbol;}}
 
-/* (BOCL:DEFINE-FUNCTION name function) -> name.  The single function-definition
-   mechanism the DEFUN macro expands to: install FUNCTION as the global function
-   of the symbol NAME, NAME-PRESERVING — the stored function's lisp_name becomes
-   NAME, so FUNCTION-LAMBDA-EXPRESSION and backtraces report NAME even when the
-   argument was built from an anonymous (LAMBDA ...).  A closure keeps its captured
-   environment; a built-in is stored unchanged.  (The natural home for future
-   compile-time bookkeeping — e.g. noting that NAME names a function.)  Every cons
-   here auto-roots in the live pool. */
+/* (BOCL:DEFINE-FUNCTION name documentation function) -> name.  The single
+   function-definition mechanism the DEFUN macro expands to: install FUNCTION as
+   the global function of the symbol NAME, NAME-PRESERVING — the stored function's
+   lisp_name becomes NAME, so FUNCTION-LAMBDA-EXPRESSION and backtraces report NAME
+   even when the argument was built from an anonymous (LAMBDA ...).  A closure keeps
+   its captured environment; a built-in is stored unchanged.  DOCUMENTATION (or
+   NIL) is recorded as (documentation NAME 'function) — the same extraction the
+   interpreter's DEFUN does, so eval and the fasl agree.  (The natural home for
+   future compile-time bookkeeping.)  Every cons here auto-roots in the live pool. */
 static void kernel_bocl_DEFINE_FUNCTION(unused Ref self, Ref arguments, MultipleValues* results){
     Ref name = cons_car(arguments);
-    Ref fn   = cons_car(cons_cdr(arguments));
+    Ref doc  = cons_car(cons_cdr(arguments));
+    Ref fn   = cons_car(cons_cdr(cons_cdr(arguments)));
     check_type(name, SYMBOL_Class);
     Ref named;
     if(closurep(fn)){
@@ -1358,6 +1360,7 @@ static void kernel_bocl_DEFINE_FUNCTION(unused Ref self, Ref arguments, Multiple
     }else{
         named = fn;}
     set_symbol_function(name, named);
+    bocl_set_function_documentation(name, doc);
     results->count=1;
     results->values[0]=name;}
 
@@ -1812,7 +1815,8 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("%FUNCTION-LAMBDA-BODY"),ll_x,kernel_FUNCTION_LAMBDA_BODY));
         {   Ref dfn=package_intern_cstring_in("DEFINE-FUNCTION",BOCL_Package);
             set_symbol_function(dfn,built_in_function_new(dfn,
-                list(symbol_intern_cstring("NAME"),symbol_intern_cstring("FUNCTION"),NULL),
+                list(symbol_intern_cstring("NAME"),symbol_intern_cstring("DOCUMENTATION"),
+                     symbol_intern_cstring("FUNCTION"),NULL),
                 kernel_bocl_DEFINE_FUNCTION));
             package_export(BOCL_Package,dfn); }
         set_symbol_function(symbol_intern_cstring("ED"),

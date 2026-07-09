@@ -5903,6 +5903,13 @@ the class object it denotes, so two specializers compare by class identity."
         (push (cons doc-type new) (gethash object *documentation-table*))))
   new)
 
+;; Called from C (DEFUN / BOCL:DEFINE-FUNCTION) to record an extracted defun
+;; docstring; a plain function so the kernel can reach it via SYMBOL-FUNCTION
+;; without the (SETF DOCUMENTATION) setf-function machinery.  NIL doc is a no-op.
+(defun %set-function-documentation (name doc)
+  (when doc (setf (documentation name 'function) doc))
+  name)
+
 ;;;; ========================================================================
 ;;;; Slice 22 — I/O built-ins, list set operations, hash utilities,
 ;;;;   TYPE-OF, array operations, bit-vector ops, LOOP-FINISH, misc.
@@ -9510,34 +9517,39 @@ result array; return that array."
 ;;; DEFUN builds (make_block_body): a name-preserving install of
 ;;; (lambda lambda-list <decls+doc> (block name . forms)), via the C helper
 ;;; BOCL:DEFINE-FUNCTION (lisp_name = name), so eval and macroexpand agree.
-(defun %split-body-head (body)
-  "Split a function BODY into (values head forms): HEAD is the leading (declare
-   ...) forms plus an optional documentation string (a string counts as a
-   docstring only when more forms follow — a lone trailing string is a return
-   value); FORMS is the rest.  Mirrors the C skip_declares_and_doc so the DEFUN
-   macro and the interpreter's DEFUN agree, and declarations stay OUTSIDE the
+(defun %parse-body (body)
+  "Split a function BODY into (values declarations docstring forms): DECLARATIONS
+   is the leading (declare ...) forms, DOCSTRING an optional documentation string
+   (a string counts only when at least one more form follows — a lone trailing
+   string is a return value), FORMS the rest.  Declarations and a docstring may
+   interleave at the head (CLHS 3.4.11).  Mirrors the C make_block_body split so
+   the DEFUN macro and the interpreter's DEFUN agree; declarations stay OUTSIDE the
    lexical BLOCK (which would otherwise evaluate a declare as a call)."
-  (let ((head '()) (rest body) (doc-seen nil))
+  (let ((decls '()) (doc nil) (doc-seen nil) (rest body))
     (loop
       (cond ((and (consp rest) (consp (car rest)) (eq (caar rest) 'declare))
-             (push (car rest) head) (setf rest (cdr rest)))
+             (push (car rest) decls) (setf rest (cdr rest)))
             ((and (not doc-seen) (consp rest) (stringp (car rest)) (consp (cdr rest)))
-             (setf doc-seen t) (push (car rest) head) (setf rest (cdr rest)))
+             (setf doc (car rest) doc-seen t) (setf rest (cdr rest)))
             (t (return))))
-    (values (nreverse head) rest)))
+    (values (nreverse decls) doc rest)))
 
 (defmacro defun (name lambda-list &rest body)
-  (multiple-value-bind (head forms) (%split-body-head body)
+  (multiple-value-bind (decls doc forms) (%parse-body body)
     (if (and (consp name) (eq (car name) 'setf)
              (consp (cdr name)) (symbolp (cadr name)) (null (cddr name)))
         ;; (defun (setf foo) (val arg...) ...) — register a SETF function for FOO;
         ;; the implicit block is named FOO (CLHS 3.1.3).  Handled at the Lisp level
-        ;; because the kernel names functions with symbols only.
+        ;; because the kernel names functions with symbols only.  A docstring stays
+        ;; in the body (setf functions carry no separate documentation).
         (let ((sym (cadr name)))
           `(%register-setf-function ',sym
-             (function (lambda ,lambda-list ,@head (block ,sym ,@forms)))))
-        `(bocl:define-function ',name
-           (function (lambda ,lambda-list ,@head (block ,name ,@forms)))))))
+             (function (lambda ,lambda-list ,@decls ,@(and doc (list doc))
+                         (block ,sym ,@forms)))))
+        ;; The docstring is EXTRACTED and passed to BOCL:DEFINE-FUNCTION, which
+        ;; records it as (documentation name 'function) — matching the C DEFUN.
+        `(bocl:define-function ',name ,doc
+           (function (lambda ,lambda-list ,@decls (block ,name ,@forms)))))))
 
 ;; File / time helpers.
 (defun truename (filespec)

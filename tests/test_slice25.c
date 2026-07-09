@@ -179,7 +179,18 @@ static void test_defun_macro(void){
     TEST_EQ(eql, NIL_Symbol,
             e("(labels ((has (f s) (cond ((eq f s) t) ((consp f)"
               "           (or (has (car f) s) (has (cdr f) s))) (t nil))))"
-              "  (has (macroexpand '(defun q (x) x)) 'defun))"));}
+              "  (has (macroexpand '(defun q (x) x)) 'defun))"));
+    /* a docstring is EXTRACTED to DOCUMENTATION and dropped from the body — the
+       same way whether DEFUN is eval'd (C) or its macroexpansion is (fasl). */
+    e("(defun s25-doc (x) \"Doc for X.\" x)");
+    TEST_EQ(equal, e("\"Doc for X.\""), e("(documentation 's25-doc 'function)"));
+    TEST_EQ(eql, e("'block"), e("(car (caddr (function-lambda-expression 's25-doc)))"));
+    e("(eval (macroexpand '(defun s25-doc2 (x) \"Doc2.\" x)))");
+    TEST_EQ(equal, e("\"Doc2.\""), e("(documentation 's25-doc2 'function)"));
+    /* a lone trailing string is a return value, not documentation */
+    e("(defun s25-str () \"payload\")");
+    TEST_EQ(eql, NIL_Symbol, e("(documentation 's25-str 'function)"));
+    TEST_EQ(equal, e("\"payload\""), e("(s25-str)"));}
 
 /* ---- COMPILE-FILE writes a real macro-free fast-load file ---------------- */
 
