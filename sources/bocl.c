@@ -18,6 +18,7 @@
 #include "macros.h"
 #include "eval.h"
 #include "packages.h"
+#include "cfasl.h"
 #include <time.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
@@ -282,6 +283,99 @@ Ref bocl_load_cstring(const char* path){
     set_symbol_value(S(*LOAD-TRUENAME*), old_load_tn);
 
     close_live_pool(load_pool);
+    return T_Symbol;}
+
+
+/* Load a BINARY (cfasl) fast-load file: the compact counterpart of
+   bocl_load_cstring.  Verifies the magic + format version, then deserializes
+   and evaluates each top-level form.  Returns NIL_Symbol (so LOAD falls back to
+   source / text fasl) when PATH is not a cfasl or carries a version this build
+   cannot read; T_Symbol on a successful load.  A form graph that is truncated /
+   malformed mid-stream aborts the load with a warning (a corrupt cache should
+   not silently load a partial file).  See cfasl.h for the format. */
+Ref bocl_fasl_load(const char* path){
+    FILE* f = fopen(path, "rb");
+    if(!f){ return NIL_Symbol; }
+    if(fseek(f, 0, SEEK_END) != 0){ fclose(f); return NIL_Symbol; }
+    long sz = ftell(f);
+    if(sz < (long)(CFASL_MAGIC_LEN + 2) || fseek(f, 0, SEEK_SET) != 0){ fclose(f); return NIL_Symbol; }
+    uint8_t* buf = (uint8_t*)malloc((size_t)sz);
+    if(!buf){ fclose(f); return NIL_Symbol; }
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    if(got != (size_t)sz){ free(buf); return NIL_Symbol; }
+
+    if(memcmp(buf, CFASL_MAGIC, CFASL_MAGIC_LEN) != 0){ free(buf); return NIL_Symbol; }
+    uint8_t ver = buf[CFASL_MAGIC_LEN];
+    /* buf[CFASL_MAGIC_LEN+1] = flags (reserved) */
+    if(ver != CFASL_VERSION){
+        fprintf(stderr, ";; WARNING: %s is a bocl cfasl v%u; this build reads v%u"
+                        " — falling back to source.\n", path, (unsigned)ver, (unsigned)CFASL_VERSION);
+        free(buf);
+        return NIL_Symbol;
+    }
+
+    cfasl_in in;
+    cfasl_in_init(&in, buf + CFASL_MAGIC_LEN + 2, (size_t)sz - CFASL_MAGIC_LEN - 2);
+
+    /* Bind *LOAD-PATHNAME* / *LOAD-TRUENAME* exactly as the text loader, so
+       EVAL-WHEN :LOAD-TOPLEVEL and relative sibling loads behave identically. */
+    uword load_pool = open_live_pool();
+    Ref pn_obj = physical_pathname_new_cstring(path);
+    add_to_live_pool(pn_obj);
+    Ref tn_obj = pn_obj;
+    {   char abs[4096];
+        if(realpath(path, abs)){ tn_obj = physical_pathname_new_cstring(abs); add_to_live_pool(tn_obj); }}
+    Ref old_load_pn = variable_value(S(*LOAD-PATHNAME*));
+    Ref old_load_tn = variable_value(S(*LOAD-TRUENAME*));
+    add_to_live_pool(old_load_pn);
+    add_to_live_pool(old_load_tn);
+    set_symbol_value(S(*LOAD-PATHNAME*), pn_obj);
+    set_symbol_value(S(*LOAD-TRUENAME*), tn_obj);
+
+    Ref wrapper = NIL_Symbol;
+    if(bocl_load_recover){
+        wrapper = symbol_function(symbol_intern_cstring("%LOAD-EVAL-TOPLEVEL-FORM"));
+        if(!(functionp(wrapper) || built_in_function_p(wrapper) || closurep(wrapper))){ wrapper = NIL_Symbol; }
+    }
+
+    int ok = 1;
+    for(;;){
+        if(cfasl_at_end(&in) || in.data[in.pos] == CFASL_TAG_EOF){ break; }
+        /* One live-pool frame per form: the form graph and its eval garbage are
+           reclaimed before the next form, keeping GC scans O(form) not O(file);
+           definitions survive via their symbols, exactly as the text loader. */
+        uword form_pool = open_live_pool();
+        cfasl_rctx* rc = cfasl_rctx_new(&in);
+        Ref form = rc ? cfasl_read_object(rc) : NIL_Symbol;
+        if(!rc || cfasl_rctx_error(rc)){
+            cfasl_rctx_free(rc);
+            close_live_pool(form_pool);
+            ok = 0;
+            break;
+        }
+        add_to_live_pool(form);
+        PROFILE_ENTER(PROF_EVAL);
+        if(!nullp(wrapper)){
+            MultipleValues res = {0};
+            kernel_apply(wrapper, cons(form, NIL_Symbol), &res);
+        } else {
+            bocl_eval(form);
+        }
+        PROFILE_EXIT(PROF_EVAL);
+        cfasl_rctx_free(rc);
+        close_live_pool(form_pool);
+    }
+
+    set_symbol_value(S(*LOAD-PATHNAME*), old_load_pn);
+    set_symbol_value(S(*LOAD-TRUENAME*), old_load_tn);
+    close_live_pool(load_pool);
+    free(buf);
+
+    if(!ok){
+        fprintf(stderr, ";; WARNING: %s is a truncated / malformed cfasl.\n", path);
+        return NIL_Symbol;
+    }
     return T_Symbol;}
 
 

@@ -1,0 +1,74 @@
+cfasl-3 — Binary fasl loader/deserializer (plan-1-compact-fasl).
+
+Read a cfasl file and evaluate its top-level forms.
+
+WHAT
+- `bocl_fasl_load(path)`: open, verify magic + format-version (major mismatch ->
+  WARN and fall back to source, mirroring %CHECK-FASL-VERSION).
+- Read the INTERN TABLE: for each entry intern the symbol ONCE in its named package
+  (creating the package if the fasl carried a defpackage earlier — but package
+  creation is a normal top-level form in the stream, so most symbols' packages
+  already exist by the time they are referenced; order the intern table AFTER the
+  packages, or intern lazily on first reference).  Build the index->symbol array.
+- Read the CONSTANT POOL into an index->object array.
+- Read the FORM STREAM: for each form, deserialize the object graph (resolving
+  symbol-refs / constant-refs / backrefs against the arrays), then evaluate it
+  through the normal evaluator (evale / the %REPL-EVAL wrapper) so EVAL-WHEN and
+  side effects behave exactly as a loaded source form.
+- Rooting: the index arrays and the in-progress object must be pinned across the
+  eval of each form (eval can GC).
+
+KEY WIN: no reader (no character-level parse of huge s-exprs), no re-macroexpansion
+(forms are already macro-free), and each symbol interned exactly once.
+
+ACCEPTANCE: load a fasl produced by cfasl-2 and get identical definitions/effects to
+loading the source; round-trip the corpus from cfasl-2.
+
+DEPENDS ON: cfasl-1, cfasl-2.
+
+--------------------------------------------------------------------------------
+DONE (v1.6.3, cfasl branch).
+
+Implemented in two layers:
+
+sources/cfasl.c — the pure deserializer (mirror of the cfasl-2 writer):
+  cfasl_rctx* cfasl_rctx_new(cfasl_in*);
+  Ref         cfasl_read_object(cfasl_rctx*);   -- rebuild one object graph
+  int         cfasl_rctx_error(cfasl_rctx*);
+  void        cfasl_rctx_free(cfasl_rctx*);
+An id->object array mirrors the writer's shared-object table so BACKREFs resolve;
+containers are recorded (cons/string/simple-vector) or reserve their id
+(symbol/keyword/uninterned/ratio) BEFORE their sub-components, so cycles and
+shared structure reconstruct with the ORIGINAL eq identity.  Symbols are
+INTERNED (package_intern_cstring_in in the recorded package / KEYWORD_Package),
+never copied, so a deserialized symbol is EQ to the live one — the "intern each
+symbol once" win.  Uninterned symbols are freshly made (symbol_new).
+
+sources/bocl.c — bocl_fasl_load(path), the binary counterpart of
+bocl_load_cstring: reads the whole file, checks the "BOCLFASL" magic + u8
+version (mismatch -> WARN to stderr + return NIL so LOAD falls back, mirroring
+%CHECK-FASL-VERSION), binds *LOAD-PATHNAME*/*LOAD-TRUENAME* identically, then
+loops reading + evaluating one top-level form per live-pool frame (bocl_eval, or
+%LOAD-EVAL-TOPLEVEL-FORM under bocl_load_recover).  Per-form pools keep GC scans
+O(form) not O(file), exactly as the text loader; definitions survive via their
+symbols.  Returns T on success, NIL on not-a-cfasl / version mismatch, and warns
++ NIL on a truncated/malformed stream.
+
+DESIGN NOTE (deviation from the sketch): the format has NO separate intern-table
+/ constant-pool sections — cfasl-1 chose a single STREAMING shared-object id
+space, so the loader is just deserialize-graph + eval, with interning happening
+inline on first symbol occurrence (idempotent).  The shared-object scope is ONE
+top-level form (fresh rctx per form): this bounds retention and mirrors the text
+loader's per-form discipline, at the cost of re-emitting a cross-form-repeated
+symbol's name once per form.  The dominant wins — no character-level reader, no
+re-macroexpansion, within-form dedup, one intern per occurrence — are preserved;
+the writer resets per form (cfasl-4) to keep the id numbering in sync.
+
+ACCEPTANCE: tests/test_misc.c::
+  - test_cfasl_roundtrip  — writer->reader is EQUAL to the source graph and
+    preserves EQ (the two X of (setq x x) are one symbol, EQ to the interned X;
+    char/ratio/keyword/simple-vector round-trip).
+  - test_cfasl_load_file  — a full on-disk image (magic+version+DEFUN+EOF) loaded
+    via bocl_fasl_load defines the function with real effect ((%cfasl-sq 7)=>49),
+    and a non-cfasl file returns NIL for fallback.
+Full suite: see the cfasl-3 commit (green).

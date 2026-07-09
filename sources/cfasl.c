@@ -9,6 +9,7 @@
 #include "kernel_functions.h"
 #include "kernel_types.h"
 #include "kernel_objects.h"
+#include "packages.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -293,4 +294,140 @@ void cfasl_write_object(cfasl_wctx* w, Ref obj){
        streams, ...): flag the context so the caller keeps the text fasl.  These
        are rare in top-level forms; cfasl-6 extends coverage. */
     w->error = 1;
+}
+
+/* ======================================================================== */
+/* Object-graph reader (cfasl-3)                                             */
+/* ======================================================================== */
+
+/* Mirror of the writer's shared-object table: an id -> object array, filled in
+   emission order so CFASL_TAG_BACKREF resolves.  The reader ALLOCATES bocl
+   objects; its caller must have a live pool open (allocate() auto-roots every
+   new object there), so the array need only hold the pointers — the objects
+   are kept alive by the pool, not by this C array.  Containers are recorded
+   (or their id reserved) BEFORE their sub-components, so cycles reconstruct. */
+struct cfasl_rctx {
+    cfasl_in* in;
+    Ref*      objs;
+    size_t    cap;
+    size_t    count;   /* == next id to assign */
+    int       error;
+};
+
+cfasl_rctx* cfasl_rctx_new(cfasl_in* in){
+    cfasl_rctx* r = (cfasl_rctx*)calloc(1, sizeof(*r));
+    if(!r){ return NULL; }
+    r->in = in;
+    return r;
+}
+
+void cfasl_rctx_free(cfasl_rctx* r){
+    if(!r){ return; }
+    free(r->objs);
+    free(r);
+}
+
+int cfasl_rctx_error(cfasl_rctx* r){
+    return !r || r->error || (r->in && r->in->error);
+}
+
+/* Append an id slot (holding OBJ) and return its id. */
+static size_t cfasl_rctx_record(cfasl_rctx* r, Ref obj){
+    if(r->count == r->cap){
+        size_t ncap = r->cap ? r->cap*2 : 64;
+        Ref* n = (Ref*)realloc(r->objs, ncap*sizeof(*n));
+        if(!n){ r->error = 1; return r->count; }
+        r->objs = n; r->cap = ncap;
+    }
+    r->objs[r->count] = obj;
+    return r->count++;
+}
+
+Ref cfasl_read_object(cfasl_rctx* r){
+    if(cfasl_rctx_error(r)){ return NIL_Symbol; }
+    uint8_t tag = cfasl_get_u8(r->in);
+    switch(tag){
+    case CFASL_TAG_NIL:          return NIL_Symbol;
+    case CFASL_TAG_T:            return T_Symbol;
+    case CFASL_TAG_FIXNUM:       return integer_from_word((word)cfasl_get_svarint(r->in));
+    case CFASL_TAG_CHARACTER:    return code_character(integer_from_word((word)cfasl_get_uvarint(r->in)));
+    case CFASL_TAG_DOUBLE_FLOAT: return float_from_floating(cfasl_get_f64(r->in));
+    case CFASL_TAG_BACKREF:{
+        uint64_t id = cfasl_get_uvarint(r->in);
+        if(id >= r->count){ r->error = 1; return NIL_Symbol; }
+        return r->objs[id];
+    }
+    case CFASL_TAG_CONS:{
+        Ref cell = cons(NIL_Symbol, NIL_Symbol);   /* real cell first, for cycles */
+        size_t id = cfasl_rctx_record(r, cell);
+        cons_rplaca(cell, cfasl_read_object(r));
+        cons_rplacd(cell, cfasl_read_object(r));
+        (void)id;
+        return cell;
+    }
+    case CFASL_TAG_STRING:{
+        uint64_t n = cfasl_get_uvarint(r->in);
+        Ref s = string_new((halfword)n);
+        cfasl_rctx_record(r, s);
+        cfasl_get_bytes(r->in, string_octets(s), (size_t)n);
+        return s;
+    }
+    case CFASL_TAG_SYMBOL:{
+        size_t id = cfasl_rctx_record(r, NIL_Symbol);   /* reserve id before components */
+        Ref pkgname = cfasl_read_object(r);
+        Ref name    = cfasl_read_object(r);
+        Ref sym = NIL_Symbol;
+        if(!r->error){
+            char* p = string_cstring(pkgname);
+            char* nm = string_cstring(name);
+            Ref pkg = package_find_cstring(p);
+            if(nullp(pkg)){ r->error = 1; }              /* package must exist by now */
+            else { sym = package_intern_cstring_in(nm, pkg); }
+            free(p); free(nm);
+        }
+        r->objs[id] = sym;
+        return sym;
+    }
+    case CFASL_TAG_KEYWORD:{
+        size_t id = cfasl_rctx_record(r, NIL_Symbol);
+        Ref name = cfasl_read_object(r);
+        Ref sym = NIL_Symbol;
+        if(!r->error){
+            char* nm = string_cstring(name);
+            sym = package_intern_cstring_in(nm, KEYWORD_Package);
+            free(nm);
+        }
+        r->objs[id] = sym;
+        return sym;
+    }
+    case CFASL_TAG_UNINTERNED:{
+        size_t id = cfasl_rctx_record(r, NIL_Symbol);
+        Ref name = cfasl_read_object(r);
+        Ref sym = r->error ? NIL_Symbol : symbol_new(name);
+        r->objs[id] = sym;
+        return sym;
+    }
+    case CFASL_TAG_RATIO:{
+        size_t id = cfasl_rctx_record(r, NIL_Symbol);
+        Ref num = cfasl_read_object(r);
+        Ref den = cfasl_read_object(r);
+        Ref rat = r->error ? NIL_Symbol : ratio_new(num, den);
+        r->objs[id] = rat;
+        return rat;
+    }
+    case CFASL_TAG_SIMPLE_VECTOR:{
+        uint64_t n = cfasl_get_uvarint(r->in);
+        Ref lst = NIL_Symbol;                       /* length-n placeholder */
+        for(uint64_t i=0;i<n;i++){ lst = cons(NIL_Symbol, lst); }
+        Ref vec = vector_new(lst);
+        cfasl_rctx_record(r, vec);                  /* id before elements */
+        for(uint64_t i=0;i<n && !r->error;i++){
+            svref_set(vec, integer_from_word((word)i), cfasl_read_object(r));
+        }
+        return vec;
+    }
+    default:
+        r->error = 1;
+        return NIL_Symbol;
+    }
 }

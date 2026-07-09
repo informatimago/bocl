@@ -11,6 +11,7 @@
 #include "packages.h"
 #include "bocl.h"
 #include "macros.h"
+#include "memory.h"   /* open_live_pool/close_live_pool for the cfasl reader */
 #include "cfasl.h"    /* cfasl-1: binary fasl byte/varint/float primitives */
 
 TEST_SUITE_SETUP(misc_init){
@@ -290,10 +291,96 @@ static void test_cfasl_writer(void){
     cfasl_wctx_free(w2); cfasl_out_free(&b2);
 }
 
+/* Serialize FORM with the writer and read it back with the reader (into an open
+   live pool).  Sets *back.  Asserts no writer/reader error and clean EOF. */
+static Ref cfasl_roundtrip(const char* src, uword pool){
+    (void)pool;
+    Ref original = e(src);
+    cfasl_out b; cfasl_out_init(&b);
+    cfasl_wctx* w = cfasl_wctx_new(&b);
+    cfasl_write_object(w, original);
+    TEST_EQ(eql, NIL_Symbol, cfasl_wctx_error(w) ? T_Symbol : NIL_Symbol);
+    cfasl_in in; cfasl_in_init(&in, b.data, b.len);
+    cfasl_rctx* r = cfasl_rctx_new(&in);
+    Ref back = cfasl_read_object(r);
+    TEST_EQ(eql, NIL_Symbol, cfasl_rctx_error(r) ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, T_Symbol, cfasl_at_end(&in) ? T_Symbol : NIL_Symbol);
+    cfasl_rctx_free(r);
+    cfasl_wctx_free(w);
+    cfasl_out_free(&b);
+    return back;
+}
+
+/* cfasl-3: the loader/deserializer rebuilds the graph EQUAL to the original and
+   preserves EQ identity for shared sub-objects (issue cfasl-3-loader). */
+static void test_cfasl_roundtrip(void){
+    uword pool = open_live_pool();
+
+    /* (1) conses / symbols / string / fixnums: EQUAL descends fully. */
+    Ref original = e("'(defun f (x) (setq x x) \"doc\" (a b 42) nil)");
+    Ref back = cfasl_roundtrip("'(defun f (x) (setq x x) \"doc\" (a b 42) nil)", pool);
+    TEST_EQ(eql, T_Symbol, equal(original, back) ? T_Symbol : NIL_Symbol);
+
+    /* EQ sharing: the two X of (setq x x) are one symbol, and it is THE interned
+       X (not a fresh copy) — the deserializer interns, it does not build symbols. */
+    Ref setqform = car(cdr(cdr(cdr(back))));      /* (setq x x) */
+    Ref x1 = car(cdr(setqform));
+    Ref x2 = car(cdr(cdr(setqform)));
+    TEST_EQ(eql, T_Symbol, (x1==x2) ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, T_Symbol, (x1==e("'x")) ? T_Symbol : NIL_Symbol);
+
+    /* (2) scalars + simple-vector + keyword: EQUAL skips vectors, so check the
+       shape element-wise. */
+    Ref v = cfasl_roundtrip("(vector #\\Z 3/4 :kw)", pool);   /* a live simple-vector */
+    TEST_EQ(eql, T_Symbol, eql(svref(v, I(0)), e("#\\Z")) ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, T_Symbol, eql(svref(v, I(1)), e("3/4"))  ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, T_Symbol, (svref(v, I(2)) == e(":kw"))   ? T_Symbol : NIL_Symbol);   /* keyword interned once */
+
+    close_live_pool(pool);
+}
+
+/* cfasl-3: bocl_fasl_load reads a complete cfasl image from disk (magic +
+   version + form stream + EOF) and evaluates its forms with real side effects,
+   and rejects a non-cfasl file so LOAD can fall back. */
+static void test_cfasl_load_file(void){
+    /* assemble a full image: header, one DEFUN form, EOF tag */
+    Ref form = e("'(defun %cfasl-sq (x) (* x x))");
+    cfasl_out b; cfasl_out_init(&b);
+    cfasl_put_bytes(&b, CFASL_MAGIC, CFASL_MAGIC_LEN);
+    cfasl_put_u8(&b, (uint8_t)CFASL_VERSION);
+    cfasl_put_u8(&b, 0);                                  /* flags */
+    cfasl_wctx* w = cfasl_wctx_new(&b);
+    cfasl_write_object(w, form);
+    cfasl_put_u8(&b, CFASL_TAG_EOF);
+    TEST_EQ(eql, NIL_Symbol, (cfasl_wctx_error(w)||b.error) ? T_Symbol : NIL_Symbol);
+
+    char path[] = "/tmp/bocl_cfaslXXXXXX";
+    int fd = mkstemp(path);
+    TEST_EQ(eql, T_Symbol, (fd>=0) ? T_Symbol : NIL_Symbol);
+    ssize_t wr = write(fd, b.data, b.len); (void)wr; close(fd);
+
+    Ref res = bocl_fasl_load(path);
+    unlink(path);
+    TEST_EQ(eql, T_Symbol, res);                         /* loaded OK */
+    TEST_EQ(eql, I(49), e("(%cfasl-sq 7)"));             /* the DEFUN took effect */
+
+    /* a file that is not a cfasl loads as NIL so LOAD falls back to source */
+    char p2[] = "/tmp/bocl_notfaslXXXXXX";
+    int fd2 = mkstemp(p2);
+    ssize_t wr2 = write(fd2, "not a bocl fasl!!!!", 19); (void)wr2; close(fd2);
+    TEST_EQ(eql, NIL_Symbol, bocl_fasl_load(p2));
+    unlink(p2);
+
+    cfasl_wctx_free(w);
+    cfasl_out_free(&b);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
     TEST_CASE("cfasl writer",        test_cfasl_writer)
+    TEST_CASE("cfasl roundtrip",     test_cfasl_roundtrip)
+    TEST_CASE("cfasl load file",     test_cfasl_load_file)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

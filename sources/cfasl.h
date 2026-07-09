@@ -148,4 +148,27 @@ int         cfasl_wctx_error(cfasl_wctx* w);   /* out-of-memory or unsupported t
 /* Serialize one object graph into the context's output buffer. */
 void        cfasl_write_object(cfasl_wctx* w, Ref obj);
 
+/* ---- Object-graph reader (cfasl-3) -------------------------------------- */
+/* Rebuilds an object graph written by cfasl_write_object, mirroring the shared-
+   object table with an id->object array so BACKREFs resolve and cycles / shared
+   structure reconstruct with the original EQ identity.  The reader ALLOCATES
+   bocl objects: the CALLER must have a live pool open before each read (see
+   bocl_fasl_load) — allocate() auto-roots new objects there.  The shared-object
+   scope is ONE top-level form: bocl_fasl_load uses a fresh context per form, so
+   ids restart at 0 each form (bounded retention, mirroring the text loader's
+   per-form pool discipline; the writer resets per form to match). */
+typedef struct cfasl_rctx cfasl_rctx;
+
+cfasl_rctx* cfasl_rctx_new(cfasl_in* in);
+void        cfasl_rctx_free(cfasl_rctx* r);
+int         cfasl_rctx_error(cfasl_rctx* r);   /* truncated / malformed / bad ref */
+Ref         cfasl_read_object(cfasl_rctx* r);
+
+/* Load a binary fasl: verify magic + version, then deserialize and evaluate
+   each top-level form (like bocl_load_cstring for text).  Returns T_Symbol on a
+   successful load, or NIL_Symbol when PATH is not a cfasl / carries a version
+   this build cannot read (the caller then falls back to the source or text
+   fasl, mirroring %CHECK-FASL-VERSION).  Defined in bocl.c. */
+Ref         bocl_fasl_load(const char* path);
+
 #endif

@@ -57,7 +57,6 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-cfasl-3-loader.issue                 (plan-1)
 cfasl-4-compile-file-integ.issue     (plan-1)
 cfasl-5-benchmark-validate.issue     (plan-1)
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
