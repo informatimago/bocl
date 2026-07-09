@@ -44,3 +44,17 @@ Fix
 ---
 Give SUBTYPEP a more complete decision procedure over the standard type lattice
 so the certainty flag is T whenever the relationship is in fact decidable.
+
+== RESOLVED (v1.5.12) ==
+Added a complete atomic-type ancestor lattice (*%ATOMIC-TYPE-SUPERTYPES* +
+%ATOMIC-TYPE-ANCESTORS) covering the standard number / character / symbol / list /
+sequence / array / string / stream / etc. atomic types, each with its EXHAUSTIVE
+proper supertypes.  SUBTYPEP's fallback (after the enumerated clauses and the CLOS
+path) now, for two symbol type specifiers: returns (T T) when TYPE2 is a modelled
+ancestor of TYPE1; (NIL T) — CERTAIN not-a-subtype — when both are modelled and
+that fails; and (NIL NIL) only when a type is unmodelled (never a false certainty,
+which the "why not a quick fix" note warned about — the lattice is complete for the
+types it lists).  So (subtypep 'string 'number) => (NIL T), and previously-missed
+subtypes like (subtypep 'keyword 'symbol) / (boolean symbol) => (T T).
+Re-enabled the previously-disabled certainty assertion in tests/test_slice15.c
+(+ keyword/integer-float cases).  Full unit suite (42) green.

@@ -27,7 +27,6 @@ uiop-bocl-porting.issue
 
 precise-condition-subclasses.issue
 should-tests-type-errors.issue
-subtypep-certainty.issue
 
 deferred-bignum-ops.issue
 deferred-cons-paged-heap.issue

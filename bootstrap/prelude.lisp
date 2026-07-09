@@ -7796,6 +7796,37 @@ change the count, but PREDICATE is called in that order (it may have effects)."
 
 ;;; bocl's kernel TYPE-OF handles most types; add coverage for a few more.
 
+;;; Standard atomic-type lattice for SUBTYPEP certainty (issue subtypep-certainty).
+;;; Each entry lists a modelled atomic type followed by ALL its proper supertypes
+;;; (T is implicit and handled separately).  Completeness matters: a type is only
+;;; listed when its supertype set is exhaustive, so "not a subtype" can be reported
+;;; as CERTAIN.  An unlisted type is :UNKNOWN -> (NIL NIL), never a false certainty.
+(defvar *%atomic-type-supertypes*
+  '((fixnum integer rational real number) (bignum integer rational real number)
+    (integer rational real number) (ratio rational real number)
+    (rational real number) (float real number)
+    (single-float float real number) (double-float float real number)
+    (short-float float real number) (long-float float real number)
+    (real number) (complex number) (number)
+    (cons list sequence) (null symbol list sequence) (list sequence)
+    (symbol) (keyword symbol) (boolean symbol)
+    (string vector array sequence) (simple-string string vector array sequence)
+    (base-string string vector array sequence) (bit-vector vector array sequence)
+    (simple-bit-vector bit-vector vector array sequence)
+    (simple-vector vector array sequence) (vector array sequence)
+    (array) (simple-array array) (sequence)
+    (character) (base-char character) (standard-char base-char character)
+    (extended-char character)
+    (function) (compiled-function function) (hash-table) (package) (pathname)
+    (stream) (readtable) (random-state)))
+
+(defun %atomic-type-ancestors (type)
+  "Complete proper supertypes of a modelled standard atomic TYPE (T implicit), or
+   :UNKNOWN if TYPE is not modelled."
+  (cond ((eq type t) '())
+        ((assoc type *%atomic-type-supertypes*) (cdr (assoc type *%atomic-type-supertypes*)))
+        (t :unknown)))
+
 (defun subtypep (type1 type2 &optional environment)
   "Return T if TYPE1 is definitely a subtype of TYPE2.
   Simplified: handles common cases."
@@ -7836,6 +7867,15 @@ change the count, but PREDICATE is called in that order (it may have effects)."
              ((member type2 '(standard-object t class standard-class)) (values t t))
              ((null type2) (values nil t))
              (t (values nil nil)))))
+    ;; Standard atomic-type lattice: TYPE1 <= TYPE2 iff TYPE2 is a modelled
+    ;; ancestor; when both are modelled and that fails, the non-subtype relation is
+    ;; CERTAIN (issue subtypep-certainty).  Unmodelled types stay (NIL NIL).
+    ((and (symbolp type1) (symbolp type2))
+     (let ((a1 (%atomic-type-ancestors type1)))
+       (cond ((eq a1 :unknown)                             (values nil nil))
+             ((member type2 a1)                            (values t   t))
+             ((eq (%atomic-type-ancestors type2) :unknown) (values nil nil))
+             (t                                            (values nil t)))))
     (t (values nil nil))))
 
 ;;;; =========================================================================
