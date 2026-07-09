@@ -53,6 +53,39 @@ static Ref skip_declares(Ref body){
         body=cdr(body);}
     return body;}
 
+/* Skip a body's leading (declare ...) forms AND an optional documentation string
+   (which may appear before or after the declarations, per CLHS 3.4.11) — but a
+   lone trailing string is a return value, not documentation, so only treat a
+   string as a docstring when at least one more form follows it. */
+static Ref skip_declares_and_doc(Ref body){
+    bool doc_seen=false;
+    while(consp(body)){
+        Ref f=car(body);
+        if(consp(f) && car(f)==S(DECLARE)){ body=cdr(body); continue; }
+        if(!doc_seen && stringp(f) && consp(cdr(body))){ doc_seen=true; body=cdr(body); continue; }
+        break;}
+    return body;}
+
+/* Wrap an implicit-progn BODY in a lexical block named BLOCK_NAME, keeping any
+   leading (declare ...) forms and documentation string at the outer (lambda)
+   level:
+       (decl/doc... form...)  ->  (decl/doc... (block BLOCK_NAME form...))
+   so the implicit block of a named function (DEFUN / FLET / LABELS / DEFMACRO) is
+   part of the STORED body — visible to FUNCTION-LAMBDA-EXPRESSION and a future
+   compiler (which can turn a lexical block into branch instructions) — rather
+   than only established dynamically at call time.  Declarations must stay OUTSIDE
+   the block: BLOCK evaluates its forms, so a (declare ...) left inside would be
+   evaluated as a call.  Every cons here is auto-rooted in the live pool
+   (memory.c allocate()), so no manual rooting is needed. */
+static Ref make_block_body(Ref block_name,Ref body){
+    Ref forms=skip_declares_and_doc(body);
+    Ref result=cons(cons(BLOCK_Symbol,cons(block_name,forms)),NIL_Symbol);
+    /* re-attach the skipped leading declarations / docstring in original order */
+    Ref head_rev=NIL_Symbol;
+    for(Ref b=body; b!=forms; b=cdr(b)){ head_rev=cons(car(b),head_rev); }
+    for(Ref d=head_rev; consp(d); d=cdr(d)){ result=cons(car(d),result); }
+    return result;}
+
 static void push_frame(Frame* frame,Ref environment){
     /* Global dynamic stack — used by CATCH/THROW, HANDLER-CASE/HANDLER-BIND and
        all non-local-exit unwinding, so those work across function-call
@@ -506,7 +539,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref params=cadr(arguments);
             Ref body=cddr(arguments);
             if(symbolp(name)){
-                Ref fn=function_new(name,params,body);
+                Ref fn=function_new(name,params,make_block_body(name,body));
                 set_symbol_function(name,fn);
                 VALUES1(name);}
             /* (defun (setf foo) (val arg...) ...) — register a SETF function for
@@ -514,7 +547,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             if(consp(name) && eql(SETF_Symbol,car(name))
                && consp(cdr(name)) && symbolp(cadr(name)) && nullp(cddr(name))){
                 Ref sym=cadr(name);
-                Ref fn=function_new(sym,params,body);
+                Ref fn=function_new(sym,params,make_block_body(sym,body));
                 MultipleValues mv;
                 kernel_apply(symbol_function(symbol_intern_cstring("%REGISTER-SETF-FUNCTION")),
                              list(sym,fn,(Ref)NULL),&mv);
@@ -561,7 +594,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref body=cddr(arguments);
             if(!symbolp(name)){
                 ERROR("DEFMACRO: %s is not a symbol",string_cstring(prin1_to_string(name)));}
-            Ref fn=function_new(name,params,body);
+            Ref fn=function_new(name,params,make_block_body(name,body));
             add_to_live_pool(fn);   /* function_new leaves fn unrooted; putf() below
                 conses (may GC) while fn is not yet on the plist — without this it is
                 freed mid-store, leaving a dangling $MACRO value that a later
@@ -908,7 +941,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref name=car(binding);
                     Ref lambda_list=cadr(binding);
                     Ref fn_body=cddr(binding);
-                    Ref fn_wrapper=env_make_local_function(name,lambda_list,fn_body);
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body));
                     environment_add_function(fn_wrapper,new_environment);}}
              environment=new_environment;
              {dolist(subform,body){
@@ -935,7 +968,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref name=car(binding);
                     Ref lambda_list=cadr(binding);
                     Ref fn_body=cddr(binding);
-                    Ref fn_wrapper=env_make_local_function(name,lambda_list,fn_body);
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body));
                     environment_add_function(fn_wrapper,new_environment);}}
              environment=new_environment;
              {dolist(subform,body){

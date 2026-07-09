@@ -1,0 +1,48 @@
+DEF-FORMS AS MACROS + LEXICAL BLOCKS (pjb, 2026-07)
+
+SYMPTOM (pjb report):
+- DEFUN / IN-PACKAGE / DEFVAR ... are open-coded special forms in eval.c, but
+  (special-operator-p 'defun) => NIL and they have NO macro definition
+  ((macroexpand '(in-package ...)) / (macroexpand '(defun ...)) return unchanged,
+  (symbol-function 'defun) is unbound).  So they are neither special operators nor
+  macros — an inconsistent limbo.
+- Downstream: (function-lambda-expression 'fact) returned (LAMBDA (X) <body>)
+  WITHOUT the implicit (BLOCK FACT ...) that a real DEFUN establishes, because the
+  block was created only at run time (eval_body_in_block, keyed on lisp_name) and
+  never stored in the function body.  return-from worked but FLE/macroexpand/fasl
+  did not reflect the block, and a compiler could not turn the (lexical) block into
+  branches.
+
+DECISION (pjb-confirmed): they are ANSI MACROS, not special operators
+(special-operator-p stays NIL — making it T would be non-conforming).  Give them
+proper macro definitions; make the implicit block LEXICAL (part of the stored
+body); fully expand them in the fasl, aided by an implementation operator
+BOCL:DEFINE-FUNCTION.  The block special operator interprets the lexical block, so
+a named function has two frames — the call frame (eval_body_in_block) and the
+block frame (the lexical BLOCK) — while an anonymous LAMBDA has only the call
+frame.
+
+PHASE 1 (v1.5.3) — DONE: LEXICAL BLOCKS.
+- New eval.c helper make_block_body(name, body): wraps the body in a lexical
+  (BLOCK name form...), keeping leading (declare ...) forms AND a documentation
+  string OUTSIDE the block (BLOCK evaluates its forms, so a declare left inside
+  would be evaluated as a call).  skip_declares_and_doc() skips an interleaved
+  docstring (only when more forms follow — a lone trailing string is a return
+  value).  Every cons auto-roots in the live pool, so no manual rooting.
+- DEFUN (symbol and (setf foo)), FLET, LABELS, and DEFMACRO now store
+  block-wrapped bodies.  FUNCTION-LAMBDA-EXPRESSION shows the block; return-from
+  the function name resolves via the lexical block.  eval_body_in_block (the call
+  frame) is unchanged, so the debugger :CALL backtrace is intact and the run-time
+  block is now a harmless redundant safety net (a future compiler uses the lexical
+  one).  Full unit suite (42) green; new regression tests in test_slice25.
+
+PHASE 2 (TODO) — DEF-FORMS AS MACROS + FASL EXPANSION:
+- BOCL:DEFINE-FUNCTION primitive (name-preserving install: lisp_name = name).
+- DEFUN macro with proper body parsing (docstring -> DOCUMENTATION; declarations
+  kept at the lambda level / wrapped in LOCALLY / treated / ignored as
+  appropriate), expanding to
+  (bocl:define-function 'name (lambda ll decl* (block name form*))) + doc.
+- Macro definitions for IN-PACKAGE / DEFVAR / DEFPARAMETER / DEFCONSTANT so
+  MACROEXPAND expands them; MACROEXPAND-ALL / the fasl then expand them (fully
+  macro-free fasl).  eval keeps a fast path (C special form checked first, or the
+  C DEFUN delegates to the macro post-bootstrap) — kept consistent with the macro.

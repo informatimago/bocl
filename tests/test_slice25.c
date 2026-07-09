@@ -298,6 +298,16 @@ static void test_function_lambda_expression(void){
     /* third value NAME is the defun's name */
     TEST_EQ(eql, e("'s25-fle"),
             e("(nth-value 2 (function-lambda-expression #'s25-fle))"));
+    /* the body carries the implicit lexical (BLOCK <name> ...) — established in
+       the stored body, not only at call time */
+    TEST_EQ(eql, e("'block"),
+            e("(car (caddr (function-lambda-expression #'s25-fle)))"));
+    TEST_EQ(eql, e("'s25-fle"),
+            e("(cadr (caddr (function-lambda-expression #'s25-fle)))"));
+    /* and RETURN-FROM the function name works via that lexical block */
+    e("(defun s25-rf (x) (if (= x 0) (return-from s25-rf :zero) x))");
+    TEST_EQ(eql, e("':zero"), e("(s25-rf 0)"));
+    TEST_EQ(eql, I(5),        e("(s25-rf 5)"));
     /* a closure reports closure-p (second value) true */
     TEST_EQ(eql, T_Symbol,
             e("(let ((n 1)) (nth-value 1 (function-lambda-expression"
