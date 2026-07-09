@@ -7,6 +7,7 @@
 #include "backtrace_compat.h"   /* execinfo backtrace() or no-op stubs (musl) */
 #include <stdint.h>
 #include "memory.h"
+#include "profile.h"
 #include "boerror.h"
 #include "kernel.h"
 #include "macros.h"
@@ -451,7 +452,7 @@ void* allocate(size_t size){
         heap_check_n = s ? (atol(s) > 0 ? atol(s) : 1) : 0;
         const char* a = getenv("BOCL_HEAPCHECK_AFTER");
         heap_check_after = a ? (uword)atol(a) : 0;}
-    heap_total_allocs++;
+    heap_total_allocs++; PROFILE_BUMP(PROF_C_ALLOC);
     if(heap_check_n > 0 && heap_total_allocs >= heap_check_after){
         if(++heap_check_c >= heap_check_n){ heap_check_c = 0; heap_verify(); }}
     Block* result=allocate_internal(size);
@@ -1000,6 +1001,7 @@ static void gc_rebuild_remset_full(void){
 uword garbage_collect(void){
     if(!garbage_collection_enabled){
         return 0;}
+    PROFILE_ENTER(PROF_GC); PROFILE_BUMP(PROF_C_GC);
     if(gc_log_enabled < 0){ gc_log_enabled = getenv("BOCL_GCLOG")?1:0; }
     gc_major_count++;
     mark((Block*)rootset);
@@ -1014,6 +1016,7 @@ uword garbage_collect(void){
     gc_demote_pinned();
     gc_rebuild_remset_full();   /* full scan: recover old->young edges created by promotion */
     if(gc_log_enabled){ gc_log("major", freed); }
+    PROFILE_EXIT(PROF_GC);
     return freed;}
 
 /* Minor (generational) collection: reclaim only young garbage without
@@ -1031,6 +1034,7 @@ uword minor_collect(void){
         return 0;}
     if(gc_log_enabled < 0){ gc_log_enabled = getenv("BOCL_GCLOG")?1:0; }
     gc_minor_count++;
+    PROFILE_ENTER(PROF_GC); PROFILE_BUMP(PROF_C_GC);
     mark_wstack_top = 0;
     /* (a) rootset (young scaffold) — traces the active pool chain + live objects */
     minor_push_if_young((Block*)rootset);
@@ -1048,6 +1052,7 @@ uword minor_collect(void){
     uword freed = sweep(true);     /* young-only: skips old, reclaims young dead, no promote */
     gc_rebuild_remset();
     if(gc_log_enabled){ gc_log("minor", freed); }
+    PROFILE_EXIT(PROF_GC);
     return freed;}
 
 

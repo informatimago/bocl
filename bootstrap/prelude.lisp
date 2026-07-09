@@ -11098,6 +11098,35 @@ the rest take :INITIAL-ELEMENT."
    the kernel stack-overflow guard calls this to signal a catchable condition."
   (make-condition 'bocl::out-of-stack-memory-error :limit limit :used used))
 
+;;; ---- Profiling interface (issue hot-1-profile) ----------------------------
+;;; Phase-exclusive wall-clock profiler for the performance program.  Active only
+;;; when bocl was built with -DBOCL_PROFILE (BOCL:PROFILE-ENABLED-P); otherwise
+;;; BOCL:PROFILE-REPORT prints "not compiled in".  The kernel instruments READ /
+;;; EVAL / GC in the load loop (zero cost when off); WITH-PROFILE-PHASE brackets a
+;;; coarser phase (e.g. :MACROEXPAND, :CLOS) from Lisp.
+(defun bocl::profile-reset ()
+  "Zero the profiler's phase timers and counters."
+  (%profile-reset))
+(defun bocl::profile-report (&optional (stream *standard-output*))
+  "Print the phase-exclusive time breakdown + counters to STREAM."
+  (%profile-report stream))
+(defun bocl::profile-enabled-p ()
+  "T if bocl was built with -DBOCL_PROFILE (instrumentation compiled in)."
+  (%profile-enabled-p))
+(defun bocl::%profile-phase-id (keyword)
+  (case keyword (:other 0) (:read 1) (:macroexpand 2) (:eval 3) (:gc 4) (:clos 5)
+                (t 3)))
+(defmacro bocl::with-profile-phase (phase &body body)
+  "Charge BODY's exclusive time to PHASE (a keyword: :read :macroexpand :eval :gc
+   :clos), pausing the enclosing phase.  A no-op unless -DBOCL_PROFILE."
+  (let ((id (gensym "PID")))
+    `(let ((,id (bocl::%profile-phase-id ,phase)))
+       (%profile-phase-enter ,id)
+       (unwind-protect (progn ,@body) (%profile-phase-exit ,id)))))
+(export '(bocl::profile-reset bocl::profile-report bocl::profile-enabled-p
+          bocl::with-profile-phase)
+        "BOCL")
+
 (define-condition bocl::invalid-module-plist (error)
   ((object :initarg :object :reader bocl::invalid-module-plist-object)
    (reason :initarg :reason :reader bocl::invalid-module-plist-reason)))

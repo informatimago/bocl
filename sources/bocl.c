@@ -8,6 +8,7 @@
 #endif
 #include "bocl.h"
 #include "memory.h"
+#include "profile.h"
 #include "boerror.h"
 #include "kernel.h"
 #include "stream.h"
@@ -240,8 +241,11 @@ Ref bocl_load_cstring(const char* path){
     int dbgf=0;
     for(;;){
         uword form_pool=open_live_pool();
+        PROFILE_ENTER(PROF_READ);
         Ref sexp=kernel_read(inp,NIL_Symbol,inp,NIL_Symbol);
+        PROFILE_EXIT(PROF_READ);
         if(sexp==inp){ close_live_pool(form_pool); break; }
+        PROFILE_BUMP(PROF_C_FORM);
         add_to_live_pool(sexp);
         if(do_print){
             prin1(sexp,out);
@@ -252,6 +256,7 @@ Ref bocl_load_cstring(const char* path){
             if(consp(sexp)&&symbolp(car(sexp))){ fputs(string_cstring(symbol_name(car(sexp))),stderr);
                 if(consp(cdr(sexp))&&symbolp(cadr(sexp))){ fputc(' ',stderr); fputs(string_cstring(symbol_name(cadr(sexp))),stderr);} }
             fputc('\n',stderr); fflush(stderr); }
+        PROFILE_ENTER(PROF_EVAL);
         if(bocl_load_recover){
             /* Route through %LOAD-EVAL-TOPLEVEL-FORM so an error in this form is
                caught and reported rather than aborting the rest of the file. */
@@ -263,6 +268,7 @@ Ref bocl_load_cstring(const char* path){
                 bocl_eval(sexp);}
         } else {
             bocl_eval(sexp);}
+        PROFILE_EXIT(PROF_EVAL);
         close_live_pool(form_pool);}
     stream_close(inp);
     if(do_verbose){
@@ -1391,6 +1397,30 @@ static void kernel_DEFINE_CONSTANT(unused Ref s, Ref args, MultipleValues* resul
 static void kernel_IN_PACKAGE_FN(unused Ref s, Ref args, MultipleValues* results){
     results->count=1; results->values[0]=bocl_in_package(cons_car(args));}
 
+/* ---- Profiling interface (issue hot-1-profile) --------------------------
+   Drive the phase-exclusive profiler (profile.c).  Active only when the sources
+   were built with -DBOCL_PROFILE; otherwise these are harmless no-ops and
+   %PROFILE-REPORT prints "not compiled in". */
+static void kernel_PROFILE_RESET(unused Ref f, unused Ref arguments, MultipleValues* results){
+    profile_reset();
+    results->count=1; results->values[0]=NIL_Symbol;}
+static void kernel_PROFILE_REPORT(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref stream = nullp(arguments) ? variable_value(S(*STANDARD-OUTPUT*)) : cons_car(arguments);
+    FILE* out = stream_output_cstream(stream);
+    profile_report(out);
+    fflush(out);
+    results->count=1; results->values[0]=NIL_Symbol;}
+static void kernel_PROFILE_ENABLED_P(unused Ref f, unused Ref arguments, MultipleValues* results){
+    results->count=1; results->values[0]= profile_enabled() ? T_Symbol : NIL_Symbol;}
+static void kernel_PROFILE_PHASE_ENTER(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref id = cons_car(arguments);
+    if(integerp(id)){ word phase=integer_value(id); PROFILE_ENTER((profile_phase_t)phase); (void)phase; }
+    results->count=1; results->values[0]=NIL_Symbol;}
+static void kernel_PROFILE_PHASE_EXIT(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref id = cons_car(arguments);
+    if(integerp(id)){ word phase=integer_value(id); PROFILE_EXIT((profile_phase_t)phase); (void)phase; }
+    results->count=1; results->values[0]=NIL_Symbol;}
+
 /* (ED &optional x) → NIL stub. */
 static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -1846,6 +1876,19 @@ void bocl_register_load(void){
                      symbol_intern_cstring("FUNCTION"),NULL),
                 kernel_bocl_DEFINE_FUNCTION));
             package_export(BOCL_Package,dfn); }
+        {   Ref nofn=list(NULL);
+            Ref opt_s=list(symbol_intern_cstring("&OPTIONAL"),symbol_intern_cstring("STREAM"),NULL);
+            Ref id1=list(symbol_intern_cstring("ID"),NULL);
+            set_symbol_function(symbol_intern_cstring("%PROFILE-RESET"),
+                built_in_function_new(symbol_intern_cstring("%PROFILE-RESET"),nofn,kernel_PROFILE_RESET));
+            set_symbol_function(symbol_intern_cstring("%PROFILE-REPORT"),
+                built_in_function_new(symbol_intern_cstring("%PROFILE-REPORT"),opt_s,kernel_PROFILE_REPORT));
+            set_symbol_function(symbol_intern_cstring("%PROFILE-ENABLED-P"),
+                built_in_function_new(symbol_intern_cstring("%PROFILE-ENABLED-P"),list(NULL),kernel_PROFILE_ENABLED_P));
+            set_symbol_function(symbol_intern_cstring("%PROFILE-PHASE-ENTER"),
+                built_in_function_new(symbol_intern_cstring("%PROFILE-PHASE-ENTER"),id1,kernel_PROFILE_PHASE_ENTER));
+            set_symbol_function(symbol_intern_cstring("%PROFILE-PHASE-EXIT"),
+                built_in_function_new(symbol_intern_cstring("%PROFILE-PHASE-EXIT"),list(symbol_intern_cstring("ID"),NULL),kernel_PROFILE_PHASE_EXIT)); }
         {   Ref nv=list(symbol_intern_cstring("NAME"),symbol_intern_cstring("VALUE"),NULL);
             Ref n =list(symbol_intern_cstring("NAME"),NULL);
             set_symbol_function(symbol_intern_cstring("%DEFINE-VARIABLE"),

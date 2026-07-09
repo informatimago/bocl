@@ -191,8 +191,21 @@ static void test_write_to_string(void){
     TEST_EQ(equal, e("\"hello\""),
             e("(write-to-string \"hello\" :escape nil)"));}
 
+/* Profiling interface (issue hot-1-profile).  The default build has
+   -DBOCL_PROFILE OFF, so ENABLED-P is NIL and the entry points are no-ops. */
+static void test_profile_interface(void){
+    TEST_EQ(eql, NIL_Symbol, e("(bocl:profile-enabled-p)"));   /* off in default build */
+    /* WITH-PROFILE-PHASE runs BODY and returns its value even when off */
+    TEST_EQ(eql, I(42), e("(bocl:with-profile-phase :macroexpand 42)"));
+    TEST_EQ(eql, I(3),  e("(bocl:with-profile-phase :eval (+ 1 2))"));
+    /* RESET / REPORT don't error (report to a string stream) */
+    TEST_EQ(eql, NIL_Symbol, e("(bocl:profile-reset)"));
+    TEST_EQ(eql, T_Symbol,
+            e("(progn (with-output-to-string (s) (bocl:profile-report s)) t)"));}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
+    TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
     TEST_CASE("array-in-bounds-p",   test_array_in_bounds)

@@ -15,6 +15,7 @@
 #include "kernel_private.h"
 #include "macros.h"
 #include "memory.h"
+#include "profile.h"
 #include "boerror.h"
 #include "cons.h"
 #include "data.h"
@@ -1472,6 +1473,7 @@ static Ref symbol_intern_obarray(Ref name,Ref obarray,bool* internal){
 
 Ref symbol_intern(Ref name){
     bool internal;
+    PROFILE_BUMP(PROF_C_INTERN);
     return symbol_intern_obarray(name,KERNEL_obarray,&internal);}
 
 /* Package support (packages.c): an "obarray" is a cons sentinel whose CDR is the
@@ -2587,6 +2589,7 @@ void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results)
    where the frame machinery (push_frame / UNWIND) lives. */
 
 void kernel_apply_built_in(Ref function,BuiltInFunction* slots,Ref arguments,MultipleValues* results){
+    PROFILE_BUMP(PROF_C_FUNCALL);
     slots->kernel_function(function,arguments,results);}
 
 

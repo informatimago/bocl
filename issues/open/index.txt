@@ -57,7 +57,6 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-hot-1-profile.issue                  (plan-3) FIRST — attribute the time; gates all
 cfasl-1-format-spec.issue            (plan-1)
 cfasl-2-object-serializer.issue      (plan-1)
 cfasl-3-loader.issue                 (plan-1)

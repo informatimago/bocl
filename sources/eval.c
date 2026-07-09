@@ -2,6 +2,7 @@
 #include <sys/resource.h>
 #include "eval.h"
 #include "kernel.h"
+#include "profile.h"
 #include "boerror.h"
 #include "cons.h"
 #include "environment.h"
@@ -2080,6 +2081,7 @@ static void eval_body_in_block(Ref function,Ref block_name,Ref body,Ref environm
     (void)function;}
 
 void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleValues* results){
+    PROFILE_BUMP(PROF_C_FUNCALL);
     uword pool=open_live_pool();
     add_to_live_pool(function);
     add_to_live_pool(arguments);
@@ -2092,6 +2094,7 @@ void kernel_apply_function(Ref function,Function* slots,Ref arguments,MultipleVa
     close_live_pool(pool);}
 
 void kernel_apply_closure(Ref closure,Closure* slots,Ref arguments,MultipleValues* results){
+    PROFILE_BUMP(PROF_C_FUNCALL);
     uword pool=open_live_pool();
     add_to_live_pool(closure);
     add_to_live_pool(arguments);

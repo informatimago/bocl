@@ -14,6 +14,7 @@ common_SRCS = \
 	character.c bostring.c bit_vector.c vector.c \
 	integer.c float.c \
 	\
+	profile.c \
 	strdup.c \
 	\
 	$(DEBUG_SRCS)

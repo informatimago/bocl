@@ -1,0 +1,67 @@
+hot-1 — Profile & attribute the ASDF load/compile (plan-3; DO FIRST, gates all 3 plans).
+
+Measure before optimizing.  Establishes the baseline every other issue reports against.
+
+WHAT
+- Instrument the load path with cheap phase timers (a small ring of named counters,
+  printed on demand): time spent in READ (the reader), MACROEXPAND-ALL, EVAL of
+  top-level forms, and CLOS setup (defclass/defmethod/make-instance/dispatch).  Also
+  count: forms read, symbols interned, conses allocated, funcalls, GC time.
+- Drive (require :asdf) (or the closest reproducible load) three ways where possible
+  — source, text fasl, and later binary fasl — and dump the attribution.
+- Add an eval-hot-path micro-profiler: sample or count time in variable lookup
+  (environment_find_variable), argument-list construction, funcall dispatch, and the
+  DIVOP/arith fast paths — to confirm the ~150us/funcall breakdown on THIS workload.
+- Optionally a build flag BOCL_PROFILE that compiles in the counters (off by default,
+  zero cost when off).
+
+DELIVERABLE: a written baseline table (phase -> seconds/%, on a named machine) in the
+issue, so plan-1/2/3 each cite "before/after" against it.  This tells us whether the
+lever is the reader, the macroexpander, the evaluator, or CLOS — and thus how much of
+each plan matters.
+
+ACCEPTANCE: reproducible attribution of the ASDF load and compile times; numbers
+recorded; zero overhead when BOCL_PROFILE is off; suite green.
+
+DEPENDS ON: none (first thing to do across the whole performance program).
+
+== IMPLEMENTED (v1.6.0) ==
+Phase-exclusive wall-clock profiler + event counters, gated by -DBOCL_PROFILE
+(zero cost by default — the PROFILE_* macros expand to nothing).
+
+- New sources/profile.{h,c}: a phase STACK charges exclusive time to the phase on
+  top (nested READ/GC pause the enclosing EVAL); CLOCK_MONOTONIC (POSIX).  Phases:
+  other/read/macroexpand/eval/gc/clos.  Counters: allocations/interns/funcalls/
+  gc-runs/forms.  Built into common_SRCS.
+- C instrumentation (all no-op unless -DBOCL_PROFILE, so default builds are
+  unchanged): READ + EVAL bracket each top-level form in bocl_load_cstring's load
+  loop; garbage_collect / minor_collect bracket GC; allocate() bumps allocations;
+  symbol_intern bumps interns; the three appliers (kernel_apply_function/closure/
+  built_in) bump funcalls; per-form counter.
+- Lisp interface (BOCL package, exported): BOCL:PROFILE-RESET, BOCL:PROFILE-REPORT
+  [&optional stream], BOCL:PROFILE-ENABLED-P, and the WITH-PROFILE-PHASE macro to
+  bracket a coarser phase (e.g. :MACROEXPAND, :CLOS) from Lisp.  Kernel primitives
+  %PROFILE-RESET / -REPORT / -ENABLED-P / -PHASE-ENTER / -PHASE-EXIT.
+- Enable with: make build CPPFLAGS=-DBOCL_PROFILE.  Both builds are warning-clean.
+
+== BASELINE (prelude load ~9s, Linux x86-64; the ASDF baseline should be re-run on
+   the M3 with the same tooling, source / text-fasl / binary-fasl) ==
+  phase          time      %
+  read          0.147 s   1.6
+  eval          8.818 s  96.3     <-- dominant
+  gc            0.190 s   2.1
+  clos          0.000 s   0.0     (not bracketed on a bare load)
+  TOTAL         9.158 s
+  allocations 3,826,083   interns 1,922   funcalls 787,389   gc-runs 14   forms 1,313
+
+FINDING: source load is EVAL-BOUND (~96%) — the tree-walker (with lazy macro
+displacement folded into EVAL) dominates; READ and GC are minor here.  Implications
+for the program:
+- plan-2 (byte-code VM) and plan-3 (hot-path eval opts) attack the 96% — they are
+  the real levers for run/compile speed.
+- plan-1 (compact fasl) attacks READ + re-intern + re-macroexpand: only ~1.6% on
+  this SOURCE load, but that share is much larger for the BLOATED ASDF *text* fasl
+  (the reason the text fasl was slower than source) — so plan-1 still fixes the
+  fasl-slower-than-source regression, while the VM is what moves the eval needle.
+Re-run this attribution on the actual ASDF load (M3) to confirm the split there
+(expect read/intern larger for the text fasl; eval still dominant).
