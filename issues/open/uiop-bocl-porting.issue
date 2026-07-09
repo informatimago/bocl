@@ -382,3 +382,29 @@ NON-BLOCKING, filed while here (in index):
 USING-ASDF leg is COMPLETE.  Remaining work in this (large, multi-tier) issue is the
 broader UIOP surface — Tier-2 RUN-PROGRAM / real COMPILE-FILE* condition capture,
 Tier-3 launch-program — exercised only by systems whose build ops need subprocesses.
+
+== STATE RE-ASSESSMENT (v1.5.7) ==
+Checked the implementation before processing (index rule).  Much of TIER 1 is now
+already in place:
+- *FEATURES* has :BOCL :UNIX :LINUX :X86-64 (item 1 DONE).
+- bocl:getenv / bocl:getcwd / bocl:chdir present (item 2 DONE); bocl command-line
+  arguments accessor present (item 3 DONE).
+- CL:DIRECTORY enumerates wildcards (e.g. "/tmp/*" -> 158 entries) via the
+  %DIRECTORY-GLOB kernel primitive (item 4 DONE for the wildcard path).
+- CONDITION HIERARCHY (item 5, the stated first-error blocker) is RESOLVED:
+  (typep (make-condition 'style-warning) 'warning) => T and
+  (subtypep 'style-warning 'warning) => (T T).  See clos-condition-hierarchy-parents.
+
+REMAINING (this stays an open epic — the real deliverable is ASDF loading and
+OPERATE-ing end to end, which is iterative and touches many subsystems):
+- TIER 2 item 6: bocl:run-program / bocl:%system (fork+exec+waitpid) is NOT yet
+  implemented (find-symbol RUN-PROGRAM/%SYSTEM in BOCL => NIL).  ASDF core does not
+  need it, but build ops do.
+- TIER 2 item 7: verify UIOP COMPILE-FILE* condition capture against bocl's
+  COMPILE-FILE multiple-value return.
+- TIER 3: launch-program / async spawn (optional, UIOP tolerates
+  NOT-IMPLEMENTED-ERROR).
+- End-to-end: walk the ASDF load to completion and add the remaining #+bocl
+  branches as each NOT-IMPLEMENTED-ERROR / gap is hit.
+Not put on hold for a dependency (the condition blocker is cleared) — kept open as
+an epic advanced incrementally as ASDF is driven.
