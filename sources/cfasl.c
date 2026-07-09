@@ -10,6 +10,7 @@
 #include "kernel_types.h"
 #include "kernel_objects.h"
 #include "packages.h"
+#include "memory.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -302,10 +303,13 @@ void cfasl_write_object(cfasl_wctx* w, Ref obj){
 
 /* Mirror of the writer's shared-object table: an id -> object array, filled in
    emission order so CFASL_TAG_BACKREF resolves.  The reader ALLOCATES bocl
-   objects; its caller must have a live pool open (allocate() auto-roots every
-   new object there), so the array need only hold the pointers — the objects
-   are kept alive by the pool, not by this C array.  Containers are recorded
-   (or their id reserved) BEFORE their sub-components, so cycles reconstruct. */
+   objects and holds them (in this C array and in C locals) across FURTHER
+   allocations that can trigger GC.  Object_new() balances its own live pool, so
+   a freshly constructed object is NOT left rooted — the caller must root it.  We
+   therefore add_to_live_pool() every recorded object (and every intermediate
+   held across a nested read); the caller's per-form live pool frame trims them
+   once the form is evaluated.  Containers are recorded (or their id reserved)
+   BEFORE their sub-components, so cycles reconstruct. */
 struct cfasl_rctx {
     cfasl_in* in;
     Ref*      objs;
@@ -331,7 +335,9 @@ int cfasl_rctx_error(cfasl_rctx* r){
     return !r || r->error || (r->in && r->in->error);
 }
 
-/* Append an id slot (holding OBJ) and return its id. */
+/* Append an id slot (holding OBJ) and return its id.  OBJ is rooted in the
+   caller's live pool so a later allocation's GC cannot reclaim it out from under
+   a still-pending BACKREF (Object_new does not leave its result rooted). */
 static size_t cfasl_rctx_record(cfasl_rctx* r, Ref obj){
     if(r->count == r->cap){
         size_t ncap = r->cap ? r->cap*2 : 64;
@@ -340,7 +346,15 @@ static size_t cfasl_rctx_record(cfasl_rctx* r, Ref obj){
         r->objs = n; r->cap = ncap;
     }
     r->objs[r->count] = obj;
+    add_to_live_pool(obj);
     return r->count++;
+}
+
+/* Patch a reserved id slot with the finished object and root it (the reserve
+   recorded only a NIL placeholder, so the real object still needs rooting). */
+static void cfasl_rctx_patch(cfasl_rctx* r, size_t id, Ref obj){
+    r->objs[id] = obj;
+    add_to_live_pool(obj);
 }
 
 Ref cfasl_read_object(cfasl_rctx* r){
@@ -374,7 +388,7 @@ Ref cfasl_read_object(cfasl_rctx* r){
     }
     case CFASL_TAG_SYMBOL:{
         size_t id = cfasl_rctx_record(r, NIL_Symbol);   /* reserve id before components */
-        Ref pkgname = cfasl_read_object(r);
+        Ref pkgname = cfasl_read_object(r);             /* recorded+rooted by its STRING case */
         Ref name    = cfasl_read_object(r);
         Ref sym = NIL_Symbol;
         if(!r->error){
@@ -385,7 +399,7 @@ Ref cfasl_read_object(cfasl_rctx* r){
             else { sym = package_intern_cstring_in(nm, pkg); }
             free(p); free(nm);
         }
-        r->objs[id] = sym;
+        cfasl_rctx_patch(r, id, sym);
         return sym;
     }
     case CFASL_TAG_KEYWORD:{
@@ -397,30 +411,31 @@ Ref cfasl_read_object(cfasl_rctx* r){
             sym = package_intern_cstring_in(nm, KEYWORD_Package);
             free(nm);
         }
-        r->objs[id] = sym;
+        cfasl_rctx_patch(r, id, sym);
         return sym;
     }
     case CFASL_TAG_UNINTERNED:{
         size_t id = cfasl_rctx_record(r, NIL_Symbol);
         Ref name = cfasl_read_object(r);
         Ref sym = r->error ? NIL_Symbol : symbol_new(name);
-        r->objs[id] = sym;
+        cfasl_rctx_patch(r, id, sym);
         return sym;
     }
     case CFASL_TAG_RATIO:{
         size_t id = cfasl_rctx_record(r, NIL_Symbol);
         Ref num = cfasl_read_object(r);
+        add_to_live_pool(num);                    /* hold NUM across the DEN read (may be an unrooted fixnum) */
         Ref den = cfasl_read_object(r);
         Ref rat = r->error ? NIL_Symbol : ratio_new(num, den);
-        r->objs[id] = rat;
+        cfasl_rctx_patch(r, id, rat);
         return rat;
     }
     case CFASL_TAG_SIMPLE_VECTOR:{
         uint64_t n = cfasl_get_uvarint(r->in);
         Ref lst = NIL_Symbol;                       /* length-n placeholder */
-        for(uint64_t i=0;i<n;i++){ lst = cons(NIL_Symbol, lst); }
+        for(uint64_t i=0;i<n;i++){ lst = cons(NIL_Symbol, lst); add_to_live_pool(lst); }
         Ref vec = vector_new(lst);
-        cfasl_rctx_record(r, vec);                  /* id before elements */
+        cfasl_rctx_record(r, vec);                  /* id before elements; roots vec */
         for(uint64_t i=0;i<n && !r->error;i++){
             svref_set(vec, integer_from_word((word)i), cfasl_read_object(r));
         }

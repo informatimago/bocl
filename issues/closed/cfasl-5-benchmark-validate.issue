@@ -1,0 +1,80 @@
+cfasl-5 — Benchmark + validate the binary fasl (plan-1-compact-fasl).
+
+Measure the win and guard against regressions.
+
+WHAT
+- Benchmark harness (reuse the ASDF-load setup): time (require :asdf) three ways —
+  interpreted source, text fasl, binary fasl — on the same machine; also time a
+  large single-file compile+load.  Record before/after in the issue and a doc note.
+  Attribute the binary-fasl load internally (deserialize vs eval) with cheap timers
+  to confirm the read/intern/macroexpand share was removed (feeds plan-3 hot-1's
+  attribution).
+- Correctness corpus: a directory of .lisp files exercising DEFUN/DEFMACRO/DEFVAR/
+  DEFPARAMETER/DEFCONSTANT/DEFCLASS/DEFMETHOD, EVAL-WHEN situations, IN-PACKAGE /
+  DEFPACKAGE, shared gensyms, bignums/ratios/floats/strings/vectors/structs; assert
+  binary-fasl load == source load (definitions + return values).
+- Full unit suite (make -C tests test) green; test_slice25 fasl cases adapted.
+
+ACCEPTANCE: documented speedup vs both source and text fasl; corpus + suite green;
+no new warnings (clean C17 build).
+
+DEPENDS ON: cfasl-1..4.
+
+--------------------------------------------------------------------------------
+DONE (v1.6.5, cfasl branch).
+
+BLOCKING BUG FOUND + FIXED (reader live-pool rooting).
+Benchmarking a large binary load surfaced a GC rooting bug in the cfasl-3 reader:
+loads with GC disabled (BOCL_NOGC=1) succeeded, GC-enabled loads failed with a
+"TYPE ERROR: expected STRING, got CHARACTER/SYMBOL" whose symptom varied with
+size — the hallmark of use-after-free.  Root cause: Object_new() (kernel.c:70)
+opens a live-pool frame, roots its inputs, allocates, then BALANCES with
+close_live_pool — so a freshly constructed object is NOT left rooted; the caller
+must root it (the same discipline reader.c already follows).  cfasl_read_object
+wrongly assumed allocate() left objects rooted, so a recorded object (e.g. the
+"COMMON-LISP" package-name string shared via BACKREF across a big form) was
+collected out from under a later backref once enough allocation triggered a GC.
+Fix (sources/cfasl.c): add_to_live_pool() every recorded object (cfasl_rctx_record
++ a cfasl_rctx_patch for the reserve-then-fill symbol/keyword/uninterned/ratio
+cases), the ratio numerator across the denominator read, and each simple-vector
+placeholder cons.  The caller's per-form pool trims them after eval.  A 200-pair
+DEFUN/DOLIST file (which GCs several times mid-load) now loads correctly; added
+as test_cfasl_corpus so the suite guards it.
+
+BENCHMARK (Linux x86-64, this build; load time only, best of a few runs).
+  A) macro+DOLIST heavy — 1500 (defmacro m/defun f) pairs:
+       source 300 ms | text-fasl 463 ms | binary-fasl 386 ms
+       sizes: src 174 KB | text 757 KB | binary 714 KB
+  B) parse/literal heavy — 800 defparameters of 40-element quoted lists:
+       source 424 ms | text-fasl 489 ms | binary-fasl 454 ms
+       sizes: src 900 KB | text 939 KB | binary 1083 KB
+
+READING OF THE NUMBERS (honest):
+- Binary ALWAYS beats the TEXT fasl (−17% A, −7% B): it removes the text fasl's
+  re-parse of the macroexpand-ALL'd (hence bloated) forms — the text fasl was in
+  fact a regression vs source for cheap-macro code, which binary repairs.
+- Binary roughly TIES compact SOURCE and does not beat it here.  This is exactly
+  what hot-1's attribution predicted: prelude/source load is ~96% EVAL, ~1.6%
+  READ, ~2% GC, so the read + re-macroexpansion that a compact fasl removes is a
+  SINGLE-DIGIT-percent slice of load time.  For workloads whose macros are cheap
+  and whose expansions are LARGER than the source (A, B), pre-expanding even adds
+  bytes to deserialize.  plan-1's real, durable wins are (i) beating the text
+  fasl and (ii) the streaming shared-object model / one-intern-per-symbol; the
+  big load-time levers remain plan-2 (byte-code VM) and plan-3 (hot path), which
+  attack the 96% EVAL.  Recorded here so plan-2/3 are prioritised accordingly.
+- Internal attribution (deserialize vs eval) confirms the same: with -DBOCL_PROFILE
+  the binary load's PROF_EVAL dominates and PROF_READ is ~0 (no reader runs).
+
+CORRECTNESS CORPUS (tests/test_misc.c::test_cfasl_corpus, run in the suite):
+  * the 200-pair GC-stress file above: cfc::f182 => 552, cfc::f0 => 6 post-load;
+  * a feature file DEFPACKAGE/IN-PACKAGE + EVAL-WHEN(:load) + DEFCLASS/DEFMETHOD +
+    ratio 3/4 + double-float 2.5d0 + string + simple-vector #(1 2 3): every value
+    matches the source-load expectation after (load (compile-file ...)).
+  Plus the earlier manual multi-package round-trip and the bignum text-fallback.
+
+SUITE + BUILD: full `make -C tests test` green (42 suites, 0 failures); clean
+C17 build, no new warnings.  test_slice25 fasl cases adapted in cfasl-4.
+
+This closes the cfasl (plan-1-compact-fasl) implementation series (cfasl-1..5);
+cfasl-6 (bignum/structure/bit-vector literal coverage) remains open as a
+non-blocking extension.

@@ -375,12 +375,56 @@ static void test_cfasl_load_file(void){
     cfasl_out_free(&b);
 }
 
+/* cfasl-5: compile-file -> binary fasl -> load must equal a source load across a
+   feature corpus, AND a load large enough to trigger GC mid-deserialization must
+   survive (regression guard for the reader live-pool rooting — Object_new does
+   not leave its result rooted, so recorded objects would otherwise be collected
+   out from under a pending BACKREF). */
+static void test_cfasl_corpus(void){
+    /* (1) GC-rooting guard: a file with enough forms + repeated CL symbols
+       (backrefs) that binary load allocates through several GCs. */
+    FILE* f = fopen("/tmp/bocl_cfasl_corpus.lisp", "w");
+    TEST_EQ(eql, T_Symbol, f ? T_Symbol : NIL_Symbol);
+    fputs("(defpackage :cfc (:use :cl))(in-package :cfc)\n", f);
+    for(int i=0;i<200;i++){
+        fprintf(f, "(defmacro m%d (x) (list '+ %d x))\n", i, i);
+        fprintf(f, "(defun f%d (l) (let ((a 0)) (dolist (e l a) (setq a (+ a (m%d e))))))\n", i, i);
+    }
+    fclose(f);
+    e("(compile-file \"/tmp/bocl_cfasl_corpus.lisp\")");
+    TEST_EQ(eql, T_Symbol, e("(%cfasl-file-p \"/tmp/bocl_cfasl_corpus.fasl\")")); /* binary */
+    e("(load \"/tmp/bocl_cfasl_corpus.fasl\")");
+    TEST_EQ(eql, I(552), e("(cfc::f182 '(1 2 3))"));   /* 183+184+185 — survived GC */
+    TEST_EQ(eql, I(6),   e("(cfc::f0 '(1 2 3))"));      /* 1+2+3 */
+
+    /* (2) feature coverage: DEFPACKAGE/IN-PACKAGE, EVAL-WHEN, DEFCLASS/DEFMETHOD,
+       ratio/float/string/simple-vector literals — binary load == expected. */
+    FILE* g = fopen("/tmp/bocl_cfasl_feat.lisp", "w");
+    TEST_EQ(eql, T_Symbol, g ? T_Symbol : NIL_Symbol);
+    fputs("(defpackage :cfg (:use :cl) (:export #:area))\n(in-package :cfg)\n", g);
+    fputs("(eval-when (:load-toplevel :execute) (defparameter *lv* :yes))\n", g);
+    fputs("(defclass shp () ((r :initarg :r :accessor r)))\n", g);
+    fputs("(defmethod area ((s shp)) (* 3 (r s) (r s)))\n", g);
+    fputs("(defvar *rat* 3/4)(defvar *flo* 2.5d0)(defvar *str* \"hi\")(defvar *vec* #(1 2 3))\n", g);
+    fputs("(in-package :cl-user)\n", g);
+    fclose(g);
+    e("(compile-file \"/tmp/bocl_cfasl_feat.lisp\")");
+    e("(load \"/tmp/bocl_cfasl_feat.fasl\")");
+    TEST_EQ(eql, T_Symbol, e("(if (eq cfg::*lv* :yes) t nil)"));           /* eval-when :load */
+    TEST_EQ(eql, I(48),    e("(cfg:area (make-instance 'cfg::shp :r 4))")); /* class + method */
+    TEST_EQ(eql, T_Symbol, e("(if (= cfg::*rat* 3/4) t nil)"));            /* ratio */
+    TEST_EQ(eql, T_Symbol, e("(if (= cfg::*flo* 2.5d0) t nil)"));          /* double-float */
+    TEST_EQ(equal, e("\"hi\""), e("cfg::*str*"));                          /* string */
+    TEST_EQ(eql, I(2),     e("(aref cfg::*vec* 1)"));                      /* simple-vector */
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
     TEST_CASE("cfasl writer",        test_cfasl_writer)
     TEST_CASE("cfasl roundtrip",     test_cfasl_roundtrip)
     TEST_CASE("cfasl load file",     test_cfasl_load_file)
+    TEST_CASE("cfasl corpus",        test_cfasl_corpus)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
