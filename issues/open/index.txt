@@ -43,40 +43,37 @@ minor-gc-doomed-under-gcminorstress.issue
 
 ====================================================================
 PERFORMANCE PROGRAM — speed up loading/running (ASDF: load ~240s,
-compile ~300s, on M3).  Three planification issues, each expanding into
-ordered implementation issues.  Portability gate: strict C17 / POSIX, no
-native codegen (a byte-code VM is the ceiling).
+compile ~300s, on M3).  Portability gate: strict C17 / POSIX, no native
+codegen (a byte-code VM is the ceiling).  Three planification issues
+(plan-1 compact fasl, plan-2 byte-code VM, plan-3 interpreter hot-path)
+describe the plans; the implementation issues below are listed IN GLOBAL
+IMPLEMENTATION ORDER (cross-dependencies resolved: hot-1 first; plan-1 is
+plan-2's serialization layer; hot-2 is plan-2's compiler front-end).
 
-RECOMMENDED GLOBAL ORDER (respects cross-dependencies):
-  1. hot-1-profile      FIRST — attribute the time; gates all three plans.
-  2. plan-1 (cfasl-*)   compact binary fasl — immediate load win; is the
-                        serialization layer plan-2 reuses.
-  3. plan-3 (hot-2..6)  tree-walker opts; hot-2 (lexical addressing) is the
-                        analyzer plan-2's compiler reuses.
-  4. plan-2 (vm-*)      byte-code VM + compiler; depends on cfasl-1..3 and hot-2.
+Planification issues (read first, not implemented directly):
+  plan-1-compact-fasl.issue
+  plan-2-bytecode-vm.issue
+  plan-3-interpreter-hotpath.issue
 
-plan-1-compact-fasl.issue
-  cfasl-1-format-spec.issue
-  cfasl-2-object-serializer.issue
-  cfasl-3-loader.issue
-  cfasl-4-compile-file-integ.issue
-  cfasl-5-benchmark-validate.issue
+Implementation issues, in global order:
 
-plan-2-bytecode-vm.issue
-  vm-1-isa-and-function-layout.issue
-  vm-2-dispatch-core.issue
-  vm-3-compiler-frontend.issue
-  vm-4-codegen-core.issue
-  vm-5-codegen-control.issue
-  vm-6-closures-and-interop.issue
-  vm-7-clos-inline-cache.issue
-  vm-8-bytecode-fasl.issue
-  vm-9-debug-bootstrap-validate.issue
-
-plan-3-interpreter-hotpath.issue
-  hot-1-profile.issue
-  hot-2-lexical-addressing.issue
-  hot-3-frame-representation.issue
-  hot-4-arglist-avoidance.issue
-  hot-5-dispatch-caches.issue
-  hot-6-benchmark-validate.issue
+hot-1-profile.issue                  (plan-3) FIRST — attribute the time; gates all
+cfasl-1-format-spec.issue            (plan-1)
+cfasl-2-object-serializer.issue      (plan-1)
+cfasl-3-loader.issue                 (plan-1)
+cfasl-4-compile-file-integ.issue     (plan-1)
+cfasl-5-benchmark-validate.issue     (plan-1)
+hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
+hot-3-frame-representation.issue     (plan-3)
+hot-4-arglist-avoidance.issue        (plan-3)
+hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
+hot-6-benchmark-validate.issue       (plan-3)
+vm-1-isa-and-function-layout.issue   (plan-2)
+vm-2-dispatch-core.issue             (plan-2)
+vm-3-compiler-frontend.issue         (plan-2) — builds on hot-2
+vm-4-codegen-core.issue              (plan-2)
+vm-5-codegen-control.issue           (plan-2)
+vm-6-closures-and-interop.issue      (plan-2)
+vm-7-clos-inline-cache.issue         (plan-2)
+vm-8-bytecode-fasl.issue             (plan-2) — builds on cfasl-1..4
+vm-9-debug-bootstrap-validate.issue  (plan-2)
