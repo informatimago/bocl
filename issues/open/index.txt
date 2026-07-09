@@ -23,7 +23,6 @@ Rules of Processing Issues
 
 Current list of issues to resolve:
 
-structured-pathnames.issue
 uiop-bocl-porting.issue
 format-specifier-capitalize.issue
 

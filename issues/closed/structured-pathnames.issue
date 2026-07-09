@@ -78,3 +78,24 @@ It is the single blocker preventing ASDF from loading after the LOOP / destructu
 DO-SYMBOLS / Tier-1 fixes (v1.3.13).  ASDF's entire component/system model is pathname-
 centric, so OPERATE will need MERGE-PATHNAMES, wild DIRECTORY, name/type splitting, and
 ENOUGH-NAMESTRING to behave per spec.
+
+== CLOSED (v1.5.7) ==
+Core structured pathnames were done in v1.3.14 (above).  The concrete remaining
+refinements are now addressed, so this issue is closed:
+- PATHNAME-NAME / PATHNAME-TYPE return :WILD for a "*" component (v1.5.7), CLHS-
+  conformant; %PN-COMP-STRING already maps :WILD -> "*", and pathnames are
+  namestring-backed, so MAKE-PATHNAME / NAMESTRING round-trip ("*.lisp" <-> name
+  :WILD type "lisp") and WILD-PATHNAME-P / PATHNAME-MATCH-P still hold.
+- COMPILE-FILE already returns (values (truename output) NIL failure-p) — first
+  value is the output truename (bootstrap/prelude.lisp).
+Full unit suite (42) green.
+
+The rest were flagged in REMAINING as author-deferred and stay out of this issue's
+gating scope:
+- MAKE-PATHNAME :NAME "a.b" :TYPE NIL not round-tripping is inherent to
+  namestring-backed pathnames (acceptable).
+- TRUENAME not canonicalising "." / ".." to absolute is a pre-existing, separate
+  concern (not a structured-pathname parsing gap).
+- Logical pathnames / wild TRANSLATE-PATHNAME beyond UIOP's needs are out of scope.
+- Full ENOUGH-NAMESTRING relativisation and :BACK-vs-:UP completeness are exercised
+  incrementally by uiop-bocl-porting.issue as ASDF drives them.

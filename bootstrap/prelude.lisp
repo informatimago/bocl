@@ -3598,20 +3598,22 @@ SETQ/INCF/DECF is left in place (sequential)."
     (subseq s (+ pos 1))))
 
 (defun pathname-name (pathname)
-  ;; Return the name component (without extension), e.g. "foo".
+  ;; Return the name component (without extension), e.g. "foo"; :WILD for "*".
   (let* ((base (file-namestring pathname))
-         (dot  (%path-dot-pos base)))
-    (if (< dot 0)
-        (if (string= base "") nil base)
-        (subseq base 0 dot))))
+         (dot  (%path-dot-pos base))
+         (name (if (< dot 0)
+                   (if (string= base "") nil base)
+                   (subseq base 0 dot))))
+    (if (equal name "*") :wild name)))
 
 (defun pathname-type (pathname)
-  ;; Return the type (extension) component, e.g. "lisp", or NIL.
+  ;; Return the type (extension) component, e.g. "lisp", or NIL; :WILD for "*".
   (let* ((base (file-namestring pathname))
-         (dot  (%path-dot-pos base)))
-    (if (< dot 0)
-        nil
-        (subseq base (+ dot 1)))))
+         (dot  (%path-dot-pos base))
+         (type (if (< dot 0)
+                   nil
+                   (subseq base (+ dot 1)))))
+    (if (equal type "*") :wild type)))
 
 (defun pathname-host    (p) (setq p nil) nil)
 (defun pathname-device  (p) (setq p nil) nil)
