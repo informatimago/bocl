@@ -5,6 +5,10 @@
    so the file is endianness-independent. */
 
 #include "cfasl.h"
+#include "kernel.h"
+#include "kernel_functions.h"
+#include "kernel_types.h"
+#include "kernel_objects.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -112,4 +116,181 @@ double cfasl_get_f64(cfasl_in* c){
     uint64_t bits = 0;
     for(int i=7;i>=0;i--){ bits = (bits << 8) | le[i]; }
     double v; memcpy(&v, &bits, 8); return v;
+}
+
+/* ======================================================================== */
+/* Object-graph writer (cfasl-2)                                            */
+/* ======================================================================== */
+
+/* Streaming shared-object table: a private open-addressing hash mapping an
+   object pointer to the id assigned the first time it was emitted.  Because GC
+   is non-moving and the writer allocates no bocl objects, the raw Ref pointer
+   is a stable key for the lifetime of the serialization. */
+struct cfasl_wctx {
+    cfasl_out* out;
+    void**     keys;      /* NULL slot = empty                                */
+    uint64_t*  ids;
+    size_t     cap;       /* power of two (0 while unallocated)               */
+    size_t     count;
+    uint64_t   next_id;   /* id to assign to the next freshly-emitted object  */
+    int        error;     /* unsupported type or OOM                          */
+};
+
+cfasl_wctx* cfasl_wctx_new(cfasl_out* out){
+    cfasl_wctx* w = (cfasl_wctx*)calloc(1, sizeof(*w));
+    if(!w){ return NULL; }
+    w->out = out;
+    return w;
+}
+
+void cfasl_wctx_free(cfasl_wctx* w){
+    if(!w){ return; }
+    free(w->keys);
+    free(w->ids);
+    free(w);
+}
+
+int cfasl_wctx_error(cfasl_wctx* w){
+    return !w || w->error || (w->out && w->out->error);
+}
+
+static size_t cfasl_ptr_hash(const void* p){
+    /* fibonacci/murmur-style finalizer so the low pointer bits mix into the
+       whole word (adjacent objects hash far apart). */
+    uintptr_t x = (uintptr_t)p;
+    x ^= x >> 33; x *= (uintptr_t)0xff51afd7ed558ccdULL;
+    x ^= x >> 33; x *= (uintptr_t)0xc4ceb9fe1a85ec53ULL;
+    x ^= x >> 33;
+    return (size_t)x;
+}
+
+static int cfasl_wctx_grow(cfasl_wctx* w){
+    size_t ncap = w->cap ? w->cap*2 : 256;
+    void**    nk = (void**)calloc(ncap, sizeof(*nk));
+    uint64_t* ni = (uint64_t*)malloc(ncap*sizeof(*ni));
+    if(!nk || !ni){ free(nk); free(ni); w->error = 1; return 0; }
+    for(size_t i=0;i<w->cap;i++){
+        if(!w->keys[i]){ continue; }
+        size_t m = ncap - 1, j = cfasl_ptr_hash(w->keys[i]) & m;
+        while(nk[j]){ j = (j+1) & m; }
+        nk[j] = w->keys[i]; ni[j] = w->ids[i];
+    }
+    free(w->keys); free(w->ids);
+    w->keys = nk; w->ids = ni; w->cap = ncap;
+    return 1;
+}
+
+/* If OBJ is already in the table, store its id and return 1; else return 0. */
+static int cfasl_wctx_lookup(cfasl_wctx* w, Ref obj, uint64_t* id_out){
+    if(!w->cap){ return 0; }
+    size_t m = w->cap - 1, j = cfasl_ptr_hash(obj) & m;
+    while(w->keys[j]){
+        if(w->keys[j] == (void*)obj){ *id_out = w->ids[j]; return 1; }
+        j = (j+1) & m;
+    }
+    return 0;
+}
+
+/* Record OBJ->id (caller guarantees OBJ is not already present). */
+static void cfasl_wctx_insert(cfasl_wctx* w, Ref obj, uint64_t id){
+    if((w->count+1)*10 >= (w->cap?w->cap:1)*7){    /* keep load factor < 0.7 */
+        if(!cfasl_wctx_grow(w)){ return; }
+    }
+    size_t m = w->cap - 1, j = cfasl_ptr_hash(obj) & m;
+    while(w->keys[j]){ j = (j+1) & m; }
+    w->keys[j] = (void*)obj; w->ids[j] = id; w->count++;
+}
+
+/* Assign the next id to OBJ, record it, and return that id.  Composite objects
+   call this BEFORE emitting their sub-components so a cycle back to OBJ emits a
+   BACKREF instead of recursing forever. */
+static uint64_t cfasl_wctx_assign(cfasl_wctx* w, Ref obj){
+    uint64_t id = w->next_id++;
+    cfasl_wctx_insert(w, obj, id);
+    return id;
+}
+
+void cfasl_write_object(cfasl_wctx* w, Ref obj){
+    if(cfasl_wctx_error(w)){ return; }
+
+    /* ---- immediates: value-encoded, never shared, get no id ------------- */
+    if(nullp(obj)){        cfasl_put_u8(w->out, CFASL_TAG_NIL); return; }
+    if(obj == T_Symbol){   cfasl_put_u8(w->out, CFASL_TAG_T);   return; }
+    if(integerp(obj) && !bignump(obj)){
+        cfasl_put_u8(w->out, CFASL_TAG_FIXNUM);
+        cfasl_put_svarint(w->out, (int64_t)integer_value(obj));
+        return;
+    }
+    if(characterp(obj)){
+        cfasl_put_u8(w->out, CFASL_TAG_CHARACTER);
+        cfasl_put_uvarint(w->out, (uint64_t)integer_value(character_code(obj)));
+        return;
+    }
+    if(floatp(obj)){
+        cfasl_put_u8(w->out, CFASL_TAG_DOUBLE_FLOAT);
+        cfasl_put_f64(w->out, float_value(obj));
+        return;
+    }
+
+    /* ---- shared objects: emit a BACKREF on a repeat/cycle --------------- */
+    uint64_t id;
+    if(cfasl_wctx_lookup(w, obj, &id)){
+        cfasl_put_u8(w->out, CFASL_TAG_BACKREF);
+        cfasl_put_uvarint(w->out, id);
+        return;
+    }
+
+    if(consp(obj)){
+        cfasl_wctx_assign(w, obj);              /* id before car, for cycles */
+        cfasl_put_u8(w->out, CFASL_TAG_CONS);
+        cfasl_write_object(w, cons_car(obj));
+        cfasl_write_object(w, cons_cdr(obj));
+        return;
+    }
+    if(stringp(obj)){
+        cfasl_wctx_assign(w, obj);
+        cfasl_put_u8(w->out, CFASL_TAG_STRING);
+        uword n = string_length(obj);
+        cfasl_put_uvarint(w->out, (uint64_t)n);
+        cfasl_put_bytes(w->out, string_octets(obj), (size_t)n);
+        return;
+    }
+    if(symbolp(obj)){
+        cfasl_wctx_assign(w, obj);
+        if(keywordp(obj)){
+            cfasl_put_u8(w->out, CFASL_TAG_KEYWORD);
+            cfasl_write_object(w, symbol_name(obj));
+            return;
+        }
+        Ref pkg = symbol_package(obj);
+        if(nullp(pkg)){
+            cfasl_put_u8(w->out, CFASL_TAG_UNINTERNED);
+            cfasl_write_object(w, symbol_name(obj));
+            return;
+        }
+        cfasl_put_u8(w->out, CFASL_TAG_SYMBOL);
+        cfasl_write_object(w, pkg->slots->package.name);   /* package-name string */
+        cfasl_write_object(w, symbol_name(obj));
+        return;
+    }
+    if(ratiop(obj)){
+        cfasl_wctx_assign(w, obj);
+        cfasl_put_u8(w->out, CFASL_TAG_RATIO);
+        cfasl_write_object(w, ratio_numerator(obj));   /* may itself be a bignum -> error */
+        cfasl_write_object(w, ratio_denominator(obj));
+        return;
+    }
+    if(obj->class == VECTOR_Class){        /* a genuine simple-vector (svref-able) */
+        cfasl_wctx_assign(w, obj);
+        cfasl_put_u8(w->out, CFASL_TAG_SIMPLE_VECTOR);
+        uword n = vector_length(obj);
+        cfasl_put_uvarint(w->out, (uint64_t)n);
+        for(uword i=0;i<n;i++){ cfasl_write_object(w, svref(obj, integer_from_word((word)i))); }
+        return;
+    }
+
+    /* Unsupported here (bignum, structure, bit-vector, non-simple arrays,
+       streams, ...): flag the context so the caller keeps the text fasl.  These
+       are rare in top-level forms; cfasl-6 extends coverage. */
+    w->error = 1;
 }

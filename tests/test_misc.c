@@ -234,9 +234,66 @@ static void test_cfasl_primitives(void){
     cfasl_out_free(&b);
 }
 
+/* A minimal structural decoder mirroring the cfasl.h tag grammar: it walks the
+   serialized graph without rebuilding it, so the writer (cfasl-2) can be checked
+   before the real loader (cfasl-3) exists.  Counts BACKREFs seen. */
+static int cfasl_backrefs_seen;
+static void cfasl_skip_object(cfasl_in* c){
+    if(c->error){ return; }
+    uint8_t tag = cfasl_get_u8(c);
+    switch(tag){
+    case CFASL_TAG_NIL: case CFASL_TAG_T: case CFASL_TAG_EOF:            break;
+    case CFASL_TAG_BACKREF:      cfasl_get_uvarint(c); cfasl_backrefs_seen++; break;
+    case CFASL_TAG_FIXNUM:       cfasl_get_svarint(c);                   break;
+    case CFASL_TAG_CHARACTER:    cfasl_get_uvarint(c);                   break;
+    case CFASL_TAG_DOUBLE_FLOAT: cfasl_get_f64(c);                       break;
+    case CFASL_TAG_SINGLE_FLOAT: cfasl_get_f32(c);                       break;
+    case CFASL_TAG_STRING:{ uint64_t n=cfasl_get_uvarint(c);
+                            for(uint64_t i=0;i<n && !c->error;i++){ cfasl_get_u8(c);} } break;
+    case CFASL_TAG_KEYWORD: case CFASL_TAG_UNINTERNED:
+                                 cfasl_skip_object(c);                   break;
+    case CFASL_TAG_SYMBOL: case CFASL_TAG_CONS: case CFASL_TAG_RATIO:
+                                 cfasl_skip_object(c); cfasl_skip_object(c); break;
+    case CFASL_TAG_SIMPLE_VECTOR:{ uint64_t n=cfasl_get_uvarint(c);
+                            for(uint64_t i=0;i<n && !c->error;i++){ cfasl_skip_object(c);} } break;
+    default: c->error = 1;                                              break;
+    }
+}
+
+/* cfasl-2: the object-graph writer emits a decodable, EQ-sharing-preserving
+   stream (issue cfasl-2-object-serializer). */
+static void test_cfasl_writer(void){
+    /* the two X are the same interned symbol; a fixnum, string, char and ratio
+       exercise the scalar tags too. */
+    Ref form = e("'(setq x x 1 \"hi\" #\\A 3/4 #(0 1 2))");
+    cfasl_out b; cfasl_out_init(&b);
+    cfasl_wctx* w = cfasl_wctx_new(&b);
+    cfasl_write_object(w, form);
+    TEST_EQ(eql, NIL_Symbol, cfasl_wctx_error(w) ? T_Symbol : NIL_Symbol); /* all types supported */
+    TEST_EQ(eql, I(CFASL_TAG_CONS), I(b.data[0]));                         /* a list at the root */
+
+    cfasl_in c; cfasl_in_init(&c, b.data, b.len);
+    cfasl_backrefs_seen = 0;
+    cfasl_skip_object(&c);
+    TEST_EQ(eql, NIL_Symbol, c.error ? T_Symbol : NIL_Symbol);            /* decodes cleanly */
+    TEST_EQ(eql, T_Symbol, cfasl_at_end(&c) ? T_Symbol : NIL_Symbol);     /* consumes exactly */
+    TEST_EQ(eql, T_Symbol, cfasl_backrefs_seen>=1 ? T_Symbol : NIL_Symbol); /* repeated X shared */
+
+    /* an unsupported object (bignum) flags the context so the caller can fall
+       back to the text fasl rather than emit a truncated graph. */
+    cfasl_out b2; cfasl_out_init(&b2);
+    cfasl_wctx* w2 = cfasl_wctx_new(&b2);
+    cfasl_write_object(w2, e("(* 1000000000000 1000000000000)"));         /* a bignum */
+    TEST_EQ(eql, T_Symbol, cfasl_wctx_error(w2) ? T_Symbol : NIL_Symbol);
+
+    cfasl_wctx_free(w);  cfasl_out_free(&b);
+    cfasl_wctx_free(w2); cfasl_out_free(&b2);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
+    TEST_CASE("cfasl writer",        test_cfasl_writer)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

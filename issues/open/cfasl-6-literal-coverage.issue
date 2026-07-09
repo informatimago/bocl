@@ -1,0 +1,27 @@
+cfasl-6 — Extend the cfasl writer/reader to bignum, structure and bit-vector
+literals (plan-1-compact-fasl; discovered while doing cfasl-2).
+
+WHY
+cfasl-2 serializes cons/symbol/string/fixnum/char/double-float/ratio/simple-
+vector — everything that appears in ordinary macroexpanded top-level forms.  It
+sets cfasl_wctx_error() on bignum, structure-instance and bit-vector objects, so
+COMPILE-FILE simply keeps the text fasl for a file containing such a literal.
+That is correct but leaves those files on the slow load path.
+
+WHAT
+- BIGNUM: pick a representation-independent encoding.  Preferred: emit the sign +
+  the base-10^k digit groups (or the printed decimal string) and reparse with the
+  integer reader on load, so the fasl does NOT couple to Bignum.value's internal
+  digit-list repr.  Update the CFASL_TAG_BIGNUM payload doc in cfasl.h to match.
+- STRUCTURE: emit <class-name-symbol> + slot count + slot values (use
+  structure_class_instance_size / structure_get); on load, find the structure
+  class by name, make_structure_instance, and structure_set each slot.  Decide
+  the behaviour when the class is unknown at load time (error -> fall back).
+- BIT-VECTOR: emit length + packed bits.
+- Remove each from the "unsupported -> error" tail of cfasl_write_object and add
+  the matching reader cases (cfasl-3's builder).
+
+ACCEPTANCE: a file defining a defparameter bound to a bignum, a struct literal,
+and a bit-vector compiles to a BINARY fasl (no text fallback) and LOADs EQUAL.
+
+DEPENDS ON: cfasl-2 (writer), cfasl-3 (reader).

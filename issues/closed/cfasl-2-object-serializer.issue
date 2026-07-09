@@ -1,0 +1,74 @@
+cfasl-2 — Object-graph serializer + intern/constant tables (plan-1-compact-fasl).
+
+Write the CL object graph (a top-level form) to the binary format of cfasl-1.
+
+WHAT
+- A C (or Lisp-with-kernel-help) writer `bocl_fasl_write_object(stream, obj, ctx)`
+  emitting the type-tagged encoding: cons (car then cdr), NIL/T, small integer
+  (varint), bignum (sign+limbs, reuse the bignum engine's limb repr), ratio
+  (num/den), single/double-float (raw bits), character (code), string (length +
+  octets — bocl strings are one octet/char, see [[bocl-interpreter-perf]]),
+  simple-vector, structure instance (class-name-ref + slot values), package
+  designator, and SYMBOL as an index into the intern table.
+- A serialization CONTEXT accumulates: the intern table (map symbol -> index,
+  recording its package name + name), the constant pool (map eq/eql/equal literal
+  -> index for large or shared literals), and an EQ-hash of already-emitted objects
+  for SHARED / CIRCULAR structure -> emit a BACKREF tag with the prior index
+  (this is the structural, always-correct replacement for *PRINT-CIRCLE*; the text
+  fasl needed *print-circle* T for shared gensyms — here sharing is intrinsic).
+- Two passes or one: single pass with an object-id counter and a backref table is
+  simplest; assign ids as objects are first seen.
+
+GC/rooting: build the tables from bocl objects; pin the context's tables in the live
+pool across the walk (same discipline as %KERNEL-SORT!).
+
+ACCEPTANCE: serialize representative forms (a DEFUN-expansion, a DOLIST expansion
+with COMMON-LISP::DOLIST-* symbols, a struct literal, a shared-gensym expansion) and
+have cfasl-3 read them back EQUAL (and EQ where shared).
+
+DEPENDS ON: cfasl-1.
+
+--------------------------------------------------------------------------------
+DONE (v1.6.2, cfasl branch).
+
+Implemented the object-graph writer in sources/cfasl.c on top of the cfasl-1
+primitives, declared in sources/cfasl.h:
+
+  cfasl_wctx* cfasl_wctx_new(cfasl_out*);   -- writer context
+  void        cfasl_write_object(cfasl_wctx*, Ref);
+  int         cfasl_wctx_error(cfasl_wctx*); -- OOM or unsupported type
+  void        cfasl_wctx_free(cfasl_wctx*);
+
+Design:
+- The "intern table + constant pool + eq-hash of emitted objects" of the sketch
+  collapse into ONE streaming SHARED-OBJECT table (as documented in cfasl.h /
+  cfasl-1): every composite/interned object gets the next id on first emit and a
+  later occurrence emits CFASL_TAG_BACKREF + varint(id).  Containers assign their
+  id BEFORE emitting sub-components, so cycles and shared structure (incl. shared
+  gensyms — the *print-circle* case) reconstruct without any special mode.
+- The table is a private open-addressing pointer hash (object pointer -> id).
+  GC is non-moving and the writer allocates no bocl objects during a walk, so raw
+  Refs are stable keys (no rooting needed here — simpler than the %KERNEL-SORT!
+  discipline the sketch anticipated, which only applies to the allocating reader).
+- SYMBOL is emitted as <package-name-string> <symbol-name-string> (both shared),
+  which subsumes the "index into an intern table": the string sharing makes the
+  package name cost one varint after first use, and identical symbols backref.
+
+Supported types: nil, t, fixnum, character, double-float, string, symbol /
+keyword / uninterned, cons, ratio (fixnum components), simple-vector.
+
+Deviation from the sketch: bignum and structure literals are NOT yet serialized.
+bocl bignums store an internal digit-LIST (Bignum.value), not raw limbs, and a
+struct instance needs class-name + slot reconstruction — both couple the format
+to internal representation and are rare in top-level forms.  The writer sets
+cfasl_wctx_error() on such an object so the caller (cfasl-4) keeps the text fasl
+for that file: never a wrong fasl, only a slower load for the rare case.  Filed
+cfasl-6-literal-coverage to extend the writer/reader to bignum, structure and
+bit-vector.
+
+The EQUAL/EQ round-trip half of ACCEPTANCE is verified in cfasl-3 (loader).  For
+cfasl-2, tests/test_misc.c::test_cfasl_writer serializes a form mixing the shared
+symbol X, a fixnum, string, character, ratio and simple-vector, then walks the
+byte stream with a structural skip-decoder: it decodes cleanly, consumes exactly
+the whole buffer, and shows the repeated X emitted once + a BACKREF; a separate
+bignum object correctly trips cfasl_wctx_error().

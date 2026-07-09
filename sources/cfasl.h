@@ -120,4 +120,32 @@ int64_t  cfasl_get_svarint(cfasl_in* c);
 float    cfasl_get_f32(cfasl_in* c);
 double   cfasl_get_f64(cfasl_in* c);
 
+/* ---- Object-graph writer (cfasl-2) -------------------------------------- */
+/* `Ref` is the bocl object handle (canonical typedef in kernel_types.h; the
+   identical redefinition here is legal in C11+ and keeps this header usable by
+   the object API without dragging in the whole kernel).                     */
+typedef struct Object* Ref;
+
+/* A writer context bundles the growable output with the streaming SHARED-OBJECT
+   table: an object-pointer -> id map used to emit CFASL_TAG_BACKREF for shared
+   or circular structure (the reader mirrors it with an id->object array).  The
+   context is opaque; the table is a private open-addressing pointer hash.  GC
+   is non-moving and the writer allocates no bocl objects, so raw Ref pointers
+   are stable keys for the whole serialization.
+
+   Supported object types: nil, t, fixnum, character, double-float, string,
+   symbol / keyword / uninterned-symbol, cons, ratio (with fixnum components),
+   and simple-vector.  cfasl_wctx_error() becomes true if an unsupported object
+   is met (bignum, structure, bit-vector, non-simple array, stream, ...; see
+   cfasl-6).  The caller then discards the buffer and falls back to the text
+   fasl, so an unserializable literal degrades to a correct-but-slower load. */
+typedef struct cfasl_wctx cfasl_wctx;
+
+cfasl_wctx* cfasl_wctx_new(cfasl_out* out);
+void        cfasl_wctx_free(cfasl_wctx* w);
+int         cfasl_wctx_error(cfasl_wctx* w);   /* out-of-memory or unsupported type */
+
+/* Serialize one object graph into the context's output buffer. */
+void        cfasl_write_object(cfasl_wctx* w, Ref obj);
+
 #endif
