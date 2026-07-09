@@ -92,8 +92,29 @@ static void test_byte_ldb_dpb(void){
     TEST_EQ(eql, I(0xaf), e("(dpb 15 (byte 4 0) 171)"));}
 #endif
 
+/* FLOOR / CEILING / TRUNCATE / ROUND / MOD / REM of a RATIO
+   (issue ratio-floor-round-truncate). */
+static void test_ratio_divop(void){
+    TEST_EQ(equal, e("'(0 1/3)"),  e("(multiple-value-list (floor 1/3))"));
+    TEST_EQ(equal, e("'(2 1/3)"),  e("(multiple-value-list (floor 7/3))"));
+    TEST_EQ(equal, e("'(-1 2/3)"), e("(multiple-value-list (floor -1/3))"));
+    TEST_EQ(equal, e("'(2 1/2)"),  e("(multiple-value-list (round 5/2))"));  /* ties to even */
+    TEST_EQ(equal, e("'(4 -1/2)"), e("(multiple-value-list (round 7/2))"));
+    TEST_EQ(equal, e("'(2 1/3)"),  e("(multiple-value-list (truncate 7/3))"));
+    TEST_EQ(equal, e("'(-2 -1/3)"),e("(multiple-value-list (truncate -7/3))"));
+    TEST_EQ(equal, e("'(1 -2/3)"), e("(multiple-value-list (ceiling 1/3))"));
+    TEST_EQ(equal, e("'(1 1/6)"),  e("(multiple-value-list (floor 1/2 1/3))")); /* two-arg */
+    TEST_EQ(eql, e("1/3"),  e("(mod 7/3 1)"));
+    TEST_EQ(eql, e("2/3"),  e("(mod -7/3 1)"));
+    TEST_EQ(eql, e("-1/3"), e("(rem -7/3 1)"));
+    /* integer / float paths unchanged */
+    TEST_EQ(eql, I(2), e("(floor 7 3)"));
+    TEST_EQ(eql, I(2), e("(round 5 2)"));
+    TEST_EQ(eql, I(1), e("(mod 7 3)"));}
+
 TEST_INITIALIZE(test_numeric_extras);
 TEST_SUITE(test_numeric_extras, num_init, num_clean)
+    TEST_CASE( "ratio FLOOR/ROUND/...", test_ratio_divop)
     TEST_CASE( "EXPT",          test_expt)
     TEST_CASE( "SQRT",          test_sqrt)
     TEST_CASE( "GCD / LCM",     test_gcd_lcm)

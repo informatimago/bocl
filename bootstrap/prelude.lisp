@@ -270,6 +270,54 @@
 (defun rationalp (x) (typep x 'rational))
 (defun realp     (x) (typep x 'real))
 (defun complexp  (x) (typep x 'complex))
+
+;;; FLOOR / CEILING / TRUNCATE / ROUND on a RATIO (issue ratio-floor-round-truncate).
+;;; The kernel divops handle integer / bignum / float operands but not a ratio
+;;; (they fall to the integer path and INTEGER-VALUE a ratio -> TYPE ERROR).  Wrap
+;;; them: when NUMBER or DIVISOR is a ratio, compute exactly — q is the kernel
+;;; two-arg INTEGER divop of the numerator and denominator of NUMBER/DIVISOR, and
+;;; the remainder is (- NUMBER (* q DIVISOR)) (a rational).  Integer / float
+;;; operands take the unchanged kernel path.
+(defvar *%kernel-floor*    (symbol-function 'floor))
+(defvar *%kernel-ceiling*  (symbol-function 'ceiling))
+(defvar *%kernel-truncate* (symbol-function 'truncate))
+(defvar *%kernel-round*    (symbol-function 'round))
+(defvar *%kernel-mod*      (symbol-function 'mod))
+(defvar *%kernel-rem*      (symbol-function 'rem))
+
+(defun %ratio-p (x) (and (rationalp x) (not (integerp x))))
+
+(defun %rational-divop (kfn number divisor)
+  (let* ((rv (/ number divisor))
+         (q  (if (integerp rv) rv (funcall kfn (numerator rv) (denominator rv)))))
+    (values q (- number (* q divisor)))))
+
+(defun floor (number &optional (divisor 1))
+  (if (or (%ratio-p number) (%ratio-p divisor))
+      (%rational-divop *%kernel-floor* number divisor)
+      (funcall *%kernel-floor* number divisor)))
+(defun ceiling (number &optional (divisor 1))
+  (if (or (%ratio-p number) (%ratio-p divisor))
+      (%rational-divop *%kernel-ceiling* number divisor)
+      (funcall *%kernel-ceiling* number divisor)))
+(defun truncate (number &optional (divisor 1))
+  (if (or (%ratio-p number) (%ratio-p divisor))
+      (%rational-divop *%kernel-truncate* number divisor)
+      (funcall *%kernel-truncate* number divisor)))
+(defun round (number &optional (divisor 1))
+  (if (or (%ratio-p number) (%ratio-p divisor))
+      (%rational-divop *%kernel-round* number divisor)
+      (funcall *%kernel-round* number divisor)))
+;; MOD / REM share the divop's ratio gap: a ratio operand is the FLOOR / TRUNCATE
+;; remainder respectively (which the ratio-aware wrappers above already produce).
+(defun mod (number divisor)
+  (if (or (%ratio-p number) (%ratio-p divisor))
+      (nth-value 1 (floor number divisor))
+      (funcall *%kernel-mod* number divisor)))
+(defun rem (number divisor)
+  (if (or (%ratio-p number) (%ratio-p divisor))
+      (nth-value 1 (truncate number divisor))
+      (funcall *%kernel-rem* number divisor)))
 (defun characterp (x) (typep x 'character))
 (defun vectorp   (x)
   ;; A 1-D array is a vector — including a displaced/adjustable one, which bocl
