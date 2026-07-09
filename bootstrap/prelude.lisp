@@ -9013,21 +9013,34 @@ result array; return that array."
          (ns     (namestring merged))
          (type   (pathname-type merged)))
     (flet ((do-load (path)
-             ;; A fast-load file (compiled type) may carry a bocl fasl header.
-             ;; When it does, read it back under the SAME controlled syntax it was
-             ;; written with (standard readtable, DOUBLE-FLOAT floats, base 10, and
-             ;; *READ-EVAL* off — a bocl fasl is macro-free and never contains #.);
-             ;; %CHECK-FASL-VERSION also warns on a newer major version.  A source
-             ;; or foreign file (no header) loads with the caller's syntax.
-             (if (and (%known-file-type-p (pathname-type (pathname path))
-                                          *accepted-compiled-file-types*)
-                      (%check-fasl-version path))
-                 (let ((*readtable*                 (copy-readtable nil))
-                       (*read-default-float-format* 'double-float)
-                       (*read-base*                 10)
-                       (*read-eval*                 nil))
-                   (funcall *%kernel-load* path))
-                 (funcall *%kernel-load* path)))
+             ;; Dispatch on what the file actually is:
+             (cond
+               ;; (a) A BINARY cfasl (starts with the "BOCLFASL" magic): the
+               ;;     binary loader deserializes + evals directly (no reader, no
+               ;;     re-macroexpansion).  On a version mismatch / corrupt image
+               ;;     %CFASL-LOAD warns and returns NIL, so fall back to the
+               ;;     source sibling, mirroring the text-fasl version check.
+               ((%cfasl-file-p path)
+                (or (%cfasl-load path)
+                    (let ((source (%find-source-file (pathname path))))
+                      (if source
+                          (funcall *%kernel-load* source)
+                          (error "LOAD: unreadable binary fasl ~S" path)))))
+               ;; (b) A TEXT bocl fasl (compiled type, carries the ';; BOCL ...'
+               ;;     header): read it back under the SAME controlled syntax it was
+               ;;     written with (standard readtable, DOUBLE-FLOAT floats, base
+               ;;     10, *READ-EVAL* off — it is macro-free and never contains #.);
+               ;;     %CHECK-FASL-VERSION also warns on a newer major version.
+               ((and (%known-file-type-p (pathname-type (pathname path))
+                                         *accepted-compiled-file-types*)
+                     (%check-fasl-version path))
+                (let ((*readtable*                 (copy-readtable nil))
+                      (*read-default-float-format* 'double-float)
+                      (*read-base*                 10)
+                      (*read-eval*                 nil))
+                  (funcall *%kernel-load* path)))
+               ;; (c) A source or foreign file (no header): caller's syntax.
+               (t (funcall *%kernel-load* path))))
            (missing ()
              (if if-does-not-exist
                  (error "LOAD: file ~S does not exist" ns)
@@ -9750,10 +9763,20 @@ result array; return that array."
 ;;; remaining forms are read, printed and expanded in the right package with the
 ;;; file's own macros known.
 (defvar *bocl-fasl-header-prefix* ";; BOCL "
-  "First-line prefix of a bocl fast-load file, followed by the producing
+  "First-line prefix of a bocl TEXT fast-load file, followed by the producing
    LISP-IMPLEMENTATION-VERSION and \" FASL\".  A Lisp line comment, so LOAD's
-   source loader skips it; file(1) and LOAD use it to recognise a bocl fasl and
-   check version compatibility (see %BOCL-FASL-VERSION).")
+   source loader skips it; file(1) and LOAD use it to recognise a text fasl and
+   check version compatibility (see %BOCL-FASL-VERSION).  A BINARY (cfasl) fasl
+   instead starts with the \"BOCLFASL\" magic (see cfasl.h / %CFASL-FILE-P).")
+
+(defvar *compile-file-binary* t
+  "When true (the default), COMPILE-FILE writes a compact BINARY (cfasl) fast-load
+   file and LOAD dispatches on its magic; the already-macroexpanded top-level form
+   graph is serialized directly, so LOAD needs no reader and no re-macroexpansion.
+   Bind to NIL to write the readable TEXT fasl (macroexpanded s-exprs) for
+   debugging.  A file whose macroexpansion holds a literal the binary writer does
+   not yet serialize (bignum / structure / bit-vector — see cfasl-6) auto-falls-
+   back to the text fasl even when this is true.")
 
 (defun %compile-file-toplevel (form)
   "Perform COMPILE-FILE's compile-time effects for one top-level FORM (CLHS
@@ -9777,42 +9800,45 @@ result array; return that array."
          (eval form))
         (t nil)))))
 
-(defun %write-fasl-form (form stream readtable)
-  "Write one top-level FORM to a fasl STREAM as a macro-free form: MACROEXPAND-ALL
-   it, then PRIN1 under a controlled I/O syntax so it reads back identically —
-   WITH-STANDARD-IO-SYNTAX (canonical *PRINT-* values, incl. no *PRINT-LEVEL* /
-   *PRINT-LENGTH* truncation) plus the standard READTABLE, *PRINT-CIRCLE* on (so a
-   symbol shared across an expansion — e.g. a gensym — round-trips as one object)
-   and *READ-DEFAULT-FLOAT-FORMAT* DOUBLE-FLOAT (bocl's only float type, so floats
-   print without an exponent marker).  *PACKAGE* is held at the compile-time
-   package so symbols qualify relative to the fasl's IN-PACKAGE sequence.  READTABLE
-   is a pre-made standard readtable (shared across the file; PRIN1 never mutates
-   it).  Returns T on success, NIL if the form could not be macroexpanded (then
-   written verbatim)."
-  (multiple-value-bind (expanded ok)
-      (handler-case (values (macroexpand-all form) t)
-        (error () (values form nil)))
-    (let ((pkg *package*))
+(defun %write-text-fasl (out-namestring source entries readtable)
+  "Write the readable TEXT fast-load file to OUT-NAMESTRING: the
+   ';; BOCL <version> FASL' header, a provenance line naming SOURCE, then each
+   collected (PACKAGE . EXPANDED-FORM) of ENTRIES PRIN1'd so it reads back
+   identically — WITH-STANDARD-IO-SYNTAX (canonical *PRINT-* values, incl. no
+   *PRINT-LEVEL* / *PRINT-LENGTH* truncation) plus the standard READTABLE,
+   *PRINT-CIRCLE* on (a symbol shared across an expansion — e.g. a gensym —
+   round-trips as one object) and *READ-DEFAULT-FLOAT-FORMAT* DOUBLE-FLOAT (bocl's
+   only float type).  *PACKAGE* is held at each form's OWN compile-time package so
+   symbols qualify relative to the fasl's IN-PACKAGE sequence.  The forms are
+   already MACROEXPAND-ALL'd (this only prints); READTABLE is a pre-made standard
+   readtable (PRIN1 never mutates it).  Returns T."
+  (with-open-file (dst out-namestring :direction :output
+                                      :if-exists :supersede :if-does-not-exist :create)
+    (format dst "~A~A FASL~%" *bocl-fasl-header-prefix* (lisp-implementation-version))
+    (format dst ";;; minimal-compiled (macroexpanded) forms.  Source: ~A~%" source)
+    (dolist (entry entries)
       (with-standard-io-syntax
-        (let ((*package*                   pkg)
+        (let ((*package*                   (car entry))
               (*readtable*                 readtable)
               (*print-circle*              t)
               (*read-default-float-format* 'double-float))
-          (prin1 expanded stream)
-          (terpri stream))))
-    ok))
+          (prin1 (cdr entry) dst)
+          (terpri dst)))))
+  t)
 
 (defun compile-file (input-file &key output-file &allow-other-keys)
   "Minimal-compile INPUT-FILE to a fast-load file and return its truename.  Each
    top-level form is read; its compile-time effects fire (%COMPILE-FILE-TOPLEVEL —
    EVAL-WHEN :COMPILE-TOPLEVEL, IN-PACKAGE, DEFMACRO, ...), then it is
-   MACROEXPAND-ALL'd and written to OUTPUT-FILE (default: source with type
-   *DEFAULT-COMPILED-FILE-TYPE*).  The file begins with a ';; BOCL <version> FASL'
-   header and an IN-PACKAGE pinning the load package; LOAD reads it with the
-   ordinary source loader.  A compile-time IN-PACKAGE is contained by the
-   *PACKAGE* rebinding.  Returns (values output-truename warnings-p failure-p):
-   warnings-p is always NIL; failure-p is T if some form could not be
-   macroexpanded (it was written verbatim)."
+   MACROEXPAND-ALL'd and collected together with the package in effect for it.
+   The collected macro-free forms are written to OUTPUT-FILE (default: source with
+   type *DEFAULT-COMPILED-FILE-TYPE*), preceded by an IN-PACKAGE pinning the load
+   package, as a compact BINARY cfasl (the default; see *COMPILE-FILE-BINARY*) or,
+   when binary is disabled or a form holds a literal the binary writer cannot
+   serialize, as the readable TEXT fasl.  A compile-time IN-PACKAGE is contained
+   by the *PACKAGE* rebinding.  Returns (values output-truename warnings-p
+   failure-p): warnings-p is always NIL; failure-p is T if some form could not be
+   macroexpanded (it was collected verbatim)."
   (let* ((merged (merge-pathnames input-file *default-pathname-defaults*))
          ;; Select the actual source file (issue lisp-file-types pseudocode):
          ;; an explicit type or an existing file is used as is; otherwise search
@@ -9827,26 +9853,34 @@ result array; return that array."
          (out-ns  (namestring out))
          (*package*   *package*)                ; contain a compile-time IN-PACKAGE
          (*readtable* *readtable*)              ; the SOURCE is read with this readtable
-         (std-rt   (copy-readtable nil))        ; the FASL is written with the standard one
-         (failure nil))
+         (std-rt   (copy-readtable nil))        ; the TEXT fasl is written with the standard one
+         (failure nil)
+         (entries '()))                         ; (package . expanded-form), reverse order
+    ;; Pin the load package to the compile-time package, in case the source
+    ;; carries no IN-PACKAGE of its own.
+    (push (cons *package* (list 'in-package (package-name *package*))) entries)
     (with-open-file (src actual :direction :input)
-      (with-open-file (dst out-ns :direction :output
-                                  :if-exists :supersede :if-does-not-exist :create)
-        ;; Identifying header (a comment: the source loader skips it) + provenance.
-        (format dst "~A~A FASL~%" *bocl-fasl-header-prefix* (lisp-implementation-version))
-        (format dst ";;; minimal-compiled (macroexpanded) forms.  Source: ~A~%" actual)
-        ;; Pin the load package to the compile-time package, in case the source
-        ;; carries no IN-PACKAGE of its own.  (Written under standard syntax too.)
-        (%write-fasl-form (list 'in-package (package-name *package*)) dst std-rt)
-        (let ((eof '#:eof))
-          (loop
-            ;; READ the source under the caller's *READTABLE* (it may use custom
-            ;; read syntax); WRITE the fasl under the standard readtable (std-rt).
-            (let ((form (read src nil eof)))
-              (when (eq form eof) (return))
-              (%compile-file-toplevel form)               ; compile-time effects
-              (unless (%write-fasl-form form dst std-rt)   ; macroexpand + emit
-                (setq failure t)))))))
+      (let ((eof '#:eof))
+        (loop
+          ;; READ the source under the caller's *READTABLE* (it may use custom
+          ;; read syntax).
+          (let ((form (read src nil eof)))
+            (when (eq form eof) (return))
+            (%compile-file-toplevel form)                 ; compile-time effects
+            (multiple-value-bind (expanded ok)
+                (handler-case (values (macroexpand-all form) t)
+                  (error () (values form nil)))
+              (unless ok (setq failure t))
+              ;; Capture *PACKAGE* per form so a multi-package file's symbols
+              ;; qualify correctly should we fall back to the text writer.
+              (push (cons *package* expanded) entries))))))
+    (setq entries (nreverse entries))
+    ;; Binary by default; fall back to text when disabled or when a form holds an
+    ;; object the binary writer cannot serialize (%WRITE-CFASL then returns NIL,
+    ;; having written nothing).
+    (or (and *compile-file-binary*
+             (%write-cfasl out-ns (mapcar #'cdr entries)))
+        (%write-text-fasl out-ns actual entries std-rt))
     (values (truename out) nil failure)))
 
 (defun %bocl-fasl-version (path)

@@ -232,9 +232,10 @@ static void test_compile_file_fasl(void){
     e("(compile-file \"/tmp/bocl-s25-fasl-src.lisp\")");
     TEST_EQ(eql, T_Symbol,
             e("(if (probe-file \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
-    /* ... carrying a bocl fasl version header ... */
+    /* ... which is a binary cfasl (the COMPILE-FILE default), recognised by its
+       magic so LOAD dispatches to the binary loader ... */
     TEST_EQ(eql, T_Symbol,
-            e("(if (%bocl-fasl-version \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
+            e("(if (%cfasl-file-p \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
     /* ... which loads and defines everything, the macro having expanded. */
     e("(load \"/tmp/bocl-s25-fasl-src.fasl\")");
     TEST_EQ(eql, T_Symbol, e("(boundp '*s25-fasl-loaded*)"));

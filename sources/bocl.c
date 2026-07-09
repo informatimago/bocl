@@ -1515,6 +1515,66 @@ static void kernel_PROFILE_PHASE_EXIT(unused Ref f, Ref arguments, MultipleValue
     if(integerp(id)){ word phase=integer_value(id); PROFILE_EXIT((profile_phase_t)phase); (void)phase; }
     results->count=1; results->values[0]=NIL_Symbol;}
 
+/* ---- Binary (cfasl) COMPILE-FILE / LOAD hooks (cfasl-4) ------------------ */
+
+/* (%CFASL-FILE-P namestring) -> T if the file begins with the cfasl magic, so
+   LOAD dispatches to the binary loader instead of the text/source reader. */
+static void kernel_CFASL_FILE_P(unused Ref f, Ref arguments, MultipleValues* results){
+    results->count=1; results->values[0]=NIL_Symbol;
+    Ref path = cons_car(arguments);
+    if(!stringp(path)){ return; }
+    char* p = string_cstring(path);
+    FILE* fp = fopen(p, "rb");
+    free(p);
+    if(fp){
+        char magic[CFASL_MAGIC_LEN];
+        size_t n = fread(magic, 1, CFASL_MAGIC_LEN, fp);
+        fclose(fp);
+        if(n==CFASL_MAGIC_LEN && memcmp(magic, CFASL_MAGIC, CFASL_MAGIC_LEN)==0){
+            results->values[0]=T_Symbol; }}}
+
+/* (%CFASL-LOAD namestring) -> T on a successful binary load, NIL when the file
+   is not a cfasl / carries an unreadable version (LOAD then falls back). */
+static void kernel_CFASL_LOAD(unused Ref f, Ref arguments, MultipleValues* results){
+    results->count=1; results->values[0]=NIL_Symbol;
+    Ref path = cons_car(arguments);
+    if(!stringp(path)){ return; }
+    char* p = string_cstring(path);
+    results->values[0] = bocl_fasl_load(p);
+    free(p);}
+
+/* (%WRITE-CFASL namestring forms) -> T if a binary fasl was written, or NIL if
+   any form holds an object the writer cannot serialize (COMPILE-FILE then writes
+   the text fasl instead — never a partial file, since serialization completes in
+   memory before the file is opened).  Each form gets a fresh writer context so
+   its shared-object ids restart at 0, matching the per-form reader. */
+static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* results){
+    results->count=1; results->values[0]=NIL_Symbol;
+    Ref path  = cons_car(arguments);
+    Ref forms = cons_car(cons_cdr(arguments));
+    if(!stringp(path)){ return; }
+    cfasl_out b; cfasl_out_init(&b);
+    cfasl_put_bytes(&b, CFASL_MAGIC, CFASL_MAGIC_LEN);
+    cfasl_put_u8(&b, (uint8_t)CFASL_VERSION);
+    cfasl_put_u8(&b, 0);                              /* flags (reserved) */
+    int ok = 1;
+    for(Ref l=forms; consp(l); l=cons_cdr(l)){
+        cfasl_wctx* w = cfasl_wctx_new(&b);
+        cfasl_write_object(w, cons_car(l));
+        int err = cfasl_wctx_error(w);
+        cfasl_wctx_free(w);
+        if(err){ ok=0; break; }}
+    cfasl_put_u8(&b, CFASL_TAG_EOF);
+    if(ok && !b.error){
+        char* p = string_cstring(path);
+        FILE* fp = fopen(p, "wb");
+        free(p);
+        if(fp){
+            size_t wn = fwrite(b.data, 1, b.len, fp);
+            fclose(fp);
+            if(wn==b.len){ results->values[0]=T_Symbol; }}}
+    cfasl_out_free(&b);}
+
 /* (ED &optional x) → NIL stub. */
 static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -1983,6 +2043,14 @@ void bocl_register_load(void){
                 built_in_function_new(symbol_intern_cstring("%PROFILE-PHASE-ENTER"),id1,kernel_PROFILE_PHASE_ENTER));
             set_symbol_function(symbol_intern_cstring("%PROFILE-PHASE-EXIT"),
                 built_in_function_new(symbol_intern_cstring("%PROFILE-PHASE-EXIT"),list(symbol_intern_cstring("ID"),NULL),kernel_PROFILE_PHASE_EXIT)); }
+        {   Ref path1  = list(symbol_intern_cstring("PATH"),NULL);
+            Ref pathfs = list(symbol_intern_cstring("PATH"),symbol_intern_cstring("FORMS"),NULL);
+            set_symbol_function(symbol_intern_cstring("%CFASL-FILE-P"),
+                built_in_function_new(symbol_intern_cstring("%CFASL-FILE-P"),path1,kernel_CFASL_FILE_P));
+            set_symbol_function(symbol_intern_cstring("%CFASL-LOAD"),
+                built_in_function_new(symbol_intern_cstring("%CFASL-LOAD"),list(symbol_intern_cstring("PATH"),NULL),kernel_CFASL_LOAD));
+            set_symbol_function(symbol_intern_cstring("%WRITE-CFASL"),
+                built_in_function_new(symbol_intern_cstring("%WRITE-CFASL"),pathfs,kernel_WRITE_CFASL)); }
         {   Ref nv=list(symbol_intern_cstring("NAME"),symbol_intern_cstring("VALUE"),NULL);
             Ref n =list(symbol_intern_cstring("NAME"),NULL);
             set_symbol_function(symbol_intern_cstring("%DEFINE-VARIABLE"),
