@@ -24,7 +24,6 @@ Rules of Processing Issues
 Current list of issues to resolve:
 
 uiop-bocl-porting.issue
-format-specifier-capitalize.issue
 
 stale-test-suite-failures.issue
 ratio-floor-round-truncate.issue

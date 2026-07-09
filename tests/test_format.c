@@ -183,8 +183,30 @@ static void test_write_string(void){
             e("(with-output-to-string (s)"
               "  (write-string \"hello\" s :end 3))"));}
 
+/* ~(...~) case conversion (CLHS 22.3.8.2) + ~@? indirect format. */
+static void test_format_case_conversion(void){
+    TEST_EQ(equal, e("\"hello cruel world!\""),
+            e("(format nil \"~(~A~)\" \"Hello Cruel World!\")"));   /* downcase */
+    TEST_EQ(equal, e("\"Hello Cruel World!\""),
+            e("(format nil \"~:(~A~)\" \"hello cruel world!\")"));  /* capitalize each word */
+    TEST_EQ(equal, e("\"Hello cruel world!\""),
+            e("(format nil \"~@(~A~)\" \"hello cruel world!\")"));  /* capitalize first word */
+    TEST_EQ(equal, e("\"HELLO CRUEL WORLD!\""),
+            e("(format nil \"~:@(~A~)\" \"hello cruel world!\")")); /* upcase */
+    /* the issue's assertion, driven through ~@? (indirect, consuming args) */
+    TEST_EQ(eql, T_Symbol,
+            e("(if (equalp"
+              "     (loop for spec in '(\"~(~A~)\" \"~:(~A~)\" \"~@(~A~)\" \"~:@(~A~)\")"
+              "           collect (format nil \"~@?\" spec \"hello cruel world!\"))"
+              "     '(\"hello cruel world!\" \"Hello Cruel World!\""
+              "       \"Hello cruel world!\" \"HELLO CRUEL WORLD!\")) t nil)"));
+    /* ~? (arg-list) still works */
+    TEST_EQ(equal, e("\"a=1 b=2\""),
+            e("(format nil \"~?\" \"a=~A b=~A\" '(1 2))"));}
+
 TEST_INITIALIZE(test_format);
 TEST_SUITE(test_format, fmt_init, fmt_clean)
+    TEST_CASE("format ~(...~)/~@?",              test_format_case_conversion)
     TEST_CASE("format literal",                  test_format_literal)
     TEST_CASE("format ~A",                       test_format_tilde_A)
     TEST_CASE("format ~S",                       test_format_tilde_S)

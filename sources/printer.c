@@ -1077,6 +1077,24 @@ static uword fmt_find_close(const octet* ctrl, uword pos, uword end){
         pos++;}
     return (uword)-1;}
 
+/* Like fmt_find_close but for the ~(...~) case-conversion block: return the
+   index of the ~ of the matching ~), honouring nested ~(.  -1 if unbalanced. */
+static uword fmt_find_close_paren(const octet* ctrl, uword pos, uword end){
+    int depth=1;
+    while(pos<end){
+        if(ctrl[pos]!='~'){ pos++; continue;}
+        pos++;               /* skip ~ */
+        while(pos<end && ctrl[pos]>='0' && ctrl[pos]<='9') pos++;  /* skip digits */
+        while(pos<end && (ctrl[pos]==':' || ctrl[pos]=='@'))  pos++;/* skip modifiers */
+        if(pos>=end) break;
+        int d=(int)ctrl[pos];
+        if(d=='(') depth++;
+        else if(d==')'){
+            depth--;
+            if(depth==0) return pos-1; /* pos-1 is the ~ */}
+        pos++;}
+    return (uword)-1;}
+
 /* Pop the first element from *args_ptr (a cons list).
    Returns the element; advances *args_ptr to the rest.
    If the list is empty, returns NIL_Symbol and leaves *args_ptr unchanged. */
@@ -1303,6 +1321,41 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               if(close_pos!=(uword)-1) i=close_pos+2; /* skip ~} */
               break;}
           case '}': goto done; /* end of ~{~} — stop this invocation */
+          case '(': {
+              /* ~(...~) — case conversion (CLHS 22.3.8.2):
+                   ~(   downcase                ~:(  capitalize each word
+                   ~@(  capitalize first word   ~:@( upcase
+                 Run the inner control into a string buffer (consuming args in
+                 place), fold the buffer, then emit it. */
+              uword close_pos=fmt_find_close_paren(ctrl,i,end);
+              uword sub_end  =(close_pos!=(uword)-1) ? close_pos : end;
+              Ref buf=stream_output_string(S(CHARACTER));
+              bocl_format_run(buf,ctrl_string,i,sub_end,args_ptr);
+              Ref s=string_output_stream_get_string(buf);
+              octet* b=string_octets(s);
+              uword  n=string_length(s);
+              bool at_word_start=true;   /* start of string is a word start */
+              bool first_done=false;     /* ~@( : only the first word */
+              for(uword k=0;k<n;k++){
+                  int ch=(int)(unsigned char)b[k];
+                  bool alnum=(ch>='0'&&ch<='9')||(ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z');
+                  int oc;
+                  if(colonp && atsignp){          /* ~:@( upcase */
+                      oc=toupper(ch);
+                  }else if(!colonp && !atsignp){   /* ~(   downcase */
+                      oc=tolower(ch);
+                  }else if(colonp){                /* ~:(  capitalize each word */
+                      oc=tolower(ch);
+                      if(at_word_start && oc>='a' && oc<='z') oc=toupper(oc);
+                  }else{                           /* ~@(  capitalize first word only */
+                      oc=tolower(ch);
+                      if(!first_done && at_word_start && oc>='a' && oc<='z'){
+                          oc=toupper(oc); first_done=true; }}
+                  at_word_start=!alnum;
+                  put_content_char(stream,out,oc);}
+              if(close_pos!=(uword)-1) i=close_pos+2; /* skip ~) */
+              break;}
+          case ')': goto done; /* end of ~(~) */
           case '[': {
               /* ~[clause0~;clause1~;...~] — select clause by integer arg.
                  ~:[false~;true~] — boolean: use arg as T/NIL.
@@ -1361,12 +1414,17 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               break;}
           case ']': goto done; /* end of ~[~] */
           case '?': {
-              /* ~? — indirect: pop ctrl-string and args-list from arg stack */
+              /* ~? — indirect format.  ~? pops a control string and a LIST of
+                 args; ~@? pops a control string and consumes the REMAINING args
+                 in place (CLHS 22.3.7.6). */
               Ref sub_ctrl = fmt_pop(args_ptr);
-              Ref sub_args = fmt_pop(args_ptr);
               if(stringp(sub_ctrl)){
                   uword sc_len=string_length(sub_ctrl);
-                  bocl_format_run(stream,sub_ctrl,0,sc_len,&sub_args);}
+                  if(atsignp){
+                      bocl_format_run(stream,sub_ctrl,0,sc_len,args_ptr);
+                  }else{
+                      Ref sub_args = fmt_pop(args_ptr);
+                      bocl_format_run(stream,sub_ctrl,0,sc_len,&sub_args);}}
               break;}
           case '^': {  /* ~^ — escape upward: stop if no more args remain */
               if(nullp(*args_ptr)) goto done;
