@@ -11033,6 +11033,31 @@ the rest take :INITIAL-ELEMENT."
    location, else a default).  Recorded so a failed REQUIRE can report where it
    looked.")
 
+;;; ---- Resource-exhaustion conditions (issue precise-condition-subclasses) ----
+;;; Implementation-specific STORAGE-CONDITION subclasses so code can catch stack
+;;; vs heap exhaustion on their own — still TYPEP STORAGE-CONDITION, so existing
+;;; handlers keep firing.  The kernel stack-overflow guard (boerror.c) signals
+;;; BOCL:OUT-OF-STACK-MEMORY-ERROR via %MAKE-OUT-OF-STACK-MEMORY-ERROR below.
+(define-condition bocl::out-of-memory-error (storage-condition) ()
+  (:documentation "Exhaustion of a bocl memory area (control stack or heap)."))
+(define-condition bocl::out-of-stack-memory-error (bocl::out-of-memory-error)
+  ((limit :initarg :limit :initform nil :reader bocl::out-of-memory-limit)
+   (used  :initarg :used  :initform nil :reader bocl::out-of-memory-used))
+  (:report (lambda (c s)
+             (format s "Control stack exhausted (recursion too deep)")
+             (let ((l (bocl::out-of-memory-limit c)) (u (bocl::out-of-memory-used c)))
+               (when (and l u) (format s ": used ~D of ~D bytes" u l))))))
+(define-condition bocl::out-of-heap-memory-error (bocl::out-of-memory-error)
+  ((requested :initarg :requested :initform nil :reader bocl::out-of-memory-requested)))
+(export '(bocl::out-of-memory-error bocl::out-of-stack-memory-error
+          bocl::out-of-heap-memory-error bocl::out-of-memory-limit
+          bocl::out-of-memory-used bocl::out-of-memory-requested)
+        "BOCL")
+(defun bocl::%make-out-of-stack-memory-error (limit used)
+  "Build a BOCL:OUT-OF-STACK-MEMORY-ERROR carrying the guard LIMIT / USED bytes;
+   the kernel stack-overflow guard calls this to signal a catchable condition."
+  (make-condition 'bocl::out-of-stack-memory-error :limit limit :used used))
+
 (define-condition bocl::invalid-module-plist (error)
   ((object :initarg :object :reader bocl::invalid-module-plist-object)
    (reason :initarg :reason :reader bocl::invalid-module-plist-reason)))

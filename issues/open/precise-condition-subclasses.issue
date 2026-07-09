@@ -72,3 +72,33 @@ class, filling slots:
    category.
 Re-run the must-* suite after each step (handler dispatch is sensitive); especially
 must-condition.
+
+== PROGRESS (v1.5.11) — item 1 DONE; items 2-4 remain (this is an incremental audit) ==
+DELIVERABLE 1 (BOCL:OUT-OF-STACK-MEMORY-ERROR) DONE:
+- Prelude define-conditions (exported from BOCL): BOCL:OUT-OF-MEMORY-ERROR
+  (<- STORAGE-CONDITION), BOCL:OUT-OF-STACK-MEMORY-ERROR (limit/used slots +
+  :report), BOCL:OUT-OF-HEAP-MEMORY-ERROR (requested slot); readers
+  BOCL:OUT-OF-MEMORY-LIMIT/-USED/-REQUESTED; helper
+  BOCL::%MAKE-OUT-OF-STACK-MEMORY-ERROR.
+- eval.c exposes eval_stack_guard_limit() / eval_stack_guard_used(); boerror.c
+  stack_overflow_error() now signals BOCL:OUT-OF-STACK-MEMORY-ERROR (with the guard
+  limit / current usage in bytes) once the constructor is loaded, falling back to a
+  plain STORAGE-CONDITION during early boot.  Verified in the full binary: deep
+  recursion is caught by (handler-case ... (bocl:out-of-stack-memory-error (c) ...)),
+  the condition is TYPEP STORAGE-CONDITION, and limit/used are integers.
+  test_conditions "out-of-stack-memory-error" covers the class/slots (the actual
+  guard-signalling can't run in the CUnit harness — it does not arm the C-stack
+  guard, so real recursion segfaults there rather than signalling).
+
+STILL OPEN (items 2-4, verified undone as of v1.5.11):
+- Item 2 UNBOUND-VARIABLE / UNDEFINED-FUNCTION: the kernel UNBOUND_VARIABLE_Class /
+  UNDEFINED_FUNCTION_Class exist but have NIL superclasses (not linked to
+  CELL-ERROR / ERROR) and the eval.c sites signal a generic error (funcall of an
+  unbound symbol -> SIMPLE-TYPE-ERROR).  Needs class linking + retrofitting the two
+  sites with the :name slot.
+- Item 3 TYPE-ERROR :datum / :expected-type: unpopulated — (error 'type-error
+  :datum 5 :expected-type 'string) then TYPE-ERROR-DATUM / -EXPECTED-TYPE => NIL.
+  (Separately, (the <type> x) does not type-check at all.)  Needs the two slots
+  wired through type_error() and the accessors.
+- Item 4: the remaining kernel ERROR("CAT: ...") / prelude (error "...") sweep by
+  category.

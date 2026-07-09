@@ -8,6 +8,8 @@
 #include "boerror.h"
 #include "memory.h"
 #include "kernel.h"
+#include "eval.h"        /* eval_stack_guard_limit / _used */
+#include "packages.h"    /* BOCL_Package / package_intern_cstring_in */
 #include "macros.h"
 #include "variable.h"
 #include "stream.h"
@@ -187,11 +189,28 @@ _Noreturn void stack_overflow_error(void){
        place do not re-trigger the guard. */
     if(STORAGE_CONDITION_Class->class != NULL){
         uword pool = open_live_pool();
-        Ref fmt = string_new_cstring(
-            "STORAGE ERROR: control stack exhausted (recursion too deep)");
-        add_to_live_pool(fmt);
-        Ref cond = make_simple_condition(STORAGE_CONDITION_Class, fmt, NIL_Symbol);
-        add_to_live_pool(cond);
+        Ref cond = NIL_Symbol;
+        /* Prefer the specific BOCL:OUT-OF-STACK-MEMORY-ERROR (a STORAGE-CONDITION
+           subclass) carrying the guard limit / current usage, once its
+           constructor is loaded — so code can catch stack exhaustion on its own
+           while old STORAGE-CONDITION handlers still fire. */
+        Ref mk = package_intern_cstring_in("%MAKE-OUT-OF-STACK-MEMORY-ERROR",
+                                           BOCL_Package);
+        if(symbol_fboundp(mk)){
+            add_to_live_pool(mk);
+            Ref limit = integer_from_uword((uword)eval_stack_guard_limit());
+            Ref used  = integer_from_uword((uword)eval_stack_guard_used());
+            add_to_live_pool(limit); add_to_live_pool(used);
+            MultipleValues mv;
+            kernel_apply(symbol_function(mk), list(limit,used,(Ref)NULL), &mv);
+            cond = mv.values[0];
+            add_to_live_pool(cond);}
+        if(nullp(cond)){
+            Ref fmt = string_new_cstring(
+                "STORAGE ERROR: control stack exhausted (recursion too deep)");
+            add_to_live_pool(fmt);
+            cond = make_simple_condition(STORAGE_CONDITION_Class, fmt, NIL_Symbol);
+            add_to_live_pool(cond);}
         signal_condition(cond, eval_global_environment());
         /* signal_condition returned — no handler matched; fall through to exit. */
         close_live_pool(pool);

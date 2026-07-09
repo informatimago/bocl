@@ -8,6 +8,11 @@ Ref evale(Ref form,Ref environment,MultipleValues* results);
    Lisp helper exists).  Shared by DEFUN (eval.c) and BOCL:DEFINE-FUNCTION (bocl.c)
    so both set documentation the same way. */
 void bocl_set_function_documentation(Ref name,Ref doc);
+
+/* Control-stack guard limit / current usage (bytes) — for the slots of
+   BOCL:OUT-OF-STACK-MEMORY-ERROR. */
+size_t eval_stack_guard_limit(void);
+size_t eval_stack_guard_used(void);
 void eval_init_stack_guard(char* approx_base);
 Ref eval_global_environment(void);
 /* Run BODY(ctx) under a top-level CATCH for BOCL:QUIT (non-local exit). */

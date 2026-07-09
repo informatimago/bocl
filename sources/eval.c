@@ -439,6 +439,15 @@ void eval_init_stack_guard(char* approx_base){
     if(margin >= total)   { margin = total/2; }
     g_stack_limit = total - margin;}
 
+/* The guard's limit (bytes) and the current control-stack usage, for filling the
+   slots of BOCL:OUT-OF-STACK-MEMORY-ERROR (issue precise-condition-subclasses). */
+size_t eval_stack_guard_limit(void){ return g_stack_limit; }
+size_t eval_stack_guard_used(void){
+    char probe;
+    if(g_stack_base != NULL && g_stack_base > &probe){
+        return (size_t)(g_stack_base - &probe);}
+    return 0;}
+
 Ref evale(Ref form,Ref environment,MultipleValues* results){
     {   /* Stack-overflow guard: stack grows downward, so deeper frames have lower
            addresses; used = base - current.  Cheap: a global load + subtract +

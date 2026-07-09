@@ -86,8 +86,26 @@ static void test_handler_case_catches_type_error_from_last(void){
     Ref r = e("(handler-case (last 7) (error (e) 'caught))");
     TEST_EQ(eql, S(CAUGHT), r);}
 
+/* BOCL:OUT-OF-STACK-MEMORY-ERROR class (issue precise-condition-subclasses,
+   item 1).  The guard actually SIGNALLING it on deep recursion is verified in the
+   full bocl binary (this test harness does not arm the C-stack guard, so real
+   recursion here would segfault rather than signal). */
+static void test_out_of_stack_memory_error(void){
+    /* a STORAGE-CONDITION / BOCL:OUT-OF-MEMORY-ERROR subclass */
+    TEST_EQ(eql, T_Symbol,
+            e("(subtypep 'bocl:out-of-stack-memory-error 'storage-condition)"));
+    TEST_EQ(eql, T_Symbol,
+            e("(subtypep 'bocl:out-of-stack-memory-error 'bocl:out-of-memory-error)"));
+    /* make-condition carries the limit / used slots */
+    TEST_EQ(eql, T_Symbol,
+            e("(let ((c (make-condition 'bocl:out-of-stack-memory-error :limit 100 :used 90)))"
+              "  (and (typep c 'storage-condition)"
+              "       (= 100 (bocl:out-of-memory-limit c))"
+              "       (= 90  (bocl:out-of-memory-used c))))"));}
+
 TEST_INITIALIZE(test_conditions);
 TEST_SUITE(test_conditions, cond_init, cond_clean)
+    TEST_CASE( "out-of-stack-memory-error",  test_out_of_stack_memory_error)
     TEST_CASE( "handler-case catches",      test_handler_case_catches_error)
     TEST_CASE( "handler-case pass-through", test_handler_case_passes_through)
     TEST_CASE( "handler-case binds var",    test_handler_case_binds_condition)
