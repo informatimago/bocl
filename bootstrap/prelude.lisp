@@ -8881,13 +8881,21 @@ result array; return that array."
          (ns     (namestring merged))
          (type   (pathname-type merged)))
     (flet ((do-load (path)
-             ;; A fast-load file (compiled type) may carry a bocl fasl header;
-             ;; check its version (warn on a newer major) before loading it as
-             ;; ordinary source.  Non-fasl files have no header (no-op).
-             (when (%known-file-type-p (pathname-type (pathname path))
-                                       *accepted-compiled-file-types*)
-               (%check-fasl-version path))
-             (funcall *%kernel-load* path))
+             ;; A fast-load file (compiled type) may carry a bocl fasl header.
+             ;; When it does, read it back under the SAME controlled syntax it was
+             ;; written with (standard readtable, DOUBLE-FLOAT floats, base 10, and
+             ;; *READ-EVAL* off — a bocl fasl is macro-free and never contains #.);
+             ;; %CHECK-FASL-VERSION also warns on a newer major version.  A source
+             ;; or foreign file (no header) loads with the caller's syntax.
+             (if (and (%known-file-type-p (pathname-type (pathname path))
+                                          *accepted-compiled-file-types*)
+                      (%check-fasl-version path))
+                 (let ((*readtable*                 (copy-readtable nil))
+                       (*read-default-float-format* 'double-float)
+                       (*read-base*                 10)
+                       (*read-eval*                 nil))
+                   (funcall *%kernel-load* path))
+                 (funcall *%kernel-load* path)))
            (missing ()
              (if if-does-not-exist
                  (error "LOAD: file ~S does not exist" ns)
@@ -9562,17 +9570,29 @@ result array; return that array."
          (eval form))
         (t nil)))))
 
-(defun %write-fasl-form (form stream)
+(defun %write-fasl-form (form stream readtable)
   "Write one top-level FORM to a fasl STREAM as a macro-free form: MACROEXPAND-ALL
-   it and PRIN1 with *PRINT-CIRCLE* on so that a symbol shared across an expansion
-   (e.g. a gensym) round-trips as one object.  Returns T on success, NIL if the
-   form could not be macroexpanded (it is then written verbatim)."
+   it, then PRIN1 under a controlled I/O syntax so it reads back identically —
+   WITH-STANDARD-IO-SYNTAX (canonical *PRINT-* values, incl. no *PRINT-LEVEL* /
+   *PRINT-LENGTH* truncation) plus the standard READTABLE, *PRINT-CIRCLE* on (so a
+   symbol shared across an expansion — e.g. a gensym — round-trips as one object)
+   and *READ-DEFAULT-FLOAT-FORMAT* DOUBLE-FLOAT (bocl's only float type, so floats
+   print without an exponent marker).  *PACKAGE* is held at the compile-time
+   package so symbols qualify relative to the fasl's IN-PACKAGE sequence.  READTABLE
+   is a pre-made standard readtable (shared across the file; PRIN1 never mutates
+   it).  Returns T on success, NIL if the form could not be macroexpanded (then
+   written verbatim)."
   (multiple-value-bind (expanded ok)
       (handler-case (values (macroexpand-all form) t)
         (error () (values form nil)))
-    (let ((*print-circle* t) (*print-length* nil) (*print-level* nil))
-      (prin1 expanded stream)
-      (terpri stream))
+    (let ((pkg *package*))
+      (with-standard-io-syntax
+        (let ((*package*                   pkg)
+              (*readtable*                 readtable)
+              (*print-circle*              t)
+              (*read-default-float-format* 'double-float))
+          (prin1 expanded stream)
+          (terpri stream))))
     ok))
 
 (defun compile-file (input-file &key output-file &allow-other-keys)
@@ -9599,7 +9619,8 @@ result array; return that array."
          (out     (compile-file-pathname actual :output-file output-file))
          (out-ns  (namestring out))
          (*package*   *package*)                ; contain a compile-time IN-PACKAGE
-         (*readtable* *readtable*)
+         (*readtable* *readtable*)              ; the SOURCE is read with this readtable
+         (std-rt   (copy-readtable nil))        ; the FASL is written with the standard one
          (failure nil))
     (with-open-file (src actual :direction :input)
       (with-open-file (dst out-ns :direction :output
@@ -9608,15 +9629,16 @@ result array; return that array."
         (format dst "~A~A FASL~%" *bocl-fasl-header-prefix* (lisp-implementation-version))
         (format dst ";;; minimal-compiled (macroexpanded) forms.  Source: ~A~%" actual)
         ;; Pin the load package to the compile-time package, in case the source
-        ;; carries no IN-PACKAGE of its own.
-        (prin1 (list 'in-package (package-name *package*)) dst)
-        (terpri dst)
+        ;; carries no IN-PACKAGE of its own.  (Written under standard syntax too.)
+        (%write-fasl-form (list 'in-package (package-name *package*)) dst std-rt)
         (let ((eof '#:eof))
           (loop
+            ;; READ the source under the caller's *READTABLE* (it may use custom
+            ;; read syntax); WRITE the fasl under the standard readtable (std-rt).
             (let ((form (read src nil eof)))
               (when (eq form eof) (return))
               (%compile-file-toplevel form)               ; compile-time effects
-              (unless (%write-fasl-form form dst)          ; macroexpand + emit
+              (unless (%write-fasl-form form dst std-rt)   ; macroexpand + emit
                 (setq failure t)))))))
     (values (truename out) nil failure)))
 

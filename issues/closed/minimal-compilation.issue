@@ -126,3 +126,21 @@ writes a genuine fast-load file:
   are macro-free (no local-macro call, no DOLIST, survives the walk).
 Round-trip verified for macros (DOLIST / backquote), EVAL-WHEN, and multi-package
 files (DEFPACKAGE + IN-PACKAGE), including the (load (compile-file f)) idiom.
+
+----------------------------------------------------------------------
+PROGRESS (v1.5.2) — CONTROLLED I/O SYNTAX FOR SAFE FASL ROUND-TRIPPING:
+On pjb's note that prin1/read round-tripping must control *readtable* and the
+other *print-*/*read-* variables, the fasl is now written and read under matching
+canonical syntax:
+- WRITE (%write-fasl-form): PRIN1 inside WITH-STANDARD-IO-SYNTAX (standard *print-*
+  values; no *print-level*/*print-length* truncation) + the standard *READTABLE*
+  (a copy-readtable NIL made once per file), *PRINT-CIRCLE* T, and
+  *READ-DEFAULT-FLOAT-FORMAT* DOUBLE-FLOAT; *PACKAGE* is re-bound to the
+  compile-time package for correct symbol qualification.  The SOURCE keeps being
+  read with the caller's *READTABLE* (custom read syntax stays honoured) — only
+  the fasl WRITE uses the standard readtable.
+- READ (LOAD of a header-bearing fasl): *READTABLE* standard, *READ-DEFAULT-FLOAT-
+  FORMAT* DOUBLE-FLOAT, *READ-BASE* 10, and *READ-EVAL* NIL (a fasl is macro-free
+  and never contains #.; the reader honours *READ-EVAL*).
+Round-trip re-verified for floats (3.14d0 -> 3.14 -> double), escaped strings and
+keywords, plus the earlier macro / EVAL-WHEN / multi-package cases.
