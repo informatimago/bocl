@@ -39,3 +39,44 @@ generational-gc.issue
 ansi-test.issue
 
 minor-gc-doomed-under-gcminorstress.issue
+
+
+====================================================================
+PERFORMANCE PROGRAM — speed up loading/running (ASDF: load ~240s,
+compile ~300s, on M3).  Three planification issues, each expanding into
+ordered implementation issues.  Portability gate: strict C17 / POSIX, no
+native codegen (a byte-code VM is the ceiling).
+
+RECOMMENDED GLOBAL ORDER (respects cross-dependencies):
+  1. hot-1-profile      FIRST — attribute the time; gates all three plans.
+  2. plan-1 (cfasl-*)   compact binary fasl — immediate load win; is the
+                        serialization layer plan-2 reuses.
+  3. plan-3 (hot-2..6)  tree-walker opts; hot-2 (lexical addressing) is the
+                        analyzer plan-2's compiler reuses.
+  4. plan-2 (vm-*)      byte-code VM + compiler; depends on cfasl-1..3 and hot-2.
+
+plan-1-compact-fasl.issue
+  cfasl-1-format-spec.issue
+  cfasl-2-object-serializer.issue
+  cfasl-3-loader.issue
+  cfasl-4-compile-file-integ.issue
+  cfasl-5-benchmark-validate.issue
+
+plan-2-bytecode-vm.issue
+  vm-1-isa-and-function-layout.issue
+  vm-2-dispatch-core.issue
+  vm-3-compiler-frontend.issue
+  vm-4-codegen-core.issue
+  vm-5-codegen-control.issue
+  vm-6-closures-and-interop.issue
+  vm-7-clos-inline-cache.issue
+  vm-8-bytecode-fasl.issue
+  vm-9-debug-bootstrap-validate.issue
+
+plan-3-interpreter-hotpath.issue
+  hot-1-profile.issue
+  hot-2-lexical-addressing.issue
+  hot-3-frame-representation.issue
+  hot-4-arglist-avoidance.issue
+  hot-5-dispatch-caches.issue
+  hot-6-benchmark-validate.issue

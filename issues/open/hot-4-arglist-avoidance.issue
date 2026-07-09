@@ -1,0 +1,26 @@
+hot-4 — Avoid per-call argument-list consing (plan-3).
+
+Stop allocating a fresh list for every funcall's arguments.
+
+WHAT
+- Today a call conses (a1 a2 ... an) and the callee walks it (pop_mandatory_argument
+  etc.).  For a variable-heavy load this is a huge chunk of the ~150us and of GC
+  pressure.
+- Introduce an argument passing convention over a VALUE STACK / reusable Ref buffer:
+  the caller pushes evaluated args onto a stack region; the callee reads them by
+  index for required params and only materialises a list for &REST.  A required-only
+  fast path binds directly from the stack into the (hot-3) frame slots with no
+  consing; &optional/&key use a general binder (still off the stack).
+- Adapt the callee kinds: tree-walked FUNCTION/CLOSURE bind from the stack;
+  BUILT-IN-FUNCTION primitives — provide a stack-based arg accessor alongside the
+  current cons-list one (or an adapter) so primitives need not all change at once.
+- This is also exactly the VM's calling convention (vm-2/vm-6) — design the stack
+  layout so the tree-walker and the VM SHARE it, easing plan-2.
+- GC: the arg stack is a rooted scan region (non-moving GC), same discipline as the
+  SORT scratch / the VM value stack.
+
+ACCEPTANCE: micro-benchmark call-heavy code showing reduced allocation + time;
+&optional/&rest/&key correctness (destructuring, apply) parity; suite green; the
+stack layout documented for reuse by the VM.
+
+DEPENDS ON: hot-3 (frame slots to bind into).

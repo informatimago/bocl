@@ -1,0 +1,27 @@
+hot-2 — Lexical addressing pre-pass (plan-3; SHARED with vm-3).
+
+Replace per-reference alist variable lookup with O(1) (depth,index) addressing.
+
+WHAT
+- A one-time analysis pass over a function body (run at DEFUN / lambda creation, its
+  result cached on the function object): walk the body with a compile-time lexical
+  environment, and rewrite / annotate each variable reference and SETQ with a
+  (frame-depth, slot-index) ADDRESS, and each FLET/LABELS call with its slot.  Mark
+  SPECIAL variables (declared or globally proclaimed via DEFVAR/DEFPARAMETER/proclaim
+  special) so they route to the dynamic path, not an address.
+- At eval time, a variable reference becomes: walk `depth` parent frames, index the
+  slot vector — instead of environment_find_variable's name search up the alist
+  chain.  This is the single biggest per-call win after arg-consing.
+- Correctness: shadowing, LET vs LET*, closhandling over captured frames, and the
+  MACROLET/SYMBOL-MACROLET expansion (already handled by MACROEXPAND-ALL) must all be
+  respected.  Non-analyzable / eval'd forms (interactive EVAL of a bare form) fall
+  back to the current name-based lookup.
+- FACTORING: implement the analyzer as a standalone module so plan-2 vm-3 consumes
+  the SAME (depth,index) output (one lexical analyzer for both the fast tree-walker
+  and the bytecode compiler).
+
+ACCEPTANCE: micro-benchmark variable-heavy code (nested LET, deep closures) showing
+the lookup cost drop; parity with the current interpreter on the control/binding
+suites; the analyzer reusable by vm-3.
+
+DEPENDS ON: hot-1 (to confirm lookup is a top cost).  Co-develop with vm-3.

@@ -1,0 +1,52 @@
+PLANIFICATION 1 — Compact binary fast-load file (the immediate load win).
+
+MOTIVATION (from the ASDF-load performance analysis)
+Loading ASDF is eval-bound: each top-level form is evaluated once; the resident
+functions are barely called during load.  The current fasl (a readable text file
+of MACROEXPAND-ALL'd, fully-package-qualified s-expressions — see
+[[bocl-fasl-format]]) made load SLOWER than source (~255s vs ~240s on M3): it is
+bigger (macroexpansion inflates DOLIST->TAGBODY, backquote->APPEND/LIST) and every
+symbol is re-parsed and re-interned at load.  So the "fasl slower than source"
+regression is a FORMAT problem, not a fundamental one.
+
+GOAL
+Replace the printed-s-expression fasl with a COMPACT BINARY serialization of the
+already-macroexpanded top-level form graph, plus a symbol/constant INDEX table
+(each unique symbol interned once at load, referenced by integer index).  LOAD
+becomes deserialize-and-eval — no re-parsing, no re-interning, no re-macroexpanding.
+This is the single highest-ROI step for load time that keeps the tree-walker, and
+its serializer is exactly the layer the bytecode fasl (plan-2) will reuse.
+
+CONSTRAINTS
+Portable C17 / POSIX only: a hand-rolled little/host-endian binary format read with
+fread; no mmap-required layout, no external serialization library.  Round-trip and
+LOAD semantics (EVAL-WHEN, IN-PACKAGE, package pinning) must match the text fasl.
+
+EXPANSION — implementation issues, in order (see cfasl-*.issue):
+  cfasl-1-format-spec.issue      define the container: magic/version header, the
+                                 section layout (intern table, constant pool, form
+                                 stream), and the type tags.
+  cfasl-2-object-serializer.issue  write the CL object graph (cons/symbol-by-index/
+                                 integer/bignum/ratio/float/char/string/vector/
+                                 structure) + build the symbol+constant intern table;
+                                 handle shared/circular structure via back-references
+                                 (the *PRINT-CIRCLE* concern, done structurally).
+  cfasl-3-loader.issue           C deserializer: read the intern table (intern each
+                                 symbol once, in its package), rebuild the graph, run
+                                 the top-level form stream through the evaluator.
+  cfasl-4-compile-file-integ.issue  COMPILE-FILE emits the binary fasl under a new
+                                 magic; LOAD detects magic and dispatches (binary vs
+                                 the ";; BOCL <v> FASL" text vs source); preserve
+                                 EVAL-WHEN :compile-toplevel firing + IN-PACKAGE.
+  cfasl-5-benchmark-validate.issue  benchmark ASDF load (source / text-fasl / binary-
+                                 fasl) + a fasl round-trip corpus; full unit suite.
+
+CROSS-PLAN
+- plan-2 (bytecode VM): cfasl-2's object serializer is extended by vm-8 to serialize
+  compiled-function objects (bytecode + constant pool), so the binary fasl becomes
+  the bytecode fasl.  Do cfasl-1..3 before vm-8.
+
+SUCCESS
+Binary fasl loads materially faster than both the text fasl and source (target:
+approach read+eval cost, i.e. cut the read/intern/macroexpand share of the ~240s),
+with identical results and a green suite.

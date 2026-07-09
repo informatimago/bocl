@@ -1,0 +1,32 @@
+vm-9 — Debugger frames, self-hosting bootstrap, benchmark (plan-2-bytecode-vm).
+
+Finish the VM: introspection, compile the prelude, measure.
+
+WHAT
+- Backtrace / debugger: VM call frames must appear in the backtrace with function
+  name + (best-effort) source location / current form, so HANDLER-CASE reporting
+  and the REPL debugger work for compiled code as they do for the tree-walker (mind
+  the call-frame vs block-frame model, [[bocl-defun-lexical-block]]).  A bytecode ->
+  source-position map (from the compiler) drives this.
+- Conditions from bytecode (errors, RETURN-FROM across frames) integrate with the
+  existing signal_condition / frame-unwind machinery.
+- SELF-HOSTING: compile the compiler and the prelude to bytecode.  Decide the
+  bootstrap: (a) tree-walk the compiler to compile the prelude at build time and
+  ship a prelude bytecode fasl, or (b) keep loading prelude source but compile hot
+  prelude functions.  Prefer (a): a build step compiles prelude.lisp -> a bytecode
+  image loaded at boot -> fast startup (also shrinks the ~11s prelude load).
+- FUNCTION-LAMBDA-EXPRESSION / DISASSEMBLE for compiled functions (keep the source
+  lambda, or a bytecode disassembler).
+
+VALIDATE
+- Full unit suite (make -C tests test) green with compiled prelude + compiled test
+  paths.
+- Benchmark: (require :asdf) compile + load + a representative OPERATE, tree-walker
+  vs VM; document the speedup vs the original ~240-300s and vs plan-1's numbers.
+- Confirm the strict-C17 switch-dispatch build (no __GNUC__) still passes the suite
+  (portability gate).
+
+ACCEPTANCE: prelude self-hosts, suite green on BOTH dispatch builds, documented
+end-to-end speedup.
+
+DEPENDS ON: vm-1..8 (vm-7 optional).

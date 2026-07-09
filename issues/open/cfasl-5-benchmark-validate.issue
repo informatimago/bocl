@@ -1,0 +1,21 @@
+cfasl-5 — Benchmark + validate the binary fasl (plan-1-compact-fasl).
+
+Measure the win and guard against regressions.
+
+WHAT
+- Benchmark harness (reuse the ASDF-load setup): time (require :asdf) three ways —
+  interpreted source, text fasl, binary fasl — on the same machine; also time a
+  large single-file compile+load.  Record before/after in the issue and a doc note.
+  Attribute the binary-fasl load internally (deserialize vs eval) with cheap timers
+  to confirm the read/intern/macroexpand share was removed (feeds plan-3 hot-1's
+  attribution).
+- Correctness corpus: a directory of .lisp files exercising DEFUN/DEFMACRO/DEFVAR/
+  DEFPARAMETER/DEFCONSTANT/DEFCLASS/DEFMETHOD, EVAL-WHEN situations, IN-PACKAGE /
+  DEFPACKAGE, shared gensyms, bignums/ratios/floats/strings/vectors/structs; assert
+  binary-fasl load == source load (definitions + return values).
+- Full unit suite (make -C tests test) green; test_slice25 fasl cases adapted.
+
+ACCEPTANCE: documented speedup vs both source and text fasl; corpus + suite green;
+no new warnings (clean C17 build).
+
+DEPENDS ON: cfasl-1..4.

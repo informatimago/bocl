@@ -1,0 +1,29 @@
+cfasl-1 — Binary fasl container format spec (plan-1-compact-fasl).
+
+Design (no code) the on-disk format the serializer/loader implement.
+
+CONTENT
+- Header: 8-byte magic (e.g. "BOCLFAS\0"), u16 format-version, u16 flags, u32
+  reserved.  A distinct magic from the text ";; BOCL <v> FASL" so LOAD can
+  discriminate by peeking the first bytes.  file(1) friendliness: keep the magic
+  ASCII-ish.
+- Sections (offsets/lengths in the header, or streamed with section tags):
+    1. INTERN TABLE: N entries, each = (package-name-string-index, symbol-name,
+       flags[keyword/uninterned]).  Symbols in the object stream are referenced by
+       their index here, so each is interned exactly once at load.
+    2. CONSTANT POOL (optional): large/shared literals (strings, bignums, vectors)
+       referenced by index, so duplicates are stored once.
+    3. FORM STREAM: the serialized top-level forms, in order, each preceded by its
+       byte length (for skip/validation).
+- Value type tags for the object serializer (cons, nil, symbol-ref, small-int,
+  bignum, ratio, single/double-float, character, string, simple-vector, structure,
+  backref, T, package-designator, ...).  Reserve a tag space; version-gate.
+- Endianness: fixed little-endian on disk (byte-swap on big-endian hosts) OR
+  host-endian + a header endianness byte (simpler; document the choice).
+- Versioning: LOAD checks format-version (major mismatch -> refuse/fall back to
+  source, like %CHECK-FASL-VERSION does for the text fasl).
+
+ACCEPTANCE: a written spec (this issue + a doc note) that cfasl-2 (writer) and
+cfasl-3 (reader) can both implement unambiguously; agree the tag list.
+
+DEPENDS ON: none (first).

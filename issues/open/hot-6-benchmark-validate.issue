@@ -1,0 +1,18 @@
+hot-6 — Benchmark + validate the tree-walker optimizations (plan-3).
+
+Quantify the win and lock it in.
+
+WHAT
+- Re-run hot-1's attribution + micro-benchmarks after hot-2..hot-5; report the
+  tree-walked eval speedup and the MACROEXPAND-ALL / compile speedup (the walker is
+  an eval consumer, so the ~300s compile should shrink too).
+- Regression guard: full unit suite (make -C tests test) green after EACH of
+  hot-2..hot-5 (these touch the evaluator core — verify incrementally).  Run the
+  GC-stress checks where feasible (aware of minor-gc-doomed-under-gcminorstress).
+- Confirm the lexical analyzer (hot-2) and the arg-stack (hot-4) and the dispatch
+  cache (hot-5) are factored as reusable modules for plan-2 (vm-3 / vm-2 / vm-7).
+
+ACCEPTANCE: documented 2-5x-ish tree-walker/compile speedup vs the hot-1 baseline;
+suite green; shared modules confirmed reusable by the VM plan.
+
+DEPENDS ON: hot-2..hot-5.

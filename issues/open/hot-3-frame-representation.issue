@@ -1,0 +1,26 @@
+hot-3 — Environment frame representation (plan-3).
+
+Make the environment a flat, index-addressable structure so hot-2's addresses are
+cheap to follow.
+
+WHAT
+- Represent a lexical frame as a small VECTOR of slots (not an alist of
+  name->value/local-variable structs): frame = { parent, slots[n] }, indexed by the
+  hot-2 slot index.  Allocate the slot vector sized by the analyzed local count.
+- Keep the SPECIAL/dynamic binding stack SEPARATE (a shadowing stack of
+  symbol/old-value pairs restored on unwind), so lexical access never walks dynamic
+  bindings and special access never walks lexical frames.  DEFVAR/PROGV/LET-of-a-
+  special push there.
+- Preserve the debugger's per-frame info (the call frame records function +
+  environment for backtraces — see [[bocl-defun-lexical-block]]): keep enough
+  metadata on the frame for backtrace even with vector slots.
+- GC: frames are ordinary heap objects (non-moving GC keeps raw slot pointers valid);
+  auto-rooted via allocate().  Watch the write barrier when storing into an older
+  frame (cf. gc_write_barrier usage).
+
+ACCEPTANCE: binding/closure/special-variable suites (control, restarts, must-control)
+green; measured allocation/lookup reduction vs the alist frames; no GC regressions
+(run BOCL_GCMINORSTRESS-style checks where applicable, mindful of the known
+minor-gc-doomed issue).
+
+DEPENDS ON: hot-2.

@@ -1,0 +1,27 @@
+cfasl-3 — Binary fasl loader/deserializer (plan-1-compact-fasl).
+
+Read a cfasl file and evaluate its top-level forms.
+
+WHAT
+- `bocl_fasl_load(path)`: open, verify magic + format-version (major mismatch ->
+  WARN and fall back to source, mirroring %CHECK-FASL-VERSION).
+- Read the INTERN TABLE: for each entry intern the symbol ONCE in its named package
+  (creating the package if the fasl carried a defpackage earlier — but package
+  creation is a normal top-level form in the stream, so most symbols' packages
+  already exist by the time they are referenced; order the intern table AFTER the
+  packages, or intern lazily on first reference).  Build the index->symbol array.
+- Read the CONSTANT POOL into an index->object array.
+- Read the FORM STREAM: for each form, deserialize the object graph (resolving
+  symbol-refs / constant-refs / backrefs against the arrays), then evaluate it
+  through the normal evaluator (evale / the %REPL-EVAL wrapper) so EVAL-WHEN and
+  side effects behave exactly as a loaded source form.
+- Rooting: the index arrays and the in-progress object must be pinned across the
+  eval of each form (eval can GC).
+
+KEY WIN: no reader (no character-level parse of huge s-exprs), no re-macroexpansion
+(forms are already macro-free), and each symbol interned exactly once.
+
+ACCEPTANCE: load a fasl produced by cfasl-2 and get identical definitions/effects to
+loading the source; round-trip the corpus from cfasl-2.
+
+DEPENDS ON: cfasl-1, cfasl-2.

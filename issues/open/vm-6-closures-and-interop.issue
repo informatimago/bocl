@@ -1,0 +1,29 @@
+vm-6 — Closures + uniform inter-calling (plan-2-bytecode-vm).
+
+Make compiled closures work and make every function kind inter-callable.
+
+WHAT
+- Closure conversion: for a local LAMBDA / FLET / LABELS that captures outer lexical
+  variables, the analyzer (vm-3) marks captured vars; codegen boxes them (a shared
+  cell) or copies them into an UPVALUE vector.  MAKE-CLOSURE tmpl-i builds a closure
+  object = { compiled-function template, captured environment (display of frames or
+  upvalue vector) }.  LOAD-UPVAL / STORE-UPVAL access captured cells.  Decide box-
+  per-mutated-captured-var vs a captured-frame display (display is simpler; box only
+  variables that are both captured AND SETQ'd).
+- Uniform APPLY: one C entry `bocl_apply(callable, args, nargs, results)` that
+  dispatches on the object kind:
+    BUILT-IN-FUNCTION -> kernel_apply_built_in
+    compiled function/closure -> bocl_vm_run
+    tree-walked FUNCTION/CLOSURE -> kernel_apply_function/closure (evale body)
+  so bytecode can call built-ins and not-yet-compiled tree-walked functions and vice
+  versa, with correct &optional/&rest/&key arg processing (share the existing
+  parameter-binding for the tree-walked/kernel sides; the VM binds required args
+  fast and falls back to the general binder for &optional/&key).
+- This gives INCREMENTAL migration: uncompiled code keeps working; only compiled
+  functions run in the VM.
+
+ACCEPTANCE: adder-returning closures, mutable captured counters, mutually-recursive
+LABELS, a compiled fn calling a tree-walked fn and a built-in and vice versa;
+&optional/&rest/&key on a compiled fn; parity with the tree-walker.
+
+DEPENDS ON: vm-4 (and vm-5 for LABELS control).
