@@ -27,3 +27,15 @@ ACCEPTANCE: a written spec (this issue + a doc note) that cfasl-2 (writer) and
 cfasl-3 (reader) can both implement unambiguously; agree the tag list.
 
 DEPENDS ON: none (first).
+
+== DONE (cfasl branch, v1.6.1) ==
+The format spec is codified in sources/cfasl.h (magic "BOCLFASL" + u8 version +
+u8 flags; the tag enum; the streaming shared-object model that subsumes the intern
+table + constant pool and handles shared/circular structure; LEB128 varints and
+little-endian floats for endianness-independence).  sources/cfasl.c implements the
+low-level I/O the writer (cfasl-2) and loader (cfasl-3) build on: growable output
+buffer, input cursor, u8/bytes, unsigned+signed (zig-zag) varints, little-endian
+f32/f64.  Built into common_SRCS.  Round-trip test in test_misc "cfasl primitives".
+DEVIATION from the sketch: chose a streaming incremental-id shared-object table
+(simpler, handles cycles) over separate offset-based intern-table/constant-pool
+sections.

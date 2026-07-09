@@ -15,6 +15,7 @@ common_SRCS = \
 	integer.c float.c \
 	\
 	profile.c \
+	cfasl.c \
 	strdup.c \
 	\
 	$(DEBUG_SRCS)

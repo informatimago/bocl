@@ -57,7 +57,6 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-cfasl-1-format-spec.issue            (plan-1)
 cfasl-2-object-serializer.issue      (plan-1)
 cfasl-3-loader.issue                 (plan-1)
 cfasl-4-compile-file-integ.issue     (plan-1)

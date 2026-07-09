@@ -11,6 +11,7 @@
 #include "packages.h"
 #include "bocl.h"
 #include "macros.h"
+#include "cfasl.h"    /* cfasl-1: binary fasl byte/varint/float primitives */
 
 TEST_SUITE_SETUP(misc_init){
     kernel_initialize();
@@ -203,8 +204,39 @@ static void test_profile_interface(void){
     TEST_EQ(eql, T_Symbol,
             e("(progn (with-output-to-string (s) (bocl:profile-report s)) t)"));}
 
+/* cfasl-1: binary fasl low-level I/O primitives round-trip (issue plan-1-compact-fasl). */
+static void test_cfasl_primitives(void){
+    cfasl_out b; cfasl_out_init(&b);
+    /* write a mix */
+    cfasl_put_u8(&b, 0xAB);
+    uint64_t uv[] = { 0, 1, 127, 128, 300, 16384, 0xFFFFFFFFull, 0x123456789ABCull };
+    for(size_t i=0;i<sizeof uv/sizeof uv[0]; i++){ cfasl_put_uvarint(&b, uv[i]); }
+    int64_t  sv[] = { 0, 1, -1, 63, -64, 1000, -1000, 0x7FFFFFFFLL, -0x80000000LL };
+    for(size_t i=0;i<sizeof sv/sizeof sv[0]; i++){ cfasl_put_svarint(&b, sv[i]); }
+    cfasl_put_f32(&b, 3.5f);
+    cfasl_put_f64(&b, -2.718281828459045);
+    const char* s = "hi"; cfasl_put_bytes(&b, s, 2);
+    TEST_EQ(eql, NIL_Symbol, b.error ? T_Symbol : NIL_Symbol);   /* no OOM */
+
+    /* read it back */
+    cfasl_in c; cfasl_in_init(&c, b.data, b.len);
+    TEST_EQ(eql, I(0xAB), I(cfasl_get_u8(&c)));
+    for(size_t i=0;i<sizeof uv/sizeof uv[0]; i++){
+        TEST_EQ(eql, T_Symbol, cfasl_get_uvarint(&c)==uv[i] ? T_Symbol : NIL_Symbol); }
+    for(size_t i=0;i<sizeof sv/sizeof sv[0]; i++){
+        TEST_EQ(eql, T_Symbol, cfasl_get_svarint(&c)==sv[i] ? T_Symbol : NIL_Symbol); }
+    TEST_EQ(eql, T_Symbol, cfasl_get_f32(&c)==3.5f ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, T_Symbol, cfasl_get_f64(&c)==-2.718281828459045 ? T_Symbol : NIL_Symbol);
+    char two[3]={0}; cfasl_get_bytes(&c, two, 2);
+    TEST_EQ(eql, T_Symbol, (two[0]=='h'&&two[1]=='i') ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, NIL_Symbol, c.error ? T_Symbol : NIL_Symbol);   /* consumed cleanly */
+    TEST_EQ(eql, T_Symbol, cfasl_at_end(&c) ? T_Symbol : NIL_Symbol);
+    cfasl_out_free(&b);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
+    TEST_CASE("cfasl primitives",    test_cfasl_primitives)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
