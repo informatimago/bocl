@@ -73,3 +73,24 @@ compile-time package tracking still fires) and DEFVAR / DEFPARAMETER / DEFCONSTA
 (expand to proclaim-special + conditional set, matching the C special forms).
 Docstring -> DOCUMENTATION extraction is still deferred (kept in the lambda body,
 as the C DEFUN does — no drift).
+
+PHASE 2b (v1.5.5 doc-extraction, v1.5.6 macros) — DONE.  ISSUE CLOSED.
+- v1.5.5: DEFUN extracts the docstring into (documentation name 'function).
+  make_block_body gained a DOC_OUT (extract for DEFUN, keep in body for
+  FLET/LABELS/DEFMACRO); bocl_set_function_documentation (eval.c, shared via
+  eval.h) records it through the Lisp %SET-FUNCTION-DOCUMENTATION helper; both the
+  interpreter's DEFUN and BOCL:DEFINE-FUNCTION (now (name documentation function))
+  call it, so eval and fasl agree.  A lone trailing string stays a return value.
+- v1.5.6: IN-PACKAGE / DEFVAR / DEFPARAMETER / DEFCONSTANT are now macros too.
+  New kernel seams %IN-PACKAGE / %DEFINE-VARIABLE / %DEFINE-VARIABLE-UNBOUND /
+  %DEFINE-PARAMETER / %DEFINE-CONSTANT forward to the SAME primitives
+  (bocl_in_package, variable.c define_*) the eval.c special forms use, so a
+  fasl-loaded expansion behaves identically to eval.  IN-PACKAGE expands inside an
+  EVAL-WHEN (:compile-toplevel :load-toplevel :execute) so compile-file's
+  compile-time package tracking still fires; DEFVAR guards init-form evaluation to
+  the unbound case.  eval keeps the C special forms (dispatch precedes macros);
+  special-operator-p stays NIL for all of them.
+Net: a compiled file is now FULLY macro-free — DEFUN / DEFVAR / DEFPARAMETER /
+DEFCONSTANT / IN-PACKAGE / DEFPACKAGE all expand to primitives — and round-trips
+(multi-package + return-from verified).  Full unit suite (42) green throughout;
+new test_slice25 "def-form macros".

@@ -9551,6 +9551,38 @@ result array; return that array."
         `(bocl:define-function ',name ,doc
            (function (lambda ,lambda-list ,@decls (block ,name ,@forms)))))))
 
+;;; --- IN-PACKAGE / DEFVAR / DEFPARAMETER / DEFCONSTANT as macros ------------
+;;; Like DEFUN, these are ANSI macros that bocl ALSO open-codes in the evaluator
+;;; for bootstrap + speed (special-form dispatch precedes macro dispatch, so eval
+;;; keeps using the C special forms).  Installing the macro-functions lets
+;;; MACROEXPAND / MACROEXPAND-ALL / the fasl treat them as the macros they are;
+;;; each expands to the very kernel primitive (%DEFINE-VARIABLE / %IN-PACKAGE ...)
+;;; its special form uses, so eval and a fasl-loaded expansion behave identically.
+;;; special-operator-p stays NIL for all of them.
+(defmacro in-package (name)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (%in-package ',name)))
+
+(defmacro defvar (name &optional (value nil value-p) documentation)
+  ;; The init form is evaluated only when NAME is unbound (CLHS): guard it at run
+  ;; time; %DEFINE-VARIABLE marks NAME special and sets it only if still unbound.
+  `(progn
+     ,(if value-p
+          `(if (boundp ',name) (%define-variable-unbound ',name) (%define-variable ',name ,value))
+          `(%define-variable-unbound ',name))
+     ,@(and documentation `((setf (documentation ',name 'variable) ,documentation)))
+     ',name))
+
+(defmacro defparameter (name value &optional documentation)
+  `(progn (%define-parameter ',name ,value)
+          ,@(and documentation `((setf (documentation ',name 'variable) ,documentation)))
+          ',name))
+
+(defmacro defconstant (name value &optional documentation)
+  `(progn (%define-constant ',name ,value)
+          ,@(and documentation `((setf (documentation ',name 'variable) ,documentation)))
+          ',name))
+
 ;; File / time helpers.
 (defun truename (filespec)
   (or (probe-file filespec)

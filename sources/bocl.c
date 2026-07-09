@@ -1364,6 +1364,33 @@ static void kernel_bocl_DEFINE_FUNCTION(unused Ref self, Ref arguments, Multiple
     results->count=1;
     results->values[0]=name;}
 
+/* Kernel seams the DEFVAR / DEFPARAMETER / DEFCONSTANT / IN-PACKAGE macros expand
+   to, so a macroexpansion / fasl form behaves EXACTLY like the corresponding
+   eval.c special form (which stays the eval fast path).  Each just forwards to
+   the same variable.c / bocl_in_package primitive the special form uses. */
+static void kernel_DEFINE_VARIABLE(unused Ref s, Ref args, MultipleValues* results){
+    Ref name=cons_car(args); Ref value=cons_car(cons_cdr(args));
+    check_type(name,SYMBOL_Class);
+    define_variable(name,value);                 /* marks special; sets iff unbound */
+    results->count=1; results->values[0]=name;}
+static void kernel_DEFINE_VARIABLE_UNBOUND(unused Ref s, Ref args, MultipleValues* results){
+    Ref name=cons_car(args);
+    check_type(name,SYMBOL_Class);
+    define_variable(name,UNBOUND_Object);        /* mark special, keep any value */
+    results->count=1; results->values[0]=name;}
+static void kernel_DEFINE_PARAMETER(unused Ref s, Ref args, MultipleValues* results){
+    Ref name=cons_car(args); Ref value=cons_car(cons_cdr(args));
+    check_type(name,SYMBOL_Class);
+    define_parameter(name,value);
+    results->count=1; results->values[0]=name;}
+static void kernel_DEFINE_CONSTANT(unused Ref s, Ref args, MultipleValues* results){
+    Ref name=cons_car(args); Ref value=cons_car(cons_cdr(args));
+    check_type(name,SYMBOL_Class);
+    define_constant(name,value);
+    results->count=1; results->values[0]=name;}
+static void kernel_IN_PACKAGE_FN(unused Ref s, Ref args, MultipleValues* results){
+    results->count=1; results->values[0]=bocl_in_package(cons_car(args));}
+
 /* (ED &optional x) → NIL stub. */
 static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -1819,6 +1846,19 @@ void bocl_register_load(void){
                      symbol_intern_cstring("FUNCTION"),NULL),
                 kernel_bocl_DEFINE_FUNCTION));
             package_export(BOCL_Package,dfn); }
+        {   Ref nv=list(symbol_intern_cstring("NAME"),symbol_intern_cstring("VALUE"),NULL);
+            Ref n =list(symbol_intern_cstring("NAME"),NULL);
+            set_symbol_function(symbol_intern_cstring("%DEFINE-VARIABLE"),
+                built_in_function_new(symbol_intern_cstring("%DEFINE-VARIABLE"),nv,kernel_DEFINE_VARIABLE));
+            set_symbol_function(symbol_intern_cstring("%DEFINE-VARIABLE-UNBOUND"),
+                built_in_function_new(symbol_intern_cstring("%DEFINE-VARIABLE-UNBOUND"),n,kernel_DEFINE_VARIABLE_UNBOUND));
+            set_symbol_function(symbol_intern_cstring("%DEFINE-PARAMETER"),
+                built_in_function_new(symbol_intern_cstring("%DEFINE-PARAMETER"),nv,kernel_DEFINE_PARAMETER));
+            set_symbol_function(symbol_intern_cstring("%DEFINE-CONSTANT"),
+                built_in_function_new(symbol_intern_cstring("%DEFINE-CONSTANT"),nv,kernel_DEFINE_CONSTANT));
+            set_symbol_function(symbol_intern_cstring("%IN-PACKAGE"),
+                built_in_function_new(symbol_intern_cstring("%IN-PACKAGE"),
+                    list(symbol_intern_cstring("DESIGNATOR"),NULL),kernel_IN_PACKAGE_FN)); }
         set_symbol_function(symbol_intern_cstring("ED"),
             built_in_function_new(symbol_intern_cstring("ED"),ll_x,kernel_ED));
         /* Slice 25b — EVAL, MACROEXPAND-1, MACROEXPAND */

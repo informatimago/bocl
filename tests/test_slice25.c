@@ -192,6 +192,29 @@ static void test_defun_macro(void){
     TEST_EQ(eql, NIL_Symbol, e("(documentation 's25-str 'function)"));
     TEST_EQ(equal, e("\"payload\""), e("(s25-str)"));}
 
+/* ---- IN-PACKAGE / DEFVAR / DEFPARAMETER / DEFCONSTANT are macros --------- */
+
+static void test_def_form_macros(void){
+    /* like DEFUN, these are macros (not special operators). */
+    TEST_EQ(eql, T_Symbol, e("(if (macro-function 'in-package) t nil)"));
+    TEST_EQ(eql, T_Symbol, e("(if (macro-function 'defvar) t nil)"));
+    TEST_EQ(eql, T_Symbol, e("(if (macro-function 'defparameter) t nil)"));
+    TEST_EQ(eql, T_Symbol, e("(if (macro-function 'defconstant) t nil)"));
+    TEST_EQ(eql, NIL_Symbol, e("(special-operator-p 'defvar)"));
+    /* eval uses the C special forms — behaviour unchanged. */
+    e("(defparameter *s25-p* 7)");    TEST_EQ(eql, I(7),  e("*s25-p*"));
+    e("(defvar *s25-v* 11)");          TEST_EQ(eql, I(11), e("*s25-v*"));
+    e("(defconstant +s25-c+ 5)");      TEST_EQ(eql, I(5),  e("+s25-c+"));
+    /* DEFVAR does not re-init an already-bound var — via the macroexpansion too. */
+    e("(eval (macroexpand '(defvar *s25-v* 999)))");
+    TEST_EQ(eql, I(11), e("*s25-v*"));
+    /* the expansions are macro-free (no DEFVAR / IN-PACKAGE remains). */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(labels ((has (f s) (cond ((eq f s) t) ((consp f)"
+              "           (or (has (car f) s) (has (cdr f) s))) (t nil))))"
+              "  (or (has (macroexpand '(defvar *z* 1)) 'defvar)"
+              "      (has (macroexpand '(in-package :cl-user)) 'in-package)))"));}
+
 /* ---- COMPILE-FILE writes a real macro-free fast-load file ---------------- */
 
 static void write_cf_fasl_src(void){
@@ -396,6 +419,7 @@ TEST_SUITE(test_slice25, s25_init, s25_fini)
     TEST_CASE("eval",                      test_eval)
     TEST_CASE("macroexpand",               test_macroexpand)
     TEST_CASE("defun macro",               test_defun_macro)
+    TEST_CASE("def-form macros",           test_def_form_macros)
     TEST_CASE("compile-file eval-when",    test_compile_file_eval_when)
     TEST_CASE("compile-file fasl",         test_compile_file_fasl)
     TEST_CASE("provide/require/*modules*", test_provide_require)
