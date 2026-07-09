@@ -25,7 +25,6 @@ Current list of issues to resolve:
 
 uiop-bocl-porting.issue
 
-clos-condition-hierarchy-parents.issue
 precise-condition-subclasses.issue
 should-tests-type-errors.issue
 subtypep-certainty.issue

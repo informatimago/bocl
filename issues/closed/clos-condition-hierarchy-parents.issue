@@ -45,3 +45,19 @@ Blocks ASDF/UIOP loading at the first WARN.  Also a plain conformance bug: e.g.
 ERROR ancestor.  Note: bocl's WARN intentionally type-checks its condition (issue
 must-condition forms 19-24) — the WARN check is correct; the class hierarchy is what
 is wrong.
+
+== RESOLVED (already fixed; verified v1.5.10) ==
+Checked before processing (index rule): the fix is already in the tree.  The
+prelude DEFCLASS forms now give each condition its proper CL superclass (not
+(standard-object)):
+  program-error/control-error/parse-error/print-not-readable/cell-error/
+  arithmetic-error/stream-error/file-error -> (error);
+  storage-condition -> (serious-condition);  style-warning -> (warning)
+(bootstrap/prelude.lisp ~5627-5650).  Runtime confirms the chain:
+  (subtypep 'style-warning 'warning)        => T T
+  (subtypep 'program-error 'error)          => T T   (and all the others => T T)
+  (typep (make-condition 'style-warning) 'warning) => T
+  (handler-case (error 'program-error) (error () :caught)) => :CAUGHT
+so TYPEP / HANDLER-CASE dispatch on an ancestor works and WARN of a STYLE-WARNING
+subclass no longer type-errors (the WARN blocker for ASDF/UIOP is gone —
+uiop-bocl-porting item 5).  test_conditions passes.  Closed.
