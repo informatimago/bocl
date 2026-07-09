@@ -156,6 +156,31 @@ static void test_compile_file_eval_when(void){
     TEST_EQ(eql, T_Symbol,
             e("(boundp '*cf-s25-ex*)"));      /* :execute fired */ }
 
+/* ---- DEFUN is an ANSI macro (BOCL:DEFINE-FUNCTION expansion) ------------- */
+
+static void test_defun_macro(void){
+    /* DEFUN now has a macro-function (it is a macro, not a special operator) ... */
+    TEST_EQ(eql, T_Symbol, e("(if (macro-function 'defun) t nil)"));
+    /* ... and SPECIAL-OPERATOR-P stays NIL (conforming). */
+    TEST_EQ(eql, NIL_Symbol, e("(special-operator-p 'defun)"));
+    /* eval'd DEFUN: name preserved, lexical block, return-from works. */
+    e("(defun s25-dm (n) (if (= n 0) (return-from s25-dm :z) n))");
+    TEST_EQ(eql, e("':z"),     e("(s25-dm 0)"));
+    TEST_EQ(eql, I(4),         e("(s25-dm 4)"));
+    TEST_EQ(eql, e("'s25-dm"), e("(nth-value 2 (function-lambda-expression 's25-dm))"));
+    /* the macroexpansion, evaluated, is equivalent — name preserved via the C
+       helper BOCL:DEFINE-FUNCTION, block intact. */
+    e("(eval (macroexpand '(defun s25-dm2 (n) (* n 3))))");
+    TEST_EQ(eql, I(12),         e("(s25-dm2 4)"));
+    TEST_EQ(eql, e("'s25-dm2"), e("(nth-value 2 (function-lambda-expression 's25-dm2))"));
+    TEST_EQ(eql, e("'block"),
+            e("(car (caddr (function-lambda-expression 's25-dm2)))"));
+    /* the expansion is macro-free (no DEFUN remains). */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(labels ((has (f s) (cond ((eq f s) t) ((consp f)"
+              "           (or (has (car f) s) (has (cdr f) s))) (t nil))))"
+              "  (has (macroexpand '(defun q (x) x)) 'defun))"));}
+
 /* ---- COMPILE-FILE writes a real macro-free fast-load file ---------------- */
 
 static void write_cf_fasl_src(void){
@@ -359,6 +384,7 @@ TEST_SUITE(test_slice25, s25_init, s25_fini)
     TEST_CASE("compile",                   test_compile)
     TEST_CASE("eval",                      test_eval)
     TEST_CASE("macroexpand",               test_macroexpand)
+    TEST_CASE("defun macro",               test_defun_macro)
     TEST_CASE("compile-file eval-when",    test_compile_file_eval_when)
     TEST_CASE("compile-file fasl",         test_compile_file_fasl)
     TEST_CASE("provide/require/*modules*", test_provide_require)

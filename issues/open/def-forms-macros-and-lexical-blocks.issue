@@ -46,3 +46,30 @@ PHASE 2 (TODO) — DEF-FORMS AS MACROS + FASL EXPANSION:
   MACROEXPAND expands them; MACROEXPAND-ALL / the fasl then expand them (fully
   macro-free fasl).  eval keeps a fast path (C special form checked first, or the
   C DEFUN delegates to the macro post-bootstrap) — kept consistent with the macro.
+
+PHASE 2a (v1.5.4) — DONE: DEFUN IS A MACRO.
+- New C primitive BOCL:DEFINE-FUNCTION (bocl.c): the single, name-preserving
+  function-definition mechanism the DEFUN macro expands to.  It installs a
+  function under a symbol with lisp_name = that symbol (rebuilding an anonymous
+  (LAMBDA ...) closure so FLE / backtraces report the real name), keeping a
+  closure's captured environment; a built-in is stored unchanged.  Registered and
+  exported in the BOCL package.  (The natural home for future compile-time
+  bookkeeping.)
+- DEFUN macro (prelude, with %SPLIT-BODY-HEAD mirroring the C skip_declares_and_doc):
+  (defun name ll . body) -> (bocl:define-function 'name
+     #'(lambda ll <decls+doc> (block name . forms))), and (defun (setf foo) ...) ->
+  (%register-setf-function 'foo #'(lambda ll ... (block foo . forms))) — the kernel
+  names functions with symbols only, so (setf foo) is handled at the Lisp level.
+  eval still uses the C DEFUN (special-form dispatch precedes macro dispatch), and
+  the macro produces the SAME shape, so eval and MACROEXPAND agree (verified: FLE
+  identical, name preserved, block intact).  MACROEXPAND-ALL / COMPILE-FILE now
+  fully expand DEFUN (the fasl carries BOCL:DEFINE-FUNCTION forms, no DEFUN), and
+  round-trips (return-from included).  special-operator-p 'defun stays NIL.  Full
+  unit suite (42) green; new test_slice25 "defun macro".
+
+PHASE 2b (TODO): macro-functions for IN-PACKAGE (needs a %IN-PACKAGE primitive
+exposing bocl_in_package, expanded inside an EVAL-WHEN so compile-file's
+compile-time package tracking still fires) and DEFVAR / DEFPARAMETER / DEFCONSTANT
+(expand to proclaim-special + conditional set, matching the C special forms).
+Docstring -> DOCUMENTATION extraction is still deferred (kept in the lambda body,
+as the C DEFUN does — no drift).

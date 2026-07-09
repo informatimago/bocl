@@ -9501,6 +9501,44 @@ result array; return that array."
       (terpri))
     nil))
 
+;;; --- DEFUN as a macro (issue def-forms-macros-and-lexical-blocks) ----------
+;;; DEFUN is an ANSI macro, not a special operator.  bocl open-codes it in the
+;;; evaluator (eval.c) for bootstrap + speed — the special-form dispatch runs
+;;; before macro dispatch, so eval keeps using the C DEFUN — but installing this
+;;; macro-function makes MACROEXPAND / MACROEXPAND-ALL / a code walker / the fasl
+;;; treat it as the macro it is.  The expansion produces the SAME shape the C
+;;; DEFUN builds (make_block_body): a name-preserving install of
+;;; (lambda lambda-list <decls+doc> (block name . forms)), via the C helper
+;;; BOCL:DEFINE-FUNCTION (lisp_name = name), so eval and macroexpand agree.
+(defun %split-body-head (body)
+  "Split a function BODY into (values head forms): HEAD is the leading (declare
+   ...) forms plus an optional documentation string (a string counts as a
+   docstring only when more forms follow — a lone trailing string is a return
+   value); FORMS is the rest.  Mirrors the C skip_declares_and_doc so the DEFUN
+   macro and the interpreter's DEFUN agree, and declarations stay OUTSIDE the
+   lexical BLOCK (which would otherwise evaluate a declare as a call)."
+  (let ((head '()) (rest body) (doc-seen nil))
+    (loop
+      (cond ((and (consp rest) (consp (car rest)) (eq (caar rest) 'declare))
+             (push (car rest) head) (setf rest (cdr rest)))
+            ((and (not doc-seen) (consp rest) (stringp (car rest)) (consp (cdr rest)))
+             (setf doc-seen t) (push (car rest) head) (setf rest (cdr rest)))
+            (t (return))))
+    (values (nreverse head) rest)))
+
+(defmacro defun (name lambda-list &rest body)
+  (multiple-value-bind (head forms) (%split-body-head body)
+    (if (and (consp name) (eq (car name) 'setf)
+             (consp (cdr name)) (symbolp (cadr name)) (null (cddr name)))
+        ;; (defun (setf foo) (val arg...) ...) — register a SETF function for FOO;
+        ;; the implicit block is named FOO (CLHS 3.1.3).  Handled at the Lisp level
+        ;; because the kernel names functions with symbols only.
+        (let ((sym (cadr name)))
+          `(%register-setf-function ',sym
+             (function (lambda ,lambda-list ,@head (block ,sym ,@forms)))))
+        `(bocl:define-function ',name
+           (function (lambda ,lambda-list ,@head (block ,name ,@forms)))))))
+
 ;; File / time helpers.
 (defun truename (filespec)
   (or (probe-file filespec)
