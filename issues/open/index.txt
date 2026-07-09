@@ -25,7 +25,6 @@ Current list of issues to resolve:
 
 uiop-bocl-porting.issue
 
-stale-test-suite-failures.issue
 ratio-floor-round-truncate.issue
 defstruct-conc-name-package.issue
 clos-condition-hierarchy-parents.issue

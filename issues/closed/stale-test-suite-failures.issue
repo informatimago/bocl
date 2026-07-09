@@ -50,3 +50,21 @@ test_loop, test_numeric_extras, test_structures, test_slice23 (0 failures).
   - Category 1 suites either load the prelude or test only real kernel builtins.
   - Category 3 mismatches are fixed or split into their own issues with a clear
     triage note here.
+
+== RESOLVED (verified v1.5.8) ==
+Checked against the current tree (index rule).  `make -C tests test` runs all 42
+CUnit suites to completion with 0 failures and rc=0 — the three categories are
+gone:
+- Category 1 (kernel-only suites expecting prelude builtins): test_arithmetic,
+  test_eval, test_reader, test_packages, test_hash_table, test_conditions,
+  test_sequences, test_reader_macros now load the prelude (bocl_test_load_prelude)
+  and pass.
+- Category 2 (a single unhandled error aborts the binary): no suite ABORTs; every
+  binary prints its CUnit summary.  (test_slice25's compile-file / def-form work
+  and others run to a summary.)
+- Category 3 (behavioural mismatches): test_strings (string</<=/>//=/-lessp/
+  -greaterp), test_setf, test_list_utils, test_control, test_seq_lib,
+  test_restarts, test_slice27 — all 0 failures; STRING-LENGTH/VECTOR-LENGTH access
+  from CL-USER no longer trips the format tests.
+The acceptance criteria (no ABORTs; Category-1 suites load the prelude or test real
+builtins; Category-3 mismatches fixed) are met.  Closed.
