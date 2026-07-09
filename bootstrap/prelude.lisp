@@ -1947,6 +1947,18 @@ identity."
                  (cadr spec)
                  (if (cddr spec) (getf (cddr spec) :read-only nil) nil)))))
 
+(defun %boa-lambda-vars (lambda-list)
+  "The variable names bound by an ordinary/BOA lambda list (DEFSTRUCT uses this to
+   tell which slots a BOA constructor's arglist supplies; the rest take their
+   initforms)."
+  (let ((vars '()))
+    (dolist (item lambda-list (nreverse vars))
+      (cond ((member item '(&optional &rest &body &key &aux &allow-other-keys
+                            &environment &whole))
+             nil)
+            ((consp item) (push (if (consp (car item)) (cadr (car item)) (car item)) vars))
+            (t (push item vars))))))
+
 (defmacro defstruct (name-and-options &rest slot-specs)
   ;; Supported structure options: :conc-name, :constructor, :copier,
   ;;   :predicate, :include.
@@ -1964,18 +1976,25 @@ identity."
                            (t ""))))
          ;; :include parent
          (include  (let ((o (assq :include options))) (if o (cadr o) nil)))
-         ;; :constructor — default MAKE-<NAME>; nil to suppress
-         (ctor-sym (let ((o (assq :constructor options)))
-                     (if o (cadr o)
-                         (intern (%string-append "MAKE-" (symbol-name name))))))
+         ;; Per CLHS 3.4.4, the generated accessor / constructor / predicate /
+         ;; copier symbols are interned in the HOME package of the structure NAME,
+         ;; not in the current *PACKAGE*.
+         (struct-pkg (or (symbol-package name) *package*))
+         ;; :constructor — default MAKE-<NAME>; nil to suppress.  A third element
+         ;; is a BOA (ordinary) lambda list.
+         (ctor-opt (assq :constructor options))
+         (ctor-sym (if ctor-opt (cadr ctor-opt)
+                       (intern (%string-append "MAKE-" (symbol-name name)) struct-pkg)))
+         (ctor-boa-p (and ctor-opt (cddr ctor-opt)))    ; option has a 3rd element
+         (ctor-boa   (and ctor-boa-p (caddr ctor-opt))) ; the BOA lambda list
          ;; :predicate — default <NAME>-P; nil to suppress
          (pred-sym (let ((o (assq :predicate options)))
                      (if o (cadr o)
-                         (intern (%string-append (symbol-name name) "-P")))))
+                         (intern (%string-append (symbol-name name) "-P") struct-pkg))))
          ;; :copier — default COPY-<NAME>; nil to suppress
          (copy-sym (let ((o (assq :copier options)))
                      (if o (cadr o)
-                         (intern (%string-append "COPY-" (symbol-name name))))))
+                         (intern (%string-append "COPY-" (symbol-name name)) struct-pkg))))
          ;; Parse own slot specs; retrieve inherited slot specs
          (own-specs (mapcar #'%parse-defstruct-slot slot-specs))
          (inh-specs (if include (gethash include *defstruct-slot-specs*) nil))
@@ -1987,7 +2006,8 @@ identity."
          (acc-info  (mapcar (lambda (sp)
                               (list (car sp)
                                     (intern (%string-append conc-str
-                                                            (symbol-name (car sp))))
+                                                            (symbol-name (car sp)))
+                                            struct-pkg)
                                     (cadr sp)
                                     (caddr sp)))
                             all-specs))
@@ -1999,17 +2019,32 @@ identity."
        ;; Register for future :include uses.
        (sethash ',name *defstruct-classes*    ,cls-var)
        (sethash ',name *defstruct-slot-specs* ',all-specs)
-       ;; Constructor
+       ;; Constructor — a BOA (ordinary) lambda list when the :constructor option
+       ;; supplies one (slots named in it are bound positionally / by
+       ;; &optional / &key; the others take their initforms), else the default
+       ;; all-keyword constructor.
        ,@(when ctor-sym
-           `((set-symbol-function
-              (lambda (&key ,@(mapcar (lambda (ai)
-                                        (if (caddr ai) (list (car ai) (caddr ai)) (car ai)))
-                                      acc-info))
-                (let ((%i (make-structure-instance ,cls-var)))
-                  ,@(mapcar (lambda (ai) `(structure-set ,(car ai) %i ',(car ai)))
-                            acc-info)
-                  %i))
-              ',ctor-sym)))
+           (if ctor-boa-p
+               (let ((boa-vars (%boa-lambda-vars ctor-boa)))
+                 `((set-symbol-function
+                    (lambda ,ctor-boa
+                      (let ((%i (make-structure-instance ,cls-var)))
+                        ,@(mapcar (lambda (ai)
+                                    (if (member (car ai) boa-vars)
+                                        `(structure-set ,(car ai) %i ',(car ai))
+                                        `(structure-set ,(caddr ai) %i ',(car ai))))
+                                  acc-info)
+                        %i))
+                    ',ctor-sym)))
+               `((set-symbol-function
+                  (lambda (&key ,@(mapcar (lambda (ai)
+                                            (if (caddr ai) (list (car ai) (caddr ai)) (car ai)))
+                                          acc-info))
+                    (let ((%i (make-structure-instance ,cls-var)))
+                      ,@(mapcar (lambda (ai) `(structure-set ,(car ai) %i ',(car ai)))
+                                acc-info)
+                      %i))
+                  ',ctor-sym))))
        ;; Predicate
        ,@(when pred-sym
            `((set-symbol-function (lambda (o) (typep o ,cls-var)) ',pred-sym)))

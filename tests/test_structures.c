@@ -79,9 +79,31 @@ static void test_conc_name(void){
     TEST_EQ(eql, I(20), e("(v-y (make-vec2 :x 10 :y 20))"));}
 #endif /* BOCL_GC59_TESTS */
 
+/* Generated names interned in the struct's home package, and BOA constructors
+   (issue defstruct-conc-name-package). */
+static void test_home_package_and_boa(void){
+    /* accessor of a package-qualified struct name is fbound in THAT package
+       (before the fix it was interned in CL-USER and BOCL::...-BAR was unbound) */
+    e("(defstruct (bocl::%tst-foo (:constructor bocl::%mk-foo)) bar)");
+    TEST_EQ(eql, T_Symbol, e("(if (fboundp 'bocl::%tst-foo-bar) t nil)"));
+    TEST_EQ(eql, I(7),
+            e("(let ((o (bocl::%mk-foo))) (setf (bocl::%tst-foo-bar o) 7) (bocl::%tst-foo-bar o))"));
+    /* BOA constructor: named slots positional, others take their initforms */
+    e("(defstruct (tst-baz (:constructor tst-mk-baz (x))) x (y 10))");
+    TEST_EQ(eql, I(1),  e("(tst-baz-x (tst-mk-baz 1))"));
+    TEST_EQ(eql, I(10), e("(tst-baz-y (tst-mk-baz 1))"));
+    /* BOA with &optional default */
+    e("(defstruct (tst-pt (:constructor tst-mkpt (a &optional (b 0)))) a b)");
+    TEST_EQ(eql, I(3), e("(tst-pt-a (tst-mkpt 3))"));
+    TEST_EQ(eql, I(0), e("(tst-pt-b (tst-mkpt 3))"));
+    /* default keyword constructor still works */
+    e("(defstruct tst-kw x y)");
+    TEST_EQ(eql, I(5), e("(tst-kw-x (make-tst-kw :x 5 :y 6))"));}
+
 TEST_INITIALIZE(test_structures);
 TEST_SUITE(test_structures, str_init, str_clean)
     TEST_CASE("basic constructor / predicate / copier", test_basic)
+    TEST_CASE("home-package names / BOA constructor", test_home_package_and_boa)
 #ifdef BOCL_GC59_TESTS
     TEST_CASE("initform / SETF",     test_initform_and_setf)
     TEST_CASE(":include inheritance", test_include)
