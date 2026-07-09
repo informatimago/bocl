@@ -25,6 +25,7 @@ Current list of issues to resolve:
 
 structured-pathnames.issue
 uiop-bocl-porting.issue
+format-specifier-capitalize.issue
 
 stale-test-suite-failures.issue
 ratio-floor-round-truncate.issue
@@ -39,11 +40,9 @@ deferred-cons-paged-heap.issue
 deferred-sacla-logic-bugs.tissue
 deferred-signal-hooks.issue
 
-minimal-compilation.issue
 missing-functions.issue
 generational-gc.issue
 
 ansi-test.issue
-
 
 minor-gc-doomed-under-gcminorstress.issue

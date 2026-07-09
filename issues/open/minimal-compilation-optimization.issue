@@ -1,0 +1,19 @@
+-*- mode:org;coding:utf-8 -*-
+
+NOTE: This issue is NOT READY. Ignore it.
+
+Once macroexpanded all, a lisp form may be optimized.
+
+For example:
+| Old form                                                | Replacement form | Remark                            |
+|---------------------------------------------------------+------------------+-----------------------------------|
+| (EVAL-WHEN (:LOAD-TOPLEVEL :COMPILE-TOPLEVEL :EXECUTE)) | NIL              | as toplevel form, can be removed. |
+| (progn single-form)                                     | single-form      |                                   |
+| (prog1 single-form)                                     | single-form      |                                   |
+|                                                         |                  |                                   |
+|                                                         |                  |                                   |
+
+
+
+
+

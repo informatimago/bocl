@@ -31,6 +31,7 @@ This unblocked the ASDF load past uiop/configuration.lisp (form 114 -> 254+).
 - Logical pathnames / wild TRANSLATE-PATHNAME beyond what UIOP needs.
 - The full CLHS surface (ENOUGH-NAMESTRING relativisation, :BACK vs :UP semantics) is
   only as complete as ASDF exercises.
+- COMPILE-FILE should return as first value the TRUENAME of the output file.
 
 == Original analysis ==
 

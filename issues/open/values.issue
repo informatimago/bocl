@@ -1,0 +1,20 @@
+Values should return multiple values.
+the REPL should collect multiple values and display them:
+
+    (setq /// // // / / (multiple-value-list (eval expr)))
+    (format t "~&--> ~{~S~^ ;~%    ~}~%" /)
+
+bocl repl:
+
+    CL-USER> (values (type-of *standard-output*) (eq *standard-output* *trace-output*))
+    
+    FILE-STREAM
+    CL-USER>
+
+expected:
+
+    CL-USER> (values (type-of *standard-output*) (eq *standard-output* *trace-output*))
+    --> FILE-STREAM ;
+        T
+    CL-USER>
+
