@@ -156,6 +156,38 @@ static void test_compile_file_eval_when(void){
     TEST_EQ(eql, T_Symbol,
             e("(boundp '*cf-s25-ex*)"));      /* :execute fired */ }
 
+/* ---- COMPILE-FILE writes a real macro-free fast-load file ---------------- */
+
+static void write_cf_fasl_src(void){
+    FILE* f = fopen("/tmp/bocl-s25-fasl-src.lisp", "w");
+    if(f){
+        fputs("(defmacro s25-dbl (x) (list '* 2 x))\n", f);
+        fputs("(defun s25-usedbl (n) (s25-dbl n))\n", f);
+        fputs("(defun s25-sum (lst) (let ((s 0)) (dolist (x lst s) (setq s (+ s x)))))\n", f);
+        fputs("(defvar *s25-fasl-loaded* t)\n", f);
+        fclose(f);}}
+
+static void test_compile_file_fasl(void){
+    write_cf_fasl_src();
+    /* compile-file writes a real fasl that PROBE-FILE finds ... */
+    e("(compile-file \"/tmp/bocl-s25-fasl-src.lisp\")");
+    TEST_EQ(eql, T_Symbol,
+            e("(if (probe-file \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
+    /* ... carrying a bocl fasl version header ... */
+    TEST_EQ(eql, T_Symbol,
+            e("(if (%bocl-fasl-version \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
+    /* ... which loads and defines everything, the macro having expanded. */
+    e("(load \"/tmp/bocl-s25-fasl-src.fasl\")");
+    TEST_EQ(eql, T_Symbol, e("(boundp '*s25-fasl-loaded*)"));
+    TEST_EQ(eql, I(6),  e("(s25-usedbl 3)"));
+    TEST_EQ(eql, I(10), e("(s25-sum '(1 2 3 4))"));
+    /* the compiled bodies are macro-free: no S25-DBL call, no DOLIST, remains */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(labels ((has (f s) (cond ((eq f s) t) ((consp f)"
+              "           (or (has (car f) s) (has (cdr f) s))) (t nil))))"
+              "  (or (has (function-lambda-expression #'s25-usedbl) 's25-dbl)"
+              "      (has (function-lambda-expression #'s25-sum) 'dolist)))"));}
+
 /* ---- PROVIDE / REQUIRE / *MODULES* -------------------------------------- */
 
 static void test_provide_require(void){
@@ -318,6 +350,7 @@ TEST_SUITE(test_slice25, s25_init, s25_fini)
     TEST_CASE("eval",                      test_eval)
     TEST_CASE("macroexpand",               test_macroexpand)
     TEST_CASE("compile-file eval-when",    test_compile_file_eval_when)
+    TEST_CASE("compile-file fasl",         test_compile_file_fasl)
     TEST_CASE("provide/require/*modules*", test_provide_require)
     TEST_CASE("string-stream-p",           test_string_stream_p)
     TEST_CASE("file-stream-p",             test_file_stream_p)

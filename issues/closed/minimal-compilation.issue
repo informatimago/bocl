@@ -99,3 +99,30 @@ PROGRESS (v1.5.0) — REMAINING ITEMS DONE, ISSUE CLOSED:
 - test_slice25 de-quarantined (removed from tests/Makefile XFAIL_TESTS); new
   regression tests in test_slice25.c cover FLE, DISASSEMBLE, and MACROLET /
   SYMBOL-MACROLET (via COMPILE).  Whole unit suite green.
+
+----------------------------------------------------------------------
+PROGRESS (v1.5.1) — COMPILE-FILE NOW WRITES A REAL FAST-LOAD FILE:
+Follow-up to a user report: v1.5.0's COMPILE-FILE wrote NO file (it relied on
+LOAD falling back to source), so (probe-file (compile-file f)) was NIL and
+ASDF's compile-op / any code expecting the output file to exist broke.  Now that
+the deferred-compile-file-rt-gc-corruption blocker is resolved, COMPILE-FILE
+writes a genuine fast-load file:
+- Each top-level form's compile-time effects fire first (%compile-file-toplevel:
+  EVAL-WHEN :compile-toplevel, plus IN-PACKAGE / DEFPACKAGE / DEFMACRO /
+  DEFINE-SYMBOL-MACRO so later forms read/print/expand in the right package with
+  the file's own macros known), then the form is MACROEXPAND-ALL'd (macro-free)
+  and PRIN1'd to the output with *PRINT-CIRCLE* on (so a gensym shared across an
+  expansion round-trips as one symbol).
+- The file starts with a header line ";; BOCL <version> FASL" (a Lisp comment,
+  so the ordinary source loader skips it) that lets file(1) and LOAD identify a
+  bocl fasl and check version compatibility, followed by an (IN-PACKAGE ...)
+  pinning the load package.
+- LOAD loads the fasl with the normal source loader (minimal compilation =
+  macroexpansion; no macro expansion needed at load) and first checks the header
+  version via %CHECK-FASL-VERSION (warns, non-fatally, on a newer MAJOR version).
+- New helpers: %WRITE-FASL-FORM, %BOCL-FASL-VERSION, %CHECK-FASL-VERSION.
+- Regression test test_slice25 "compile-file fasl": compile-file writes a fasl
+  PROBE-FILE finds, with a version header, that LOADs correctly and whose bodies
+  are macro-free (no local-macro call, no DOLIST, survives the walk).
+Round-trip verified for macros (DOLIST / backquote), EVAL-WHEN, and multi-package
+files (DEFPACKAGE + IN-PACKAGE), including the (load (compile-file f)) idiom.

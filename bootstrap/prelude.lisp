@@ -8864,11 +8864,12 @@ result array; return that array."
 (defun load (filespec &key (verbose *load-verbose*) (print *load-print*)
                            (if-does-not-exist t) (external-format :default))
   "Load FILESPEC.  A relative pathname is merged against
-   *DEFAULT-PATHNAME-DEFAULTS* before opening (conforming behaviour).  Because
-   bocl's COMPILE-FILE produces no real fasl, a request to LOAD a missing
-   compiled file (e.g. \"foo.fasl\") transparently falls back to its source
-   \"foo.lsp\" — this is what makes the COMPILE-AND-LOAD idiom work without
-   writing any compiled files."
+   *DEFAULT-PATHNAME-DEFAULTS* before opening (conforming behaviour).  A bocl fasl
+   (written by COMPILE-FILE — a header comment plus macro-free forms) loads with
+   the ordinary source loader; its version header is checked first (see
+   %CHECK-FASL-VERSION).  Should a named compiled file (e.g. \"foo.fasl\") be
+   ABSENT, LOAD transparently falls back to its source sibling \"foo.lsp\", so the
+   COMPILE-AND-LOAD idiom keeps working even when no fasl was written."
   (declare (ignore verbose print external-format))
   ;; CLHS LOAD: bind *PACKAGE* and *READTABLE* to their pre-load values so that an
   ;; IN-PACKAGE (or readtable change) inside the loaded file is local to the load
@@ -8879,7 +8880,14 @@ result array; return that array."
    (let* ((merged (merge-pathnames filespec *default-pathname-defaults*))
          (ns     (namestring merged))
          (type   (pathname-type merged)))
-    (flet ((do-load (path) (funcall *%kernel-load* path))
+    (flet ((do-load (path)
+             ;; A fast-load file (compiled type) may carry a bocl fasl header;
+             ;; check its version (warn on a newer major) before loading it as
+             ;; ordinary source.  Non-fasl files have no header (no-op).
+             (when (%known-file-type-p (pathname-type (pathname path))
+                                       *accepted-compiled-file-types*)
+               (%check-fasl-version path))
+             (funcall *%kernel-load* path))
            (missing ()
              (if if-does-not-exist
                  (error "LOAD: file ~S does not exist" ns)
@@ -9515,23 +9523,32 @@ result array; return that array."
 
 ;;; --- COMPILE-FILE -----------------------------------------------------
 ;;; (issues: compile-file-output, minimal-compilation)
-;;; bocl is an interpreter and writes no real fast-load file.  COMPILE-FILE
-;;; performs the compile-time processing CLHS 3.2.3.1 requires — it reads each
-;;; top-level form and evaluates the bodies of (EVAL-WHEN (:COMPILE-TOPLEVEL) ...)
-;;; forms NOW, recursing through PROGN and top-level macro expansions — then
-;;; returns the conventional output pathname WITHOUT writing a fasl.  LOAD of that
-;;; (missing) .fasl transparently falls back to the .lsp source (see LOAD), which
-;;; is exactly the COMPILE-AND-LOAD idiom: :LOAD-TOPLEVEL / :EXECUTE / ordinary
-;;; forms run at LOAD, while :COMPILE-TOPLEVEL side effects have already happened.
-;;; This avoids the slow per-char copy and the MACROEXPAND-ALL + package-qualified
-;;; PRIN1 fasl-writing path.
+;;; bocl is an interpreter, but COMPILE-FILE writes a real fast-load file: a
+;;; sequence of MACROEXPAND-ALL'd (macro-free) top-level forms, headed by a
+;;; ";; BOCL <version> FASL" line that identifies it to file(1) and LOAD.  A fasl
+;;; is ordinary Lisp — LOAD reads it with the normal source loader (the header is
+;;; a comment) — so minimal compilation = macroexpansion (CLHS 3.2.2.2): loading
+;;; it needs no macro expansion.  COMPILE-FILE also performs the compile-time
+;;; processing CLHS 3.2.3.1 requires: (EVAL-WHEN (:COMPILE-TOPLEVEL) ...) bodies
+;;; run at compile time, and the forms that shape the compilation environment
+;;; (IN-PACKAGE / DEFPACKAGE / DEFMACRO / DEFINE-SYMBOL-MACRO) run now too so the
+;;; remaining forms are read, printed and expanded in the right package with the
+;;; file's own macros known.
+(defvar *bocl-fasl-header-prefix* ";; BOCL "
+  "First-line prefix of a bocl fast-load file, followed by the producing
+   LISP-IMPLEMENTATION-VERSION and \" FASL\".  A Lisp line comment, so LOAD's
+   source loader skips it; file(1) and LOAD use it to recognise a bocl fasl and
+   check version compatibility (see %BOCL-FASL-VERSION).")
+
 (defun %compile-file-toplevel (form)
-  "Process one top-level FORM for COMPILE-FILE's compile-time effects (CLHS
+  "Perform COMPILE-FILE's compile-time effects for one top-level FORM (CLHS
    3.2.3.1): PROGN splices into several top-level forms; an
    (EVAL-WHEN situations . body) whose SITUATIONS name :COMPILE-TOPLEVEL (or the
-   deprecated COMPILE) has its body evaluated NOW.  Ordinary forms and EVAL-WHEN
-   with only :LOAD-TOPLEVEL / :EXECUTE are NOT run here — LOAD of the source
-   performs them (bocl writes no separate fasl)."
+   deprecated COMPILE) has its body evaluated NOW; and IN-PACKAGE / DEFPACKAGE /
+   DEFMACRO / DEFINE-SYMBOL-MACRO are evaluated NOW so later forms are read and
+   MACROEXPAND-ALL'd in the correct package with the file's macros defined.
+   Ordinary forms and EVAL-WHEN with only :LOAD-TOPLEVEL / :EXECUTE are left for
+   LOAD, which evaluates the fasl form itself."
   (let ((form (macroexpand form)))              ; a top-level macro may yield PROGN/EVAL-WHEN
     (when (consp form)
       (cond
@@ -9541,17 +9558,34 @@ result array; return that array."
          (let ((situations (cadr form)))
            (when (or (member :compile-toplevel situations) (member 'compile situations))
              (dolist (f (cddr form)) (eval f)))))
+        ((member (car form) '(in-package defpackage defmacro define-symbol-macro))
+         (eval form))
         (t nil)))))
 
+(defun %write-fasl-form (form stream)
+  "Write one top-level FORM to a fasl STREAM as a macro-free form: MACROEXPAND-ALL
+   it and PRIN1 with *PRINT-CIRCLE* on so that a symbol shared across an expansion
+   (e.g. a gensym) round-trips as one object.  Returns T on success, NIL if the
+   form could not be macroexpanded (it is then written verbatim)."
+  (multiple-value-bind (expanded ok)
+      (handler-case (values (macroexpand-all form) t)
+        (error () (values form nil)))
+    (let ((*print-circle* t) (*print-length* nil) (*print-level* nil))
+      (prin1 expanded stream)
+      (terpri stream))
+    ok))
+
 (defun compile-file (input-file &key output-file &allow-other-keys)
-  "Fire the compile-time effects of INPUT-FILE and return its conventional
-   fast-load pathname without writing any file.  Each top-level form is read and
-   handed to %COMPILE-FILE-TOPLEVEL, so (EVAL-WHEN (:COMPILE-TOPLEVEL) ...) bodies
-   run now; bocl interprets, so LOAD of the (absent) result falls back to the
-   source for everything else.  An IN-PACKAGE run at compile time is contained by
-   the *PACKAGE* rebinding.  Any pre-existing (stale) fast-load file is deleted so
-   it cannot shadow the source.  Returns (values output-truename warnings-p
-   failure-p); warnings-p and failure-p are always NIL."
+  "Minimal-compile INPUT-FILE to a fast-load file and return its truename.  Each
+   top-level form is read; its compile-time effects fire (%COMPILE-FILE-TOPLEVEL —
+   EVAL-WHEN :COMPILE-TOPLEVEL, IN-PACKAGE, DEFMACRO, ...), then it is
+   MACROEXPAND-ALL'd and written to OUTPUT-FILE (default: source with type
+   *DEFAULT-COMPILED-FILE-TYPE*).  The file begins with a ';; BOCL <version> FASL'
+   header and an IN-PACKAGE pinning the load package; LOAD reads it with the
+   ordinary source loader.  A compile-time IN-PACKAGE is contained by the
+   *PACKAGE* rebinding.  Returns (values output-truename warnings-p failure-p):
+   warnings-p is always NIL; failure-p is T if some form could not be
+   macroexpanded (it was written verbatim)."
   (let* ((merged (merge-pathnames input-file *default-pathname-defaults*))
          ;; Select the actual source file (issue lisp-file-types pseudocode):
          ;; an explicit type or an existing file is used as is; otherwise search
@@ -9562,20 +9596,61 @@ result array; return that array."
                    ((%find-source-file merged))
                    (t (error "COMPILE-FILE: no source file for ~S"
                              (namestring merged)))))
-         (out    (compile-file-pathname actual :output-file output-file))
+         (out     (compile-file-pathname actual :output-file output-file))
+         (out-ns  (namestring out))
          (*package*   *package*)                ; contain a compile-time IN-PACKAGE
-         (*readtable* *readtable*))
-    ;; Perform the compile-time processing (EVAL-WHEN :COMPILE-TOPLEVEL, etc.).
+         (*readtable* *readtable*)
+         (failure nil))
     (with-open-file (src actual :direction :input)
-      (let ((eof '#:eof))
-        (loop
-          (let ((form (read src nil eof)))
-            (when (eq form eof) (return))
-            (%compile-file-toplevel form)))))
-    ;; LOAD only falls back to the .lsp source when the .fasl is ABSENT; remove a
-    ;; stale .fasl (e.g. left by an older COMPILE-FILE) so the fresh source wins.
-    (when (probe-file out) (ignore-errors (delete-file out)))
-    (values (pathname out) nil nil)))
+      (with-open-file (dst out-ns :direction :output
+                                  :if-exists :supersede :if-does-not-exist :create)
+        ;; Identifying header (a comment: the source loader skips it) + provenance.
+        (format dst "~A~A FASL~%" *bocl-fasl-header-prefix* (lisp-implementation-version))
+        (format dst ";;; minimal-compiled (macroexpanded) forms.  Source: ~A~%" actual)
+        ;; Pin the load package to the compile-time package, in case the source
+        ;; carries no IN-PACKAGE of its own.
+        (prin1 (list 'in-package (package-name *package*)) dst)
+        (terpri dst)
+        (let ((eof '#:eof))
+          (loop
+            (let ((form (read src nil eof)))
+              (when (eq form eof) (return))
+              (%compile-file-toplevel form)               ; compile-time effects
+              (unless (%write-fasl-form form dst)          ; macroexpand + emit
+                (setq failure t)))))))
+    (values (truename out) nil failure)))
+
+(defun %bocl-fasl-version (path)
+  "If the file at PATH begins with a bocl fasl header
+   (\";; BOCL <version> FASL\"), return the <version> string; else NIL.  Lets LOAD
+   (and external tools) recognise a bocl fast-load file and read its version."
+  (ignore-errors
+    (with-open-file (s path :direction :input :if-does-not-exist nil)
+      (when s
+        (let ((line   (read-line s nil nil))
+              (prefix *bocl-fasl-header-prefix*))
+          (when (and line
+                     (>= (length line) (length prefix))
+                     (string= prefix line :end2 (length prefix)))
+            (let* ((start (length prefix))
+                   (end   (search " FASL" line :start2 start)))
+              (when (and end (> end start))
+                (subseq line start end)))))))))
+
+(defun %check-fasl-version (path)
+  "Warn if PATH is a bocl fasl produced by a newer MAJOR version than this build
+   (its macro-free forms may use constructs this runtime lacks).  Returns the
+   fasl version string, or NIL when PATH carries no bocl fasl header."
+  (let ((v (%bocl-fasl-version path)))
+    (when v
+      (flet ((major (s) (ignore-errors (parse-integer s :end (position #\. s)))))
+        (let ((fasl-major (major v))
+              (my-major   (major (lisp-implementation-version))))
+          (when (and fasl-major my-major (> fasl-major my-major))
+            (warn "LOAD: fast-load file ~A was produced by bocl ~A, newer than ~
+                   this ~A — loading anyway."
+                  path v (lisp-implementation-version))))))
+    v))
 
 ;;; WITH-COMPILATION-UNIT (CLHS 3.2.2.3 / macro).  Its purpose is to batch
 ;;; deferred compiler warnings across an extent.  bocl interprets and defers no
