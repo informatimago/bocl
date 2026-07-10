@@ -57,12 +57,16 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-*** BYTE-CODE COMPILER (plan-2): vm-1..vm-6 DONE (branch `vm`, v1.8.9).  Before
-    continuing, READ issues/open/vm-COMPILER-PLAN.md (design/IR/plan).  vm-3=analyzer;
-    vm-4=codegen core; vm-5=control/values; vm-6=closures + extended lambda list +
-    uniform interop (%VM-COMPILE runs real closures & &optional/&key fns).  NEXT: vm-7
-    (CLOS inline cache).  Deferred follow-ups: vm-6b (tail calls / fast APPLY / stack
-    signal) and the condition system (HANDLER-BIND/-CASE/RESTART). ***
+*** BYTE-CODE COMPILER (plan-2): vm-1..vm-6 + vm-8-part-1 DONE (branch `vm`, v1.8.10).
+    READ issues/open/vm-COMPILER-PLAN.md first (design/IR/plan/status).  vm-3=analyzer;
+    vm-4=codegen core; vm-5=control/values/NLX; vm-6=closures + extended lambda list;
+    vm-8 part 1 = byte-code fasl serialization.  %VM-COMPILE is a COMPLETE compiler for
+    the core language (all special ops, closures, full lambda lists, NLX, MV) — but is
+    the EXPLICIT entry; COMPILE is not rewired yet.  CRITICAL-PATH NEXT: vm-conditions
+    (HANDLER-BIND/-CASE/RESTART) which UNBLOCKS vm-8 part 2 (wire COMPILE), then vm-9
+    (self-host + validate).  Off-path deferrals: vm-7 (CLOS cache, speed) and vm-6b
+    (TCO / fast APPLY).  Branch is ~17 commits ahead of master, all suite-green,
+    NOT merged (user decides the merge + minor bump). ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
@@ -72,5 +76,6 @@ hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
 vm-6b-tail-calls-and-fast-apply.issue (plan-2) — DEFERRED opt: TCO trampoline, fast APPLY
 vm-7-clos-inline-cache.issue         (plan-2)
-vm-8-bytecode-fasl.issue             (plan-2) — builds on cfasl-1..4
+vm-8-bytecode-fasl.issue             (plan-2) — part 1 done (serialization); part 2 wiring
+vm-conditions.issue                  (plan-2) — HANDLER-BIND/-CASE/RESTART (blocks vm-8 part 2)
 vm-9-debug-bootstrap-validate.issue  (plan-2)
