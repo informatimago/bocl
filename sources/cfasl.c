@@ -11,6 +11,7 @@
 #include "kernel_objects.h"
 #include "packages.h"
 #include "memory.h"
+#include "bytecode.h"    /* vm-8: serialize CompiledFunction templates */
 #include <stdlib.h>
 #include <string.h>
 
@@ -291,6 +292,21 @@ void cfasl_write_object(cfasl_wctx* w, Ref obj){
         return;
     }
 
+    if(compiled_function_p(obj)){          /* vm-8: a byte-code template */
+        cfasl_wctx_assign(w, obj);         /* id before fields (record-before, for sharing) */
+        cfasl_put_u8(w->out, CFASL_TAG_COMPILED_FUNCTION);
+        cfasl_put_uvarint(w->out, (uint64_t)BYTECODE_VERSION);
+        cfasl_write_object(w, compiled_function_name(obj));
+        cfasl_write_object(w, compiled_function_lambda_list(obj));
+        cfasl_write_object(w, compiled_function_code(obj));        /* the octet string */
+        cfasl_write_object(w, compiled_function_constants(obj));   /* pool; may nest templates */
+        cfasl_write_object(w, compiled_function_arity(obj));
+        cfasl_write_object(w, compiled_function_max_stack(obj));
+        cfasl_write_object(w, compiled_function_n_locals(obj));
+        cfasl_write_object(w, compiled_function_source(obj));
+        return;
+    }
+
     /* Unsupported here (bignum, structure, bit-vector, non-simple arrays,
        streams, ...): flag the context so the caller keeps the text fasl.  These
        are rare in top-level forms; cfasl-6 extends coverage. */
@@ -440,6 +456,24 @@ Ref cfasl_read_object(cfasl_rctx* r){
             svref_set(vec, integer_from_word((word)i), cfasl_read_object(r));
         }
         return vec;
+    }
+    case CFASL_TAG_COMPILED_FUNCTION:{          /* vm-8: a byte-code template */
+        size_t id = cfasl_rctx_record(r, NIL_Symbol);   /* reserve id before fields */
+        uint64_t bcver = cfasl_get_uvarint(r->in);
+        if(bcver != (uint64_t)BYTECODE_VERSION){         /* incompatible byte-code */
+            r->error = 1; return NIL_Symbol; }
+        Ref name   = cfasl_read_object(r); add_to_live_pool(name);
+        Ref ll     = cfasl_read_object(r); add_to_live_pool(ll);
+        Ref code   = cfasl_read_object(r); add_to_live_pool(code);
+        Ref consts = cfasl_read_object(r); add_to_live_pool(consts);
+        Ref arity  = cfasl_read_object(r); add_to_live_pool(arity);
+        Ref maxst  = cfasl_read_object(r); add_to_live_pool(maxst);
+        Ref nloc   = cfasl_read_object(r); add_to_live_pool(nloc);
+        Ref source = cfasl_read_object(r); add_to_live_pool(source);
+        Ref cf = r->error ? NIL_Symbol
+                 : compiled_function_new(name, ll, code, consts, arity, maxst, nloc, source);
+        cfasl_rctx_patch(r, id, cf);
+        return cf;
     }
     default:
         r->error = 1;

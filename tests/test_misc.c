@@ -901,6 +901,41 @@ static void test_vm_closures(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-8 (part 1): byte-code fasl — serialize compiled-function templates ---- */
+/* cfasl gained CFASL_TAG_COMPILED_FUNCTION (a template: name, lambda-list, code octet
+   string, constant pool — which may nest templates for FLET/closures — arity,
+   max-stack, n-locals, source).  A round-tripped template must run identically. */
+static void test_vm_fasl(void){
+    uword pool = open_live_pool();
+
+    /* a plain compiled fn round-trips and still runs */
+    Ref f = cfasl_roundtrip("(%vm-compile '(lambda (x) (+ (* x x) 1)))", pool);
+    add_to_live_pool(f);
+    TEST_EQ(eql, T_Symbol, compiled_function_p(f) ? T_Symbol : NIL_Symbol);
+    e("(defvar *fasl-f* nil)");
+    set_symbol_value(e("'*fasl-f*"), f);
+    TEST_EQ(eql, I(50), e("(funcall *fasl-f* 7)"));
+
+    /* nested templates (a closure-making fn) survive: its constant pool holds the
+       inner template; round-trip, then build + call the closure */
+    e("(defvar *fasl-mk* (%vm-compile '(lambda (n) (lambda (x) (+ x n)))))");
+    Ref mk = cfasl_roundtrip("*fasl-mk*", pool); add_to_live_pool(mk);
+    TEST_EQ(eql, T_Symbol, compiled_function_p(mk) ? T_Symbol : NIL_Symbol);
+    e("(defvar *fasl-mk2* nil)");
+    set_symbol_value(e("'*fasl-mk2*"), mk);
+    TEST_EQ(eql, I(15), e("(funcall (funcall *fasl-mk2* 10) 5)"));
+
+    /* a fn with the extended lambda list (RAW-entry + prologue) round-trips */
+    e("(defvar *fasl-opt* (%vm-compile '(lambda (x &key (y 10)) (list x y))))");
+    Ref g = cfasl_roundtrip("*fasl-opt*", pool); add_to_live_pool(g);
+    e("(defvar *fasl-opt2* nil)");
+    set_symbol_value(e("'*fasl-opt2*"), g);
+    TEST_EQ(equal, e("'(1 10)"), e("(funcall *fasl-opt2* 1)"));
+    TEST_EQ(equal, e("'(1 7)"),  e("(funcall *fasl-opt2* 1 :y 7)"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -916,6 +951,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm values",           test_vm_values)
     TEST_CASE("vm nlx",              test_vm_nlx)
     TEST_CASE("vm closures",         test_vm_closures)
+    TEST_CASE("vm fasl",             test_vm_fasl)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

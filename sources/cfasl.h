@@ -62,7 +62,7 @@
 
 #define CFASL_MAGIC     "BOCLFASL"   /* 8 bytes, no trailing NUL written */
 #define CFASL_MAGIC_LEN 8
-#define CFASL_VERSION   1
+#define CFASL_VERSION   2   /* v2: CFASL_TAG_COMPILED_FUNCTION (byte-code templates) */
 
 typedef enum {
     CFASL_TAG_EOF = 0,
@@ -83,6 +83,7 @@ typedef enum {
     CFASL_TAG_SIMPLE_VECTOR,
     CFASL_TAG_STRUCTURE,
     CFASL_TAG_PACKAGE,
+    CFASL_TAG_COMPILED_FUNCTION,   /* vm-8: a byte-code CompiledFunction TEMPLATE */
     CFASL_TAG_N
 } cfasl_tag_t;
 

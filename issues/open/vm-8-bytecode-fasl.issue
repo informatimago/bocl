@@ -26,3 +26,36 @@ faster load AND faster run than the tree-walker; round-trip a corpus; suite gree
 Benchmark ASDF (require :asdf) with bytecode fasls vs the numbers from cfasl-5.
 
 DEPENDS ON: cfasl-1..4 (plan-1), vm-1..6 (compiler emits functions).
+
+====================================================================
+PROGRESS (v1.8.10, branch vm) — PART 1: byte-code fasl SERIALIZATION done.
+
+The cfasl object serializer now round-trips a byte-code CompiledFunction TEMPLATE.
+
+- New tag CFASL_TAG_COMPILED_FUNCTION (sources/cfasl.{h,c}; CFASL_VERSION -> 2).  The
+  writer records the template's id BEFORE its fields (sharing-safe), writes the
+  BYTECODE_VERSION, then the 8 slots: name, lambda-list, code (the octet STRING),
+  constants (the pool — recursively serialized, so NESTED templates for FLET / closures
+  round-trip), arity, max-stack, n-locals, source.  The reader reserves the id, checks
+  BYTECODE_VERSION (refuses a mismatch), reads the fields, and rebuilds via
+  compiled_function_new (reserve-id + patch, like SYMBOL/KEYWORD).  Closures' captured
+  cells are NOT serialized (only templates), per the design.
+- Verified: tests/test_misc.c::test_vm_fasl — a plain fn, a closure-making fn (nested
+  template in the pool), and an extended-lambda-list fn (&key) each round-trip through
+  cfasl and run identically.  Full suite green.
+
+REMAINING for this issue (PART 2): wire the pipeline —
+- COMPILE (in-memory): make (COMPILE nil '(lambda ...)) / (COMPILE 'name) produce a
+  byte-code function via %VM-COMPILE, with a SAFE fallback to the current minimal
+  compilation for forms the VM can't yet handle.
+- COMPILE-FILE: compile top-level DEFUN/DEFMETHOD bodies (and effectful forms as load
+  thunks) to byte-code and serialise via cfasl; LOAD then installs templates with no
+  re-compilation (the ASDF load-speed payoff).
+- LOAD-TIME-VALUE patched into the pool at load.
+BLOCKER for the global COMPILE wiring: the CONDITION SYSTEM.  HANDLER-BIND is a kernel
+special operator (eval.c) but is NOT in SPECIAL-OPERATOR-P's list, so the analyzer
+treats (handler-bind ...) / (handler-case ...) / (ignore-errors ...) as ordinary calls
+and the handler is never established — a function using them would COMPILE but misbehave
+at runtime.  Wiring COMPILE globally must wait until either the VM implements the
+condition-system special operators (analyzer + handler-frame opcodes, building on
+vm-5's NLX) OR COMPILE detects those forms and falls back.  (See the vm-5 closing note.)
