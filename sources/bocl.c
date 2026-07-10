@@ -1415,6 +1415,23 @@ static void kernel_FUNCTION_LAMBDA_BODY(unused Ref function, Ref arguments, Mult
         results->values[2]=NIL_Symbol;
         results->values[3]=fn->slots->built_in_function.lisp_name;
         results->values[4]=NIL_Symbol;
+    } else if(compiled_function_p(fn) || compiled_closure_p(fn)){
+        /* A byte-code function keeps no interpreted body — reconstruct the lambda
+           expression from its SOURCE slot (stored MACROEXPAND-ALL'd by %VM-COMPILE).
+           CLOSURE-P is conservative T (as for an interpreted COMPILE'd function). */
+        Ref cf  = compiled_closure_p(fn) ? compiled_closure_function(fn) : fn;
+        Ref src = compiled_function_source(cf);        /* (lambda lambda-list . body) */
+        if(consp(src) && consp(cons_cdr(src))){
+            results->values[0]=T_Symbol;
+            results->values[1]=cons_car(cons_cdr(src));    /* lambda-list */
+            results->values[2]=cons_cdr(cons_cdr(src));    /* body */
+        } else {
+            results->values[0]=NIL_Symbol;
+            results->values[1]=NIL_Symbol;
+            results->values[2]=NIL_Symbol;
+        }
+        results->values[3]=compiled_function_name(cf);
+        results->values[4]=T_Symbol;
     } else if(functionp(fn)){
         results->values[0]=T_Symbol;
         results->values[1]=fn->slots->function.lambda_list;
@@ -1602,6 +1619,13 @@ static void kernel_MAKE_COMPILED_FUNCTION(unused Ref f, Ref arguments, MultipleV
     results->count = 1;
     results->values[0] = compiled_function_new(name, lambda_list, code, constants,
                                                arity, max_stack, n_locals, source);}
+
+/* (%COMPILED-FUNCTION-P object) -> T if OBJECT is a byte-code CompiledFunction or
+   CompiledClosure (so CL:COMPILED-FUNCTION-P can recognise VM-compiled functions). */
+static void kernel_COMPILED_FUNCTION_P(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref o = cons_car(arguments);
+    results->count=1;
+    results->values[0] = (compiled_function_p(o) || compiled_closure_p(o)) ? T_Symbol : NIL_Symbol;}
 
 /* (%BYTECODE-OPCODES) -> an alist ((:opcode-name . value) ...) plus
    (:version . BYTECODE_VERSION), built straight from the C enum so the Lisp codegen
@@ -1943,6 +1967,8 @@ void bocl_register_load(void){
             kernel_MAKE_COMPILED_FUNCTION)); }
     {   Ref sc=symbol_intern_cstring("%BYTECODE-OPCODES");
         set_symbol_function(sc,built_in_function_new(sc,NIL_Symbol,kernel_BYTECODE_OPCODES)); }
+    {   Ref sc=symbol_intern_cstring("%COMPILED-FUNCTION-P");
+        set_symbol_function(sc,built_in_function_new(sc,list(S(OBJECT),NULL),kernel_COMPILED_FUNCTION_P)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

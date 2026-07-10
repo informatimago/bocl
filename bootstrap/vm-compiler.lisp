@@ -99,10 +99,16 @@
   (and (symbolp name) (not (keywordp name)) (%globally-special-p name)))
 
 (defun %vm-special-operator-p (op)
-  "The special operators the analyzer handles: the standard ones plus the condition-
-   system operators HANDLER-BIND / HANDLER-CASE, which are kernel special operators
-   (eval.c) but — a bocl quirk — are NOT in SPECIAL-OPERATOR-P's list."
-  (or (special-operator-p op) (member op '(handler-bind handler-case))))
+  "Operators the analyzer routes to %VM-ANALYZE-SPECIAL: the standard special operators
+   PLUS the kernel special operators that — a bocl quirk — are NOT in SPECIAL-OPERATOR-P's
+   list (eval.c handles them inline).  HANDLER-BIND/HANDLER-CASE are handled; the RESTART
+   operators and the top-level def-forms are recognized only so the analyzer ERRORS on
+   them (compile time) instead of miscompiling them into calls — so a caller with a safe
+   fallback (COMPILE) reverts to the tree-walker for such a function."
+  (or (special-operator-p op)
+      (member op '(handler-bind handler-case
+                   restart-bind restart-case
+                   defun defmacro defvar defparameter defconstant in-package))))
 
 (defun %vm-make-local-macro-expander (lambda-list body)
   "Build a MACROLET expander: a function of the whole call form that
@@ -240,12 +246,16 @@
     ((keywordp sym) (list :const sym))
     ((eq sym 't)    (list :const t))
     ((eq sym 'nil)  (list :const nil))
-    ((%vm-symbol-macro lexenv sym)
-     (%vm-analyze-form (cadr (%vm-symbol-macro lexenv sym)) cenv lexenv))
+    ;; A LEXICAL binding shadows a symbol-macro of the same name (CLHS 3.1.2.1.1),
+    ;; so resolve the lexical/special binding FIRST, then fall back to a symbol-macro.
     (t (multiple-value-bind (b depth) (%vm-resolve sym :var cenv)
-         (if (and b (not (%vm-binding-special-p b)))
-             (list :lref depth (%vm-binding-index b))
-             (list :gref sym))))))              ; special/free/global -> dynamic
+         (cond
+           (b (if (%vm-binding-special-p b)
+                  (list :gref sym)                       ; special LET binding -> dynamic
+                  (list :lref depth (%vm-binding-index b))))
+           ((%vm-symbol-macro lexenv sym)                ; not lexically bound -> symbol-macro
+            (%vm-analyze-form (cadr (%vm-symbol-macro lexenv sym)) cenv lexenv))
+           (t (list :gref sym)))))))                     ; free / global
 
 (defun %vm-analyze-call (op args cenv lexenv)
   (let ((arg-irs (mapcar (lambda (a) (%vm-analyze-form a cenv lexenv)) args)))
@@ -1152,7 +1162,13 @@
         (if complex (logior a (ash 1 19)) a))          ; RAW-entry bit (BC_ARITY_RAW)
       (max 1 (svref cs 4))                            ; max-stack (>= 1)
       (%vm-cs-nlocals cs)                             ; incl. scratch slots
-      source)
+      ;; store the source with a MACROEXPAND-ALL'd BODY so FUNCTION-LAMBDA-EXPRESSION
+      ;; reports a macro-free body (CLHS 3.2.2 — as an interpreted COMPILE'd function
+      ;; does).  Expand only the body forms — MACROEXPAND-ALL of the whole (LAMBDA ...)
+      ;; would wrap it in (FUNCTION ...) since LAMBDA is itself a macro.
+      (if (and (consp source) (eq (car source) 'lambda))
+          (list* 'lambda (cadr source) (mapcar #'macroexpand-all (cddr source)))
+          source))
      (%vm-cs-max-depth cs))))                         ; deepest upvalue depth reached
 
 (defun %vm-compile (lambda-expr)
@@ -1160,3 +1176,54 @@
    core path (no closures / control); wiring COMPILE / COMPILE-FILE to emit
    byte-code is vm-8."
   (%vm-compile-lambda (%vm-analyze lambda-expr)))
+
+;;; ===========================================================================
+;;; vm-8 part 2 — wire COMPILE to emit byte-code (with a safe fallback)
+;;; ---------------------------------------------------------------------------
+;;; COMPILE / %COMPILE-DEFINITION (defined earlier in the prelude) are REDEFINED here
+;;; — vm-compiler.lisp loads last — so (COMPILE nil '(lambda ...)) / (COMPILE 'name)
+;;; byte-compile via %VM-COMPILE.  When the definition is not a plain lambda, or the VM
+;;; analyzer/codegen signals it cannot handle a form (RESTART-*, an unsupported special
+;;; operator, ...), we FALL BACK to the original interpreted minimal compilation, so no
+;;; program regresses — only the compilable functions gain the VM.
+;;; ===========================================================================
+
+(defvar *vm-compile-enable* t
+  "When true, COMPILE byte-compiles a lambda via %VM-COMPILE (with a fallback to the
+   interpreted minimal compilation).  Bind to NIL to force the interpreter.")
+
+(defun %vm-lambda-of (definition)
+  "The (LAMBDA ...) expression underlying a COMPILE DEFINITION, or NIL when there is
+   none to byte-compile (a function value, or a (SETF ...) name form)."
+  (cond ((and (consp definition) (eq (car definition) 'lambda)) definition)
+        ((and (consp definition) (eq (car definition) 'function)
+              (consp (cadr definition)) (eq (car (cadr definition)) 'lambda))
+         (cadr definition))
+        (t nil)))
+
+(defun %vm-compile-interpreted (definition)
+  "The original minimal-compilation path: an interpreted function whose body is fully
+   MACROEXPAND-ALL'd (CLHS 3.2.2)."
+  (cond
+    ((functionp definition) definition)
+    ((and (consp definition) (eq (car definition) 'lambda))
+     (eval (macroexpand-all (list 'function definition))))
+    ((and (consp definition) (eq (car definition) 'function))
+     (eval (macroexpand-all definition)))
+    (t (eval definition))))
+
+(defun %compile-definition (definition)
+  "Coerce DEFINITION to a function — byte-compiled via %VM-COMPILE when enabled and the
+   definition is a lambda the VM can handle; otherwise the interpreted minimal-compiled
+   function.  Any error from the VM path falls back rather than propagating."
+  (let ((lam (and *vm-compile-enable* (%vm-lambda-of definition))))
+    (if lam
+        (handler-case (%vm-compile lam)
+          (error () (%vm-compile-interpreted definition)))
+        (%vm-compile-interpreted definition))))
+
+;;; Now that COMPILE emits real byte-code, CL:COMPILED-FUNCTION-P must recognise it
+;;; (the prelude's stub always returned NIL — see its "bocl interprets" comment).
+(defun compiled-function-p (object)
+  "T if OBJECT is a compiled function — now that COMPILE can produce byte-code."
+  (and (%compiled-function-p object) t))
