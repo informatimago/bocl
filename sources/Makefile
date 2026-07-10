@@ -131,7 +131,8 @@ SYSTEM_LISP = \
 	../bootstrap/cl-exports.lisp \
 	../bootstrap/bignum.lisp \
 	../bootstrap/bignum-integration.lisp \
-	../bootstrap/socket.lisp
+	../bootstrap/socket.lisp \
+	../bootstrap/vm-compiler.lisp
 
 # Manual page (committed roff) and Texinfo source/output for the info manual.
 MAN_PAGE  = ../man/bocl.1

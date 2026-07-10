@@ -534,6 +534,83 @@ static void test_vm_execute(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-3: the compiler front-end / lexical analyzer ------------------- */
+/* %VM-ANALYZE (bootstrap/vm-compiler.lisp) walks a (LAMBDA ...) into IR with
+   every lexical reference resolved to a (depth index) address in the flat-locals
+   model.  The IR is a keyword-tagged tree; here we check the :BODY / :ARITY the
+   analyzer produces for the acceptance lambdas (nested LET, closures, LABELS
+   recursion, SPECIAL binding, macro expansion).  BODY(x) := (getf (cdr x) :body). */
+static void test_vm_analyze(void){
+    uword pool = open_live_pool();
+    e("(defvar *vm3-dyn* 0)");
+
+    /* the analyzer must be present (prelude loaded vm-compiler.lisp) */
+    TEST_EQ(eql, T_Symbol, e("(if (fboundp '%vm-analyze) t nil)"));
+
+    /* identity: parameter X -> depth 0, slot 0 */
+    TEST_EQ(equal, e("'(:lref 0 0)"),
+            e("(getf (cdr (%vm-analyze '(lambda (x) x))) :body)"));
+
+    /* flat-locals: nested LET consumes fresh slots (does NOT reset per LET) */
+    TEST_EQ(equal, e("'(:let ((:lex 1 (:const 1)))"
+                     "   (:let ((:lex 2 (:const 2)))"
+                     "     (:call-named list (:lref 0 0) (:lref 0 1) (:lref 0 2))))"),
+            e("(getf (cdr (%vm-analyze"
+              "  '(lambda (x) (let ((y 1)) (let ((z 2)) (list x y z)))))) :body)"));
+
+    /* LET* : second init sees the first binding (slot 0) */
+    TEST_EQ(equal, e("'(:let* ((:lex 0 (:const 1)) (:lex 1 (:lref 0 0))) (:lref 0 1))"),
+            e("(getf (cdr (%vm-analyze '(lambda () (let* ((a 1) (b a)) b)))) :body)"));
+
+    /* closure: reference to an outer var crosses one lambda -> depth 1.
+       BODY is (:make-closure (:lambda ...)); the inner lambda's :body is (:lref 1 0). */
+    TEST_EQ(equal, e("'(:lref 1 0)"),
+            e("(getf (cdr (cadr (getf (cdr"
+              "   (%vm-analyze '(lambda (x) (lambda () x)))) :body))) :body)"));
+
+    /* LABELS recursion: the self call resolves the function slot at depth 1 */
+    TEST_EQ(equal, e("t"),
+            e("(let* ((body (getf (cdr (%vm-analyze"
+              "        '(lambda () (labels ((f (n) (if (= n 0) 1 (f (- n 1))))) (f 3)))))"
+              "        :body))"
+              "       (fbody (getf (cdr (cdar (cadr body))) :body)))"
+              "  (if (equal (cadddr fbody) '(:call (:lref 1 0)"
+              "                              (:call-named - (:lref 0 0) (:const 1)))) t nil))"));
+
+    /* SPECIAL binding: a DEFVAR'd var -> dynamic (:special) bind and (:gref) ref */
+    TEST_EQ(equal, e("'(:let ((:special *vm3-dyn* (:const 1))) (:gref *vm3-dyn*))"),
+            e("(getf (cdr (%vm-analyze '(lambda () (let ((*vm3-dyn* 1)) *vm3-dyn*)))) :body)"));
+
+    /* SETQ: lexical -> :lset, dynamic/global -> :gset */
+    TEST_EQ(equal, e("'(:lset 0 0 (:const 9))"),
+            e("(getf (cdr (%vm-analyze '(lambda (x) (setq x 9)))) :body)"));
+    TEST_EQ(equal, e("'(:gset *vm3-dyn* (:const 9))"),
+            e("(getf (cdr (%vm-analyze '(lambda () (setq *vm3-dyn* 9)))) :body)"));
+
+    /* MACROLET / SYMBOL-MACROLET are expanded away by the analyzer */
+    TEST_EQ(equal, e("'(:call-named * (:lref 0 0) (:lref 0 0))"),
+            e("(getf (cdr (%vm-analyze"
+              "  '(lambda (x) (macrolet ((sq (a) (list '* a a))) (sq x))))) :body)"));
+    TEST_EQ(equal, e("'(:call-named car (:lref 0 0))"),
+            e("(getf (cdr (%vm-analyze"
+              "  '(lambda (x) (symbol-macrolet ((m (car x))) m)))) :body)"));
+
+    /* arity pack + n-locals (supplied-p vars take slots) */
+    TEST_EQ(equal, e("'(:arity 2 1 t t nil)"),
+            e("(getf (cdr (%vm-analyze"
+              "  '(lambda (a b &optional (c 3) &rest r &key k) (list a b c r k)))) :arity)"));
+    TEST_EQ(equal, e("3"),
+            e("(getf (cdr (%vm-analyze '(lambda (a &optional (c 3 cp)) (list a c cp)))) :n-locals)"));
+
+    /* FLET: a local function shadows the global of the same name at its slot.
+       BODY is (:flet ((idx . lambda-ir)) call); the call is its third element. */
+    TEST_EQ(equal, e("'(:call (:lref 0 1) (:lref 0 0))"),
+            e("(caddr (getf (cdr (%vm-analyze"
+              "  '(lambda (x) (flet ((list (y) y)) (list x))))) :body))"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -543,6 +620,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl corpus",        test_cfasl_corpus)
     TEST_CASE("vm compiled-function", test_vm_compiled_function)
     TEST_CASE("vm execute",          test_vm_execute)
+    TEST_CASE("vm analyze",          test_vm_analyze)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

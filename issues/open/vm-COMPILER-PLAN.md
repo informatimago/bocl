@@ -24,9 +24,24 @@ Already on `master` (context): cfasl-1..5 (compact binary fasl, `sources/cfasl.*
 hot-2/hot-3 (v1.7.x). Key finding: **bocl eval is CPU-per-operation bound, not
 allocation bound** (GC ~2% prelude / ~12% loop code) — the VM is the real lever.
 
-REMAINING: vm-3 (analyzer) → vm-4 (codegen core) → vm-5 (codegen control) →
+- **vm-3** — the compiler front-end / lexical analyzer (v1.8.2). Lisp module
+  `bootstrap/vm-compiler.lisp` (loaded at end of prelude); `%VM-ANALYZE` walks a
+  `(LAMBDA ...)` into the §4 IR with every reference resolved to a `(depth index)`
+  flat-locals address; expands global + local macros; marks captures; the new
+  `%GLOBALLY-SPECIAL-P` kernel prim (`sources/bocl.c`) is the special-var predicate.
+  Verified by `tests/test_misc.c::test_vm_analyze`.
+
+REMAINING: vm-4 (codegen core) → vm-5 (codegen control) →
 vm-6 (closures + interop) → vm-7 (CLOS inline cache) → vm-8 (byte-code fasl) →
 vm-9 (self-host prelude + validate). Issues in `issues/open/vm-*.issue`.
+
+**vm-4 starts here:** consume the `%VM-ANALYZE` IR (see §4 for the node set — note
+the actual `:let`/`:let*`/`:flet`/`:labels`/`:make-closure` shapes the analyzer
+emits, and that `(:lambda ...)` is a `:arity/:n-locals/:params/:body/:source`
+plist tagged by `:lambda`). Build the emitter + constant pool, lower non-control
+IR to the vm-2 opcodes, expose `%make-compiled-function`, reconcile the code
+representation (§3.4), and make `(compile nil '(lambda ...))` produce a runnable
+byte-code function.
 
 ---
 

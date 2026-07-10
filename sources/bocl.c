@@ -1575,6 +1575,15 @@ static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* resu
             if(wn==b.len){ results->values[0]=T_Symbol; }}}
     cfasl_out_free(&b);}
 
+/* (%GLOBALLY-SPECIAL-P symbol) -> T if SYMBOL is globally proclaimed special
+   (DEFVAR/DEFPARAMETER/proclaim SPECIAL set the $SPECIAL plist marker).  Used by
+   the byte-code compiler's lexical analyzer (vm-3) to decide whether a free
+   variable reference is dynamic (a :gref) or a lexical slot.  Non-symbols → NIL. */
+static void kernel_GLOBALLY_SPECIAL_P(unused Ref f, Ref arguments, MultipleValues* results){
+    results->count=1; results->values[0]=NIL_Symbol;
+    Ref sym = cons_car(arguments);
+    if(symbolp(sym) && special_variable_p(sym)){ results->values[0]=T_Symbol; }}
+
 /* (ED &optional x) → NIL stub. */
 static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -1865,6 +1874,9 @@ void bocl_register_load(void){
     {   Ref sc=symbol_intern_cstring("%KERNEL-SORT!");
         set_symbol_function(sc,built_in_function_new(sc,
             list(S(SEQUENCE),S(LESS),NULL),kernel_KERNEL_SORT)); }
+    {   Ref sc=symbol_intern_cstring("%GLOBALLY-SPECIAL-P");
+        set_symbol_function(sc,built_in_function_new(sc,
+            list(S(SYMBOL),NULL),kernel_GLOBALLY_SPECIAL_P)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

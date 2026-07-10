@@ -11280,3 +11280,16 @@ the rest take :INITIAL-ELEMENT."
              (pos (search "prelude.lisp" ns :from-end t))
              (dir (if pos (subseq ns 0 pos) "")))
         (load (concatenate 'string dir "socket.lisp"))))))
+
+;;; ---- BYTE-CODE COMPILER (plan-2) ------------------------------------------
+;;; Load the plan-2 byte-code compiler's Lisp front-end (bootstrap/vm-compiler.lisp),
+;;; a sibling of this prelude.  Gated on the %GLOBALLY-SPECIAL-P kernel primitive
+;;; (the analyzer's special-variable predicate) so a kernel built without it still
+;;; boots.  *LOAD-TRUENAME* is bound to this file by the loader.
+(when (fboundp '%globally-special-p)
+  (let ((here (or *load-truename* *load-pathname*)))
+    (when here
+      (let* ((ns  (if (stringp here) here (namestring here)))
+             (pos (search "prelude.lisp" ns :from-end t))
+             (dir (if pos (subseq ns 0 pos) "")))
+        (load (concatenate 'string dir "vm-compiler.lisp"))))))
