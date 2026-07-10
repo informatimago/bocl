@@ -93,3 +93,22 @@ REMAINING for this issue (PART 3): genuine BC_TAIL_CALL (a trampoline so a tail 
 to a compiled callee reuses the C frame — loops-as-recursion without C-stack growth),
 the stack-based fast APPLY (skip the arg-list re-cons), and the VM stack-overflow
 signal (BOCL:OUT-OF-STACK-MEMORY-ERROR).
+
+====================================================================
+DONE (v1.8.9, branch vm) — vm-6 ACCEPTANCE MET (closing).
+
+Parts 1 (closures) + 2 (extended lambda list) together satisfy the acceptance:
+adder-returning closures, mutable/shared captured counters, mutually-recursive LABELS,
+FLET, a compiled fn/closure inter-calling built-ins and tree-walked functions and vice
+versa (interop flows through kernel_apply — already uniform from vm-2), and
+&optional/&rest/&key on a compiled fn — all differentially equal to the tree-walker
+(tests/test_misc.c::test_vm_closures).  Full suite green.
+
+DEFERRED to a follow-up (vm-6b-tail-calls-and-fast-apply.issue) — these were in the
+WHAT but are OPTIMIZATIONS beyond the acceptance, and the tree-walker itself does no
+TCO (so no-TCO is parity):
+- genuine BC_TAIL_CALL / BC_TAIL_CALL_NAMED via a trampoline (loops-as-recursion in
+  constant C-stack space; needs capture-aware frame reuse + tail-context threading in
+  codegen);
+- the stack-based fast APPLY (skip the CALL arg-list re-cons of §3.3);
+- the VM stack-overflow signal (BOCL:OUT-OF-STACK-MEMORY-ERROR).

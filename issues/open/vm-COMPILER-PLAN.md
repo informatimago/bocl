@@ -49,21 +49,30 @@ allocation bound** (GC ~2% prelude / ~12% loop code) — the VM is the real leve
   lexical exits correctly unwinding crossed dynamic frames; LOAD-TIME-VALUE.
   BYTECODE_VERSION → 6.  Tested in test_misc.c (test_vm_control/values/nlx).
 
-REMAINING: vm-6 (closures + interop) → vm-7 (CLOS inline cache) →
-vm-8 (byte-code fasl) → vm-9 (self-host prelude + validate). Issues in `vm-*.issue`.
+- **vm-6** — closures + interop, done at v1.8.8/v1.8.9 (issue closed).  Compiled
+  closures via a per-activation DISPLAY (MAKE-CLOSURE pairs a template with
+  [this frame's locals, ...current upvalues]; LOAD/STORE-LOCAL depth>0 walk it);
+  capture detection with max-depth PROPAGATION (a fn that only relays a deeper frame is
+  itself a closure); FLET/LABELS store closures in enclosing-frame slots; the extended
+  lambda list (&optional-default/supplied-p, &key, &aux) via a RAW-entry arity bit + a
+  compiled prologue.  Interop was already uniform (kernel_apply).  BYTECODE_VERSION → 6.
+  Tested in test_misc.c::test_vm_closures.
 
-**vm-6 starts here:** CLOSURES + interop.  `%VM-GEN` currently errors on `:flet`,
-`:labels`, and on a `:make-closure`/`:lref depth>0` that actually captures (upvalue
-reference).  Implement closure capture (MAKE-CLOSURE builds a CompiledClosure over an
-upvalue/display vector; LOAD-UPVAL and LOAD-LOCAL depth>0 read it — see the vm-2 stubs
-in bytecode.c), FLET/LABELS as local-function templates + closures (labels bodies see
-themselves — mutual recursion needs shared cells), the uniform stack-based APPLY (drop
-the per-call arg-list re-cons of §3.3), the no-C-recursion trampoline + VM
-stack-overflow signal, and genuine TAIL_CALL (BC_TAIL_CALL is in the ISA but the VM
-still errors on it).  Also worth lifting here: the &optional-default/supplied-p/&key/
-&aux lambda-list restriction in %VM-CHECK-CORE-LAMBDA-LIST (emit a prologue).
-Separately, the CONDITION SYSTEM (HANDLER-BIND/-CASE/RESTART) is a deferred follow-up
-that builds on vm-5's NLX frames (needs handler-frame opcodes).
+REMAINING: vm-7 (CLOS inline cache) →
+vm-8 (byte-code fasl) → vm-9 (self-host prelude + validate). Issues in `vm-*.issue`.
+DEFERRED follow-ups (not on the critical path): **vm-6b** (genuine TAIL_CALL trampoline,
+stack-based fast APPLY, VM stack-overflow signal — optimizations; design notes in
+`issues/open/vm-6b-tail-calls-and-fast-apply.issue`) and the **condition system**
+(HANDLER-BIND/-CASE/RESTART, builds on vm-5's NLX frames — needs handler-frame opcodes).
+
+**vm-7 starts here:** a CLOS generic-function inline cache.  Generic-function dispatch
+in byte-code with a per-call-site inline cache (monomorphic + small polymorphic); a
+miss recomputes via COMPUTE-APPLICABLE-METHODS + method-combination; invalidate on
+add/remove-method / class redefinition (a generation counter).  Mind the kernel CLASS
+vs CLOS %cls duality for the cache key (use class_designator_name, not class_name).
+Factor the cache so a future shared module could serve both the VM and a tree-walker
+fast path (plan-3 hot-5).  NOTE: %VM-COMPILE calls already dispatch generic functions
+correctly today (through kernel_apply); vm-7 is the SPEED path, not new behavior.
 
 ---
 

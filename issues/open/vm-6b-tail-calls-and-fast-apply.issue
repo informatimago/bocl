@@ -1,0 +1,37 @@
+vm-6b — Tail calls + fast APPLY + stack-overflow signal (plan-2, deferred from vm-6).
+
+Optimizations split out of vm-6 (whose ACCEPTANCE — closures + interop + &key — is met
+at v1.8.9).  None of these change observable results vs the tree-walker; they are about
+space and speed.  %VM-COMPILE is the entry (COMPILE isn't rewired until vm-8), so this
+is not on any critical path yet.
+
+WHAT
+- Genuine BC_TAIL_CALL / BC_TAIL_CALL_NAMED (both are in / append to the ISA): a
+  trampoline in bytecode_apply so a tail call to a COMPILED callee reuses the current C
+  frame (goto a `reinit:` label that re-binds the new function) instead of recursing
+  through kernel_apply — loops written as tail recursion then run in constant C-stack
+  space.  A tail call to a built-in / tree-walked callee falls back to kernel_apply +
+  RETURN.  DESIGN NOTES already worked out:
+  * Codegen must thread a TAIL context through %VM-GEN (progn-last, both IF branches,
+    let/let* body are tail) and emit TAIL_CALL only when NO dynamic frame (:dframe) is
+    active — inside CATCH/UNWIND-PROTECT/special-LET a call is not a true tail call.
+    So `nvf==0` holds at every TAIL_CALL, which also means no setjmp target is live
+    across the trampoline (the per-function state L/S/K/code need not be volatile).
+  * CONSTANT SPACE needs capture-aware frame REUSE: reusing the locals/stack vectors on
+    tail call would corrupt a frame that a closure captured.  Track a runtime
+    `frame_escaped` flag (set when MAKE_CLOSURE runs); on tail-call reinit reuse the
+    vectors only when the LEAVING frame did not escape and the incoming nloc/maxst fit
+    — else allocate fresh (and the old frame stays rooted for the closure).  Without
+    reuse, the live pool grows per tail call (bounded-depth only).
+- Stack-based fast APPLY: a calling convention that passes args on the VM operand stack
+  (no per-call Lisp arg-list re-cons — see plan §3.3), shared by compiled callees; keep
+  the kernel_apply fallback for built-in / tree-walked callees.
+- VM stack-overflow signal: bound the trampoline / recursion depth and signal
+  BOCL:OUT-OF-STACK-MEMORY-ERROR instead of crashing the C stack.
+
+ACCEPTANCE: a deep tail-recursive loop (e.g. count down 10,000,000) runs in constant
+space without a C-stack crash; a closure created inside a tail loop still captures a
+DISTINCT frame per iteration; micro-benchmark shows the fast APPLY beats the arg-list
+path; overflow signals a condition rather than crashing.
+
+DEPENDS ON: vm-6 (closures).

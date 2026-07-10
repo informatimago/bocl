@@ -57,13 +57,12 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-*** BYTE-CODE COMPILER (plan-2): vm-1..vm-5 DONE (branch `vm`, v1.8.7).  Before
-    continuing, READ issues/open/vm-COMPILER-PLAN.md (design/IR/plan).  vm-3 = analyzer
-    (%VM-ANALYZE); vm-4 = codegen core (%VM-COMPILE); vm-5 = full control/values codegen
-    (BLOCK/RETURN-FROM/TAGBODY/GO, CATCH/THROW, UNWIND-PROTECT, special LET/PROGV,
-    multiple values, LOAD-TIME-VALUE, non-capturing lambdas).  NEXT: vm-6 — CLOSURES +
-    interop (capturing lambdas/FLET/LABELS, upvalues, uniform APPLY + TCO trampoline).
-    Deferred separately: the condition system (HANDLER-BIND/-CASE/RESTART). ***
+*** BYTE-CODE COMPILER (plan-2): vm-1..vm-6 DONE (branch `vm`, v1.8.9).  Before
+    continuing, READ issues/open/vm-COMPILER-PLAN.md (design/IR/plan).  vm-3=analyzer;
+    vm-4=codegen core; vm-5=control/values; vm-6=closures + extended lambda list +
+    uniform interop (%VM-COMPILE runs real closures & &optional/&key fns).  NEXT: vm-7
+    (CLOS inline cache).  Deferred follow-ups: vm-6b (tail calls / fast APPLY / stack
+    signal) and the condition system (HANDLER-BIND/-CASE/RESTART). ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
@@ -71,7 +70,7 @@ hot-3-frame-representation.issue     (plan-3)
 hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
-vm-6-closures-and-interop.issue      (plan-2) — capturing lambdas/FLET/LABELS, upvalues, TCO
+vm-6b-tail-calls-and-fast-apply.issue (plan-2) — DEFERRED opt: TCO trampoline, fast APPLY
 vm-7-clos-inline-cache.issue         (plan-2)
 vm-8-bytecode-fasl.issue             (plan-2) — builds on cfasl-1..4
 vm-9-debug-bootstrap-validate.issue  (plan-2)
