@@ -24,3 +24,29 @@ green; measured allocation/lookup reduction vs the alist frames; no GC regressio
 minor-gc-doomed issue).
 
 DEPENDS ON: hot-2.
+
+--------------------------------------------------------------------------------
+PROGRESS (v1.7.2, hot branch) — allocation-reduction acceptance met; vector-frame
+form deferred with the analyzer.
+
+Delivered: lexical bindings are now plain conses (name . value) instead of two-
+allocation CLOS structure instances (see the v1.7.2 commit).  ACCEPTANCE metrics:
+binding/closure/special suites green (42/42); measured allocation reduction — a
+call-heavy micro-benchmark went 679,180 -> 599,165 allocations (-12%), GC
+13.1% -> 11.9% (no regression).
+
+NOT done: the "frame = a VECTOR of slots indexed by the hot-2 (depth,index)
+address" form, because it requires the hot-2 analyzer (deferred to co-develop
+with vm-3).  The cons representation captures the allocation/lookup-cost win
+without the analyzer.
+
+KEY FINDING (measured, applies to hot-4 too): the allocation reduction is
+TIME-NEUTRAL.  Even in allocation-churny loop code, eval (CPU) is ~88% and GC
+~12%, and lexical-binding wrappers are only a fraction of allocations, so cutting
+them saves ~1-2% wall-clock.  bocl's tree-walker is CPU-per-operation bound, not
+allocation bound (the v1.7.0 accessor win — pure CPU — gave 2.6x; this alloc win
+gave ~0%).  Implication: the arg-STACK of hot-4 will similarly yield ~0% from the
+avoided consing itself; its only real TIME win is the CPU it removes (the callee
+list-walk + the per-call lambda-list re-parse), which is a smaller, contained
+gain.  The large eval lever remains plan-2 (byte-code VM), exactly as hot-1
+concluded.

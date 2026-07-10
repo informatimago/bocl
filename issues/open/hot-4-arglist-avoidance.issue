@@ -24,3 +24,17 @@ ACCEPTANCE: micro-benchmark call-heavy code showing reduced allocation + time;
 stack layout documented for reuse by the VM.
 
 DEPENDS ON: hot-3 (frame slots to bind into).
+
+--------------------------------------------------------------------------------
+NOTE before implementing (from hot-2/hot-3 measurements on this build):
+bocl allocation is CHEAP — GC is ~2% on prelude load and ~12% on allocation-
+churny loop code, and the per-call arg list is only a fraction of allocations.
+The v1.7.2 hot-3 change cut lexical-binding allocations 12% for ~0% wall-clock.
+So the "avoid consing" allocation win of hot-4 is expected to be ~TIME-NEUTRAL
+here.  hot-4's real TIME payoff is its CPU side: NOT re-walking a consed arg list
+in the callee (pop_mandatory_argument) and NOT re-parsing the lambda list on
+every call (a cached parameter plan).  Scope hot-4 to those CPU wins (value stack
++ cached lambda plan bound directly into hot-3 cons slots) and MEASURE against
+the CPU baseline, not the allocation count — and weigh it against just doing
+plan-2 (the byte-code VM), which removes the whole per-form interpretation
+overhead that dominates here.
