@@ -48,7 +48,7 @@ static _Noreturn void vm_unwind_next_frame(Frame* popped){
    after a longjmp as (VmDyn*)g_frame_stack (the frame receiving control is the stack
    top).  Fields other than FRAME are read only via that recovered pointer or via the
    volatile depth counter, never via a stale automatic — safe across setjmp/longjmp. */
-enum { VMK_CATCH=1, VMK_PROTECT, VMK_DBIND };
+enum { VMK_CATCH=1, VMK_PROTECT, VMK_DBIND, VMK_PROGV };
 typedef struct VmDyn {
     Frame  frame;          /* MUST be first */
     size_t handler_pc;     /* CATCH: resume pc on throw; PROTECT: cleanup pc */
@@ -59,8 +59,18 @@ typedef struct VmDyn {
     Ref    dsym;           /* DBIND: the special symbol */
     Ref    dsaved_value;   /* DBIND: its previous value */
     int    dsaved_boundp;  /* DBIND: whether it was bound */
+    Ref    dlist;          /* PROGV: saved list ((sym boundp . oldvalue) ...) */
 } VmDyn;
 #define VM_DYN_MAX 256
+
+/* Restore a PROGV frame's special variables from its saved ((sym boundp . old) ...). */
+static void vm_progv_restore(VmDyn* a){
+    for(Ref r=a->dlist; consp(r); r=cons_cdr(r)){
+        Ref rec = cons_car(r);
+        Ref sym = cons_car(rec);
+        Ref bp  = cons_car(cons_cdr(rec));
+        Ref old = cons_cdr(cons_cdr(rec));
+        if(!nullp(bp)){ set_symbol_value(sym, old); } else { symbol_make_unbound(sym); } }}
 
 int compiled_function_p(Ref object){ return class_of(object)==COMPILED_FUNCTION_Class; }
 int compiled_closure_p(Ref object){  return class_of(object)==COMPILED_CLOSURE_Class; }
@@ -343,6 +353,45 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
             VmDyn* a = (VmDyn*)g_frame_stack;
             if(a->dsaved_boundp){ set_symbol_value(a->dsym, a->dsaved_value); }
             else { symbol_make_unbound(a->dsym); }
+            vm_pop_frame(); nvf--; break; }
+        case BC_PROGV_BIND:{
+            /* stack: [... symbols-list values-list].  Bind each symbol to its value
+               (or make it unbound when VALUES is shorter), remembering the old cells. */
+            Ref values = POP();
+            Ref symbols = POP();
+            add_to_live_pool(symbols); add_to_live_pool(values);
+            if(nvf >= VM_DYN_MAX){ ERROR("VM: too many nested dynamic frames%s",""); }
+            VmDyn* d = &vdyn[nvf];
+            d->frame.type = frame_dynamic_binding;
+            d->frame.results = results;
+            d->kind = VMK_PROGV;
+            Ref saved = NIL_Symbol;
+            {   uword cp = open_live_pool(); add_to_live_pool(saved);
+                Ref s = symbols, v = values;
+                while(consp(s)){
+                    Ref sym = cons_car(s);
+                    add_to_live_pool(sym);
+                    int bp = symbol_boundp(sym);
+                    Ref old = bp ? symbol_value(sym) : NIL_Symbol;
+                    add_to_live_pool(old);
+                    Ref rec = cons(sym, cons(bp?T_Symbol:NIL_Symbol, old));
+                    add_to_live_pool(rec); add_to_live_pool(saved);
+                    saved = cons(rec, saved); add_to_live_pool(saved);
+                    if(consp(v)){ set_symbol_value(sym, cons_car(v)); v = cons_cdr(v); }
+                    else { symbol_make_unbound(sym); }
+                    s = cons_cdr(s); }
+                close_live_pool(cp); }
+            d->dlist = saved; add_to_live_pool(saved);
+            int rc = setjmp(d->frame.non_local_exit);
+            if(rc==0){ vm_push_frame(&d->frame); nvf++; break; }
+            VmDyn* a = (VmDyn*)g_frame_stack;
+            vm_progv_restore(a);
+            vm_pop_frame(); nvf--;
+            vm_unwind_next_frame(&a->frame);
+        }
+        case BC_PROGV_UNBIND:{                      /* normal exit: restore all + pop */
+            VmDyn* a = (VmDyn*)g_frame_stack;
+            vm_progv_restore(a);
             vm_pop_frame(); nvf--; break; }
         case BC_UNWIND_PROTECT:{
             /* operand: svar offset to the cleanup code.  Establish a protect frame; the

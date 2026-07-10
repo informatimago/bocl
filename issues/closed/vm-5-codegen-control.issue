@@ -197,3 +197,32 @@ REMAINING for this issue: PROGV and LOAD-TIME-VALUE (small); FLET/LABELS is clos
 (vm-6).  The CONDITION SYSTEM (HANDLER-BIND/HANDLER-CASE/RESTART, hence IGNORE-ERRORS)
 is NOT in the WHAT list and is deferred as a separate concern — it needs handler-frame
 opcodes; the core NLX frame machinery here is the substrate it will build on.
+
+--------------------------------------------------------------------
+DONE (v1.8.7, branch vm) — vm-5 COMPLETE (closing).
+
+PROGV and LOAD-TIME-VALUE landed, completing the control/values codegen:
+- PROGV: BC_PROGV_BIND/UNBIND bind a RUNTIME list of special symbols to a runtime
+  list of values (makunbound when VALUES is shorter), remembering every old cell in a
+  saved list on the frame; restored on normal exit AND on a non-local exit through the
+  PROGV (and via the :dframe lexical-exit unwind path).
+- LOAD-TIME-VALUE: evaluated once at compile(=load) time for %VM-COMPILE and embedded
+  as a constant.
+Verified in tests/test_misc.c::test_vm_nlx.  Full suite green (42 suites).
+
+Summary of what vm-5 delivered (v1.8.4 .. v1.8.7):
+  part 1  — lexical BLOCK/RETURN-FROM/TAGBODY/GO as byte-code jumps (loops run);
+  part 2a — MULTIPLE-VALUE-CALL/-PROG1 (+ -BIND/-LIST, NTH-VALUE) + non-capturing
+            lambdas;
+  part 2b — CATCH/THROW, dynamic (special) LET/LET* binding, UNWIND-PROTECT, with
+            lexical exits correctly unwinding crossed dynamic frames;
+  final   — PROGV, LOAD-TIME-VALUE.
+
+Explicitly NOT in vm-5 (tracked elsewhere):
+- FLET/LABELS and capturing lambdas — these are CLOSURES = vm-6.
+- The CONDITION SYSTEM (HANDLER-BIND/HANDLER-CASE/RESTART, hence IGNORE-ERRORS) —
+  a separate concern built on this NLX substrate; needs handler-frame opcodes.  File a
+  follow-up when wanted (the "must-restart" acceptance line lands there).
+- Known minor limitation (documented at vm-5.2a): a BLOCK returning MULTIPLE values via
+  (return-from b (values ...)) keeps only the primary; the common (values ...) tail
+  return is unaffected.

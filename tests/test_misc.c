@@ -815,6 +815,23 @@ static void test_vm_nlx(void){
               "   (unwind-protect (return-from b 'done) (vm-nlx-log *vm-nlx-sv*)))))))"
               "  *vm-nlx-sv*)"));
 
+    /* PROGV: bind a runtime list of specials; restore (incl. makunbound when short);
+       and restore on a throw through the PROGV. */
+    e("(defvar *vm-nlx-b* 'gb)");
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda () (progv '(*vm-nlx-sv* *vm-nlx-b*) '(1 2) (list *vm-nlx-sv* *vm-nlx-b*))) '())"));
+    TEST_EQ(equal, e("'(1 nil)"),
+            e("(funcall (%vm-compile '(lambda () (progv '(*vm-nlx-sv* *vm-nlx-b*) '(1)"
+              "   (list *vm-nlx-sv* (boundp '*vm-nlx-b*))))))"));
+    TEST_EQ(equal, e("'(temp global)"),
+            e("(funcall (%vm-compile '(lambda () (list (catch 'k (progv '(*vm-nlx-sv*) '(temp)"
+              "   (throw 'k *vm-nlx-sv*))) *vm-nlx-sv*))))"));
+
+    /* LOAD-TIME-VALUE: evaluated once at compile(=load) time, embedded as a constant */
+    TEST_EQ(eql, I(5),  e("(funcall (%vm-compile '(lambda () (load-time-value (+ 2 3)))))"));
+    TEST_EQ(equal, e("'(z a b)"),
+            e("(funcall (%vm-compile '(lambda (x) (cons x (load-time-value (list 'a 'b))))) 'z)"));
+
     close_live_pool(pool);
 }
 

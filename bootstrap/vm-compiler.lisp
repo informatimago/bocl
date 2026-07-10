@@ -340,9 +340,9 @@
                   (%vm-analyze-form (caddr form) cenv lexenv)
                   (%vm-analyze-progn (cdddr form) cenv lexenv)))
     ((load-time-value)
-     (list :load-time-value
-           (%vm-analyze-form (cadr form) (list (%vm-new-flevel)) (%vm-lexenv-empty))
-           (and (cddr form) (caddr form))))
+     ;; keep the ORIGINAL form: LOAD-TIME-VALUE evaluates at load time, which for
+     ;; %VM-COMPILE (compile == load) is compile time — codegen evaluates it then.
+     (list :load-time-value (cadr form) (and (cddr form) (caddr form))))
     (t (error "VM compiler: unhandled special operator ~S" op))))
 
 (defun %vm-analyze-setq (pairs cenv lexenv)
@@ -634,10 +634,10 @@
     (:catch      (%vm-gen-catch (cadr node) (caddr node) cs))
     (:throw      (%vm-gen-throw (cadr node) (caddr node) cs))
     (:unwind-protect (%vm-gen-unwind-protect (cadr node) (caddr node) cs))
+    (:progv      (%vm-gen-progv (cadr node) (caddr node) (cadddr node) cs))
+    (:load-time-value (%vm-gen-load-time-value (cadr node) (caddr node) cs))
     (:make-closure (%vm-gen-make-closure (cadr node) cs))
     ((:flet :labels) (error "VM codegen: local functions are vm-6 (~S)" (car node)))
-    ((:progv :load-time-value)
-     (error "VM codegen: control operator ~S is vm-5 (pending: progv/load-time-value)" (car node)))
     (t (error "VM codegen: unknown IR node ~S" node))))
 
 (defun %vm-gen-const (v cs)
@@ -753,7 +753,7 @@
 ;;; single-valued leaves so BC-MV-LIST (which reads the buffer) captures all values.
 (defun %vm-gen-for-values (node cs)
   (case (car node)
-    ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect)
+    ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect :progv)
      (%vm-gen node cs))                                          ; sets the MV buffer
     (:if
      (let ((l-else (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
@@ -837,6 +837,22 @@
       (%vm-cs-set-sp cs (1+ base))                       ; protected value back on top
       (%vm-emit-label cs l-after))))
 
+;;; PROGV — bind a RUNTIME list of special symbols to a runtime list of values.
+(defun %vm-gen-progv (symbols-ir values-ir body-ir cs)
+  (%vm-gen symbols-ir cs)                              ; push the symbols list (+1)
+  (%vm-gen values-ir cs)                               ; push the values list (+1)
+  (%vm-emit-op cs (%vm-op :progv-bind)) (%vm-cs-sp+ cs -2)  ; bind all; frame -> g_frame_stack
+  (%vm-cs-push-control cs (list :dframe :progv))       ; a lexical exit must restore+pop
+  (%vm-gen-for-values body-ir cs)                      ; body value + MV (+1)
+  (%vm-cs-pop-control cs)
+  (%vm-emit-op cs (%vm-op :progv-unbind)))             ; restore all + pop (no stack effect)
+
+;;; LOAD-TIME-VALUE — evaluate the form now (compile == load time for %VM-COMPILE)
+;;; and embed the result as a constant.
+(defun %vm-gen-load-time-value (form read-only-p cs)
+  (declare (ignore read-only-p))
+  (%vm-gen-const (funcall (%vm-compile (list 'lambda '() form))) cs))
+
 (defun %vm-gen-make-closure (lambda-ir cs)
   "vm-5: a NON-capturing LAMBDA in value position — compile it to a standalone
    CompiledFunction template and push it as a constant.  A captured (depth>0)
@@ -895,6 +911,7 @@
     (when (eq (car s) :dframe)
       (case (cadr s)
         (:dbind    (%vm-emit-op cs (%vm-op :dynamic-unbind)))
+        (:progv    (%vm-emit-op cs (%vm-op :progv-unbind)))
         (:catch    (%vm-emit-op cs (%vm-op :catch-close)))
         (:uprotect (%vm-gen (caddr s) cs)                  ; run the cleanup for effect
                    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
