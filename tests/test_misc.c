@@ -743,6 +743,81 @@ static void test_vm_values(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-5 (part 2b): dynamic NLX — CATCH/THROW, dynamic binding, UNWIND-PROTECT -- */
+/* These use the setjmp/longjmp frame machinery (a frame on g_frame_stack whose setjmp
+   is the landing point), interoperating with tree-walked frames.  A lexical exit
+   (RETURN-FROM/GO, compiled as a jump) that crosses a dynamic frame emits its unwind
+   (cleanup + pop), so specials are restored and cleanups run.  VM4-CMP compares the
+   compiled result to the tree-walker; side-effect cases compare directly. */
+static void test_vm_nlx(void){
+    uword pool = open_live_pool();
+    e("(unless (fboundp 'vm4-cmp)"
+      "  (defun vm4-cmp (lam args)"
+      "    (equal (apply (%vm-compile lam) args) (apply (eval (list 'function lam)) args))))");
+    e("(defvar *vm-nlx-sv* 'global)");
+    e("(defvar *vm-nlx-log* '())");
+    e("(defun vm-nlx-log (x) (setq *vm-nlx-log* (cons x *vm-nlx-log*)) x)");
+    e("(defmacro vm-nlx-run (lam &rest args)"          /* reset log, run compiled lam, return (result . log) */
+      "  `(progn (setq *vm-nlx-log* '() *vm-nlx-sv* 'global)"
+      "          (let ((r (funcall (%vm-compile ,lam) ,@args)))"
+      "            (cons r (reverse *vm-nlx-log*)))))");
+
+    /* CATCH / THROW */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (catch 'g 42)) '())"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (catch 'g (throw 'g 99) 7)) '())"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (catch 'a (catch 'b (throw 'a 'out)) 'x)) '())"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (catch 'a (+ 1 (catch 'b (throw 'b 10)))) )'())"));
+    TEST_EQ(equal, e("'(1 2 3)"),
+            e("(multiple-value-list (funcall (%vm-compile '(lambda () (catch 'z (throw 'z (values 1 2 3)))))))"));
+    /* THROW across a call boundary (thrower is a separate compiled fn) */
+    e("(setf (symbol-function 'vm-nlx-thrower) (%vm-compile '(lambda (v) (throw 'ball v))))");
+    TEST_EQ(eql, I(123),
+            e("(funcall (%vm-compile '(lambda () (catch 'ball (vm-nlx-thrower 123) 'unreached))))"));
+    /* THROW out of a loop */
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (n) (catch 's (dotimes (i n) (if (= i 3) (throw 's i))) 'done)) '(10))"));
+
+    /* dynamic (special) binding: bound value visible (even in a called fn), restored after */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (let ((*vm-nlx-sv* 'b)) *vm-nlx-sv*)) '())"));
+    TEST_EQ(eql, e("'global"),
+            e("(progn (funcall (%vm-compile '(lambda () (let ((*vm-nlx-sv* 'b)) *vm-nlx-sv*)))) *vm-nlx-sv*)"));
+    /* parallel LET: the second init sees the OUTER special value */
+    TEST_EQ(equal, e("'(global new global)"),
+            e("(funcall (%vm-compile '(lambda () (let ((o *vm-nlx-sv*))"
+              "   (let ((*vm-nlx-sv* 'new) (y *vm-nlx-sv*)) (list y *vm-nlx-sv* o))))))"));
+    /* special restored on a THROW through the binding */
+    TEST_EQ(equal, e("'(temp global)"),
+            e("(funcall (%vm-compile '(lambda () (list (catch 'k (let ((*vm-nlx-sv* 'temp))"
+              "   (throw 'k *vm-nlx-sv*))) *vm-nlx-sv*))))"));
+
+    /* UNWIND-PROTECT: value + cleanup on normal, on throw, on lexical return-from */
+    TEST_EQ(equal, e("'(42 cl)"),
+            e("(vm-nlx-run '(lambda () (unwind-protect 42 (vm-nlx-log 'cl))))"));
+    TEST_EQ(equal, e("'(thrown cl)"),
+            e("(vm-nlx-run '(lambda () (catch 'k (unwind-protect (throw 'k 'thrown) (vm-nlx-log 'cl)))))"));
+    TEST_EQ(equal, e("'(ret cl)"),
+            e("(vm-nlx-run '(lambda () (block b (unwind-protect (return-from b 'ret) (vm-nlx-log 'cl)))))"));
+    TEST_EQ(equal, e("'(1 2 3)"),
+            e("(multiple-value-list (funcall (%vm-compile '(lambda () (unwind-protect (values 1 2 3) 0)))))"));
+    /* nested UNWIND-PROTECT unwound by a throw: inner cleanup then outer */
+    TEST_EQ(equal, e("'(done inner outer)"),
+            e("(vm-nlx-run '(lambda () (catch 'k (unwind-protect (unwind-protect (throw 'k 'done)"
+              "   (vm-nlx-log 'inner)) (vm-nlx-log 'outer)))))"));
+
+    /* lexical exit crossing BOTH an unwind-protect and a special binding:
+       (result . log) shows the cleanup ran seeing the still-bound special... */
+    TEST_EQ(equal, e("'(done x)"),
+            e("(vm-nlx-run '(lambda () (block b (let ((*vm-nlx-sv* 'x))"
+              "   (unwind-protect (return-from b 'done) (vm-nlx-log *vm-nlx-sv*))))))"));
+    /* ...and afterwards the special is restored */
+    TEST_EQ(eql, e("'global"),
+            e("(progn (funcall (%vm-compile '(lambda () (block b (let ((*vm-nlx-sv* 'x))"
+              "   (unwind-protect (return-from b 'done) (vm-nlx-log *vm-nlx-sv*)))))))"
+              "  *vm-nlx-sv*)"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -756,6 +831,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm codegen",          test_vm_codegen)
     TEST_CASE("vm control",          test_vm_control)
     TEST_CASE("vm values",           test_vm_values)
+    TEST_CASE("vm nlx",              test_vm_nlx)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

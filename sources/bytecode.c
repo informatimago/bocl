@@ -11,8 +11,56 @@
 #include "kernel_functions.h"
 #include "memory.h"
 #include "boerror.h"
+#include <setjmp.h>
 
 extern Ref Object_new(Ref class, Slots* slots);   /* defined in kernel.c (as in reader.c) */
+
+/* ---- dynamic non-local-exit frames for the VM (vm-5 part 2b) ----------------
+   CATCH/THROW, UNWIND-PROTECT and dynamic (special) binding are DYNAMICALLY scoped:
+   they live on the process-global frame stack g_frame_stack (eval.c) so a THROW or an
+   unwind crosses call boundaries and interoperates with tree-walked frames.  (BLOCK/
+   TAGBODY are LEXICAL and already compile to plain jumps — vm-5 part 1 — so the VM
+   never needs eval.c's push_frame/pop_frame, which also maintain the per-environment
+   lexical list.)  We only touch g_frame_stack here; the cascade protocol (setjmp
+   returns non_local_exit_unwind/target, run cleanup, pop, unwind to the next frame)
+   is identical to eval.c's, so mixed VM/tree-walker unwinds work. */
+extern Frame* g_frame_stack;   /* eval.c:44 (non-static; not otherwise declared) */
+
+static void vm_push_frame(Frame* f){
+    f->next = g_frame_stack; g_frame_stack = f;
+    f->env_next = NULL; f->frame = NULL; f->target = NULL; }
+static Frame* vm_pop_frame(void){
+    Frame* r = g_frame_stack; if(r){ g_frame_stack = r->next; } return r; }
+static Frame* vm_find_catch_frame(Ref tag){
+    for(Frame* f=g_frame_stack; f; f=f->next){
+        if(f->type==frame_catch && f->parameters.catch.object==tag){ return f; } }
+    return NULL; }
+/* Continue the unwind cascade after POPPED has been removed: hand control to the new
+   top with the right code (target if it is POPPED's destination, else unwind). */
+static _Noreturn void vm_unwind_next_frame(Frame* popped){
+    Frame* next = g_frame_stack;
+    if(next==NULL){ FATAL("vm_unwind_next_frame: %s","no next frame; target not reached"); }
+    non_local_exit_t code = (next==popped->target) ? non_local_exit_target : non_local_exit_unwind;
+    next->target = popped->target;
+    longjmp(next->non_local_exit, (int)code); }
+
+/* One VM dynamic-frame record.  FRAME is first so the active record is recovered
+   after a longjmp as (VmDyn*)g_frame_stack (the frame receiving control is the stack
+   top).  Fields other than FRAME are read only via that recovered pointer or via the
+   volatile depth counter, never via a stale automatic — safe across setjmp/longjmp. */
+enum { VMK_CATCH=1, VMK_PROTECT, VMK_DBIND };
+typedef struct VmDyn {
+    Frame  frame;          /* MUST be first */
+    size_t handler_pc;     /* CATCH: resume pc on throw; PROTECT: cleanup pc */
+    word   handler_sp;     /* sp to restore on entry to the handler / cleanup */
+    int    kind;
+    int    unwinding;      /* PROTECT: set when the cleanup is running due to an unwind */
+    MultipleValues saved;  /* PROTECT: the protected form's values (normal path) */
+    Ref    dsym;           /* DBIND: the special symbol */
+    Ref    dsaved_value;   /* DBIND: its previous value */
+    int    dsaved_boundp;  /* DBIND: whether it was bound */
+} VmDyn;
+#define VM_DYN_MAX 256
 
 int compiled_function_p(Ref object){ return class_of(object)==COMPILED_FUNCTION_Class; }
 int compiled_closure_p(Ref object){  return class_of(object)==COMPILED_CLOSURE_Class; }
@@ -150,6 +198,14 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     #define POP()    (S[--sp])
     #define TOP()    (S[sp-1])
 
+    /* Dynamic (NLX) frames established by THIS activation.  NVF is volatile because
+       it is read after a longjmp to locate the active frame; PC/SP need not be (the
+       longjmp-return paths only ASSIGN them from a recovered frame, never read the
+       stale value first).  The array lives on the C stack of this activation, so its
+       jmp_bufs stay valid for its whole lifetime. */
+    VmDyn vdyn[VM_DYN_MAX];
+    volatile word nvf = 0;
+
     size_t pc = 0; word sp = 0;
     results->count = 1; results->values[0] = NIL_Symbol;
     for(;;){
@@ -227,6 +283,128 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
                           PUSH(lst);
                           close_live_pool(cp);
                           break; }
+        case BC_CATCH_OPEN:{
+            /* operand: svar offset to the handler (resume point on a matching THROW).
+               The tag is on top of the stack. */
+            int64_t off = vm_read_svar(code,&pc);
+            size_t handler_pc = (size_t)((int64_t)pc + off);
+            Ref tag = POP();
+            add_to_live_pool(tag);                 /* g_frame_stack is NOT GC-scanned */
+            if(nvf >= VM_DYN_MAX){ ERROR("VM: too many nested dynamic frames%s",""); }
+            VmDyn* d = &vdyn[nvf];
+            d->frame.type = frame_catch;
+            d->frame.parameters.catch.object = tag;
+            d->frame.results = results;
+            d->kind = VMK_CATCH;
+            d->handler_pc = handler_pc;
+            d->handler_sp = sp;
+            int rc = setjmp(d->frame.non_local_exit);
+            if(rc==0){ vm_push_frame(&d->frame); nvf++; break; }   /* normal: run the body */
+            /* A THROW/unwind reached us; recover the receiving frame (stack top). */
+            VmDyn* a = (VmDyn*)g_frame_stack;
+            vm_pop_frame(); nvf--;
+            if(rc==non_local_exit_target){         /* this CATCH is the destination */
+                Ref primary = (results->count>0) ? results->values[0] : NIL_Symbol;
+                sp = a->handler_sp; pc = a->handler_pc;
+                PUSH(primary);                     /* MV already in results */
+                break;
+            }
+            vm_unwind_next_frame(&a->frame);       /* just passing through — _Noreturn */
+        }
+        case BC_CATCH_CLOSE:{                       /* normal CATCH exit: drop the frame */
+            vm_pop_frame(); nvf--; break; }
+        case BC_DYNAMIC_BIND:{
+            /* operand: constant index of the special symbol; new value on top.
+               Save the old value cell, install the new one, push a restoring frame. */
+            uint64_t si = vm_read_uvar(code,&pc);
+            Ref sym = K[si];
+            Ref newval = POP();
+            add_to_live_pool(sym); add_to_live_pool(newval);
+            if(nvf >= VM_DYN_MAX){ ERROR("VM: too many nested dynamic frames%s",""); }
+            VmDyn* d = &vdyn[nvf];
+            d->frame.type = frame_dynamic_binding;
+            d->frame.results = results;
+            d->kind = VMK_DBIND;
+            d->dsym = sym;
+            d->dsaved_boundp = symbol_boundp(sym);
+            d->dsaved_value = d->dsaved_boundp ? symbol_value(sym) : NIL_Symbol;
+            add_to_live_pool(d->dsaved_value);
+            set_symbol_value(sym, newval);
+            int rc = setjmp(d->frame.non_local_exit);
+            if(rc==0){ vm_push_frame(&d->frame); nvf++; break; }
+            /* unwinding through: restore the value cell, then continue the cascade */
+            VmDyn* a = (VmDyn*)g_frame_stack;
+            if(a->dsaved_boundp){ set_symbol_value(a->dsym, a->dsaved_value); }
+            else { symbol_make_unbound(a->dsym); }
+            vm_pop_frame(); nvf--;
+            vm_unwind_next_frame(&a->frame);
+        }
+        case BC_DYNAMIC_UNBIND:{                    /* normal exit: restore the top binding */
+            VmDyn* a = (VmDyn*)g_frame_stack;
+            if(a->dsaved_boundp){ set_symbol_value(a->dsym, a->dsaved_value); }
+            else { symbol_make_unbound(a->dsym); }
+            vm_pop_frame(); nvf--; break; }
+        case BC_UNWIND_PROTECT:{
+            /* operand: svar offset to the cleanup code.  Establish a protect frame; the
+               cleanup runs on BOTH normal completion (BC_UNWIND_NORMAL) and unwind. */
+            int64_t off = vm_read_svar(code,&pc);
+            size_t cleanup_pc = (size_t)((int64_t)pc + off);
+            if(nvf >= VM_DYN_MAX){ ERROR("VM: too many nested dynamic frames%s",""); }
+            VmDyn* d = &vdyn[nvf];
+            d->frame.type = frame_protect;
+            d->frame.results = results;
+            d->kind = VMK_PROTECT;
+            d->handler_pc = cleanup_pc;
+            d->handler_sp = sp;                    /* base, before the protected form */
+            d->unwinding = 0;
+            int rc = setjmp(d->frame.non_local_exit);
+            if(rc==0){ vm_push_frame(&d->frame); nvf++; break; }   /* run the protected form */
+            /* unwinding through: run the cleanup (still on the frame stack), then let
+               BC_UNWIND_END continue the cascade.  frame.target was set by the cascade.
+               Save the in-flight values (staged for the ultimate target) so the cleanup
+               code — which writes the shared MV buffer — cannot clobber them. */
+            VmDyn* a = (VmDyn*)g_frame_stack;
+            a->unwinding = 1;
+            a->saved = *results;
+            sp = a->handler_sp; pc = a->handler_pc;
+            break;
+        }
+        case BC_UNWIND_NORMAL:{
+            /* protected form completed normally (value on stack, MV in results): save the
+               values, drop the frame (its cleanup now runs unprotected), fall to cleanup. */
+            VmDyn* a = &vdyn[nvf-1];
+            a->unwinding = 0;
+            a->saved = *results;
+            vm_pop_frame();                        /* nvf kept: slot holds saved + reserves space */
+            sp = a->handler_sp;                    /* discard the protected value (it is saved) */
+            break;
+        }
+        case BC_UNWIND_END:{
+            VmDyn* a = &vdyn[nvf-1];
+            if(a->unwinding){                      /* unwind path: pop + continue the cascade */
+                *results = a->saved;               /* restore the in-flight values for the target */
+                vm_pop_frame(); nvf--;
+                vm_unwind_next_frame(&a->frame);   /* _Noreturn */
+            }
+            *results = a->saved;                   /* normal path: restore the protected values */
+            Ref primary = (a->saved.count>0) ? a->saved.values[0] : NIL_Symbol;
+            nvf--;
+            PUSH(primary);
+            break;
+        }
+        case BC_THROW:{
+            /* stack: [... tag value-primary]; results holds the value's MV. */
+            (void)POP();                            /* value primary (also results[0]) */
+            Ref tag = POP();
+            Frame* target = vm_find_catch_frame(tag);
+            if(target==NULL){ ERROR("THROW: no CATCH is active for the thrown tag%s",""); }
+            if(target->results != results){ *(target->results) = *results; }
+            Frame* top = g_frame_stack;
+            if(top==NULL){ ERROR("THROW: %s","no active frame"); }
+            top->target = target;
+            longjmp(top->non_local_exit,
+                    (top==target)?(int)non_local_exit_target:(int)non_local_exit_unwind);
+        }
         case BC_RETURN:{ Ref v = (sp>0) ? TOP() : NIL_Symbol;
                          if(results->count<=1 || results->values[0]!=v){ results->count=1; results->values[0]=v; }
                          goto done; }

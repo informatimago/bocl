@@ -158,3 +158,42 @@ symbol_make_unbound; special_variable_p (variable.h).
 ACCEPTANCE (unchanged, top of file): CATCH/THROW, UNWIND-PROTECT cleanup-on-throw,
 dynamic bindings restored on normal + non-local exit, PROGV, and must-control style
 cases; parity with the tree-walker.  Then this issue closes.
+
+--------------------------------------------------------------------
+PROGRESS (v1.8.6, branch vm) — PART 2b DONE (core dynamic NLX).
+
+CATCH/THROW, dynamic (special) LET/LET* binding, and UNWIND-PROTECT are implemented
+and interoperate with tree-walked frames, exactly per the design above.
+
+- Infrastructure (sources/bytecode.c): a `volatile nvf` counter + a `vdyn[]` C-stack
+  array of dynamic-frame records in bytecode_apply; VM-local vm_push/pop_frame +
+  vm_find_catch_frame + vm_unwind_next_frame over `extern Frame* g_frame_stack`
+  (no eval.c change — the cascade protocol matches, so mixed VM/tree-walker unwinds
+  work).  Each frame-opening opcode does its own setjmp; the receiving frame after a
+  longjmp is recovered as (VmDyn*)g_frame_stack (Frame is the first member); pc/sp are
+  only ASSIGNED on the longjmp-return path, so they need not be volatile.  Frame Refs
+  (catch tags, saved special values) are add_to_live_pool'd (g_frame_stack is not
+  GC-scanned).
+- New opcodes (appended; BYTECODE_VERSION -> 5): BC_CATCH_OPEN(off)/CATCH_CLOSE/THROW,
+  BC_DYNAMIC_BIND(sym)/DYNAMIC_UNBIND, BC_UNWIND_PROTECT(off)/UNWIND_NORMAL/UNWIND_END.
+- THROW stages the thrown values into the target frame's results buffer and kicks the
+  cascade (NON_LOCAL_EXIT-style); an unwind-protect cleanup SAVES/RESTORES the shared
+  MV buffer around itself so a call in the cleanup cannot clobber the in-flight values.
+- Special LET: parallel LET evaluates all inits before binding (so an init sees the
+  OUTER dynamic value); LET* binds sequentially.  Restored on normal exit AND on any
+  non-local exit through the binding.
+- KEY FIX — lexical exits crossing dynamic frames: RETURN-FROM/GO compile to jumps
+  (part 1), which would bypass an intervening CATCH/UNWIND-PROTECT/special-binding.
+  The codegen now tracks a `:dframe` control-scope per dynamic frame and, at a
+  RETURN-FROM/GO site, emits the crossed frames' unwinds (DYNAMIC_UNBIND / CATCH_CLOSE
+  / inline cleanup + pop) innermost-first before the jump — so specials are restored
+  and cleanups run, matching a true non-local exit.
+- Verified: tests/test_misc.c::test_vm_nlx (CATCH/THROW incl. cross-call, nested and
+  MV-throw; special binding incl. parallel-LET outer visibility and restore-on-throw;
+  UNWIND-PROTECT on normal/throw/return-from, nested, MV-preserving; and lexical
+  exits crossing an unwind-protect + special binding).  Full suite green.
+
+REMAINING for this issue: PROGV and LOAD-TIME-VALUE (small); FLET/LABELS is closures
+(vm-6).  The CONDITION SYSTEM (HANDLER-BIND/HANDLER-CASE/RESTART, hence IGNORE-ERRORS)
+is NOT in the WHAT list and is deferred as a separate concern — it needs handler-frame
+opcodes; the core NLX frame machinery here is the substrate it will build on.

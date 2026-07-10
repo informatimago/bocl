@@ -129,12 +129,19 @@ typedef enum {
     BC_NOP,
     BC_HALT,
     BC_MV_LIST,          /* appended in vm-5 (never renumber earlier opcodes) */
+    BC_CATCH_CLOSE,      /* appended in vm-5 part 2b: normal exit from a CATCH body */
+    BC_DYNAMIC_BIND,     /* vm-5 part 2b: bind a special var (constant sym), push a frame */
+    BC_DYNAMIC_UNBIND,   /* vm-5 part 2b: normal exit — restore the top special binding */
+    BC_UNWIND_NORMAL,    /* vm-5 part 2b: UNWIND-PROTECT normal completion (save + to cleanup) */
+    BC_UNWIND_END,       /* vm-5 part 2b: end of an UNWIND-PROTECT cleanup (restore / cascade) */
     BC_OPCODE_COUNT
 } bytecode_op_t;
 
 /* Current byte-code format version — bumped when the opcode encodings change so a
-   byte-code fasl (vm-8) can refuse an incompatible image.  v2: added BC_MV_LIST. */
-#define BYTECODE_VERSION 2
+   byte-code fasl (vm-8) can refuse an incompatible image.  v2: BC_MV_LIST.
+   v3: BC_CATCH_CLOSE + CATCH_OPEN/THROW.  v4: BC_DYNAMIC_BIND/UNBIND.
+   v5: BC_UNWIND_PROTECT + BC_UNWIND_NORMAL/END. */
+#define BYTECODE_VERSION 5
 
 /* ---- Arity descriptor -------------------------------------------------------
    A compiled function's argument shape, packed in a fixnum so the VM's entry

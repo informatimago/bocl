@@ -623,18 +623,21 @@
     (:call       (%vm-gen-call (cadr node) (cddr node) cs))
     (:call-named (%vm-gen-call-named (cadr node) (cddr node) cs))
     (:function   (%vm-gen-function (cadr node) cs))
-    (:let        (%vm-gen-let (cadr node) (caddr node) cs))
-    (:let*       (%vm-gen-let (cadr node) (caddr node) cs))
+    (:let        (%vm-gen-let (cadr node) (caddr node) cs nil))
+    (:let*       (%vm-gen-let (cadr node) (caddr node) cs t))
     (:block      (%vm-gen-block (cadr node) (caddr node) cs))
     (:return-from(%vm-gen-return-from (cadr node) (caddr node) cs))
     (:tagbody    (%vm-gen-tagbody (cadr node) cs))
     (:go         (%vm-gen-go (cadr node) cs))
     (:mv-call    (%vm-gen-mv-call (cadr node) (cddr node) cs))
     (:mv-prog1   (%vm-gen-mv-prog1 (cadr node) (cddr node) cs))
+    (:catch      (%vm-gen-catch (cadr node) (caddr node) cs))
+    (:throw      (%vm-gen-throw (cadr node) (caddr node) cs))
+    (:unwind-protect (%vm-gen-unwind-protect (cadr node) (caddr node) cs))
     (:make-closure (%vm-gen-make-closure (cadr node) cs))
     ((:flet :labels) (error "VM codegen: local functions are vm-6 (~S)" (car node)))
-    ((:catch :throw :unwind-protect :progv :load-time-value)
-     (error "VM codegen: control operator ~S is vm-5 (dynamic part pending)" (car node)))
+    ((:progv :load-time-value)
+     (error "VM codegen: control operator ~S is vm-5 (pending: progv/load-time-value)" (car node)))
     (t (error "VM codegen: unknown IR node ~S" node))))
 
 (defun %vm-gen-const (v cs)
@@ -703,19 +706,46 @@
   (%vm-emit-op cs (%vm-op :load-function)) (%vm-emit-uvar cs (%vm-cs-const cs spec))
   (%vm-cs-sp+ cs 1))
 
-(defun %vm-gen-let (entries body cs &optional (body-gen #'%vm-gen))
-  ;; Fresh slots: evaluate each init, store into its slot, drop the value; then body.
-  ;; (LET vs LET* differ only in the addresses the analyzer already baked in.)
-  ;; BODY-GEN lets an mv-context caller generate the body with %VM-GEN-FOR-VALUES.
-  (dolist (entry entries)
-    (case (car entry)
-      (:lex (%vm-gen (caddr entry) cs)                  ; init (+1)
-            (%vm-emit-op cs (%vm-op :store-local))
-            (%vm-emit-uvar cs 0) (%vm-emit-uvar cs (cadr entry))  ; STORE-LOCAL 0 idx (net 0)
-            (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))    ; drop (net 0 overall)
-      (:special (error "VM codegen: dynamic (special) LET binding is vm-5 part 2"))
-      (t (error "VM codegen: bad LET entry ~S" entry))))
-  (funcall body-gen body cs))
+(defun %vm-gen-lex-bind (entry cs)
+  "Bind one lexical LET entry: init -> fresh slot (net 0 stack effect)."
+  (%vm-gen (caddr entry) cs)                            ; init (+1)
+  (%vm-emit-op cs (%vm-op :store-local))
+  (%vm-emit-uvar cs 0) (%vm-emit-uvar cs (cadr entry))  ; STORE-LOCAL 0 idx (leaves value)
+  (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))    ; drop -> net 0
+
+(defun %vm-gen-let (entries body cs sequential-p &optional (body-gen #'%vm-gen))
+  "Generate a LET (SEQUENTIAL-P nil) / LET* (t).  Lexical entries bind fresh slots;
+   (:special name init) entries dynamically bind a special var (save/restore via a
+   DYNAMIC_BIND frame that unwinds correctly on a non-local exit).  For LET the inits
+   are all evaluated before any special is bound (parallel); for LET* each binding
+   takes effect before the next init.  BODY-GEN lets an mv-context caller use
+   %VM-GEN-FOR-VALUES for the body."
+  (let ((nspecial 0))
+    (if sequential-p
+        (dolist (entry entries)                         ; LET*: bind each in order
+          (ecase (car entry)
+            (:lex (%vm-gen-lex-bind entry cs))
+            (:special
+             (%vm-gen (caddr entry) cs)                 ; value on top (+1)
+             (%vm-emit-op cs (%vm-op :dynamic-bind))
+             (%vm-emit-uvar cs (%vm-cs-const cs (cadr entry))) (%vm-cs-sp+ cs -1)
+             (incf nspecial))))
+        (let ((special-syms '()))                       ; LET: all inits first, then bind
+          (dolist (entry entries)
+            (ecase (car entry)
+              (:lex (%vm-gen-lex-bind entry cs))
+              (:special (%vm-gen (caddr entry) cs)       ; leave value on the stack (+1)
+                        (push (cadr entry) special-syms))))  ; reversed = last entry first
+          (dolist (sym special-syms)                    ; matches stack top-down
+            (%vm-emit-op cs (%vm-op :dynamic-bind))
+            (%vm-emit-uvar cs (%vm-cs-const cs sym)) (%vm-cs-sp+ cs -1)
+            (incf nspecial))))
+    ;; Each active special binding is a dynamic frame a lexical exit must unwind.
+    (dotimes (i nspecial) (%vm-cs-push-control cs (list :dframe :dbind)))
+    (funcall body-gen body cs)                          ; body value on top
+    (dotimes (i nspecial) (%vm-cs-pop-control cs))
+    (dotimes (i nspecial)                               ; unbind (LIFO); no stack effect
+      (%vm-emit-op cs (%vm-op :dynamic-unbind)))))
 
 ;;; --- multiple values: MULTIPLE-VALUE-CALL / -PROG1 (hence -BIND / -LIST / NTH-VALUE) ---
 ;;; A "producer" leaves its PRIMARY on the stack and its FULL value set in the MV
@@ -723,7 +753,8 @@
 ;;; single-valued leaves so BC-MV-LIST (which reads the buffer) captures all values.
 (defun %vm-gen-for-values (node cs)
   (case (car node)
-    ((:call :call-named :mv-call :mv-prog1) (%vm-gen node cs))   ; sets the MV buffer
+    ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect)
+     (%vm-gen node cs))                                          ; sets the MV buffer
     (:if
      (let ((l-else (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
        (%vm-gen (cadr node) cs)
@@ -742,7 +773,8 @@
              (if (cdr r)
                  (progn (%vm-gen (car r) cs) (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))
                  (%vm-gen-for-values (car r) cs))))))
-    ((:let :let*) (%vm-gen-let (cadr node) (caddr node) cs #'%vm-gen-for-values))
+    (:let  (%vm-gen-let (cadr node) (caddr node) cs nil #'%vm-gen-for-values))
+    (:let* (%vm-gen-let (cadr node) (caddr node) cs t   #'%vm-gen-for-values))
     (t   ; single-valued leaf (const/lref/gref/lset/gset/function/block/tagbody/...)
      (%vm-gen node cs)
      (%vm-emit-op cs (%vm-op :values)) (%vm-emit-u8 cs 1))))     ; sync MV buffer = {top}
@@ -759,6 +791,51 @@
     (%vm-emit-op cs (%vm-op :call-named))              ; (apply callee appended)
     (%vm-emit-uvar cs (%vm-cs-const cs 'apply)) (%vm-emit-u8 cs 2)
     (%vm-cs-sp+ cs (- 1 2))))
+
+;;; --- dynamic NLX: CATCH / THROW (vm-5 part 2b) ---
+;;; CATCH is dynamically scoped — a runtime frame on g_frame_stack whose setjmp is the
+;;; THROW landing point.  CATCH_OPEN takes a jump-style operand (offset to the handler).
+(defun %vm-gen-catch (tag-ir body-ir cs)
+  (let ((l-handler (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+    (%vm-gen tag-ir cs)                                   ; push tag (+1)
+    (%vm-emit-jump cs (%vm-op :catch-open) l-handler)     ; CATCH_OPEN pops the tag
+    (%vm-cs-sp+ cs -1)
+    (let ((base (%vm-cs-sp cs)))
+      (%vm-cs-push-control cs (list :dframe :catch))      ; a lexical exit must pop this frame
+      (%vm-gen-for-values body-ir cs)                     ; body value + MV buffer (sp = base+1)
+      (%vm-cs-pop-control cs)
+      (%vm-emit-op cs (%vm-op :catch-close))              ; drop the frame; value stays
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-emit-label cs l-handler)                       ; THROW resume: VM pushed the primary
+      (%vm-cs-set-sp cs (1+ base))
+      (%vm-emit-label cs l-end))))
+
+(defun %vm-gen-throw (tag-ir value-ir cs)
+  (let ((s (%vm-cs-sp cs)))
+    (%vm-gen tag-ir cs)                                   ; push tag
+    (%vm-gen-for-values value-ir cs)                      ; push primary + set MV buffer
+    (%vm-emit-op cs (%vm-op :throw))                      ; never returns
+    (%vm-cs-set-sp cs (1+ s))))                            ; phantom value (dead continuation)
+
+;;; UNWIND-PROTECT: the cleanup runs on BOTH normal completion and any non-local exit
+;;; through the protected form.  A frame_protect on g_frame_stack catches the unwind;
+;;; UNWIND_NORMAL / UNWIND_END drive the normal path (save protected values, run
+;;; cleanup for effect, restore) and the unwind path (run cleanup, continue cascade).
+(defun %vm-gen-unwind-protect (protected-ir cleanup-ir cs)
+  (let ((l-cleanup (%vm-cs-label cs)) (l-after (%vm-cs-label cs)))
+    (%vm-emit-jump cs (%vm-op :unwind-protect) l-cleanup) ; open frame; handler_sp = base
+    (let ((base (%vm-cs-sp cs)))
+      (%vm-cs-push-control cs (list :dframe :uprotect cleanup-ir)) ; lexical exit runs cleanup+pops
+      (%vm-gen-for-values protected-ir cs)               ; protected value + MV (sp = base+1)
+      (%vm-cs-pop-control cs)
+      (%vm-emit-op cs (%vm-op :unwind-normal))           ; save, drop frame, sp -> base
+      (%vm-cs-set-sp cs base)
+      (%vm-emit-label cs l-cleanup)                      ; unwind path resumes here too
+      (%vm-gen cleanup-ir cs)                            ; cleanup for effect (+1)
+      (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)  ; discard cleanup value
+      (%vm-emit-op cs (%vm-op :unwind-end))              ; normal: restore value; unwind: cascade
+      (%vm-cs-set-sp cs (1+ base))                       ; protected value back on top
+      (%vm-emit-label cs l-after))))
 
 (defun %vm-gen-make-closure (lambda-ir cs)
   "vm-5: a NON-capturing LAMBDA in value position — compile it to a standalone
@@ -807,6 +884,22 @@
     (%vm-emit-op cs (%vm-op :load-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
     (%vm-cs-sp+ cs 1)))                                    ; block value on top (sp = base+1)
 
+(defun %vm-emit-unwind-to (cs target-scope)
+  "Emit the dynamic-frame unwinds for every dynamic frame between here and
+   TARGET-SCOPE (exclusive), innermost first — so a lexical RETURN-FROM/GO that
+   crosses CATCH / UNWIND-PROTECT / special bindings runs their cleanups and pops
+   their frames, exactly as a runtime non-local exit would.  (These pops/cleanups
+   are net-0 on the operand stack.)"
+  (dolist (s (svref cs 6))
+    (when (eq s target-scope) (return))
+    (when (eq (car s) :dframe)
+      (case (cadr s)
+        (:dbind    (%vm-emit-op cs (%vm-op :dynamic-unbind)))
+        (:catch    (%vm-emit-op cs (%vm-op :catch-close)))
+        (:uprotect (%vm-gen (caddr s) cs)                  ; run the cleanup for effect
+                   (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
+                   (%vm-emit-op cs (%vm-op :catch-close)))))))  ; then pop the protect frame
+
 (defun %vm-gen-return-from (name value-ir cs)
   (let ((scope (%vm-cs-find-block cs name)))
     (unless scope
@@ -816,6 +909,7 @@
       (%vm-gen value-ir cs)                                ; value on top (sp = site+1)
       (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
       (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)    ; value -> slot, sp = site
+      (%vm-emit-unwind-to cs scope)                       ; unwind crossed dynamic frames
       (%vm-emit-drop cs (- site base))                    ; cut intervening -> sp = base
       (%vm-emit-jump cs (%vm-op :jump) l-end)
       (%vm-cs-set-sp cs (1+ site)))))                      ; phantom value for dead continuation
@@ -840,6 +934,7 @@
     (unless scope
       (error "VM codegen: GO ~S has no lexically visible tag (escaping is vm-6)" tag))
     (let ((base (cadr scope)) (label (cdr (assoc tag (caddr scope) :test #'eql))))
+      (%vm-emit-unwind-to cs scope)                       ; unwind crossed dynamic frames
       (%vm-emit-drop cs (- site base))                    ; cut to tagbody base
       (%vm-emit-jump cs (%vm-op :jump) label)
       (%vm-cs-set-sp cs (1+ site)))))                      ; phantom value for dead continuation
