@@ -28,3 +28,33 @@ UNWIND-PROTECT cleanup-on-throw, multiple values, PROGV; parity with the tree-wa
 incl. the must-control / must-restart style cases.
 
 DEPENDS ON: vm-4.
+
+====================================================================
+PROGRESS (v1.8.4, branch vm) — PART 1 of 2: lexical control done.
+
+Lexical (non-escaping) control now compiles to byte-code JUMPs — no frames.  Since
+compiled closures are vm-6, EVERY block/tag in a single compiled function is
+non-escaping, so this is complete for the current VM:
+- BLOCK / RETURN-FROM: forward JUMP to the block end; the exit value travels through
+  a scratch local slot (allocated beyond the analyzer's n-locals) so the normal-fall
+  and RETURN-FROM paths converge.  A RETURN-FROM taken from inside a sub-expression
+  first CUTS the operand stack back to the block base (DROP, chunked to u8) — the VM
+  is a stack machine, so the intervening partial values must be discarded.
+- TAGBODY / GO: each tag is a label; GO cuts the stack to the tagbody base then JUMPs.
+  TAGBODY returns NIL.  A codegen-time control-scope stack (in the compiler state)
+  resolves RETURN-FROM/GO to the enclosing block/tag; escaping (via a closure) errors
+  clearly (vm-6).
+This lets the VM run real LOOPS: DOTIMES / DO / DOLIST (which macroexpand to
+TAGBODY/GO/BLOCK) and early RETURN-FROM out of a loop all run and iterate without C
+recursion.  Verified: tests/test_misc.c::test_vm_control (differential vs the
+tree-walker, incl. a 1000-iteration countdown summing to 500500).  Full suite green.
+
+REMAINING (PART 2 — dynamic NLX, next commit): CATCH/THROW, UNWIND-PROTECT, dynamic
+(special) LET/LET*/PROGV binding save-restore, and MULTIPLE-VALUE-CALL / -PROG1
+(hence MULTIPLE-VALUE-BIND/LIST, NTH-VALUE).  These need the setjmp/longjmp frame
+machinery from eval.c (Frame + g_frame_stack; push_frame/pop_frame/find_catch_frame/
+unwind_next_frame are static and must be exported) wired into the VM loop (new
+opcode handlers BLOCK_OPEN/CATCH_OPEN/THROW/UNWIND_PROTECT/UNWIND_LEAVE/MV_*), plus
+lifting the &optional-default/supplied-p/&key/&aux restriction with a prologue.  MV
+codegen needs an mv-context threaded through %VM-GEN so single-valued tails set the
+MultipleValues buffer.  (values) the FUNCTION already works via CALL-NAMED.

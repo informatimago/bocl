@@ -537,10 +537,11 @@
     (nreverse out)))
 
 ;;; --- compiler state (CS): a mutable vector ---
-;;;   0 code-rev  (asm items, newest first)   3 sp        (current stack depth)
-;;;   1 consts    (pool, in order)            4 max-sp    (high-water)
-;;;   2 nconsts                               5 label-ctr
-(defun %vm-cs-new () (vector '() '() 0 0 0 0))
+;;;   0 code-rev  (asm items, newest first)   4 max-sp    (high-water)
+;;;   1 consts    (pool, in order)            5 label-ctr
+;;;   2 nconsts                               6 control-scopes (block/tagbody, innermost first)
+;;;   3 sp        (current stack depth)       7 nlocals   (grows as scratch slots are taken)
+(defun %vm-cs-new (nlocals) (vector '() '() 0 0 0 0 '() nlocals))
 (defun %vm-cs-emit (cs item) (setf (svref cs 0) (cons item (svref cs 0))))
 (defun %vm-cs-sp+ (cs d)
   (let ((s (+ (svref cs 3) d)))
@@ -556,6 +557,23 @@
           (setf (svref cs 1) (append (svref cs 1) (list value)))
           (setf (svref cs 2) (1+ (svref cs 2)))))))
 (defun %vm-cs-label (cs) (prog1 (svref cs 5) (setf (svref cs 5) (1+ (svref cs 5)))))
+(defun %vm-cs-scratch (cs)
+  "Allocate a fresh local slot beyond the analyzer's lexicals (e.g. a BLOCK result
+   cell); grows the function's N-LOCALS."
+  (prog1 (svref cs 7) (setf (svref cs 7) (1+ (svref cs 7)))))
+(defun %vm-cs-nlocals (cs) (svref cs 7))
+;;; control scopes (block / tagbody) — innermost first, for lexical RETURN-FROM / GO:
+;;;   (:block name base-sp result-slot end-label)
+;;;   (:tagbody base-sp ((tag . label) ...))
+(defun %vm-cs-push-control (cs scope) (setf (svref cs 6) (cons scope (svref cs 6))))
+(defun %vm-cs-pop-control  (cs)       (setf (svref cs 6) (cdr (svref cs 6))))
+(defun %vm-cs-find-block (cs name)
+  (dolist (s (svref cs 6) nil)
+    (when (and (eq (car s) :block) (eql (cadr s) name)) (return s))))
+(defun %vm-cs-find-tag (cs tag)
+  (dolist (s (svref cs 6) nil)
+    (when (eq (car s) :tagbody)
+      (let ((c (assoc tag (caddr s) :test #'eql))) (when c (return s))))))
 
 ;;; --- asm item emitters (item forms: (:op b) (:u8 n) (:uvar n) (:label l) (:jump op l)) ---
 (defun %vm-emit-op    (cs op)      (%vm-cs-emit cs (list :op op)))
@@ -607,11 +625,14 @@
     (:function   (%vm-gen-function (cadr node) cs))
     (:let        (%vm-gen-let (cadr node) (caddr node) cs))
     (:let*       (%vm-gen-let (cadr node) (caddr node) cs))
+    (:block      (%vm-gen-block (cadr node) (caddr node) cs))
+    (:return-from(%vm-gen-return-from (cadr node) (caddr node) cs))
+    (:tagbody    (%vm-gen-tagbody (cadr node) cs))
+    (:go         (%vm-gen-go (cadr node) cs))
     (:make-closure (error "VM codegen: closures are vm-6 (~S)" (car node)))
     ((:flet :labels) (error "VM codegen: local functions are vm-6 (~S)" (car node)))
-    ((:block :return-from :tagbody :go :catch :throw :unwind-protect
-      :mv-call :mv-prog1 :progv :load-time-value)
-     (error "VM codegen: control operator ~S is vm-5" (car node)))
+    ((:catch :throw :unwind-protect :mv-call :mv-prog1 :progv :load-time-value)
+     (error "VM codegen: control operator ~S is vm-5 (dynamic part pending)" (car node)))
     (t (error "VM codegen: unknown IR node ~S" node))))
 
 (defun %vm-gen-const (v cs)
@@ -693,6 +714,73 @@
       (t (error "VM codegen: bad LET entry ~S" entry))))
   (%vm-gen body cs))
 
+;;; --- lexical control: BLOCK / RETURN-FROM / TAGBODY / GO as byte-code jumps ---
+;;; Within a single compiled function (no compiled closures until vm-6) every block
+;;; and tag is NON-ESCAPING, so an exit is a forward/backward JUMP.  Because the VM
+;;; is a stack machine, an exit taken from inside a sub-expression must first CUT the
+;;; operand stack back to the block/tagbody base; the exit value travels through a
+;;; scratch local slot so both the normal and the RETURN-FROM path converge.
+
+(defun %vm-emit-drop (cs n)
+  "Pop N values off the operand stack (DROP's count is u8; chunk if > 255)."
+  (when (> n 0)
+    (let ((remaining n))
+      (loop while (> remaining 0) do
+        (let ((k (min remaining 255)))
+          (%vm-emit-op cs (%vm-op :drop)) (%vm-emit-u8 cs k)
+          (setq remaining (- remaining k))))
+      (%vm-cs-sp+ cs (- n)))))
+
+(defun %vm-gen-block (name body-ir cs)
+  (let* ((base  (%vm-cs-sp cs))
+         (slot  (%vm-cs-scratch cs))
+         (l-end (%vm-cs-label cs)))
+    (%vm-cs-push-control cs (list :block name base slot l-end))
+    (%vm-gen body-ir cs)                                   ; value on top (sp = base+1)
+    (%vm-cs-pop-control cs)
+    (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
+    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)      ; body value -> slot, sp = base
+    (%vm-emit-label cs l-end)
+    (%vm-emit-op cs (%vm-op :load-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
+    (%vm-cs-sp+ cs 1)))                                    ; block value on top (sp = base+1)
+
+(defun %vm-gen-return-from (name value-ir cs)
+  (let ((scope (%vm-cs-find-block cs name)))
+    (unless scope
+      (error "VM codegen: RETURN-FROM ~S has no lexically visible block (escaping is vm-6)" name))
+    (let ((base (caddr scope)) (slot (cadddr scope)) (l-end (nth 4 scope))
+          (site (%vm-cs-sp cs)))
+      (%vm-gen value-ir cs)                                ; value on top (sp = site+1)
+      (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
+      (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)    ; value -> slot, sp = site
+      (%vm-emit-drop cs (- site base))                    ; cut intervening -> sp = base
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-cs-set-sp cs (1+ site)))))                      ; phantom value for dead continuation
+
+(defun %vm-gen-tagbody (items cs)
+  (let* ((base (%vm-cs-sp cs))
+         (tag-labels (let ((acc '()))
+                       (dolist (it items (nreverse acc))
+                         (when (eq (car it) :tag)
+                           (push (cons (cadr it) (%vm-cs-label cs)) acc))))))
+    (%vm-cs-push-control cs (list :tagbody base tag-labels))
+    (dolist (it items)
+      (case (car it)
+        (:tag  (%vm-emit-label cs (cdr (assoc (cadr it) tag-labels :test #'eql))))
+        (:stmt (%vm-gen (cadr it) cs)                      ; statement value (+1)
+               (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))))  ; ... dropped (effect)
+    (%vm-cs-pop-control cs)
+    (%vm-gen-const nil cs)))                               ; TAGBODY returns NIL
+
+(defun %vm-gen-go (tag cs)
+  (let ((scope (%vm-cs-find-tag cs tag)) (site (%vm-cs-sp cs)))
+    (unless scope
+      (error "VM codegen: GO ~S has no lexically visible tag (escaping is vm-6)" tag))
+    (let ((base (cadr scope)) (label (cdr (assoc tag (caddr scope) :test #'eql))))
+      (%vm-emit-drop cs (- site base))                    ; cut to tagbody base
+      (%vm-emit-jump cs (%vm-op :jump) label)
+      (%vm-cs-set-sp cs (1+ site)))))                      ; phantom value for dead continuation
+
 ;;; --- top-level: analyze + generate + box ---
 (defun %vm-pack-arity (a)
   "(:arity nreq nopt rest-p key-p aok-p) -> the BC_ARITY_PACK fixnum."
@@ -720,7 +808,7 @@
          (params (getf plist :params))
          (body   (getf plist :body))
          (source (getf plist :source))
-         (cs     (%vm-cs-new)))
+         (cs     (%vm-cs-new (getf plist :n-locals))))
     (%vm-check-core-lambda-list params)
     (%vm-gen body cs)
     (%vm-emit-op cs (%vm-op :return))
@@ -731,7 +819,7 @@
      (make-array (svref cs 2) :initial-contents (svref cs 1))
      (%vm-pack-arity (getf plist :arity))
      (max 1 (svref cs 4))                             ; max-stack (>= 1)
-     (getf plist :n-locals)
+     (%vm-cs-nlocals cs)                              ; incl. scratch slots (BLOCK results)
      source)))
 
 (defun %vm-compile (lambda-expr)

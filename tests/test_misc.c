@@ -663,6 +663,51 @@ static void test_vm_codegen(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-5 (part 1): lexical control — BLOCK/RETURN-FROM/TAGBODY/GO as jumps -- */
+/* Non-escaping within a single compiled function (closures are vm-6), so these
+   compile to byte-code jumps with an operand-stack cut + a scratch result slot.
+   VM4-CMP proves each compiled result equals the tree-walker's.  Loop MACROS
+   (DOTIMES / DO / DOLIST) expand to TAGBODY/GO/BLOCK, so they exercise this path. */
+static void test_vm_control(void){
+    uword pool = open_live_pool();
+    e("(unless (fboundp 'vm4-cmp)"
+      "  (defun vm4-cmp (lam args)"
+      "    (equal (apply (%vm-compile lam) args) (apply (eval (list 'function lam)) args))))");
+
+    /* BLOCK value + RETURN-FROM (top / mid-expression / conditional / nested) */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (block b (+ x 1))) '(5))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (block b (return-from b 99) x)) '(5))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (block b (+ 1 (return-from b 42)) 7)) '(5))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (x) (block b (if (> x 0) (return-from b 'pos) 'neg))) '(3))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda () (block o (block i (return-from o 'out)) 'never)) '())"));
+
+    /* TAGBODY / GO hand-written loop */
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (n)"
+              "   (let ((i 0) (s 0))"
+              "     (block nil (tagbody top (if (> i n) (return nil))"
+              "                         (setq s (+ s i)) (setq i (+ i 1)) (go top)))"
+              "     s)) '(6))"));
+    /* loop macros expand to TAGBODY/GO/BLOCK */
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s i))))) '(6))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (n) (do ((i 0 (+ i 1)) (a 1 (* a 2))) ((= i n) a))) '(5))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (l) (let ((s 0)) (dolist (x l s) (setq s (+ s x))))) '((3 4 5)))"));
+    /* early RETURN-FROM out of a loop */
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (l) (block f (dolist (x l) (if (> x 3) (return-from f x))) nil))"
+              "         '((1 2 5 9)))"));
+    /* a compiled countdown loop actually iterates (no C-stack recursion) */
+    TEST_EQ(eql, I(500500),
+            e("(funcall (%vm-compile '(lambda (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s (+ i 1))))))) 1000)"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -674,6 +719,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm execute",          test_vm_execute)
     TEST_CASE("vm analyze",          test_vm_analyze)
     TEST_CASE("vm codegen",          test_vm_codegen)
+    TEST_CASE("vm control",          test_vm_control)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
