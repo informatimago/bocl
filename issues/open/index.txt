@@ -57,6 +57,10 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
+*** BYTE-CODE COMPILER (plan-2): vm-1/vm-2 DONE (on branch `vm`, v1.8.1).  Before
+    implementing vm-3..vm-9, READ issues/open/vm-COMPILER-PLAN.md — the design
+    decisions, IR, conventions, file map and per-phase plan.  Continue on branch vm. ***
+
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
 hot-3-frame-representation.issue     (plan-3)
