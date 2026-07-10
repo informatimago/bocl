@@ -163,6 +163,12 @@ typedef enum {
 #define BC_ARITY_AOK_P(a)      (((a) >> 18) & 1)
 #define BC_ARITY_PACK(req,opt,rest,key,aok) \
     ( ((req)&0xff) | (((opt)&0xff)<<8) | ((rest)?1<<16:0) | ((key)?1<<17:0) | ((aok)?1<<18:0) )
+/* bit 19 — RAW entry (vm-6 part 2): the VM binds the WHOLE argument list into slot 0
+   and does no other parameter processing; a compiled PROLOGUE destructures it into the
+   analyzer's slots.  Used for lambda lists the fast entry can't express (an &optional
+   with a non-NIL default or supplied-p, &key, or &aux). */
+#define BC_ARITY_RAW           (1 << 19)
+#define BC_ARITY_RAW_P(a)      (((a) >> 19) & 1)
 
 /* ---- Compiled-function object ----------------------------------------------
    struct CompiledFunction / CompiledClosure live in kernel_types.h; they are

@@ -191,7 +191,13 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     Ref* K = constants->slots->array.elements->elements;   /* constant pool, direct */
 
     /* --- bind arguments into locals[0..] : required, optional, rest --- */
-    {   word req = BC_ARITY_REQUIRED(arity), opt = BC_ARITY_OPTIONAL(arity);
+    if(BC_ARITY_RAW_P(arity)){
+        /* RAW entry: the whole arg list into slot 0; a compiled prologue binds the
+           rest (defaults / supplied-p / &key / &aux) into the analyzer's slots. */
+        L[0] = arguments;
+        gc_write_barrier(locals->slots->array.elements);
+    } else {
+        word req = BC_ARITY_REQUIRED(arity), opt = BC_ARITY_OPTIONAL(arity);
         int rest = BC_ARITY_REST_P(arity);
         Ref a = arguments; word li = 0;
         for(word i=0;i<req;i++){

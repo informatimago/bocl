@@ -878,6 +878,26 @@ static void test_vm_closures(void){
     TEST_EQ(equal, e("'(2 4 6)"),
             e("(mapcar (funcall (%vm-compile '(lambda (k) (lambda (x) (* x k)))) 2) '(1 2 3))"));
 
+    /* --- vm-6 part 2: the extended lambda list via the RAW-entry + prologue path.
+       &optional with a non-NIL default / supplied-p, &key, &aux — all compared to the
+       tree-walker on the same (well-formed) argument lists. --- */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x &optional (y 10)) (list x y)) '(1))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x &optional (y 10)) (list x y)) '(1 2))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&optional (y 0 yp)) (list y yp)) '(5))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&optional (y 0 yp)) (list y yp)) '())"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x &optional (y (* x 2))) (list x y)) '(3))"));  /* default sees x */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&key a b) (list a b)) '(:a 1 :b 2))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&key a b) (list a b)) '(:b 2 :a 1))"));          /* order */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&key (a 9)) a) '())"));                          /* key default */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&key (a 0 ap)) (list a ap)) '(:a 7))"));         /* key supplied-p */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&key (a 0 ap)) (list a ap)) '())"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x &optional (y 2) &key (z 3)) (list x y z)) '(1 7 :z 9))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x &optional (y 2) &key (z 3)) (list x y z)) '(1))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x &aux (y (+ x 1))) (list x y)) '(5))"));         /* &aux */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (&rest r &key a) (list r a)) '(:a 1))"));          /* &rest + &key */
+    /* a closure capturing an &optional parameter bound by the prologue */
+    TEST_EQ(eql, I(10), e("(funcall (%vm-compile '(lambda (&optional (n 10)) (funcall (lambda () n)))))"));
+
     close_live_pool(pool);
 }
 

@@ -986,26 +986,78 @@
           (if (nth 4 a)    (ash 1 17) 0)
           (if (nth 5 a)    (ash 1 18) 0)))
 
-(defun %vm-check-core-lambda-list (params)
-  "vm-4 runs the vm-2 entry sequence (required / &optional defaulting to NIL /
-   &rest) — it does NOT evaluate &optional defaults or supplied-p, nor &key/&aux.
-   Reject a lambda list that needs those so we never miscompile it (vm-5 lifts this)."
-  (dolist (opt (getf params :optional))
-    (when (or (caddr opt) (cadr opt))
-      (error "VM codegen: &optional default / supplied-p is vm-5")))
-  (when (getf params :key)
-    (error "VM codegen: &key parameters are vm-5"))
-  (when (getf params :aux)
-    (error "VM codegen: &aux parameters are vm-5")))
+(defun %vm-complex-lambda-list-p (params)
+  "T if the lambda list needs the RAW-entry + prologue path.  The fast VM entry does
+   required / &optional-defaulting-to-NIL / &rest only; an &optional with a non-NIL
+   default or a supplied-p var, &key, or &aux needs the prologue."
+  (or (getf params :key)
+      (getf params :aux)
+      (some (lambda (o) (or (caddr o) (cadr o))) (getf params :optional))))
+
+;;; --- lambda-list PROLOGUE (vm-6 part 2): destructure the raw arg list (slot AL,
+;;; put there by the RAW VM entry) into the analyzer's parameter slots. ---
+(defun %vm-gen-effect (ir cs)                          ; gen IR, drop its value
+  (%vm-gen ir cs) (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))
+
+(defun %vm-gen-prologue-optional (o al cs)
+  (let ((idx (car o)) (sidx (cadr o)) (def (caddr o))
+        (al-ref (list :lref 0 al))
+        (l-def (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+    (%vm-gen al-ref cs)                                 ; push AL (+1)
+    (%vm-emit-jump cs (%vm-op :jump-if-nil) l-def) (%vm-cs-sp+ cs -1)  ; no more args -> default
+    (let ((base (%vm-cs-sp cs)))
+      (%vm-gen-effect (list :lset 0 idx (list :call-named 'car al-ref)) cs)
+      (when sidx (%vm-gen-effect (list :lset 0 sidx '(:const t)) cs))
+      (%vm-gen-effect (list :lset 0 al (list :call-named 'cdr al-ref)) cs)
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-emit-label cs l-def) (%vm-cs-set-sp cs base)
+      (%vm-gen-effect (list :lset 0 idx (or def '(:const nil))) cs)
+      (when sidx (%vm-gen-effect (list :lset 0 sidx '(:const nil)) cs))
+      (%vm-emit-label cs l-end))))
+
+(defun %vm-gen-prologue-key (k al marker cs)
+  (let ((kw (car k)) (idx (cadr k)) (sidx (caddr k)) (def (cadddr k))
+        (al-ref (list :lref 0 al))
+        (l-sup (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+    ;; idx = (getf al kw marker); if it is the marker, the key was not supplied.
+    (%vm-gen-effect (list :lset 0 idx
+                          (list :call-named 'getf al-ref (list :const kw) (list :const marker))) cs)
+    (%vm-gen (list :call-named 'eq (list :lref 0 idx) (list :const marker)) cs)  ; eq? (+1)
+    (%vm-emit-jump cs (%vm-op :jump-if-nil) l-sup) (%vm-cs-sp+ cs -1)   ; not-eq -> supplied
+    (let ((base (%vm-cs-sp cs)))
+      (%vm-gen-effect (list :lset 0 idx (or def '(:const nil))) cs)
+      (when sidx (%vm-gen-effect (list :lset 0 sidx '(:const nil)) cs))
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-emit-label cs l-sup) (%vm-cs-set-sp cs base)
+      (when sidx (%vm-gen-effect (list :lset 0 sidx '(:const t)) cs))
+      (%vm-emit-label cs l-end))))
+
+(defun %vm-gen-prologue (params al marker cs)
+  (let ((al-ref (list :lref 0 al)))
+    (dolist (idx (getf params :required))              ; slot = (car al); al = (cdr al)
+      (%vm-gen-effect (list :lset 0 idx (list :call-named 'car al-ref)) cs)
+      (%vm-gen-effect (list :lset 0 al  (list :call-named 'cdr al-ref)) cs))
+    (dolist (o (getf params :optional)) (%vm-gen-prologue-optional o al cs))
+    (let ((r (getf params :rest)))                     ; rest = whatever is left (incl. keys)
+      (when r (%vm-gen-effect (list :lset 0 r al-ref) cs)))
+    (dolist (k (getf params :key)) (%vm-gen-prologue-key k al marker cs))
+    (dolist (a (getf params :aux))                     ; aux = sequential init
+      (%vm-gen-effect (list :lset 0 (car a) (or (cadr a) '(:const nil))) cs))))
 
 (defun %vm-compile-lambda (lir)
   "Generate a runnable CompiledFunction from a (:LAMBDA ...) IR node."
-  (let* ((plist  (cdr lir))
-         (params (getf plist :params))
-         (body   (getf plist :body))
-         (source (getf plist :source))
-         (cs     (%vm-cs-new (getf plist :n-locals))))
-    (%vm-check-core-lambda-list params)
+  (let* ((plist   (cdr lir))
+         (params  (getf plist :params))
+         (body    (getf plist :body))
+         (source  (getf plist :source))
+         (cs      (%vm-cs-new (getf plist :n-locals)))
+         (complex (%vm-complex-lambda-list-p params)))
+    (when complex
+      ;; RAW entry left the whole arg list in slot 0; move it to a scratch slot AL and
+      ;; destructure into the analyzer's parameter slots before the body runs.
+      (let ((al (%vm-cs-scratch cs)) (marker (list :vm-key-unsupplied)))
+        (%vm-gen-effect (list :lset 0 al (list :lref 0 0)) cs)
+        (%vm-gen-prologue params al marker cs)))
     (%vm-gen body cs)
     (%vm-emit-op cs (%vm-op :return))
     (values
@@ -1014,9 +1066,10 @@
       (cadr source)                                   ; lambda list (introspection)
       (%vm-assemble (svref cs 0))
       (make-array (svref cs 2) :initial-contents (svref cs 1))
-      (%vm-pack-arity (getf plist :arity))
+      (let ((a (%vm-pack-arity (getf plist :arity))))
+        (if complex (logior a (ash 1 19)) a))          ; RAW-entry bit (BC_ARITY_RAW)
       (max 1 (svref cs 4))                            ; max-stack (>= 1)
-      (%vm-cs-nlocals cs)                             ; incl. scratch slots (BLOCK results)
+      (%vm-cs-nlocals cs)                             ; incl. scratch slots
       source)
      (%vm-cs-max-depth cs))))                         ; deepest upvalue depth reached
 

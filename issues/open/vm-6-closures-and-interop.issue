@@ -64,3 +64,32 @@ errors on the rest).  Plan: a compiled PROLOGUE that fills defaults / matches ke
 into the analyzer's slots (a sentinel for "unsupplied" from the VM entry).  Also the
 stack-based fast APPLY + the no-C-recursion trampoline + VM stack-overflow signal, and
 genuine BC_TAIL_CALL.
+
+--------------------------------------------------------------------
+PROGRESS (v1.8.9, branch vm) — PART 2: the extended lambda list.
+
+&optional with a non-NIL default or supplied-p, &key, and &aux now compile on a
+compiled fn (the acceptance's "&optional/&rest/&key on a compiled fn" is met).
+
+- The obstacle was that the analyzer's slot layout (params AND supplied-p vars all get
+  slots in order) does not match the VM's positional binding (which only counts the
+  &optional VALUE slots and puts &rest at req+opt).  Fix = a RAW-ENTRY mode: a new
+  arity bit BC_ARITY_RAW (bit 19).  When set, the VM binds the WHOLE argument list into
+  slot 0 and does nothing else; a compiled PROLOGUE then destructures it into the
+  analyzer's actual slots.
+- The prologue (all built from ordinary IR fed back through %VM-GEN): required = car/cdr
+  down the list; &optional = if-args-left take (car) + set supplied-p T else the default
+  + supplied-p NIL; &rest = the remaining list; &key = (getf list kw <fresh-marker>),
+  marker => default + supplied-p NIL, else the value + supplied-p T; &aux = sequential
+  init.  Defaults/inits see the earlier params (they run as body code in the slots).
+- Only lambda lists that actually need it take the RAW path (%VM-COMPLEX-LAMBDA-LIST-P);
+  simple ones keep the fast VM entry.
+- Verified: tests/test_misc.c::test_vm_closures (extended) — &optional default/
+  supplied-p/default-sees-earlier-param, &key basic/order/default/supplied-p,
+  &optional+&key, &aux, &rest+&key, and a closure capturing an &optional param — all
+  differentially equal to the tree-walker.  Full suite green.
+
+REMAINING for this issue (PART 3): genuine BC_TAIL_CALL (a trampoline so a tail call
+to a compiled callee reuses the C frame — loops-as-recursion without C-stack growth),
+the stack-based fast APPLY (skip the arg-list re-cons), and the VM stack-overflow
+signal (BOCL:OUT-OF-STACK-MEMORY-ERROR).
