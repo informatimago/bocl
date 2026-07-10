@@ -466,6 +466,74 @@ static void test_vm_compiled_function(void){
     close_live_pool(pool);
 }
 
+/* vm-2: hand-assemble tiny byte-code functions and run them through the VM,
+   matching the tree-walker.  Opcode operands here are all < 128 (single-byte
+   uvarints / zig-zag svarints), so the byte arrays are literal. */
+static Ref vm_code_str(const uint8_t* bytes, size_t n){
+    Ref s = string_new((halfword)n);
+    memcpy(string_octets(s), bytes, n);
+    return s;
+}
+/* apply a compiled function to a Lisp arg-list, return the primary value */
+static Ref vm_call(Ref cf, const char* arglist_src){
+    MultipleValues r = {0};
+    kernel_apply(cf, e(arglist_src), &r);
+    return r.count>0 ? r.values[0] : NIL_Symbol;
+}
+static void test_vm_execute(void){
+    uword pool = open_live_pool();
+
+    /* (1) (lambda (x) (+ x 1)) : LOAD-LOCAL 0 0; PUSH-CONST 1; CALL-NAMED + 2; RETURN */
+    {   uint8_t bc[] = { BC_LOAD_LOCAL,0,0, BC_PUSH_CONST,1, BC_CALL_NAMED,0,2, BC_RETURN };
+        Ref cf = compiled_function_new(e("'vmadd1"), e("'(x)"),
+                    vm_code_str(bc,sizeof bc), e("(vector '+ 1)"),
+                    I(BC_ARITY_PACK(1,0,0,0,0)), I(2), I(1), NIL_Symbol);
+        add_to_live_pool(cf);
+        TEST_EQ(eql, I(42), vm_call(cf, "'(41)"));
+        TEST_EQ(eql, I(0),  vm_call(cf, "'(-1)"));
+    }
+
+    /* (2) (lambda (x) (if x 1 2)) : forward JUMP-IF-NIL + JUMP */
+    {   uint8_t bc[] = { BC_LOAD_LOCAL,0,0, BC_JUMP_IF_NIL,8, BC_PUSH_CONST,0,
+                         BC_JUMP,4, BC_PUSH_CONST,1, BC_RETURN };
+        Ref cf = compiled_function_new(e("'vmif"), e("'(x)"),
+                    vm_code_str(bc,sizeof bc), e("(vector 1 2)"),
+                    I(BC_ARITY_PACK(1,0,0,0,0)), I(1), I(1), NIL_Symbol);
+        add_to_live_pool(cf);
+        TEST_EQ(eql, I(1), vm_call(cf, "'(t)"));
+        TEST_EQ(eql, I(2), vm_call(cf, "'(nil)"));
+    }
+
+    /* (3) (lambda (l) (car l)) : CALL to a built-in */
+    {   uint8_t bc[] = { BC_LOAD_LOCAL,0,0, BC_CALL_NAMED,0,1, BC_RETURN };
+        Ref cf = compiled_function_new(e("'vmcar"), e("'(l)"),
+                    vm_code_str(bc,sizeof bc), e("(vector 'car)"),
+                    I(BC_ARITY_PACK(1,0,0,0,0)), I(1), I(1), NIL_Symbol);
+        add_to_live_pool(cf);
+        TEST_EQ(eql, I(99), vm_call(cf, "'((99 . 5))"));
+    }
+
+    /* (4) reverse via a backward-JUMP loop (car/cdr/cons + nil test + STORE-LOCAL) */
+    {   uint8_t bc[] = {
+            /*0 loop*/ BC_LOAD_LOCAL,0,0, BC_JUMP_IF_NIL,56,   /* if (null lst) goto done */
+            /*5*/      BC_LOAD_LOCAL,0,0, BC_CALL_NAMED,1,1,    /* (car lst)   [car=idx1] */
+            /*11*/     BC_LOAD_LOCAL,0,1, BC_CALL_NAMED,0,2,    /* (cons .. r) [cons=idx0] */
+            /*17*/     BC_STORE_LOCAL,0,1, BC_POP,              /* r = ...          */
+            /*21*/     BC_LOAD_LOCAL,0,0, BC_CALL_NAMED,2,1,    /* (cdr lst)   [cdr=idx2] */
+            /*27*/     BC_STORE_LOCAL,0,0, BC_POP,              /* lst = ...        */
+            /*31*/     BC_JUMP,65,                              /* goto loop (-33)  */
+            /*33 done*/BC_LOAD_LOCAL,0,1, BC_RETURN };          /* return r         */
+        Ref cf = compiled_function_new(e("'vmrev"), e("'(lst)"),
+                    vm_code_str(bc,sizeof bc), e("(vector 'cons 'car 'cdr)"),
+                    I(BC_ARITY_PACK(1,0,0,0,0)), I(3), I(2), NIL_Symbol);
+        add_to_live_pool(cf);
+        TEST_EQ(equal, e("'(3 2 1)"), vm_call(cf, "'((1 2 3))"));
+        TEST_EQ(eql,   NIL_Symbol,    vm_call(cf, "'(())"));
+    }
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -474,6 +542,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl load file",     test_cfasl_load_file)
     TEST_CASE("cfasl corpus",        test_cfasl_corpus)
     TEST_CASE("vm compiled-function", test_vm_compiled_function)
+    TEST_CASE("vm execute",          test_vm_execute)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

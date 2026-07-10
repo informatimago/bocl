@@ -63,7 +63,6 @@ hot-3-frame-representation.issue     (plan-3)
 hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
-vm-2-dispatch-core.issue             (plan-2)
 vm-3-compiler-frontend.issue         (plan-2) — builds on hot-2
 vm-4-codegen-core.issue              (plan-2)
 vm-5-codegen-control.issue           (plan-2)
