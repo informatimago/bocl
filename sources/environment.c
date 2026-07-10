@@ -181,7 +181,12 @@ Ref environment_find_variable(Ref name, Ref environment){
         Ref vars=env->variables;
         while(consp(vars)){
             Ref var=cons_car(vars);
-            if(eql(name,env_variable_wrapper_name(var))){
+            /* Fast path: lexical variables are the overwhelming majority; check
+               that type once and compare the name directly, avoiding the 6-way
+               env_variable_wrapper_name cascade (and its second class_of). */
+            if(env_lexical_variable_p(var)){
+                if(eql(name,env_lexical_variable_name_fast(var))){ return var; }
+            } else if(eql(name,env_variable_wrapper_name(var))){
                 return var;}
             vars=cons_cdr(vars);}
         environment=env->next_environment;}
@@ -221,7 +226,7 @@ bool env_special_variable_p(Ref object){
             || env_local_special_variable_p(object);}
 
 Ref env_variable_value(Ref variable){
-    if(env_lexical_variable_p(variable))       { return env_lexical_variable_value(variable); }
+    if(env_lexical_variable_p(variable))       { return env_lexical_variable_value_fast(variable); }
     if(env_local_special_variable_p(variable)) {
         /* Local-special is a dynamic binding: its current value is in the symbol's value cell. */
         return symbol_value(env_local_special_variable_name(variable)); }

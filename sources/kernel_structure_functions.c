@@ -79,6 +79,13 @@ Ref env_lexical_variable_value(Ref par_lexical_variable_instance){
     check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
     ensure_lexvar_indices();
     return par_lexical_variable_instance->slots->vector_of_object.elements[lexvar_value_idx];}
+/* Unchecked fast readers: caller guarantees env_lexical_variable_p is true.  The
+   indices are always populated here because a variable is made (which runs
+   ensure) before it can be read. */
+Ref env_lexical_variable_name_fast(Ref inst){
+    return inst->slots->vector_of_object.elements[lexvar_name_idx];}
+Ref env_lexical_variable_value_fast(Ref inst){
+    return inst->slots->vector_of_object.elements[lexvar_value_idx];}
 Ref set_env_lexical_variable_value(Ref par_new_value, Ref par_lexical_variable_instance){
     check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
     ensure_lexvar_indices();

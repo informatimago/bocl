@@ -11,6 +11,11 @@ Ref env_lexical_variable_name(Ref par_lexical_variable);
 Ref set_env_lexical_variable_name(Ref par_new_name, Ref par_lexical_variable);
 Ref env_lexical_variable_value(Ref par_lexical_variable);
 Ref set_env_lexical_variable_value(Ref par_new_value, Ref par_lexical_variable);
+/* hot-2: name/value readers WITHOUT the redundant check_type — for callers that
+   have ALREADY established env_lexical_variable_p (the variable-lookup hot path),
+   so a lookup pays one class_of, not two. */
+Ref env_lexical_variable_name_fast(Ref par_lexical_variable);
+Ref env_lexical_variable_value_fast(Ref par_lexical_variable);
 extern Ref CONSTANT_VARIABLE_Class;
 bool env_constant_variable_p(Ref par_object);
 Ref env_make_constant_variable(Ref par_name, Ref par_value);
