@@ -31,17 +31,28 @@ allocation bound** (GC ~2% prelude / ~12% loop code) — the VM is the real leve
   `%GLOBALLY-SPECIAL-P` kernel prim (`sources/bocl.c`) is the special-var predicate.
   Verified by `tests/test_misc.c::test_vm_analyze`.
 
-REMAINING: vm-4 (codegen core) → vm-5 (codegen control) →
+- **vm-4** — codegen core (v1.8.3). `%VM-COMPILE` lowers the analyzer IR to the
+  vm-2 ISA and boxes it via the new `%MAKE-COMPILED-FUNCTION` prim; runs on the VM.
+  Emitter + EQL constant pool + stack-depth tracking; single-pass assembler with
+  FIXED 5-octet jump displacements (code is an octet STRING — §3.4 resolved). New
+  prims `%MAKE-COMPILED-FUNCTION` / `%BYTECODE-OPCODES` (opcode numbers straight
+  from the C enum). Verified by `test_misc.c::test_vm_codegen` (differential vs the
+  tree-walker). No TCO yet (CALL+RETURN); closures/control/&key/&aux/special-LET
+  error clearly; COMPILE/COMPILE-FILE not rewired (vm-8).
+
+REMAINING: vm-5 (codegen control) →
 vm-6 (closures + interop) → vm-7 (CLOS inline cache) → vm-8 (byte-code fasl) →
 vm-9 (self-host prelude + validate). Issues in `issues/open/vm-*.issue`.
 
-**vm-4 starts here:** consume the `%VM-ANALYZE` IR (see §4 for the node set — note
-the actual `:let`/`:let*`/`:flet`/`:labels`/`:make-closure` shapes the analyzer
-emits, and that `(:lambda ...)` is a `:arity/:n-locals/:params/:body/:source`
-plist tagged by `:lambda`). Build the emitter + constant pool, lower non-control
-IR to the vm-2 opcodes, expose `%make-compiled-function`, reconcile the code
-representation (§3.4), and make `(compile nil '(lambda ...))` produce a runnable
-byte-code function.
+**vm-5 starts here:** the analyzer already emits the control IR nodes (`:block`,
+`:return-from`, `:tagbody`, `:go`, `:catch`, `:throw`, `:unwind-protect`,
+`:mv-call`, `:mv-prog1`, `:progv`, `:load-time-value`) and dynamic-bind LET
+entries (`(:special name init)`); `%VM-GEN` currently errors on all of them.
+Implement their codegen + the VM opcode handlers (BLOCK_OPEN/RETURN_FROM/
+CATCH_OPEN/THROW/UNWIND_PROTECT/UNWIND_LEAVE/MV_*), mirroring eval.c's Frame /
+setjmp machinery, plus dynamic (special) binding save/restore. Also lift the
+&optional-default / supplied-p / &key / &aux restriction from
+`%VM-CHECK-CORE-LAMBDA-LIST` by emitting a prologue.
 
 ---
 

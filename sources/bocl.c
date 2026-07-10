@@ -19,6 +19,7 @@
 #include "eval.h"
 #include "packages.h"
 #include "cfasl.h"
+#include "bytecode.h"
 #include <time.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
@@ -1584,6 +1585,56 @@ static void kernel_GLOBALLY_SPECIAL_P(unused Ref f, Ref arguments, MultipleValue
     Ref sym = cons_car(arguments);
     if(symbolp(sym) && special_variable_p(sym)){ results->values[0]=T_Symbol; }}
 
+/* (%MAKE-COMPILED-FUNCTION name lambda-list code constants arity max-stack
+   n-locals source) -> a CompiledFunction template the VM (bytecode_apply) runs.
+   The Lisp byte-code codegen (vm-4, bootstrap/vm-compiler.lisp) assembles CODE (an
+   octet string) + CONSTANTS (a simple-vector) and calls this to box them.  ARITY is
+   the BC_ARITY_PACK fixnum; MAX-STACK / N-LOCALS are fixnums. */
+static void kernel_MAKE_COMPILED_FUNCTION(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref name        = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref lambda_list = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref code        = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref constants   = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref arity       = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref max_stack   = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref n_locals    = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref source      = cons_car(arguments);
+    results->count = 1;
+    results->values[0] = compiled_function_new(name, lambda_list, code, constants,
+                                               arity, max_stack, n_locals, source);}
+
+/* (%BYTECODE-OPCODES) -> an alist ((:opcode-name . value) ...) plus
+   (:version . BYTECODE_VERSION), built straight from the C enum so the Lisp codegen
+   has a SINGLE source of truth for opcode numbers (no hard-coded magic constants
+   that could drift from bytecode.h). */
+static void kernel_BYTECODE_OPCODES(unused Ref f, unused Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    Ref a = NIL_Symbol;
+    #define OPC(kw,val) do { \
+        Ref _pair = cons(keyword_intern_cstring(kw), integer_from_word((word)(val))); \
+        add_to_live_pool(_pair); \
+        a = cons(_pair, a); add_to_live_pool(a); } while(0)
+    OPC("PUSH-CONST",BC_PUSH_CONST);  OPC("PUSH-NIL",BC_PUSH_NIL);
+    OPC("PUSH-T",BC_PUSH_T);          OPC("DUP",BC_DUP);
+    OPC("POP",BC_POP);                OPC("DROP",BC_DROP);
+    OPC("LOAD-LOCAL",BC_LOAD_LOCAL);  OPC("STORE-LOCAL",BC_STORE_LOCAL);
+    OPC("LOAD-GLOBAL",BC_LOAD_GLOBAL);OPC("STORE-GLOBAL",BC_STORE_GLOBAL);
+    OPC("LOAD-FUNCTION",BC_LOAD_FUNCTION);
+    OPC("JUMP",BC_JUMP);              OPC("JUMP-IF-NIL",BC_JUMP_IF_NIL);
+    OPC("JUMP-IF-NOT-NIL",BC_JUMP_IF_NOT_NIL);
+    OPC("CALL",BC_CALL);              OPC("CALL-NAMED",BC_CALL_NAMED);
+    OPC("TAIL-CALL",BC_TAIL_CALL);    OPC("RETURN",BC_RETURN);
+    OPC("VALUES",BC_VALUES);          OPC("MV-CALL",BC_MV_CALL);
+    OPC("MV-BIND",BC_MV_BIND);        OPC("BLOCK-OPEN",BC_BLOCK_OPEN);
+    OPC("RETURN-FROM",BC_RETURN_FROM);OPC("CATCH-OPEN",BC_CATCH_OPEN);
+    OPC("THROW",BC_THROW);            OPC("UNWIND-PROTECT",BC_UNWIND_PROTECT);
+    OPC("UNWIND-LEAVE",BC_UNWIND_LEAVE);OPC("MAKE-CLOSURE",BC_MAKE_CLOSURE);
+    OPC("LOAD-UPVAL",BC_LOAD_UPVAL);  OPC("NOP",BC_NOP);
+    OPC("HALT",BC_HALT);              OPC("VERSION",BYTECODE_VERSION);
+    #undef OPC
+    results->count = 1; results->values[0] = a;
+    close_live_pool(pool);}
+
 /* (ED &optional x) → NIL stub. */
 static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -1877,6 +1928,13 @@ void bocl_register_load(void){
     {   Ref sc=symbol_intern_cstring("%GLOBALLY-SPECIAL-P");
         set_symbol_function(sc,built_in_function_new(sc,
             list(S(SYMBOL),NULL),kernel_GLOBALLY_SPECIAL_P)); }
+    {   Ref sc=symbol_intern_cstring("%MAKE-COMPILED-FUNCTION");
+        set_symbol_function(sc,built_in_function_new(sc,
+            list(S(NAME),S(LAMBDALIST),S(CODE),S(CONSTANTS),
+                 S(ARITY),S(MAXSTACK),S(NLOCALS),S(SOURCE),NULL),
+            kernel_MAKE_COMPILED_FUNCTION)); }
+    {   Ref sc=symbol_intern_cstring("%BYTECODE-OPCODES");
+        set_symbol_function(sc,built_in_function_new(sc,NIL_Symbol,kernel_BYTECODE_OPCODES)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

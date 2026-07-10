@@ -57,11 +57,11 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-*** BYTE-CODE COMPILER (plan-2): vm-1/vm-2/vm-3 DONE (on branch `vm`, v1.8.2).  Before
-    implementing vm-4..vm-9, READ issues/open/vm-COMPILER-PLAN.md — the design
+*** BYTE-CODE COMPILER (plan-2): vm-1..vm-4 DONE (on branch `vm`, v1.8.3).  Before
+    implementing vm-5..vm-9, READ issues/open/vm-COMPILER-PLAN.md — the design
     decisions, IR, conventions, file map and per-phase plan.  Continue on branch vm.
-    vm-3 landed the Lisp analyzer (bootstrap/vm-compiler.lisp, %VM-ANALYZE); vm-4
-    (codegen core) consumes its IR next. ***
+    vm-3 = the Lisp analyzer (%VM-ANALYZE); vm-4 = codegen core (%VM-COMPILE runs
+    the everyday forms on the VM).  vm-5 (control / NLX codegen) is next. ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
@@ -69,8 +69,7 @@ hot-3-frame-representation.issue     (plan-3)
 hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
-vm-4-codegen-core.issue              (plan-2) — consumes vm-3's %VM-ANALYZE IR
-vm-5-codegen-control.issue           (plan-2)
+vm-5-codegen-control.issue           (plan-2) — control/NLX codegen on %VM-COMPILE
 vm-6-closures-and-interop.issue      (plan-2)
 vm-7-clos-inline-cache.issue         (plan-2)
 vm-8-bytecode-fasl.issue             (plan-2) — builds on cfasl-1..4

@@ -490,3 +490,252 @@
      (write-char #\) stream) (terpri stream))
     (t (format stream "~S~%" ir)))
   (values))
+
+;;; ===========================================================================
+;;; vm-4 — CODE GENERATION (core forms)
+;;; ---------------------------------------------------------------------------
+;;; Lower the analyzer's IR to byte-code for the vm-2 ISA and box it in a
+;;; CompiledFunction (%MAKE-COMPILED-FUNCTION).  The everyday, non-control path:
+;;; constants, variable/global refs, calls, IF, PROGN, LET/LET* (lexical), SETQ,
+;;; FUNCTION.  Closures / local functions are vm-6; control operators and dynamic
+;;; (special) LET binds are vm-5 — codegen errors on them for now.
+;;;
+;;; %VM-GEN(node cs) emits code that leaves NODE's single value on the operand
+;;; stack (VALUE context); an EFFECT context is VALUE + POP.  No tail-call yet
+;;; (CALL then RETURN — genuine TCO needs the vm-6 trampoline).
+;;; ===========================================================================
+
+;;; --- opcodes: one source of truth = the C enum via %BYTECODE-OPCODES ---
+(defvar *vm-opcodes* (%bytecode-opcodes))
+(defun %vm-op (name)
+  (let ((c (assoc name *vm-opcodes*)))
+    (if c (cdr c) (error "VM codegen: no such opcode ~S" name))))
+
+;;; --- LEB128 encoders ---
+(defun %vm-uvar-bytes (n)
+  "Minimal LEB128 unsigned encoding of N (a non-negative fixnum) -> octet list."
+  (let ((out '()))
+    (loop
+      (let ((b (logand n #x7f)))
+        (setq n (ash n -7))
+        (if (zerop n) (progn (push b out) (return))
+            (push (logior b #x80) out))))
+    (nreverse out)))
+
+(defun %vm-zigzag (n) (if (minusp n) (1- (* -2 n)) (* 2 n)))
+
+(defun %vm-svar5-bytes (offset)
+  "Fixed-width (5-octet) LEB128 of the zig-zag of OFFSET.  A fixed width lets the
+   assembler resolve jumps in a single position pass — no fixpoint — since every
+   jump instruction is exactly 6 bytes.  5 groups carry 35 bits, ample for any
+   in-function displacement.  (vm_read_uvar accepts the non-minimal encoding.)"
+  (let ((z (%vm-zigzag offset)) (out '()))
+    (dotimes (i 5)
+      (let ((b (logand z #x7f)))
+        (setq z (ash z -7))
+        (push (if (< i 4) (logior b #x80) b) out)))
+    (nreverse out)))
+
+;;; --- compiler state (CS): a mutable vector ---
+;;;   0 code-rev  (asm items, newest first)   3 sp        (current stack depth)
+;;;   1 consts    (pool, in order)            4 max-sp    (high-water)
+;;;   2 nconsts                               5 label-ctr
+(defun %vm-cs-new () (vector '() '() 0 0 0 0))
+(defun %vm-cs-emit (cs item) (setf (svref cs 0) (cons item (svref cs 0))))
+(defun %vm-cs-sp+ (cs d)
+  (let ((s (+ (svref cs 3) d)))
+    (setf (svref cs 3) s)
+    (when (> s (svref cs 4)) (setf (svref cs 4) s))))
+(defun %vm-cs-sp (cs) (svref cs 3))
+(defun %vm-cs-set-sp (cs s) (setf (svref cs 3) s))
+(defun %vm-cs-const (cs value)
+  "Intern VALUE in the constant pool (EQL dedup); return its index."
+  (let ((p (position value (svref cs 1) :test #'eql)))
+    (or p
+        (prog1 (svref cs 2)
+          (setf (svref cs 1) (append (svref cs 1) (list value)))
+          (setf (svref cs 2) (1+ (svref cs 2)))))))
+(defun %vm-cs-label (cs) (prog1 (svref cs 5) (setf (svref cs 5) (1+ (svref cs 5)))))
+
+;;; --- asm item emitters (item forms: (:op b) (:u8 n) (:uvar n) (:label l) (:jump op l)) ---
+(defun %vm-emit-op    (cs op)      (%vm-cs-emit cs (list :op op)))
+(defun %vm-emit-u8    (cs n)       (%vm-cs-emit cs (list :u8 n)))
+(defun %vm-emit-uvar  (cs n)       (%vm-cs-emit cs (list :uvar n)))
+(defun %vm-emit-label (cs lbl)     (%vm-cs-emit cs (list :label lbl)))
+(defun %vm-emit-jump  (cs op lbl)  (%vm-cs-emit cs (list :jump op lbl)))
+
+;;; --- assembler: asm items -> an octet string, jumps resolved ---
+(defun %vm-item-length (it)
+  (case (car it)
+    (:op 1) (:u8 1)
+    (:uvar (length (%vm-uvar-bytes (cadr it))))
+    (:label 0)
+    (:jump 6)))
+(defun %vm-item-bytes (it labels p)
+  (case (car it)
+    (:op   (list (logand (cadr it) #xff)))
+    (:u8   (list (logand (cadr it) #xff)))
+    (:uvar (%vm-uvar-bytes (cadr it)))
+    (:label '())
+    (:jump (cons (logand (cadr it) #xff)
+                 (%vm-svar5-bytes (- (cdr (assoc (caddr it) labels)) (+ p 6)))))))
+(defun %vm-assemble (code-rev)
+  (let ((items (reverse code-rev)) (labels '()) (pos 0))
+    (dolist (it items)                             ; pass 1: label positions
+      (when (eq (car it) :label) (push (cons (cadr it) pos) labels))
+      (setq pos (+ pos (%vm-item-length it))))
+    (let ((bytes '()) (p 0))                        ; pass 2: emit
+      (dolist (it items)
+        (let ((ib (%vm-item-bytes it labels p)))
+          (dolist (b ib) (push b bytes))
+          (setq p (+ p (length ib)))))
+      (map 'string #'code-char (nreverse bytes)))))
+
+;;; --- the codegen tree walk ---
+(defun %vm-gen (node cs)
+  "Emit code leaving NODE's value on the operand stack."
+  (case (car node)
+    (:const      (%vm-gen-const (cadr node) cs))
+    (:lref       (%vm-gen-lref (cadr node) (caddr node) cs))
+    (:gref       (%vm-gen-gref (cadr node) cs))
+    (:lset       (%vm-gen-lset (cadr node) (caddr node) (cadddr node) cs))
+    (:gset       (%vm-gen-gset (cadr node) (caddr node) cs))
+    (:if         (%vm-gen-if node cs))
+    (:progn      (%vm-gen-progn (cdr node) cs))
+    (:call       (%vm-gen-call (cadr node) (cddr node) cs))
+    (:call-named (%vm-gen-call-named (cadr node) (cddr node) cs))
+    (:function   (%vm-gen-function (cadr node) cs))
+    (:let        (%vm-gen-let (cadr node) (caddr node) cs))
+    (:let*       (%vm-gen-let (cadr node) (caddr node) cs))
+    (:make-closure (error "VM codegen: closures are vm-6 (~S)" (car node)))
+    ((:flet :labels) (error "VM codegen: local functions are vm-6 (~S)" (car node)))
+    ((:block :return-from :tagbody :go :catch :throw :unwind-protect
+      :mv-call :mv-prog1 :progv :load-time-value)
+     (error "VM codegen: control operator ~S is vm-5" (car node)))
+    (t (error "VM codegen: unknown IR node ~S" node))))
+
+(defun %vm-gen-const (v cs)
+  (cond ((null v) (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1))
+        ((eq v t) (%vm-emit-op cs (%vm-op :push-t))   (%vm-cs-sp+ cs 1))
+        (t (%vm-emit-op cs (%vm-op :push-const))
+           (%vm-emit-uvar cs (%vm-cs-const cs v))
+           (%vm-cs-sp+ cs 1))))
+
+(defun %vm-gen-lref (depth index cs)
+  (unless (eql depth 0) (error "VM codegen: upvalue reference (depth ~S) is vm-6" depth))
+  (%vm-emit-op cs (%vm-op :load-local)) (%vm-emit-uvar cs depth) (%vm-emit-uvar cs index)
+  (%vm-cs-sp+ cs 1))
+
+(defun %vm-gen-gref (sym cs)
+  (%vm-emit-op cs (%vm-op :load-global)) (%vm-emit-uvar cs (%vm-cs-const cs sym))
+  (%vm-cs-sp+ cs 1))
+
+(defun %vm-gen-lset (depth index val-ir cs)
+  (unless (eql depth 0) (error "VM codegen: upvalue assignment (depth ~S) is vm-6" depth))
+  (%vm-gen val-ir cs)                                  ; value on stack (+1)
+  (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs depth) (%vm-emit-uvar cs index))
+                                                        ; STORE-LOCAL leaves the value (net 0)
+
+(defun %vm-gen-gset (sym val-ir cs)
+  (%vm-gen val-ir cs)
+  (%vm-emit-op cs (%vm-op :store-global)) (%vm-emit-uvar cs (%vm-cs-const cs sym)))
+
+(defun %vm-gen-progn (forms cs)
+  (cond ((null forms) (%vm-gen-const nil cs))
+        (t (loop for rest on forms do
+             (%vm-gen (car rest) cs)
+             (when (cdr rest)                           ; drop non-final values
+               (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))))))
+
+(defun %vm-gen-if (node cs)
+  (let ((test (cadr node)) (then (caddr node)) (else (cadddr node))
+        (l-else (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+    (%vm-gen test cs)
+    (%vm-emit-jump cs (%vm-op :jump-if-nil) l-else) (%vm-cs-sp+ cs -1)  ; pops test
+    (let ((base (%vm-cs-sp cs)))
+      (%vm-gen then cs)                                  ; base -> base+1
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-emit-label cs l-else)
+      (%vm-cs-set-sp cs base)                            ; else runs with the test popped
+      (%vm-gen else cs)                                  ; base -> base+1
+      (%vm-emit-label cs l-end))))
+
+(defun %vm-gen-call-named (sym arg-irs cs)
+  (let ((n (length arg-irs)))
+    (dolist (a arg-irs) (%vm-gen a cs))                 ; args left-to-right (+n)
+    (%vm-emit-op cs (%vm-op :call-named)) (%vm-emit-uvar cs (%vm-cs-const cs sym))
+    (%vm-emit-u8 cs n)
+    (%vm-cs-sp+ cs (- 1 n))))                            ; pops n, pushes 1
+
+(defun %vm-gen-call (fn-ir arg-irs cs)
+  (let ((n (length arg-irs)))
+    (%vm-gen fn-ir cs)                                   ; callee (+1)
+    (dolist (a arg-irs) (%vm-gen a cs))                 ; args (+n)
+    (%vm-emit-op cs (%vm-op :call)) (%vm-emit-u8 cs n)
+    (%vm-cs-sp+ cs (- n))))                              ; pops callee+n, pushes 1 => -n
+
+(defun %vm-gen-function (spec cs)
+  (unless (symbolp spec)
+    (error "VM codegen: (FUNCTION ~S) — non-symbol function specs are vm-6" spec))
+  (%vm-emit-op cs (%vm-op :load-function)) (%vm-emit-uvar cs (%vm-cs-const cs spec))
+  (%vm-cs-sp+ cs 1))
+
+(defun %vm-gen-let (entries body cs)
+  ;; Fresh slots: evaluate each init, store into its slot, drop the value; then body.
+  ;; (LET vs LET* differ only in the addresses the analyzer already baked in.)
+  (dolist (entry entries)
+    (case (car entry)
+      (:lex (%vm-gen (caddr entry) cs)                  ; init (+1)
+            (%vm-emit-op cs (%vm-op :store-local))
+            (%vm-emit-uvar cs 0) (%vm-emit-uvar cs (cadr entry))  ; STORE-LOCAL 0 idx (net 0)
+            (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))    ; drop (net 0 overall)
+      (:special (error "VM codegen: dynamic (special) LET binding is vm-5"))
+      (t (error "VM codegen: bad LET entry ~S" entry))))
+  (%vm-gen body cs))
+
+;;; --- top-level: analyze + generate + box ---
+(defun %vm-pack-arity (a)
+  "(:arity nreq nopt rest-p key-p aok-p) -> the BC_ARITY_PACK fixnum."
+  (logior (logand (cadr a) #xff)
+          (ash (logand (caddr a) #xff) 8)
+          (if (cadddr a)   (ash 1 16) 0)
+          (if (nth 4 a)    (ash 1 17) 0)
+          (if (nth 5 a)    (ash 1 18) 0)))
+
+(defun %vm-check-core-lambda-list (params)
+  "vm-4 runs the vm-2 entry sequence (required / &optional defaulting to NIL /
+   &rest) — it does NOT evaluate &optional defaults or supplied-p, nor &key/&aux.
+   Reject a lambda list that needs those so we never miscompile it (vm-5 lifts this)."
+  (dolist (opt (getf params :optional))
+    (when (or (caddr opt) (cadr opt))
+      (error "VM codegen: &optional default / supplied-p is vm-5")))
+  (when (getf params :key)
+    (error "VM codegen: &key parameters are vm-5"))
+  (when (getf params :aux)
+    (error "VM codegen: &aux parameters are vm-5")))
+
+(defun %vm-compile-lambda (lir)
+  "Generate a runnable CompiledFunction from a (:LAMBDA ...) IR node."
+  (let* ((plist  (cdr lir))
+         (params (getf plist :params))
+         (body   (getf plist :body))
+         (source (getf plist :source))
+         (cs     (%vm-cs-new)))
+    (%vm-check-core-lambda-list params)
+    (%vm-gen body cs)
+    (%vm-emit-op cs (%vm-op :return))
+    (%make-compiled-function
+     nil                                              ; anonymous template
+     (cadr source)                                    ; lambda list (introspection)
+     (%vm-assemble (svref cs 0))
+     (make-array (svref cs 2) :initial-contents (svref cs 1))
+     (%vm-pack-arity (getf plist :arity))
+     (max 1 (svref cs 4))                             ; max-stack (>= 1)
+     (getf plist :n-locals)
+     source)))
+
+(defun %vm-compile (lambda-expr)
+  "Analyze + byte-compile LAMBDA-EXPR into a runnable CompiledFunction.  The vm-4
+   core path (no closures / control); wiring COMPILE / COMPILE-FILE to emit
+   byte-code is vm-8."
+  (%vm-compile-lambda (%vm-analyze lambda-expr)))

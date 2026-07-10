@@ -611,6 +611,58 @@ static void test_vm_analyze(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-4: byte-code codegen core, differential vs the tree-walker ------ */
+/* %VM-COMPILE (bootstrap/vm-compiler.lisp) analyzes + byte-compiles a lambda into
+   a runnable CompiledFunction.  VM4-CMP compiles a lambda AND interprets the same
+   lambda (via (eval (function lambda))), applies both to the same args, and returns
+   T iff the results are EQUAL — so each check proves the compiled path matches the
+   tree-walker.  */
+static void test_vm_codegen(void){
+    uword pool = open_live_pool();
+    e("(defvar *vm4-g* 100)");
+    e("(setf (symbol-function 'vm4-dbl) (%vm-compile '(lambda (n) (* n 2))))");
+    e("(defun vm4-cmp (lam args)"
+      "  (equal (apply (%vm-compile lam) args)"
+      "         (apply (eval (list 'function lam)) args)))");
+
+    /* the compiler produces a genuine compiled-function */
+    TEST_EQ(eql, T_Symbol,
+            e("(let ((f (%vm-compile '(lambda (x) x)))) (if (functionp f) t nil))"));
+
+    /* arithmetic / calls */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (+ x 1)) '(41))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x y) (* (+ x 1) (- y 2))) '(4 5))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (l) (car (cdr l))) '((1 2 3)))"));
+    /* IF, IF-chains */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (if x 'yes 'no)) '(7))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (if x 'yes 'no)) '(nil))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (n) (if (= n 0) 'z (if (= n 1) 'o 'm))) '(1))"));
+    /* PROGN effect context */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (progn (+ x 1) (* x 2))) '(10))"));
+    /* LET parallel (inner init sees the OUTER binding), nested LET fresh slots */
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (x) (let ((y 5)) (let ((y 9) (z y)) (list y z x)))) '(0))"));
+    /* LET* sequential */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (let* ((a 2) (b (* a 3))) (+ a b))) '())"));
+    /* SETQ lexical, global var ref + set */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (setq x (+ x 100)) x) '(1))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () *vm4-g*) '())"));
+    /* QUOTE literal, FUNCALL of a passed function */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () '(a b c)) '())"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (f x) (funcall f x)) (list #'1+ 5))"));
+    /* &optional (NIL default) and &rest */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x &optional y) (list x y)) '(1))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (a &rest r) (cons a r)) '(1 2 3))"));
+
+    /* SETQ of a global takes effect in the running image */
+    TEST_EQ(eql, I(7), e("(progn (funcall (%vm-compile '(lambda () (setq *vm4-g* 7) *vm4-g*))))"));
+    /* a compiled function calling another compiled function */
+    TEST_EQ(eql, I(20), e("(funcall (%vm-compile '(lambda (x) (vm4-dbl (vm4-dbl x)))) 5)"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -621,6 +673,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm compiled-function", test_vm_compiled_function)
     TEST_CASE("vm execute",          test_vm_execute)
     TEST_CASE("vm analyze",          test_vm_analyze)
+    TEST_CASE("vm codegen",          test_vm_codegen)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
