@@ -229,11 +229,14 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
         case BC_DROP:    { uint8_t n = code[pc++]; sp -= n; break; }
         case BC_LOAD_LOCAL:{ uint64_t d = vm_read_uvar(code,&pc); uint64_t i = vm_read_uvar(code,&pc);
                              if(d==0){ PUSH(L[i]); }
-                             else { PUSH(svref(upvalues, integer_from_word((word)i))); } /* display; vm-6 */
+                             else { /* display: upvalues[d-1] is the frame d levels out */
+                                 Ref frame = svref(upvalues, integer_from_word((word)(d-1)));
+                                 PUSH(svref(frame, integer_from_word((word)i))); }
                              break; }
         case BC_STORE_LOCAL:{ uint64_t d = vm_read_uvar(code,&pc); uint64_t i = vm_read_uvar(code,&pc);
                              if(d==0){ L[i] = TOP(); gc_write_barrier(locals->slots->array.elements); }
-                             else { svref_set(upvalues, integer_from_word((word)i), TOP()); }
+                             else { Ref frame = svref(upvalues, integer_from_word((word)(d-1)));
+                                    svref_set(frame, integer_from_word((word)i), TOP()); }
                              break; }
         case BC_LOAD_GLOBAL:{ uint64_t s = vm_read_uvar(code,&pc); Ref sym = K[s];
                              if(!symbol_boundp(sym)){ ERROR("Unbound variable: %s", string_cstring(symbol_name(sym))); }
@@ -241,6 +244,22 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
         case BC_STORE_GLOBAL:{ uint64_t s = vm_read_uvar(code,&pc); set_symbol_value(K[s], TOP()); break; }
         case BC_LOAD_FUNCTION:{ uint64_t s = vm_read_uvar(code,&pc); Ref sym = K[s];
                              PUSH(symbol_function(sym)); break; }
+        case BC_MAKE_CLOSURE:{
+            /* operand: constant index of the template.  Build a display over the
+               current activation: [ this frame's locals, ...the current upvalues ],
+               so LOAD-LOCAL depth d (>0) reads display[d-1].  A captured frame keeps
+               its locals vector alive past the enclosing call (shared for mutation). */
+            uint64_t t = vm_read_uvar(code,&pc);
+            Ref tmpl = K[t];
+            uword ndisp = nullp(upvalues) ? 0 : vector_length(upvalues);
+            Ref disp = make_vm_vector((word)(ndisp+1)); add_to_live_pool(disp);
+            svref_set(disp, integer_from_word(0), locals);
+            for(uword k=0;k<ndisp;k++){
+                svref_set(disp, integer_from_word((word)(k+1)),
+                          svref(upvalues, integer_from_word((word)k))); }
+            Ref clo = compiled_closure_new(tmpl, disp); add_to_live_pool(clo);
+            PUSH(clo);
+            break; }
         case BC_JUMP:          { int64_t o = vm_read_svar(code,&pc); pc = (size_t)((int64_t)pc + o); break; }
         case BC_JUMP_IF_NIL:   { int64_t o = vm_read_svar(code,&pc); if(nullp(POP())){ pc = (size_t)((int64_t)pc + o); } break; }
         case BC_JUMP_IF_NOT_NIL:{ int64_t o = vm_read_svar(code,&pc); if(!nullp(POP())){ pc = (size_t)((int64_t)pc + o); } break; }

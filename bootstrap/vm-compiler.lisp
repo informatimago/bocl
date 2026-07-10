@@ -541,7 +541,11 @@
 ;;;   1 consts    (pool, in order)            5 label-ctr
 ;;;   2 nconsts                               6 control-scopes (block/tagbody, innermost first)
 ;;;   3 sp        (current stack depth)       7 nlocals   (grows as scratch slots are taken)
-(defun %vm-cs-new (nlocals) (vector '() '() 0 0 0 0 '() nlocals))
+;;;   8 max-depth (the deepest upvalue depth this fn reaches, DIRECTLY or via a nested
+;;;             closure it must relay; >=1 means it captures — see %VM-GEN-MAKE-CLOSURE)
+(defun %vm-cs-new (nlocals) (vector '() '() 0 0 0 0 '() nlocals 0))
+(defun %vm-cs-max-depth (cs) (svref cs 8))
+(defun %vm-cs-bump-depth (cs d) (when (> d (svref cs 8)) (setf (svref cs 8) d)))
 (defun %vm-cs-emit (cs item) (setf (svref cs 0) (cons item (svref cs 0))))
 (defun %vm-cs-sp+ (cs d)
   (let ((s (+ (svref cs 3) d)))
@@ -637,7 +641,7 @@
     (:progv      (%vm-gen-progv (cadr node) (caddr node) (cadddr node) cs))
     (:load-time-value (%vm-gen-load-time-value (cadr node) (caddr node) cs))
     (:make-closure (%vm-gen-make-closure (cadr node) cs))
-    ((:flet :labels) (error "VM codegen: local functions are vm-6 (~S)" (car node)))
+    ((:flet :labels) (%vm-gen-flet (cadr node) (caddr node) cs))
     (t (error "VM codegen: unknown IR node ~S" node))))
 
 (defun %vm-gen-const (v cs)
@@ -648,7 +652,7 @@
            (%vm-cs-sp+ cs 1))))
 
 (defun %vm-gen-lref (depth index cs)
-  (unless (eql depth 0) (error "VM codegen: upvalue reference (depth ~S) is vm-6" depth))
+  (%vm-cs-bump-depth cs depth)                          ; track the deepest upvalue this fn reaches
   (%vm-emit-op cs (%vm-op :load-local)) (%vm-emit-uvar cs depth) (%vm-emit-uvar cs index)
   (%vm-cs-sp+ cs 1))
 
@@ -657,7 +661,7 @@
   (%vm-cs-sp+ cs 1))
 
 (defun %vm-gen-lset (depth index val-ir cs)
-  (unless (eql depth 0) (error "VM codegen: upvalue assignment (depth ~S) is vm-6" depth))
+  (%vm-cs-bump-depth cs depth)                          ; track the deepest upvalue this fn reaches
   (%vm-gen val-ir cs)                                  ; value on stack (+1)
   (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs depth) (%vm-emit-uvar cs index))
                                                         ; STORE-LOCAL leaves the value (net 0)
@@ -853,12 +857,29 @@
   (declare (ignore read-only-p))
   (%vm-gen-const (funcall (%vm-compile (list 'lambda '() form))) cs))
 
+(defun %vm-gen-flet (fn-irs body-ir cs)
+  "FLET / LABELS: build each local function (a closure over the current frame, or a
+   plain template if it captures nothing) and store it in its enclosing-frame slot;
+   then run the body.  Visibility (FLET bodies don't see the locals, LABELS do, and a
+   LABELS fn sees its siblings via the shared frame) was resolved by the analyzer."
+  (dolist (f fn-irs)
+    (%vm-gen-make-closure (cdr f) cs)                    ; closure/template on stack (+1)
+    (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs (car f))
+    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))   ; store into slot, drop (net 0)
+  (%vm-gen body-ir cs))
+
 (defun %vm-gen-make-closure (lambda-ir cs)
-  "vm-5: a NON-capturing LAMBDA in value position — compile it to a standalone
-   CompiledFunction template and push it as a constant.  A captured (depth>0)
-   reference inside the lambda body errors from %VM-GEN-LREF (real closures = vm-6)."
-  (let ((tmpl (%vm-compile-lambda lambda-ir)))
-    (%vm-emit-op cs (%vm-op :push-const)) (%vm-emit-uvar cs (%vm-cs-const cs tmpl))
+  "A LAMBDA in value position.  Compile it to a template; if it captures outer
+   variables (a depth>0 reference), emit MAKE-CLOSURE to pair the template with a
+   display over the current activation's frame — otherwise push the template as a
+   plain constant (no capture needed)."
+  (multiple-value-bind (tmpl ndepth) (%vm-compile-lambda lambda-ir)
+    ;; If the nested fn reaches depth N, the ENCLOSING fn must itself capture the
+    ;; frames beyond its own (depth N-1) so its display can relay them — propagate.
+    (when (>= ndepth 2) (%vm-cs-bump-depth cs (1- ndepth)))
+    (if (>= ndepth 1)                                   ; captures at least the current frame
+        (progn (%vm-emit-op cs (%vm-op :make-closure)) (%vm-emit-uvar cs (%vm-cs-const cs tmpl)))
+        (progn (%vm-emit-op cs (%vm-op :push-const))   (%vm-emit-uvar cs (%vm-cs-const cs tmpl))))
     (%vm-cs-sp+ cs 1)))
 
 (defun %vm-gen-mv-prog1 (first-ir rest-irs cs)
@@ -987,15 +1008,17 @@
     (%vm-check-core-lambda-list params)
     (%vm-gen body cs)
     (%vm-emit-op cs (%vm-op :return))
-    (%make-compiled-function
-     nil                                              ; anonymous template
-     (cadr source)                                    ; lambda list (introspection)
-     (%vm-assemble (svref cs 0))
-     (make-array (svref cs 2) :initial-contents (svref cs 1))
-     (%vm-pack-arity (getf plist :arity))
-     (max 1 (svref cs 4))                             ; max-stack (>= 1)
-     (%vm-cs-nlocals cs)                              ; incl. scratch slots (BLOCK results)
-     source)))
+    (values
+     (%make-compiled-function
+      nil                                             ; anonymous template
+      (cadr source)                                   ; lambda list (introspection)
+      (%vm-assemble (svref cs 0))
+      (make-array (svref cs 2) :initial-contents (svref cs 1))
+      (%vm-pack-arity (getf plist :arity))
+      (max 1 (svref cs 4))                            ; max-stack (>= 1)
+      (%vm-cs-nlocals cs)                             ; incl. scratch slots (BLOCK results)
+      source)
+     (%vm-cs-max-depth cs))))                         ; deepest upvalue depth reached
 
 (defun %vm-compile (lambda-expr)
   "Analyze + byte-compile LAMBDA-EXPR into a runnable CompiledFunction.  The vm-4

@@ -835,6 +835,52 @@ static void test_vm_nlx(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-6 (part 1): closures — capturing lambdas, FLET/LABELS, upvalues -------- */
+/* A capturing LAMBDA compiles to MAKE-CLOSURE, which pairs the template with a
+   DISPLAY over the current activation's frame ([this frame, ...current upvalues]);
+   LOAD-LOCAL depth d>0 reads display[d-1].  Captured frames outlive the enclosing
+   call (shared for mutation).  A fn that only relays a deeper frame to an inner
+   closure is itself made a closure (max-depth propagation).  Interop (compiled <->
+   tree-walked <-> built-in) already flows through kernel_apply. */
+static void test_vm_closures(void){
+    uword pool = open_live_pool();
+    e("(unless (fboundp 'vm4-cmp)"
+      "  (defun vm4-cmp (lam args)"
+      "    (equal (apply (%vm-compile lam) args) (apply (eval (list 'function lam)) args))))");
+
+    /* immediately-applied capturing lambda; mapcar with a capturing lambda */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (n) (funcall (lambda (x) (+ x n)) 10)) '(5))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (b l) (mapcar (lambda (x) (+ x b)) l)) '(100 (1 2 3)))"));
+    /* nested closures, depth 2 (inner reaches the outermost frame via the display chain) */
+    TEST_EQ(eql, I(123),
+            e("(funcall (%vm-compile '(lambda (a) (funcall (lambda (b) (funcall (lambda (c)"
+              "   (+ a b c)) 100)) 20))) 3)"));
+
+    /* returned closures capture distinct bindings */
+    e("(defvar *mk* (%vm-compile '(lambda (n) (lambda (x) (+ x n)))))");
+    TEST_EQ(eql, I(6),  e("(funcall (funcall *mk* 5) 1)"));
+    TEST_EQ(eql, I(11), e("(funcall (funcall *mk* 10) 1)"));
+    /* mutable captured counter */
+    e("(defvar *ct* (funcall (%vm-compile '(lambda () (let ((c 0)) (lambda () (setq c (+ c 1))))))))");
+    TEST_EQ(equal, e("'(1 2 3)"), e("(list (funcall *ct*) (funcall *ct*) (funcall *ct*))"));
+    /* two closures sharing one captured variable */
+    e("(defvar *pair* (funcall (%vm-compile"
+      "  '(lambda () (let ((c 0)) (list (lambda () (setq c (+ c 1))) (lambda () c)))))))");
+    TEST_EQ(eql, I(2), e("(progn (funcall (first *pair*)) (funcall (first *pair*)) (funcall (second *pair*)))"));
+
+    /* mutually-recursive LABELS (even?/odd?) and a simple FLET */
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (n) (labels ((ev (k) (if (= k 0) t (od (- k 1))))"
+              "                               (od (k) (if (= k 0) nil (ev (- k 1)))))"
+              "                        (list (ev n) (od n)))) '(4))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (flet ((dbl (y) (* y 2))) (dbl (dbl x)))) '(3))"));
+    /* a compiled closure passed to a tree-walked higher-order fn (interop) */
+    TEST_EQ(equal, e("'(2 4 6)"),
+            e("(mapcar (funcall (%vm-compile '(lambda (k) (lambda (x) (* x k)))) 2) '(1 2 3))"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -849,6 +895,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm control",          test_vm_control)
     TEST_CASE("vm values",           test_vm_values)
     TEST_CASE("vm nlx",              test_vm_nlx)
+    TEST_CASE("vm closures",         test_vm_closures)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
