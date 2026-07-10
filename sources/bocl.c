@@ -1471,6 +1471,14 @@ static void kernel_bocl_DEFINE_FUNCTION(unused Ref self, Ref arguments, Multiple
                                 fn->slots->closure.environment);}
     }else if(built_in_function_p(fn)){
         named = fn;
+    }else if(compiled_function_p(fn) || compiled_closure_p(fn)){
+        /* A byte-code function (from %VM-COMPILE / a byte-code fasl): install it as-is,
+           name-preserving — set the TEMPLATE's lisp_name (do NOT rebuild it as an
+           interpreted Function, whose .body would be the code octet string). */
+        Ref cf = compiled_closure_p(fn) ? compiled_closure_function(fn) : fn;
+        cf->slots->compiled_function.lisp_name = name;
+        gc_write_barrier(cf->slots);
+        named = fn;
     }else if(functionp(fn)){
         named = function_new(name,
                              fn->slots->function.lambda_list,

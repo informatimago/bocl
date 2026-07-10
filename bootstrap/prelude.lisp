@@ -9877,10 +9877,14 @@ result array; return that array."
     (setq entries (nreverse entries))
     ;; Binary by default; fall back to text when disabled or when a form holds an
     ;; object the binary writer cannot serialize (%WRITE-CFASL then returns NIL,
-    ;; having written nothing).
-    (or (and *compile-file-binary*
-             (%write-cfasl out-ns (mapcar #'cdr entries)))
-        (%write-text-fasl out-ns actual entries std-rt))
+    ;; having written nothing).  When the byte-code compiler is present (vm-8), DEFUN
+    ;; bodies are byte-compiled into the binary fasl (%VM-COMPILE-FILE-FORM installs a
+    ;; pre-compiled template); the text path always uses the plain macroexpanded forms.
+    (let ((bin-forms (if (fboundp '%vm-compile-file-form)
+                         (mapcar (lambda (e) (%vm-compile-file-form (cdr e))) entries)
+                         (mapcar #'cdr entries))))
+      (or (and *compile-file-binary* (%write-cfasl out-ns bin-forms))
+          (%write-text-fasl out-ns actual entries std-rt)))
     (values (truename out) nil failure)))
 
 (defun %bocl-fasl-version (path)

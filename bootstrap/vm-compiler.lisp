@@ -1227,3 +1227,24 @@
 (defun compiled-function-p (object)
   "T if OBJECT is a compiled function — now that COMPILE can produce byte-code."
   (and (%compiled-function-p object) t))
+
+;;; --- COMPILE-FILE hook: byte-compile DEFUN bodies (the load-speed payoff) ---
+;;; COMPILE-FILE (prelude) macroexpand-all's each top-level form; DEFUN expands to
+;;; (BOCL:DEFINE-FUNCTION 'name doc (FUNCTION (LAMBDA ...))).  This turns that into an
+;;; install of the PRE-COMPILED template — cfasl serializes the template (vm-8 part 1),
+;;; and LOAD deserializes + installs it with NO re-compilation / macroexpansion.  Any
+;;; form the VM can't compile is left unchanged (loads interpreted, as before).
+(defun %vm-compile-file-form (form)
+  (if (and (consp form)
+           (eq (car form) (and (find-package "BOCL")
+                               (find-symbol "DEFINE-FUNCTION" (find-package "BOCL"))))
+           (= (length form) 4)
+           (let ((fn (fourth form)))
+             (and (consp fn) (eq (car fn) 'function)
+                  (consp (cadr fn)) (eq (car (cadr fn)) 'lambda))))
+      (let ((template (handler-case (%vm-compile (cadr (fourth form)))
+                        (error () nil))))
+        (if template
+            (list (car form) (second form) (third form) (list 'quote template))
+            form))
+      form))

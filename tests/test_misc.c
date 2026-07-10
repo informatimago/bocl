@@ -992,6 +992,43 @@ static void test_vm_conditions(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-8 (part 2): COMPILE / COMPILE-FILE emit byte-code -------------------- */
+static void test_vm_compile_wiring(void){
+    uword pool = open_live_pool();
+
+    /* COMPILE now byte-compiles (compiled-function-p is true) ... */
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (x) (* x x)))) t nil)"));
+    /* ... a compiled closure ... */
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (n) (lambda (x) (+ x n))))) t nil)"));
+    /* ... and FALLS BACK (interpreted) for a form the VM can't handle (RESTART-CASE),
+       which still runs correctly. */
+    TEST_EQ(eql, NIL_Symbol,
+            e("(if (compiled-function-p (compile nil '(lambda (x) (restart-case x (r () 0))))) t nil)"));
+    TEST_EQ(eql, I(9), e("(funcall (compile nil '(lambda (x) (restart-case x (r () 0)))) 9)"));
+    /* results match the interpreter */
+    TEST_EQ(eql, I(36), e("(funcall (compile nil '(lambda (x) (+ (* x x) (* 2 x) 1))) 5)"));
+
+    /* COMPILE-FILE emits a byte-code fasl; LOAD installs the templates (no recompile) */
+    e("(with-open-file (f \"/tmp/bocl_vm8_cf.lisp\" :direction :output :if-exists :supersede)"
+      "  (write-line \"(in-package :common-lisp)\" f)"
+      "  (write-line \"(defun vm8cf-sq (x) (* x x))\" f)"
+      "  (write-line \"(defun vm8cf-sum (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s i)))))\" f)"
+      "  (write-line \"(defun vm8cf-fact (n) (if (< n 2) 1 (* n (vm8cf-fact (- n 1)))))\" f))");
+    Ref fasl = e("(compile-file \"/tmp/bocl_vm8_cf.lisp\")");
+    add_to_live_pool(fasl);
+    TEST_EQ(eql, T_Symbol, e("(if (%cfasl-file-p (namestring (compile-file-pathname \"/tmp/bocl_vm8_cf.lisp\"))) t nil)"));
+    e("(load (compile-file-pathname \"/tmp/bocl_vm8_cf.lisp\"))");
+    /* the loaded functions are byte-code (installed from the fasl) and run */
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (symbol-function 'vm8cf-sq)) t nil)"));
+    TEST_EQ(eql, I(49),   e("(vm8cf-sq 7)"));
+    TEST_EQ(eql, I(4950), e("(vm8cf-sum 100)"));
+    TEST_EQ(eql, I(720),  e("(vm8cf-fact 6)"));
+    e("(ignore-errors (delete-file \"/tmp/bocl_vm8_cf.lisp\"))");
+    e("(ignore-errors (delete-file (compile-file-pathname \"/tmp/bocl_vm8_cf.lisp\")))");
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -1009,6 +1046,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm closures",         test_vm_closures)
     TEST_CASE("vm fasl",             test_vm_fasl)
     TEST_CASE("vm conditions",       test_vm_conditions)
+    TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
