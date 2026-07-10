@@ -936,6 +936,62 @@ static void test_vm_fasl(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-conditions: HANDLER-BIND / HANDLER-CASE / IGNORE-ERRORS ---------------- */
+/* HANDLER-BIND compiles to a frame_handler_bind (a no-cleanup dynamic frame the SIGNAL
+   machinery walks and CALLS into).  HANDLER-CASE is expanded by the analyzer into
+   BLOCK/RETURN-FROM + CATCH/THROW + HANDLER-BIND with capturing handler closures — all
+   already supported.  Verified vs the tree-walker where results are values. */
+static void test_vm_conditions(void){
+    uword pool = open_live_pool();
+    e("(unless (fboundp 'vm4-cmp)"
+      "  (defun vm4-cmp (lam args)"
+      "    (equal (apply (%vm-compile lam) args) (apply (eval (list 'function lam)) args))))");
+
+    /* IGNORE-ERRORS: (values nil condition) on error, the value on success */
+    TEST_EQ(equal, e("'(nil t)"),
+            e("(funcall (%vm-compile '(lambda () (multiple-value-bind (v c)"
+              "   (ignore-errors (error \"boom\") 99) (list v (if c t nil))))))"));
+    TEST_EQ(equal, e("'(3 nil)"),
+            e("(funcall (%vm-compile '(lambda () (multiple-value-bind (v c)"
+              "   (ignore-errors (+ 1 2)) (list v c)))))"));
+
+    /* HANDLER-CASE: catch + bind the condition; normal value; type dispatch */
+    TEST_EQ(equal, e("'(:caught \"x\")"),
+            e("(funcall (%vm-compile '(lambda () (handler-case (error \"x\")"
+              "   (error (c) (list :caught (princ-to-string c)))))))"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda (x) (handler-case (* x x) (error () -1))) '(6))"));
+    TEST_EQ(eql, e("':te"),
+            e("(funcall (%vm-compile '(lambda () (handler-case"
+              "   (error 'type-error :datum 1 :expected-type 'string)"
+              "   (division-by-zero () :dbz) (type-error () :te) (error () :err)))))"));
+
+    /* HANDLER-BIND: a handler that transfers control (THROW out); and one that
+       DECLINES (returns) so an enclosing HANDLER-CASE runs */
+    TEST_EQ(eql, e("':handled"),
+            e("(funcall (%vm-compile '(lambda () (catch 'out (handler-bind"
+              "   ((error (lambda (c) (declare (ignore c)) (throw 'out :handled))))"
+              "   (error \"e\") :unreached)))))"));
+    TEST_EQ(eql, e("':outer"),
+            e("(funcall (%vm-compile '(lambda () (handler-case"
+              "   (handler-bind ((error (lambda (c) (declare (ignore c)) nil))) (error \"e\"))"
+              "   (error () :outer)))))"));
+    /* nested HANDLER-CASE: the inner one catches */
+    TEST_EQ(eql, e("':inner"),
+            e("(funcall (%vm-compile '(lambda () (handler-case"
+              "   (handler-case (error \"e\") (error () :inner)) (error () :outer)))))"));
+
+    /* the block-multiple-values fix (BLOCK/RETURN-FROM now preserve all values) */
+    TEST_EQ(equal, e("'(7 8 9)"),
+            e("(funcall (%vm-compile '(lambda () (multiple-value-list"
+              "   (block b (return-from b (values 7 8 9)))))))"));
+    TEST_EQ(equal, e("'(1 2 3)"),
+            e("(funcall (%vm-compile '(lambda () (multiple-value-list"
+              "   (block b (values 1 2 3))))))"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -952,6 +1008,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm nlx",              test_vm_nlx)
     TEST_CASE("vm closures",         test_vm_closures)
     TEST_CASE("vm fasl",             test_vm_fasl)
+    TEST_CASE("vm conditions",       test_vm_conditions)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

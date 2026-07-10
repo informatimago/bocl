@@ -48,7 +48,7 @@ static _Noreturn void vm_unwind_next_frame(Frame* popped){
    after a longjmp as (VmDyn*)g_frame_stack (the frame receiving control is the stack
    top).  Fields other than FRAME are read only via that recovered pointer or via the
    volatile depth counter, never via a stale automatic — safe across setjmp/longjmp. */
-enum { VMK_CATCH=1, VMK_PROTECT, VMK_DBIND, VMK_PROGV };
+enum { VMK_CATCH=1, VMK_PROTECT, VMK_DBIND, VMK_PROGV, VMK_HANDLER_BIND };
 typedef struct VmDyn {
     Frame  frame;          /* MUST be first */
     size_t handler_pc;     /* CATCH: resume pc on throw; PROTECT: cleanup pc */
@@ -417,6 +417,28 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
         case BC_PROGV_UNBIND:{                      /* normal exit: restore all + pop */
             VmDyn* a = (VmDyn*)g_frame_stack;
             vm_progv_restore(a);
+            vm_pop_frame(); nvf--; break; }
+        case BC_HANDLER_BIND_OPEN:{
+            /* stack: [... bindings] where bindings = ((type-class . handler-fn) ...).
+               Push a frame_handler_bind so SIGNAL (conditions.c) finds it and CALLS a
+               matching handler in the signalling context (no unwind unless the handler
+               itself exits).  Never a longjmp target — so the only non-normal path is
+               an unwind PASSING THROUGH (pop + continue the cascade). */
+            Ref bindings = POP();
+            add_to_live_pool(bindings);            /* g_frame_stack is not GC-scanned */
+            if(nvf >= VM_DYN_MAX){ ERROR("VM: too many nested dynamic frames%s",""); }
+            VmDyn* d = &vdyn[nvf];
+            d->frame.type = frame_handler_bind;
+            d->frame.parameters.handler_bind.bindings = bindings;
+            d->frame.results = results;
+            d->kind = VMK_HANDLER_BIND;
+            int rc = setjmp(d->frame.non_local_exit);
+            if(rc==0){ vm_push_frame(&d->frame); nvf++; break; }
+            VmDyn* a = (VmDyn*)g_frame_stack;      /* unwinding through: pop + cascade */
+            vm_pop_frame(); nvf--;
+            vm_unwind_next_frame(&a->frame);
+        }
+        case BC_HANDLER_BIND_CLOSE:{                /* normal exit: drop the frame */
             vm_pop_frame(); nvf--; break; }
         case BC_UNWIND_PROTECT:{
             /* operand: svar offset to the cleanup code.  Establish a protect frame; the

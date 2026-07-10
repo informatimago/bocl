@@ -43,3 +43,37 @@ RESTART-CASE + INVOKE-RESTART round-trips; parity with the tree-walker on the co
 tests; full suite green.  Then vm-8 part 2 can wire COMPILE globally.
 
 DEPENDS ON: vm-5 (NLX frames), vm-6 (closures — handlers are closures).
+
+====================================================================
+PROGRESS (v1.8.11, branch vm) — HANDLER-BIND + HANDLER-CASE + IGNORE-ERRORS done.
+
+- HANDLER-BIND is a VM special form now (analyzer recognizes it via
+  %VM-SPECIAL-OPERATOR-P, which adds handler-bind/handler-case to SPECIAL-OPERATOR-P's
+  list).  Codegen builds the ((type-class . handler-fn) ...) list at runtime — the type
+  is a class-name symbol resolved with FIND-CLASS — and BC_HANDLER_BIND_OPEN pushes a
+  frame_handler_bind (a no-cleanup dynamic VmDyn: never a longjmp target, so on an
+  unwind-through it just pops + continues the cascade; BYTECODE_VERSION -> 7).  SIGNAL
+  (conditions.c, shared with the tree-walker) walks g_frame_stack and CALLS a matching
+  handler in the signalling context — so handlers that decline (return) fall through and
+  handlers that transfer control (THROW / RETURN-FROM) just work.  A :dframe :handler
+  control scope makes a lexical exit pop the frame.
+- HANDLER-CASE is EXPANDED by the analyzer (analyzer-local — the tree-walker's own
+  eval.c special op is untouched) into BLOCK/RETURN-FROM + CATCH/THROW + HANDLER-BIND
+  with capturing handler closures: a matching handler stashes the condition and THROWs a
+  clause index to a fresh-cons tag; the CATCH returns it and a CASE runs the clause with
+  the condition bound.  Handles :NO-ERROR (via MULTIPLE-VALUE-CALL).  IGNORE-ERRORS (a
+  prelude macro -> handler-case) therefore works and returns (values nil condition).
+- FIXED the block-multiple-values limitation as part of this: BLOCK / RETURN-FROM now
+  generate their value in mv-context (%VM-GEN-FOR-VALUES) and :block is an mv-buffer
+  setter, so BLOCK preserves ALL values (needed since IGNORE-ERRORS returns 2 values
+  through the handler-case block).
+- Verified: tests/test_misc.c::test_vm_conditions — ignore-errors (caught + ok),
+  handler-case catch/bind/normal/type-dispatch/nested, handler-bind transfer + decline,
+  and block-MV.  Full suite green.
+
+REMAINING for this issue: the RESTART system (RESTART-BIND / RESTART-CASE /
+INVOKE-RESTART — same frame shape, frame_restart) for the "must-restart" acceptance.
+NOT a blocker for vm-8 part 2 if COMPILE uses a SAFE FALLBACK (compile with the VM;
+fall back to minimal compilation when the analyzer errors) — the analyzer should ERROR
+on the still-unsupported kernel special operators (restart-*) so they trigger fallback
+rather than miscompile.

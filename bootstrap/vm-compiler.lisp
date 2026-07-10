@@ -98,6 +98,12 @@
    proclaim); keywords and non-symbols are not variables."
   (and (symbolp name) (not (keywordp name)) (%globally-special-p name)))
 
+(defun %vm-special-operator-p (op)
+  "The special operators the analyzer handles: the standard ones plus the condition-
+   system operators HANDLER-BIND / HANDLER-CASE, which are kernel special operators
+   (eval.c) but — a bocl quirk — are NOT in SPECIAL-OPERATOR-P's list."
+  (or (special-operator-p op) (member op '(handler-bind handler-case))))
+
 (defun %vm-make-local-macro-expander (lambda-list body)
   "Build a MACROLET expander: a function of the whole call form that
    destructures its arguments against LAMBDA-LIST and runs BODY."
@@ -221,7 +227,7 @@
             (%vm-analyze-call op (cdr form) cenv lexenv))
            ((%vm-local-macro lexenv op)
             (%vm-analyze-form (funcall (%vm-local-macro lexenv op) form) cenv lexenv))
-           ((special-operator-p op)
+           ((%vm-special-operator-p op)
             (%vm-analyze-special op form cenv lexenv))
            ((%vm-resolve op :fun cenv)                   ; a local FLET/LABELS fn
             (%vm-analyze-call op (cdr form) cenv lexenv))
@@ -343,7 +349,66 @@
      ;; keep the ORIGINAL form: LOAD-TIME-VALUE evaluates at load time, which for
      ;; %VM-COMPILE (compile == load) is compile time — codegen evaluates it then.
      (list :load-time-value (cadr form) (and (cddr form) (caddr form))))
+    ((handler-bind) (%vm-analyze-handler-bind (cadr form) (cddr form) cenv lexenv))
+    ((handler-case)
+     ;; HANDLER-CASE = HANDLER-BIND + BLOCK/RETURN-FROM + CATCH/THROW (all supported):
+     ;; expand it HERE (analyzer-local, so the tree-walker's own special op is untouched)
+     ;; and re-analyze.
+     (%vm-analyze-form (%vm-expand-handler-case form) cenv lexenv))
     (t (error "VM compiler: unhandled special operator ~S" op))))
+
+(defun %vm-analyze-handler-bind (bindings body cenv lexenv)
+  "HANDLER-BIND: analyze each (type handler-fn) clause and the body.  The type is a
+   type SPECIFIER (not evaluated); a class-name symbol resolves via FIND-CLASS, any
+   other spec is passed through as a constant (SIGNAL's SUBCLASSP consults it)."
+  (list :handler-bind
+        (mapcar (lambda (cl)
+                  (let ((type (car cl)) (fn (cadr cl)))
+                    (cons (if (and (symbolp type) (not (keywordp type)))
+                              (list :call-named 'find-class (list :const type))
+                              (list :const type))
+                          (%vm-analyze-form fn cenv lexenv))))
+                bindings)
+        (%vm-analyze-progn body cenv lexenv)))
+
+(defun %vm-expand-handler-case (form)
+  "Rewrite (HANDLER-CASE body clause...) into BLOCK/RETURN-FROM + CATCH/THROW +
+   HANDLER-BIND (with capturing handler closures).  A matching handler stashes the
+   condition and THROWs a clause index to a fresh-cons tag; the CATCH returns it and a
+   CASE runs the clause with the condition bound.  Normal completion RETURN-FROMs the
+   body value out (through the catch/handler-bind frames, which unwind).  An optional
+   (:NO-ERROR (vars) . forms) clause wraps the body via MULTIPLE-VALUE-CALL."
+  (let* ((body (cadr form))
+         (clauses (cddr form))
+         (no-error (assoc :no-error clauses))
+         (real (remove no-error clauses))
+         (tag (gensym "HC-TAG-")) (cvar (gensym "HC-COND-"))
+         (which (gensym "HC-WHICH-")) (evar (gensym "HC-E-"))
+         (bname (gensym "HC-BLOCK-"))
+         (handlers '()) (cases '()) (i 0))
+    (dolist (cl real)
+      (let ((type (car cl)) (varlist (cadr cl)) (cbody (cddr cl)) (idx i))
+        (push (list type (list 'lambda (list evar)
+                               (list 'setq cvar evar) (list 'throw tag idx)))
+              handlers)
+        (push (list idx (if varlist
+                            (list* 'let (list (list (car varlist) cvar)) cbody)
+                            (cons 'progn cbody)))
+              cases)
+        (setq i (1+ i))))
+    (let ((normal (if no-error
+                      (list* 'multiple-value-call
+                             (list* 'lambda (cadr no-error) (cddr no-error))
+                             (list body))
+                      body)))
+      (list 'let (list (list tag (list 'cons nil nil)) (list cvar nil))
+            (list 'block bname
+                  (list 'let (list (list which
+                                         (list 'catch tag
+                                               (list 'return-from bname
+                                                     (list* 'handler-bind (nreverse handlers)
+                                                            (list normal))))))
+                        (list* 'case which (nreverse cases))))))))
 
 (defun %vm-analyze-setq (pairs cenv lexenv)
   (cond
@@ -637,6 +702,7 @@
     (:mv-prog1   (%vm-gen-mv-prog1 (cadr node) (cddr node) cs))
     (:catch      (%vm-gen-catch (cadr node) (caddr node) cs))
     (:throw      (%vm-gen-throw (cadr node) (caddr node) cs))
+    (:handler-bind (%vm-gen-handler-bind (cadr node) (caddr node) cs))
     (:unwind-protect (%vm-gen-unwind-protect (cadr node) (caddr node) cs))
     (:progv      (%vm-gen-progv (cadr node) (caddr node) (cadddr node) cs))
     (:load-time-value (%vm-gen-load-time-value (cadr node) (caddr node) cs))
@@ -757,7 +823,7 @@
 ;;; single-valued leaves so BC-MV-LIST (which reads the buffer) captures all values.
 (defun %vm-gen-for-values (node cs)
   (case (car node)
-    ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect :progv)
+    ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect :progv :handler-bind :block)
      (%vm-gen node cs))                                          ; sets the MV buffer
     (:if
      (let ((l-else (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
@@ -820,6 +886,19 @@
     (%vm-gen-for-values value-ir cs)                      ; push primary + set MV buffer
     (%vm-emit-op cs (%vm-op :throw))                      ; never returns
     (%vm-cs-set-sp cs (1+ s))))                            ; phantom value (dead continuation)
+
+;;; HANDLER-BIND: a no-cleanup dynamic frame the SIGNAL machinery walks and CALLS into.
+;;; Build the ((type-class . handler-fn) ...) list, push the frame, run body, pop.
+(defun %vm-gen-handler-bind (clauses body-ir cs)
+  (let ((list-ir (list* :call-named 'list
+                        (mapcar (lambda (cl) (list :call-named 'cons (car cl) (cdr cl)))
+                                clauses))))
+    (%vm-gen list-ir cs)                                  ; the bindings list on stack (+1)
+    (%vm-emit-op cs (%vm-op :handler-bind-open)) (%vm-cs-sp+ cs -1)  ; pop list, push frame
+    (%vm-cs-push-control cs (list :dframe :handler))      ; a lexical exit must pop this frame
+    (%vm-gen-for-values body-ir cs)                       ; body value + MV
+    (%vm-cs-pop-control cs)
+    (%vm-emit-op cs (%vm-op :handler-bind-close))))       ; drop the frame (no stack effect)
 
 ;;; UNWIND-PROTECT: the cleanup runs on BOTH normal completion and any non-local exit
 ;;; through the protected form.  A frame_protect on g_frame_stack catches the unwind;
@@ -913,8 +992,10 @@
          (slot  (%vm-cs-scratch cs))
          (l-end (%vm-cs-label cs)))
     (%vm-cs-push-control cs (list :block name base slot l-end))
-    (%vm-gen body-ir cs)                                   ; value on top (sp = base+1)
+    (%vm-gen-for-values body-ir cs)                       ; value on top + MV buffer set
     (%vm-cs-pop-control cs)
+    ;; STORE/POP/LOAD carry only the primary through the slot, but do NOT touch the MV
+    ;; buffer — so the full multiple values survive to the block's RETURN.
     (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
     (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)      ; body value -> slot, sp = base
     (%vm-emit-label cs l-end)
@@ -933,6 +1014,7 @@
       (case (cadr s)
         (:dbind    (%vm-emit-op cs (%vm-op :dynamic-unbind)))
         (:progv    (%vm-emit-op cs (%vm-op :progv-unbind)))
+        (:handler  (%vm-emit-op cs (%vm-op :handler-bind-close)))
         (:catch    (%vm-emit-op cs (%vm-op :catch-close)))
         (:uprotect (%vm-gen (caddr s) cs)                  ; run the cleanup for effect
                    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
@@ -944,7 +1026,7 @@
       (error "VM codegen: RETURN-FROM ~S has no lexically visible block (escaping is vm-6)" name))
     (let ((base (caddr scope)) (slot (cadddr scope)) (l-end (nth 4 scope))
           (site (%vm-cs-sp cs)))
-      (%vm-gen value-ir cs)                                ; value on top (sp = site+1)
+      (%vm-gen-for-values value-ir cs)                     ; value + MV buffer (sp = site+1)
       (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
       (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)    ; value -> slot, sp = site
       (%vm-emit-unwind-to cs scope)                       ; unwind crossed dynamic frames
