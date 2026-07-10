@@ -59,3 +59,25 @@ and the handler is never established — a function using them would COMPILE but
 at runtime.  Wiring COMPILE globally must wait until either the VM implements the
 condition-system special operators (analyzer + handler-frame opcodes, building on
 vm-5's NLX) OR COMPILE detects those forms and falls back.  (See the vm-5 closing note.)
+
+====================================================================
+DONE (v1.8.12/1.8.13, branch vm) — vm-8 COMPLETE (closing).
+
+Part 2 landed on top of part 1 (serialization):
+- COMPILE (in-memory) byte-compiles via %VM-COMPILE with a SAFE FALLBACK to the
+  interpreted minimal compilation (the analyzer errors on RESTART-*/def-forms so they
+  fall back rather than miscompile).  *VM-COMPILE-ENABLE* gates it.  CL:COMPILED-
+  FUNCTION-P recognises VM functions; FUNCTION-LAMBDA-EXPRESSION reconstructs from the
+  MACROEXPAND-ALL'd source slot with conservative CLOSURE-P.  Fixed two bugs the wiring
+  surfaced (symbol-macrolet/let shadowing order; function-lambda-expression on a
+  compiled fn).  Full suite green WITH COMPILE emitting byte-code.
+- COMPILE-FILE emits BYTE-CODE fasls: %VM-COMPILE-FILE-FORM turns the macroexpanded
+  DEFUN (BOCL:DEFINE-FUNCTION 'name doc (function (lambda ...))) into an install of the
+  pre-compiled template; cfasl serializes it; LOAD deserializes + installs with no
+  recompile (BOCL:DEFINE-FUNCTION now installs a byte-code fn name-preserving).  The
+  text-fasl fallback keeps the plain forms.  Verified end-to-end
+  (test_misc.c::test_vm_compile_wiring) + full suite green.
+
+Deferred nicety: LOAD-TIME-VALUE embedded in a file fasl (in-memory %VM-COMPILE already
+evaluates load-time-value at compile time).  Remaining plan-2: vm-9 (self-host +
+validate), vm-conditions RESTART, vm-7 (CLOS cache, speed), vm-6b (TCO).

@@ -58,8 +58,12 @@ allocation bound** (GC ~2% prelude / ~12% loop code) — the VM is the real leve
   compiled prologue.  Interop was already uniform (kernel_apply).  BYTECODE_VERSION → 6.
   Tested in test_misc.c::test_vm_closures.
 
-REMAINING: vm-7 (CLOS inline cache) →
-vm-8 (byte-code fasl) → vm-9 (self-host prelude + validate). Issues in `vm-*.issue`.
+- **vm-conditions** (handler-*) + **vm-8** DONE (v1.8.11/1.8.13): HANDLER-BIND/-CASE/
+  IGNORE-ERRORS compile; COMPILE + COMPILE-FILE emit byte-code (safe fallback); real
+  code runs on the VM, full suite green.
+
+REMAINING: vm-9 (self-host + validate). Off-path: vm-conditions RESTART-*, vm-7 (CLOS
+cache), vm-6b (TCO). Issues in `vm-*.issue`.
 DEFERRED follow-ups (not on the critical path): **vm-6b** (genuine TAIL_CALL trampoline,
 stack-based fast APPLY, VM stack-overflow signal — optimizations; design notes in
 `issues/open/vm-6b-tail-calls-and-fast-apply.issue`) and the **condition system**
