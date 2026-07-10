@@ -629,9 +629,11 @@
     (:return-from(%vm-gen-return-from (cadr node) (caddr node) cs))
     (:tagbody    (%vm-gen-tagbody (cadr node) cs))
     (:go         (%vm-gen-go (cadr node) cs))
-    (:make-closure (error "VM codegen: closures are vm-6 (~S)" (car node)))
+    (:mv-call    (%vm-gen-mv-call (cadr node) (cddr node) cs))
+    (:mv-prog1   (%vm-gen-mv-prog1 (cadr node) (cddr node) cs))
+    (:make-closure (%vm-gen-make-closure (cadr node) cs))
     ((:flet :labels) (error "VM codegen: local functions are vm-6 (~S)" (car node)))
-    ((:catch :throw :unwind-protect :mv-call :mv-prog1 :progv :load-time-value)
+    ((:catch :throw :unwind-protect :progv :load-time-value)
      (error "VM codegen: control operator ~S is vm-5 (dynamic part pending)" (car node)))
     (t (error "VM codegen: unknown IR node ~S" node))))
 
@@ -701,18 +703,79 @@
   (%vm-emit-op cs (%vm-op :load-function)) (%vm-emit-uvar cs (%vm-cs-const cs spec))
   (%vm-cs-sp+ cs 1))
 
-(defun %vm-gen-let (entries body cs)
+(defun %vm-gen-let (entries body cs &optional (body-gen #'%vm-gen))
   ;; Fresh slots: evaluate each init, store into its slot, drop the value; then body.
   ;; (LET vs LET* differ only in the addresses the analyzer already baked in.)
+  ;; BODY-GEN lets an mv-context caller generate the body with %VM-GEN-FOR-VALUES.
   (dolist (entry entries)
     (case (car entry)
       (:lex (%vm-gen (caddr entry) cs)                  ; init (+1)
             (%vm-emit-op cs (%vm-op :store-local))
             (%vm-emit-uvar cs 0) (%vm-emit-uvar cs (cadr entry))  ; STORE-LOCAL 0 idx (net 0)
             (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))    ; drop (net 0 overall)
-      (:special (error "VM codegen: dynamic (special) LET binding is vm-5"))
+      (:special (error "VM codegen: dynamic (special) LET binding is vm-5 part 2"))
       (t (error "VM codegen: bad LET entry ~S" entry))))
-  (%vm-gen body cs))
+  (funcall body-gen body cs))
+
+;;; --- multiple values: MULTIPLE-VALUE-CALL / -PROG1 (hence -BIND / -LIST / NTH-VALUE) ---
+;;; A "producer" leaves its PRIMARY on the stack and its FULL value set in the MV
+;;; buffer.  Calls set the buffer themselves; %VM-GEN-FOR-VALUES adds a VALUES 1 after
+;;; single-valued leaves so BC-MV-LIST (which reads the buffer) captures all values.
+(defun %vm-gen-for-values (node cs)
+  (case (car node)
+    ((:call :call-named :mv-call :mv-prog1) (%vm-gen node cs))   ; sets the MV buffer
+    (:if
+     (let ((l-else (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+       (%vm-gen (cadr node) cs)
+       (%vm-emit-jump cs (%vm-op :jump-if-nil) l-else) (%vm-cs-sp+ cs -1)
+       (let ((base (%vm-cs-sp cs)))
+         (%vm-gen-for-values (caddr node) cs)
+         (%vm-emit-jump cs (%vm-op :jump) l-end)
+         (%vm-emit-label cs l-else) (%vm-cs-set-sp cs base)
+         (%vm-gen-for-values (cadddr node) cs)
+         (%vm-emit-label cs l-end))))
+    (:progn
+     (let ((forms (cdr node)))
+       (if (null forms)
+           (%vm-gen-for-values (list :const nil) cs)
+           (loop for r on forms do
+             (if (cdr r)
+                 (progn (%vm-gen (car r) cs) (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))
+                 (%vm-gen-for-values (car r) cs))))))
+    ((:let :let*) (%vm-gen-let (cadr node) (caddr node) cs #'%vm-gen-for-values))
+    (t   ; single-valued leaf (const/lref/gref/lset/gset/function/block/tagbody/...)
+     (%vm-gen node cs)
+     (%vm-emit-op cs (%vm-op :values)) (%vm-emit-u8 cs 1))))     ; sync MV buffer = {top}
+
+(defun %vm-gen-mv-call (fn-ir producer-irs cs)
+  (%vm-gen fn-ir cs)                                   ; callee (+1)
+  (let ((k (length producer-irs)))
+    (dolist (p producer-irs)
+      (%vm-gen-for-values p cs)                        ; primary + MV buffer
+      (%vm-emit-op cs (%vm-op :mv-list)))              ; -> that producer's value list (net 0)
+    (%vm-emit-op cs (%vm-op :call-named))              ; (append l1 .. lk)
+    (%vm-emit-uvar cs (%vm-cs-const cs 'append)) (%vm-emit-u8 cs k)
+    (%vm-cs-sp+ cs (- 1 k))
+    (%vm-emit-op cs (%vm-op :call-named))              ; (apply callee appended)
+    (%vm-emit-uvar cs (%vm-cs-const cs 'apply)) (%vm-emit-u8 cs 2)
+    (%vm-cs-sp+ cs (- 1 2))))
+
+(defun %vm-gen-make-closure (lambda-ir cs)
+  "vm-5: a NON-capturing LAMBDA in value position — compile it to a standalone
+   CompiledFunction template and push it as a constant.  A captured (depth>0)
+   reference inside the lambda body errors from %VM-GEN-LREF (real closures = vm-6)."
+  (let ((tmpl (%vm-compile-lambda lambda-ir)))
+    (%vm-emit-op cs (%vm-op :push-const)) (%vm-emit-uvar cs (%vm-cs-const cs tmpl))
+    (%vm-cs-sp+ cs 1)))
+
+(defun %vm-gen-mv-prog1 (first-ir rest-irs cs)
+  (%vm-gen-for-values first-ir cs)                     ; primary + MV buffer
+  (%vm-emit-op cs (%vm-op :mv-list))                   ; L = first's value list (net 0)
+  (dolist (r rest-irs)                                 ; the rest, for effect
+    (%vm-gen r cs) (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))
+  (%vm-emit-op cs (%vm-op :call-named))                ; (values-list L) -> restore the values
+  (%vm-emit-uvar cs (%vm-cs-const cs 'values-list)) (%vm-emit-u8 cs 1)
+  (%vm-cs-sp+ cs (- 1 1)))
 
 ;;; --- lexical control: BLOCK / RETURN-FROM / TAGBODY / GO as byte-code jumps ---
 ;;; Within a single compiled function (no compiled closures until vm-6) every block

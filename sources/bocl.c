@@ -1630,7 +1630,8 @@ static void kernel_BYTECODE_OPCODES(unused Ref f, unused Ref arguments, Multiple
     OPC("THROW",BC_THROW);            OPC("UNWIND-PROTECT",BC_UNWIND_PROTECT);
     OPC("UNWIND-LEAVE",BC_UNWIND_LEAVE);OPC("MAKE-CLOSURE",BC_MAKE_CLOSURE);
     OPC("LOAD-UPVAL",BC_LOAD_UPVAL);  OPC("NOP",BC_NOP);
-    OPC("HALT",BC_HALT);              OPC("VERSION",BYTECODE_VERSION);
+    OPC("HALT",BC_HALT);              OPC("MV-LIST",BC_MV_LIST);
+    OPC("VERSION",BYTECODE_VERSION);
     #undef OPC
     results->count = 1; results->values[0] = a;
     close_live_pool(pool);}

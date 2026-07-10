@@ -68,6 +68,10 @@
    BC_VALUES   u8(n)          -- ; take the top n into the MV buffer   ( x1..xn -- v1 )
    BC_MV_CALL                 -- ; MULTIPLE-VALUE-CALL: gather producers' values (vm-5)
    BC_MV_BIND  u8(n)          -- ; bind n locals from the MV buffer (vm-5)
+   BC_MV_LIST                 -- ; replace the top (a producer's primary) with the LIST
+                                   of all its values from the MV buffer  ( v1 -- (v1..vk) )
+                                   MULTIPLE-VALUE-CALL/-PROG1 codegen uses this + the
+                                   APPEND / APPLY / VALUES-LIST builtins (vm-5).
 
    -- non-local exit frame markers (bodies are already lexical; details vm-5) ---
    BC_BLOCK_OPEN  uvar(k)     -- ; establish a BLOCK named constants[k]; catch tag
@@ -124,12 +128,13 @@ typedef enum {
     BC_LOAD_UPVAL,
     BC_NOP,
     BC_HALT,
+    BC_MV_LIST,          /* appended in vm-5 (never renumber earlier opcodes) */
     BC_OPCODE_COUNT
 } bytecode_op_t;
 
 /* Current byte-code format version — bumped when the opcode encodings change so a
-   byte-code fasl (vm-8) can refuse an incompatible image. */
-#define BYTECODE_VERSION 1
+   byte-code fasl (vm-8) can refuse an incompatible image.  v2: added BC_MV_LIST. */
+#define BYTECODE_VERSION 2
 
 /* ---- Arity descriptor -------------------------------------------------------
    A compiled function's argument shape, packed in a fixnum so the VM's entry

@@ -208,8 +208,25 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
                 close_live_pool(cp);
             }
             break; }
-        case BC_VALUES:{ uint8_t n = code[pc++];   /* minimal MV: primary only for vm-2 */
-                         Ref v0 = (n>0) ? S[sp-1] : NIL_Symbol; sp -= n; PUSH(v0); break; }
+        case BC_VALUES:{ uint8_t n = code[pc++];
+                         if(n==0){ results->count=0; PUSH(NIL_Symbol); break; }
+                         /* the n values are S[sp-n .. sp-1]; primary = S[sp-n] */
+                         for(uint8_t i=0;i<n && i<MULTIPLE_VALUES_LIMIT;i++){ results->values[i]=S[sp-n+i]; }
+                         results->count = (n<MULTIPLE_VALUES_LIMIT)?n:MULTIPLE_VALUES_LIMIT;
+                         Ref v0 = S[sp-n]; sp -= n; PUSH(v0); break; }
+        case BC_MV_LIST:{ /* replace the producer's primary (top) with the LIST of all
+                             its values (from the MV buffer) — MULTIPLE-VALUE-CALL/-PROG1. */
+                          word cnt = (word)results->count;
+                          uword cp = open_live_pool();
+                          Ref lst = NIL_Symbol;
+                          for(word i=cnt-1;i>=0;i--){
+                              Ref v = results->values[i]; add_to_live_pool(v);
+                              add_to_live_pool(lst); lst = cons(v, lst); }
+                          add_to_live_pool(lst);
+                          sp--;               /* drop the primary */
+                          PUSH(lst);
+                          close_live_pool(cp);
+                          break; }
         case BC_RETURN:{ Ref v = (sp>0) ? TOP() : NIL_Symbol;
                          if(results->count<=1 || results->values[0]!=v){ results->count=1; results->values[0]=v; }
                          goto done; }

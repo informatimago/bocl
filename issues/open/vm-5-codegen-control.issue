@@ -58,3 +58,27 @@ opcode handlers BLOCK_OPEN/CATCH_OPEN/THROW/UNWIND_PROTECT/UNWIND_LEAVE/MV_*), p
 lifting the &optional-default/supplied-p/&key/&aux restriction with a prologue.  MV
 codegen needs an mv-context threaded through %VM-GEN so single-valued tails set the
 MultipleValues buffer.  (values) the FUNCTION already works via CALL-NAMED.
+
+--------------------------------------------------------------------
+PROGRESS (v1.8.5, branch vm) — PART 2a: multiple values + non-capturing lambdas.
+
+- MULTIPLE-VALUE-CALL / MULTIPLE-VALUE-PROG1 (hence MULTIPLE-VALUE-BIND / -LIST and
+  NTH-VALUE, which macroexpand to them) now compile.  New opcode BC_MV_LIST
+  (appended; BYTECODE_VERSION -> 2) replaces a producer's primary with the LIST of
+  all its values from the MV buffer; codegen threads an mv-context (%VM-GEN-FOR-VALUES)
+  so single-valued producer tails emit VALUES 1 to sync the buffer, then builds the
+  call via the APPEND / APPLY (mv-call) and VALUES-LIST (mv-prog1) builtins.  Fixed
+  BC_VALUES (it took the wrong element as primary for n>1).
+- A NON-capturing LAMBDA in value position (:make-closure with no upvalue refs) now
+  compiles to a standalone template pushed as a constant — covers FUNCALL/MAPCAR of a
+  local lambda and the MULTIPLE-VALUE-BIND expansion's &optional/&rest lambda.  A
+  capturing lambda (a depth>0 ref) still errors clearly (real closures = vm-6).
+- Verified: tests/test_misc.c::test_vm_values (differential vs the tree-walker).
+
+Known limitation (documented, uncommon): a BLOCK that returns MULTIPLE values via
+(return-from b (values ...)) keeps only the primary — the block result travels
+through a single scratch slot.  The common MV return (a function whose last form is
+(values ...)) is unaffected (RETURN preserves the MV buffer).
+
+REMAINING (PART 2b): CATCH/THROW, UNWIND-PROTECT, dynamic (special) LET/LET*/PROGV —
+the setjmp/longjmp frame machinery wired into the VM loop.

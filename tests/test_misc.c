@@ -708,6 +708,41 @@ static void test_vm_control(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-5 (part 2a): multiple values + non-capturing lambdas -------------- */
+/* MULTIPLE-VALUE-CALL/-PROG1 (and the -BIND/-LIST/NTH-VALUE macros built on them)
+   use BC-MV-LIST + the APPEND/APPLY/VALUES-LIST builtins.  A non-capturing LAMBDA in
+   value position compiles to a standalone template pushed as a constant (real
+   closures are vm-6).  All checked differentially against the tree-walker. */
+static void test_vm_values(void){
+    uword pool = open_live_pool();
+    e("(unless (fboundp 'vm4-cmp)"
+      "  (defun vm4-cmp (lam args)"
+      "    (equal (apply (%vm-compile lam) args) (apply (eval (list 'function lam)) args))))");
+
+    /* the FUNCTION values returns MV through RETURN; primary in single-value context */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (values 1 2 3)) '())"));
+    TEST_EQ(eql, I(3),     e("(funcall (%vm-compile '(lambda (a b) (floor a b))) 17 5)"));
+    /* MULTIPLE-VALUE-LIST / -BIND / -CALL / NTH-VALUE / -PROG1 */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (multiple-value-list (values 1 2 3))) '())"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda () (multiple-value-bind (a b c) (values 10 20 30) (list a b c))) '())"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda () (multiple-value-call #'list (values 1 2) (values 3 4))) '())"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda () (nth-value 1 (values 7 8 9))) '())"));
+    TEST_EQ(eql, T_Symbol,
+            e("(vm4-cmp '(lambda () (multiple-value-list"
+              "   (multiple-value-prog1 (values 1 2) (values 9 9)))) '())"));
+    /* a compiled function returning multiple values, consumed by MULTIPLE-VALUE-BIND */
+    TEST_EQ(equal, e("'(3 2)"),
+            e("(multiple-value-list (funcall (%vm-compile '(lambda (a b) (floor a b))) 17 5)))"));
+
+    /* non-capturing LAMBDA in value position: funcall + mapcar */
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (x) (funcall (lambda (y) (* y y)) x)) '(6))"));
+    TEST_EQ(eql, T_Symbol, e("(vm4-cmp '(lambda (l) (mapcar (lambda (z) (+ z 1)) l)) '((1 2 3)))"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -720,6 +755,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm analyze",          test_vm_analyze)
     TEST_CASE("vm codegen",          test_vm_codegen)
     TEST_CASE("vm control",          test_vm_control)
+    TEST_CASE("vm values",           test_vm_values)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
