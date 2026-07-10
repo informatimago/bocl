@@ -16,6 +16,7 @@ common_SRCS = \
 	\
 	profile.c \
 	cfasl.c \
+	bytecode.c \
 	strdup.c \
 	\
 	$(DEBUG_SRCS)

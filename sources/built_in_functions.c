@@ -2,6 +2,7 @@
 #include "kernel_functions.h"
 #include "kernel_structure_functions.h"
 #include "kernel.h"
+#include "bytecode.h"
 #include "cons.h"
 #include "variable.h"
 #include "stream.h"
@@ -808,6 +809,8 @@ void kernel_FUNCTIONP(Ref function,Ref arguments,MultipleValues* results){
     results->values[0] = as_boolean(
         functionp(par_object)         /* Function (interpreted) */
         || closurep(par_object)       /* Closure (lambda/let capture) */
+        || compiled_function_p(par_object)   /* byte-code function (vm-1) */
+        || compiled_closure_p(par_object)    /* byte-code closure */
         || built_in_function_p(par_object)); /* C built-in */
     close_live_pool(pool);
 }

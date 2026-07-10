@@ -370,6 +370,28 @@ typedef struct Function            { /* both FunctionClass and CompiledFunctionC
     Ref body;
 } Function;
 
+/* Byte-code VM (plan-2, vm-1).  A CompiledFunction is an immutable TEMPLATE: the
+   bytecode + constant pool + arity/frame descriptor; a CompiledClosure pairs one
+   with its captured upvalues.  All slots are Refs (objcount counts them), so the
+   GC traces them generically.  See bytecode.h for the ISA and the arity packing. */
+typedef struct CompiledFunction    {
+    BLOCK_HEADER;                 /* objcount = 8 */
+    Ref lisp_name;                /* naming symbol, or NIL */
+    Ref lambda_list;              /* source lambda list (arglist / FLE) */
+    Ref code;                     /* (simple-array (unsigned-byte 8) (*)) — the bytecode */
+    Ref constants;                /* simple-vector — the constant pool */
+    Ref arity;                    /* fixnum: BC_ARITY_PACK(...) */
+    Ref max_stack;                /* fixnum: operand-stack depth needed */
+    Ref n_locals;                 /* fixnum: number of local slots */
+    Ref source;                   /* source lambda expression (FLE/disassemble), or NIL */
+} CompiledFunction;
+
+typedef struct CompiledClosure     {
+    BLOCK_HEADER;                 /* objcount = 2 */
+    Ref function;                 /* the CompiledFunction template */
+    Ref upvalues;                 /* simple-vector of captured cells (the display) */
+} CompiledClosure;
+
 typedef struct BuiltInFunction     {
     BLOCK_HEADER;
     Ref           lisp_name;       /* the Lisp Symbol naming the kernel function. */
@@ -469,6 +491,8 @@ typedef union Slots {
     FileStream                  file_stream;
     Closure                     closure;
     Function                    function;
+    CompiledFunction            compiled_function;
+    CompiledClosure             compiled_closure;
     BuiltInFunction             built_in_function;
     FuncallableStandardObject	funcallable_function;
     Package                     package;

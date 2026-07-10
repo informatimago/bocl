@@ -12,6 +12,7 @@
 #include "kernel_types.h"
 #include "overflow.h"   /* portable bocl_u{add,mul}_overflow for the bignum magnitude code */
 #include "kernel_objects.h"
+#include "bytecode.h"
 #include "kernel_private.h"
 #include "macros.h"
 #include "memory.h"
@@ -2580,6 +2581,8 @@ void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results)
         kernel_apply_closure(function_or_closure,&function_or_closure->slots->closure,arguments,results);}
     else if(built_in_function_p(function_or_closure)){
         kernel_apply_built_in(function_or_closure,&function_or_closure->slots->built_in_function,arguments,results);}
+    else if(compiled_function_p(function_or_closure) || compiled_closure_p(function_or_closure)){
+        bytecode_apply(function_or_closure,arguments,results);}   /* byte-code VM (vm-2) */
     else if(functionp(function_or_closure)){
         kernel_apply_function(function_or_closure,&function_or_closure->slots->function,arguments,results);}
     else{

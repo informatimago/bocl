@@ -13,6 +13,7 @@
 #include "macros.h"
 #include "memory.h"   /* open_live_pool/close_live_pool for the cfasl reader */
 #include "cfasl.h"    /* cfasl-1: binary fasl byte/varint/float primitives */
+#include "bytecode.h" /* vm-1: compiled-function object + ISA */
 
 TEST_SUITE_SETUP(misc_init){
     kernel_initialize();
@@ -418,6 +419,53 @@ static void test_cfasl_corpus(void){
     TEST_EQ(eql, I(2),     e("(aref cfg::*vec* 1)"));                      /* simple-vector */
 }
 
+/* vm-1: the compiled-function object exists, is FUNCTIONP, its accessors round-
+   trip, and the arity descriptor packs/unpacks.  No execution yet (vm-2). */
+static void test_vm_compiled_function(void){
+    uword pool = open_live_pool();
+    Ref name   = e("'vm1-cf");
+    Ref ll     = e("'(x y &optional z)");
+    Ref code   = e("\"abc\"");                 /* placeholder octet vector (bocl string) */
+    Ref consts = e("(vector 'foo 42 \"s\")");
+    word apacked = BC_ARITY_PACK(2,1,0,0,0);   /* 2 required, 1 optional, no rest/key */
+    Ref cf = compiled_function_new(name, ll, code, consts,
+                                   I(apacked), I(5), I(3), e("'(lambda (x y &optional z) x)"));
+    add_to_live_pool(cf);
+
+    /* predicates */
+    TEST_EQ(eql, T_Symbol,   compiled_function_p(cf) ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, NIL_Symbol, compiled_closure_p(cf)  ? T_Symbol : NIL_Symbol);
+
+    /* accessors round-trip what was stored */
+    TEST_EQ(eql,   e("'vm1-cf"),           compiled_function_name(cf));
+    TEST_EQ(equal, e("'(x y &optional z)"),compiled_function_lambda_list(cf));
+    TEST_EQ(equal, e("\"abc\""),           compiled_function_code(cf));
+    TEST_EQ(eql,   I(5),                   compiled_function_max_stack(cf));
+    TEST_EQ(eql,   I(3),                   compiled_function_n_locals(cf));
+    TEST_EQ(eql,   e("'foo"),              svref(compiled_function_constants(cf), I(0)));
+
+    /* arity descriptor packs/unpacks */
+    word a = integer_value(compiled_function_arity(cf));
+    TEST_EQ(eql, I(2), I(BC_ARITY_REQUIRED(a)));
+    TEST_EQ(eql, I(1), I(BC_ARITY_OPTIONAL(a)));
+    TEST_EQ(eql, NIL_Symbol, BC_ARITY_REST_P(a) ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, NIL_Symbol, BC_ARITY_KEY_P(a)  ? T_Symbol : NIL_Symbol);
+
+    /* a compiled closure wraps the template */
+    Ref cc = compiled_closure_new(cf, e("(vector)"));
+    add_to_live_pool(cc);
+    TEST_EQ(eql, T_Symbol, compiled_closure_p(cc) ? T_Symbol : NIL_Symbol);
+    TEST_EQ(eql, cf, compiled_closure_function(cc));
+
+    /* CL FUNCTIONP accepts both, alongside interpreted / built-in functions */
+    set_symbol_value(e("'*vm1-cf*"), cf);
+    set_symbol_value(e("'*vm1-cc*"), cc);
+    TEST_EQ(eql, T_Symbol, e("(functionp *vm1-cf*)"));
+    TEST_EQ(eql, T_Symbol, e("(functionp *vm1-cc*)"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -425,6 +473,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl roundtrip",     test_cfasl_roundtrip)
     TEST_CASE("cfasl load file",     test_cfasl_load_file)
     TEST_CASE("cfasl corpus",        test_cfasl_corpus)
+    TEST_CASE("vm compiled-function", test_vm_compiled_function)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
