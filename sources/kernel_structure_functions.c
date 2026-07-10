@@ -5,18 +5,36 @@
 Ref LEXICAL_VARIABLE_Class;
 bool env_lexical_variable_p(Ref par_object){
     return typep(par_object,LEXICAL_VARIABLE_Class);}
+
+/* hot-2: LEXICAL-VARIABLE is the dominant wrapper on the variable hot path, and
+   its NAME/VALUE slot positions are CONSTANT once the class is defined.  The
+   generic accessors resolve them by `assq` (over the class slot list) plus a
+   live-pool dance on EVERY read/write — pure waste hot-1 measured as ~96% eval.
+   Cache the two slot indices as plain C words (NOT boxed-integer Refs, which in a
+   C static would be invisible to the collector — a rooting hazard) and read/write
+   the slot vector directly.  Populated lazily on first use; structure_class_
+   instance_slots may allocate the first time, so callers holding a fresh unrooted
+   object must root it before calling ensure (env_make_lexical_variable does). */
+static word lexvar_name_idx  = -1;
+static word lexvar_value_idx = -1;
+static void ensure_lexvar_indices(void){
+    if(lexvar_name_idx < 0){
+        Ref slots = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
+        Ref ne = assq(S(NAME), slots);
+        Ref ve = assq(S(VALUE),slots);
+        if(nullp(ne) || nullp(ve)){ FATAL("%s","NAME/VALUE not slots of LEXICAL-VARIABLE"); }
+        lexvar_name_idx  = integer_value(cdr(ne));
+        lexvar_value_idx = integer_value(cdr(ve));}}
+
 Ref env_make_lexical_variable(Ref par_name, Ref par_value){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     add_to_live_pool(par_value);
+    ensure_lexvar_indices();      /* inputs rooted first: ensure may allocate on its first call */
     Ref instance = make_structure_instance(LEXICAL_VARIABLE_Class);
-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
-    {   Ref entry = assq(S(NAME),pos);
-        if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
-        structure_set(par_name,instance,cdr(entry));}
-    {   Ref entry = assq(S(VALUE),pos);
-        if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LEXICAL-VARIABLE"); }
-        structure_set(par_value,instance,cdr(entry));}
+    instance->slots->vector_of_object.elements[lexvar_name_idx]  = par_name;
+    instance->slots->vector_of_object.elements[lexvar_value_idx] = par_value;
+    gc_write_barrier(instance->slots);
     close_live_pool(pool);
     add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
     return instance;}
@@ -43,15 +61,9 @@ Ref copy_lexical_variable(Ref par_lexical_variable_instance){
     add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
     return instance;}
 Ref env_lexical_variable_name(Ref par_lexical_variable_instance){
-    uword pool=open_live_pool();
-    add_to_live_pool(par_lexical_variable_instance);
     check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
-    Ref entry = assq(S(NAME),pos);
-    if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
-    Ref result=structure_get(par_lexical_variable_instance,cdr(entry));
-    close_live_pool(pool);
-    return result;}
+    ensure_lexvar_indices();
+    return par_lexical_variable_instance->slots->vector_of_object.elements[lexvar_name_idx];}
 Ref set_env_lexical_variable_name(Ref par_new_name, Ref par_lexical_variable_instance){
     uword pool=open_live_pool();
     add_to_live_pool(par_new_name);
@@ -64,25 +76,14 @@ Ref set_env_lexical_variable_name(Ref par_new_name, Ref par_lexical_variable_ins
     close_live_pool(pool);
     return par_new_name;}
 Ref env_lexical_variable_value(Ref par_lexical_variable_instance){
-    uword pool=open_live_pool();
-    add_to_live_pool(par_lexical_variable_instance);
     check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
-    Ref entry = assq(S(VALUE),pos);
-    if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LEXICAL-VARIABLE"); }
-    Ref result=structure_get(par_lexical_variable_instance,cdr(entry));
-    close_live_pool(pool);
-    return result;}
+    ensure_lexvar_indices();
+    return par_lexical_variable_instance->slots->vector_of_object.elements[lexvar_value_idx];}
 Ref set_env_lexical_variable_value(Ref par_new_value, Ref par_lexical_variable_instance){
-    uword pool=open_live_pool();
-    add_to_live_pool(par_new_value);
-    add_to_live_pool(par_lexical_variable_instance);
     check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
-    Ref entry = assq(S(VALUE),pos);
-    if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LEXICAL-VARIABLE"); }
-    structure_set(par_new_value,par_lexical_variable_instance,cdr(entry));
-    close_live_pool(pool);
+    ensure_lexvar_indices();
+    par_lexical_variable_instance->slots->vector_of_object.elements[lexvar_value_idx]=par_new_value;
+    gc_write_barrier(par_lexical_variable_instance->slots);
     return par_new_value;}
 Ref CONSTANT_VARIABLE_Class;
 bool env_constant_variable_p(Ref par_object){
