@@ -40,19 +40,25 @@ allocation bound** (GC ~2% prelude / ~12% loop code) — the VM is the real leve
   tree-walker). No TCO yet (CALL+RETURN); closures/control/&key/&aux/special-LET
   error clearly; COMPILE/COMPILE-FILE not rewired (vm-8).
 
-REMAINING: vm-5 (codegen control) →
+- **vm-5 PARTS 1 & 2a** — control/values codegen, done at v1.8.4/v1.8.5.
+  Part 1: lexical BLOCK/RETURN-FROM/TAGBODY/GO compile to byte-code JUMPs (all
+  non-escaping since closures are vm-6) with an operand-stack cut + a scratch result
+  slot — real loops (DOTIMES/DO/DOLIST) run. Part 2a: MULTIPLE-VALUE-CALL/-PROG1
+  (hence -BIND/-LIST, NTH-VALUE) via the new BC_MV_LIST opcode (BYTECODE_VERSION→2) +
+  APPEND/APPLY/VALUES-LIST; non-capturing lambdas compile to a standalone template
+  constant. Tested in test_misc.c (test_vm_control / test_vm_values).
+
+REMAINING: vm-5 PART 2b (dynamic NLX) →
 vm-6 (closures + interop) → vm-7 (CLOS inline cache) → vm-8 (byte-code fasl) →
 vm-9 (self-host prelude + validate). Issues in `issues/open/vm-*.issue`.
 
-**vm-5 starts here:** the analyzer already emits the control IR nodes (`:block`,
-`:return-from`, `:tagbody`, `:go`, `:catch`, `:throw`, `:unwind-protect`,
-`:mv-call`, `:mv-prog1`, `:progv`, `:load-time-value`) and dynamic-bind LET
-entries (`(:special name init)`); `%VM-GEN` currently errors on all of them.
-Implement their codegen + the VM opcode handlers (BLOCK_OPEN/RETURN_FROM/
-CATCH_OPEN/THROW/UNWIND_PROTECT/UNWIND_LEAVE/MV_*), mirroring eval.c's Frame /
-setjmp machinery, plus dynamic (special) binding save/restore. Also lift the
-&optional-default / supplied-p / &key / &aux restriction from
-`%VM-CHECK-CORE-LAMBDA-LIST` by emitting a prologue.
+**vm-5 PART 2b starts here:** the setjmp/longjmp dynamic NLX — CATCH/THROW,
+UNWIND-PROTECT, and dynamic (special) LET/LET*/PROGV binding.  `%VM-GEN` still errors
+on `:catch/:throw/:unwind-protect/:progv/:load-time-value` and on `(:special ...)`
+LET entries.  The COMPLETE implementation design (exported eval.c symbols, the
+VM-loop volatile-nvf/vframes[] setjmp protocol, GC rooting, per-opcode codegen, and
+lifting the &optional-default/&key/&aux lambda-list restriction) is written up in
+`issues/open/vm-5-codegen-control.issue` (PART 2b — DESIGN & HANDOFF).
 
 ---
 

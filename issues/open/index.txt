@@ -57,11 +57,12 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-*** BYTE-CODE COMPILER (plan-2): vm-1..vm-4 DONE (on branch `vm`, v1.8.3).  Before
-    implementing vm-5..vm-9, READ issues/open/vm-COMPILER-PLAN.md — the design
-    decisions, IR, conventions, file map and per-phase plan.  Continue on branch vm.
-    vm-3 = the Lisp analyzer (%VM-ANALYZE); vm-4 = codegen core (%VM-COMPILE runs
-    the everyday forms on the VM).  vm-5 (control / NLX codegen) is next. ***
+*** BYTE-CODE COMPILER (plan-2): vm-1..vm-4 DONE + vm-5 PARTS 1/2a DONE (branch `vm`,
+    v1.8.5).  Before continuing, READ issues/open/vm-COMPILER-PLAN.md (design/IR/plan).
+    vm-3 = analyzer (%VM-ANALYZE); vm-4 = codegen core (%VM-COMPILE); vm-5.1 = lexical
+    control (block/tagbody/go/return-from as jumps — loops run); vm-5.2a = multiple
+    values + non-capturing lambdas.  NEXT: vm-5 PART 2b — dynamic NLX (CATCH/THROW,
+    UNWIND-PROTECT, special binding); full design is in vm-5-codegen-control.issue. ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
