@@ -443,6 +443,23 @@ void eval_init_stack_guard(char* approx_base){
 /* The guard's limit (bytes) and the current control-stack usage, for filling the
    slots of BOCL:OUT-OF-STACK-MEMORY-ERROR (issue precise-condition-subclasses). */
 size_t eval_stack_guard_limit(void){ return g_stack_limit; }
+
+/* Shared control-stack guard, used by evale (inline, below) AND bytecode_apply: deep
+   NON-tail VM recursion signals a catchable STORAGE-CONDITION instead of crashing the C
+   stack.  (Tail calls reuse the C frame via the trampoline, so they never trip this.) */
+void eval_stack_guard_check(void){
+    char probe;
+    if(g_stack_base != NULL){
+        size_t used = (size_t)(g_stack_base - &probe);
+        if(used > g_stack_limit){
+            if(g_stack_guard_armed){
+                g_stack_guard_armed = false;
+                stack_overflow_error();        /* signals; no return */
+            }
+        } else {
+            g_stack_guard_armed = true;
+        }}}
+
 size_t eval_stack_guard_used(void){
     char probe;
     if(g_stack_base != NULL && g_stack_base > &probe){

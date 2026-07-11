@@ -138,6 +138,7 @@ typedef enum {
     BC_PROGV_UNBIND,     /* vm-5: PROGV — normal exit: restore all + pop */
     BC_HANDLER_BIND_OPEN,/* vm-conditions: push a frame_handler_bind (bindings on stack) */
     BC_HANDLER_BIND_CLOSE,/* vm-conditions: normal exit — pop the handler-bind frame */
+    BC_TAIL_CALL_NAMED,  /* vm-6b: TAIL_CALL by name (uvar s, u8 n); BC_TAIL_CALL is above */
     BC_OPCODE_COUNT
 } bytecode_op_t;
 
@@ -145,8 +146,8 @@ typedef enum {
    byte-code fasl (vm-8) can refuse an incompatible image.  v2: BC_MV_LIST.
    v3: BC_CATCH_CLOSE + CATCH_OPEN/THROW.  v4: BC_DYNAMIC_BIND/UNBIND.
    v5: BC_UNWIND_PROTECT + BC_UNWIND_NORMAL/END.  v6: BC_PROGV_BIND/UNBIND.
-   v7: BC_HANDLER_BIND_OPEN/CLOSE. */
-#define BYTECODE_VERSION 7
+   v7: BC_HANDLER_BIND_OPEN/CLOSE.  v8: BC_TAIL_CALL / BC_TAIL_CALL_NAMED. */
+#define BYTECODE_VERSION 8
 
 /* ---- Arity descriptor -------------------------------------------------------
    A compiled function's argument shape, packed in a fixnum so the VM's entry

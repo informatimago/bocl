@@ -35,3 +35,40 @@ DISTINCT frame per iteration; micro-benchmark shows the fast APPLY beats the arg
 path; overflow signals a condition rather than crashing.
 
 DEPENDS ON: vm-6 (closures).
+
+====================================================================
+DONE (v1.8.14, branch vm) — genuine TAIL_CALL + stack-overflow signal.
+
+- GENUINE TAIL CALLS: BC_TAIL_CALL / BC_TAIL_CALL_NAMED (appended; BYTECODE_VERSION→8).
+  bytecode_apply is restructured with a `reinit:` trampoline: a call in tail position to
+  a COMPILED callee re-binds the new function into the SAME C frame (goto reinit) instead
+  of recursing through kernel_apply; a built-in / tree-walked callee falls back to
+  kernel_apply + RETURN.  Codegen threads a TAIL context (%VM-GEN-TAIL) through the
+  function body — progn-last, both IF branches, let/let* bodies — and emits TAIL_CALL
+  ONLY when no dynamic frame is active (a call inside CATCH/UNWIND-PROTECT/special-LET/
+  PROGV/HANDLER-BIND must unwind first, so it stays a normal call).
+  * CONSTANT SPACE — C-STACK: the trampoline reuses the C frame (no recursion).  HEAP:
+    each reinit TRIMS the per-call live-pool marker and re-roots the current
+    function/args/frame, so the previous iteration's arg list is freed — a tail loop is
+    constant heap too.  Verified: a 10,000,000-deep countdown and 1,000,000-deep mutual
+    even?/odd? both run to completion (test_misc.c::test_vm_tail_calls uses 1e6/2e5).
+  * CAPTURE-AWARE FRAME REUSE: a `frame_escaped` flag (set by MAKE_CLOSURE) forces a
+    FRESH frame on the next tail call, so a closure created inside a tail loop captures a
+    DISTINCT frame per iteration (verified) — the escaped frame stays alive via the
+    closure's display.
+- STACK-OVERFLOW SIGNAL: deep NON-tail VM recursion (each nested call is a new
+  bytecode_apply C frame) now calls the shared eval.c control-stack guard
+  (eval_stack_guard_check, exported) at each activation entry — it signals the catchable
+  BOCL:OUT-OF-STACK-MEMORY-ERROR (a STORAGE-CONDITION) instead of crashing, and the VM
+  recovers.  Verified in the REPL (the test harness does not arm the guard).
+- FRAME SIZE: VM_DYN_MAX cut 256 -> 32 (the vdyn[] array of jmp_buf-carrying dynamic
+  frames is on every activation's C stack; 256 made a frame ~100KB and NON-tail
+  recursion overflow at ~60 deep).  32 keeps a frame ~16KB — NON-tail depth (~200-500)
+  is now comparable to the interpreter, while 32 simultaneous dynamic frames in ONE
+  function is far more nesting than real code needs.
+
+REMAINING (optional refinement): the stack-based FAST APPLY — bind a tail call's args
+directly from the operand stack into the new frame for simple arities, skipping the
+arg-list cons entirely (a speed micro-opt; the trampoline is already constant-space via
+the per-iteration pool trim).  And a lazy/heap vdyn[] would let a dynamic-frame-free
+function have a tiny frame and recurse as deep as memory allows.

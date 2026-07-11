@@ -14,6 +14,7 @@
 #include <setjmp.h>
 
 extern Ref Object_new(Ref class, Slots* slots);   /* defined in kernel.c (as in reader.c) */
+extern void eval_stack_guard_check(void);          /* eval.c: control-stack overflow guard */
 
 /* ---- dynamic non-local-exit frames for the VM (vm-5 part 2b) ----------------
    CATCH/THROW, UNWIND-PROTECT and dynamic (special) binding are DYNAMICALLY scoped:
@@ -61,7 +62,12 @@ typedef struct VmDyn {
     int    dsaved_boundp;  /* DBIND: whether it was bound */
     Ref    dlist;          /* PROGV: saved list ((sym boundp . oldvalue) ...) */
 } VmDyn;
-#define VM_DYN_MAX 256
+/* Max SIMULTANEOUS dynamic frames (CATCH/UNWIND-PROTECT/special-LET/PROGV/HANDLER-BIND)
+   open in ONE function activation — this array is on the C stack of every activation, so
+   keep it modest: each VmDyn is ~0.5KB (a jmp_buf + a MultipleValues), and a big array
+   would make NON-tail VM recursion overflow the C stack absurdly shallow.  32 is far more
+   nesting than real code needs while keeping the frame small (deep non-tail recursion). */
+#define VM_DYN_MAX 32
 
 /* Restore a PROGV frame's special variables from its saved ((sym boundp . old) ...). */
 static void vm_progv_restore(VmDyn* a){
@@ -165,30 +171,70 @@ static int64_t vm_read_svar(const octet* code, size_t* pc){
    CALLs dispatch through kernel_apply (uniform interop; the stack-based fast path
    is vm-6).  Non-control opcodes only (control / NLX are vm-5). */
 void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
-    uword pool = open_live_pool();
-    add_to_live_pool(function);
-    add_to_live_pool(arguments);
+    /* Deep NON-tail VM recursion (each nested call is a new bytecode_apply C frame via
+       kernel_apply) would overflow the C stack; signal a catchable STORAGE-CONDITION
+       instead.  Checked once per activation — a tail loop reuses this frame (goto
+       reinit) and never re-enters here, so it is not bounded by this. */
+    eval_stack_guard_check();
 
-    Ref cf       = compiled_closure_p(function) ? compiled_closure_function(function) : function;
-    Ref upvalues = compiled_closure_p(function) ? compiled_closure_upvalues(function) : NIL_Symbol;
+    /* Per-call live-pool marker: every iteration of the tail-call trampoline TRIMS the
+       pool back to here and re-roots the current function/args/frame, so a tail loop
+       (which reuses this C frame via `goto reinit`) also runs in constant HEAP space —
+       the previous iteration's arg list and stale refs are freed. */
+    uword pool = open_live_pool();
+
+    /* Per-function state — MUTABLE so a tail call can re-bind a new function into this
+       same C frame instead of recursing.  A TAIL_CALL fires only with NO dynamic frame
+       active (nvf==0, guaranteed by codegen), so no setjmp target is live across a
+       reinit and this state is never changed between a setjmp and its longjmp — hence it
+       need not be volatile (only NVF and FRAME_ESCAPED, mutated in the loop and read at
+       reinit / after a longjmp, are). */
+    Ref cf, upvalues, constants, codestr, locals = NULL, stack = NULL;
+    const octet* code; word arity, nloc, maxst;
+    Ref *L, *S, *K; void* Sbar;
+    VmDyn vdyn[VM_DYN_MAX];
+    volatile word nvf = 0;
+    volatile int  frame_escaped = 0;   /* set by MAKE_CLOSURE: this frame must not be reused */
+    size_t pc; word sp;
+
+  reinit:
+    close_live_pool(pool);             /* free the previous iteration's roots (no-op on entry) */
+    add_to_live_pool(function);        /* re-root incoming fn/args — still-valid objects (no GC
+                                          runs between the trim and here) */
+    add_to_live_pool(arguments);
+    cf       = compiled_closure_p(function) ? compiled_closure_function(function) : function;
+    upvalues = compiled_closure_p(function) ? compiled_closure_upvalues(function) : NIL_Symbol;
     add_to_live_pool(cf);
     add_to_live_pool(upvalues);
     check_type(cf, COMPILED_FUNCTION_Class);
-
-    Ref  codestr   = compiled_function_code(cf);
+    codestr = compiled_function_code(cf);
     if(!stringp(codestr)){ ERROR("byte-code must be an octet (string) vector for now%s",""); }
-    const octet* code = string_octets(codestr);
-    Ref  constants = compiled_function_constants(cf);
-    word arity     = integer_value(compiled_function_arity(cf));
-    word nloc      = integer_value(compiled_function_n_locals(cf));
-    word maxst     = integer_value(compiled_function_max_stack(cf));
+    code = string_octets(codestr);
+    constants = compiled_function_constants(cf);
+    arity = integer_value(compiled_function_arity(cf));
+    nloc  = integer_value(compiled_function_n_locals(cf));
+    maxst = integer_value(compiled_function_max_stack(cf));
 
-    Ref locals = make_vm_vector(nloc);  add_to_live_pool(locals);
-    Ref stack  = make_vm_vector(maxst); add_to_live_pool(stack);
-    Ref* L = locals->slots->array.elements->elements;
-    Ref* S = stack->slots->array.elements->elements;
-    void* Sbar = stack->slots->array.elements;   /* write-barrier container, stable */
-    Ref* K = constants->slots->array.elements->elements;   /* constant pool, direct */
+    /* Frame vectors: REUSE the current ones (still valid after the trim) when the leaving
+       frame did NOT escape into a closure and they are big enough — this is what makes a
+       tail loop constant-space.  Otherwise allocate fresh (any escaped frame stays alive
+       via the capturing closure's display). */
+    if(locals != NULL && !frame_escaped
+       && vector_length(locals) >= (uword)nloc && vector_length(stack) >= (uword)maxst){
+        add_to_live_pool(locals);      /* re-root the reused vectors */
+        add_to_live_pool(stack);
+        { Ref* le = locals->slots->array.elements->elements;
+          for(word i=0;i<nloc;i++){ le[i] = NIL_Symbol; }
+          gc_write_barrier(locals->slots->array.elements); }
+    } else {
+        locals = make_vm_vector(nloc);  add_to_live_pool(locals);
+        stack  = make_vm_vector(maxst); add_to_live_pool(stack);
+    }
+    frame_escaped = 0;
+    L = locals->slots->array.elements->elements;
+    S = stack->slots->array.elements->elements;
+    Sbar = stack->slots->array.elements;                   /* write-barrier container */
+    K = constants->slots->array.elements->elements;        /* constant pool, direct */
 
     /* --- bind arguments into locals[0..] : required, optional, rest --- */
     if(BC_ARITY_RAW_P(arity)){
@@ -214,15 +260,8 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     #define POP()    (S[--sp])
     #define TOP()    (S[sp-1])
 
-    /* Dynamic (NLX) frames established by THIS activation.  NVF is volatile because
-       it is read after a longjmp to locate the active frame; PC/SP need not be (the
-       longjmp-return paths only ASSIGN them from a recovered frame, never read the
-       stale value first).  The array lives on the C stack of this activation, so its
-       jmp_bufs stay valid for its whole lifetime. */
-    VmDyn vdyn[VM_DYN_MAX];
-    volatile word nvf = 0;
-
-    size_t pc = 0; word sp = 0;
+    nvf = 0;
+    pc = 0; sp = 0;
     results->count = 1; results->values[0] = NIL_Symbol;
     for(;;){
         uint8_t op = code[pc++];
@@ -264,6 +303,7 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
                 svref_set(disp, integer_from_word((word)(k+1)),
                           svref(upvalues, integer_from_word((word)k))); }
             Ref clo = compiled_closure_new(tmpl, disp); add_to_live_pool(clo);
+            frame_escaped = 1;   /* this frame is now captured — a tail call must not reuse it */
             PUSH(clo);
             break; }
         case BC_JUMP:          { int64_t o = vm_read_svar(code,&pc); pc = (size_t)((int64_t)pc + o); break; }
@@ -299,6 +339,34 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
                 close_live_pool(cp);
             }
             break; }
+        case BC_TAIL_CALL:
+        case BC_TAIL_CALL_NAMED:{
+            /* A call in TAIL position (codegen emits these only when nvf==0).  Build the
+               arg list; if the callee is COMPILED, reuse this C frame (goto reinit) — a
+               tail loop then runs in constant C-stack space.  Otherwise (built-in /
+               tree-walked / defensively nvf>0) call through kernel_apply and RETURN the
+               result to our caller (we are in tail position). */
+            Ref callee; uint8_t n;
+            if(op==BC_TAIL_CALL_NAMED){
+                uint64_t s = vm_read_uvar(code,&pc); n = code[pc++];
+                callee = symbol_function(K[s]);
+            } else {
+                n = code[pc++];
+                callee = S[sp-n-1];
+            }
+            add_to_live_pool(callee);
+            Ref args = NIL_Symbol;
+            for(word i=sp-1;i>=(word)sp-n;i--){ add_to_live_pool(args); args = cons(S[i], args); }
+            add_to_live_pool(args);
+            if(nvf==0 && (compiled_function_p(callee) || compiled_closure_p(callee))){
+                function = callee; arguments = args;
+                goto reinit;                        /* trampoline: reuse this C frame */
+            }
+            MultipleValues r = {0};
+            kernel_apply(callee, args, &r);
+            *results = r;
+            goto done;                              /* tail position: this IS our return */
+        }
         case BC_VALUES:{ uint8_t n = code[pc++];
                          if(n==0){ results->count=0; PUSH(NIL_Symbol); break; }
                          /* the n values are S[sp-n .. sp-1]; primary = S[sp-n] */

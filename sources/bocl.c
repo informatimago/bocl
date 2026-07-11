@@ -1670,6 +1670,7 @@ static void kernel_BYTECODE_OPCODES(unused Ref f, unused Ref arguments, Multiple
     OPC("PROGV-BIND",BC_PROGV_BIND); OPC("PROGV-UNBIND",BC_PROGV_UNBIND);
     OPC("HANDLER-BIND-OPEN",BC_HANDLER_BIND_OPEN);
     OPC("HANDLER-BIND-CLOSE",BC_HANDLER_BIND_CLOSE);
+    OPC("TAIL-CALL",BC_TAIL_CALL); OPC("TAIL-CALL-NAMED",BC_TAIL_CALL_NAMED);
     OPC("VERSION",BYTECODE_VERSION);
     #undef OPC
     results->count = 1; results->values[0] = a;

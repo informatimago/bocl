@@ -653,6 +653,10 @@
   (dolist (s (svref cs 6) nil)
     (when (eq (car s) :tagbody)
       (let ((c (assoc tag (caddr s) :test #'eql))) (when c (return s))))))
+(defun %vm-cs-dframe-active-p (cs)
+  "T if any dynamic frame (:dframe — CATCH/UNWIND-PROTECT/special-LET/PROGV/HANDLER-BIND)
+   is open in codegen: a call there is NOT a true tail call (the frame must unwind first)."
+  (dolist (s (svref cs 6) nil) (when (eq (car s) :dframe) (return t))))
 
 ;;; --- asm item emitters (item forms: (:op b) (:u8 n) (:uvar n) (:label l) (:jump op l)) ---
 (defun %vm-emit-op    (cs op)      (%vm-cs-emit cs (list :op op)))
@@ -1136,6 +1140,56 @@
     (dolist (a (getf params :aux))                     ; aux = sequential init
       (%vm-gen-effect (list :lset 0 (car a) (or (cadr a) '(:const nil))) cs))))
 
+;;; --- TAIL calls (vm-6b): a call in tail position reuses the caller's VM frame via the
+;;; trampoline in bytecode_apply (constant C-stack space for loops-as-recursion). ---
+(defun %vm-gen-tail (node cs)
+  "Generate NODE in TAIL position.  A :call/:call-named with no dynamic frame active
+   becomes a TAIL_CALL (the callee returns to OUR caller); tail context propagates
+   through :if branches, :progn's last form, and let/let* bodies.  Everything else is a
+   normal %VM-GEN — the function's trailing RETURN returns the value."
+  (if (%vm-cs-dframe-active-p cs)
+      (%vm-gen node cs)
+      (case (car node)
+        (:call-named (%vm-gen-tail-call-named (cadr node) (cddr node) cs))
+        (:call       (%vm-gen-tail-call (cadr node) (cddr node) cs))
+        (:if         (%vm-gen-tail-if node cs))
+        (:progn      (%vm-gen-tail-progn (cdr node) cs))
+        (:let        (%vm-gen-let (cadr node) (caddr node) cs nil #'%vm-gen-tail))
+        (:let*       (%vm-gen-let (cadr node) (caddr node) cs t   #'%vm-gen-tail))
+        (t           (%vm-gen node cs)))))
+
+(defun %vm-gen-tail-call-named (sym arg-irs cs)
+  (let ((base (%vm-cs-sp cs)) (n (length arg-irs)))
+    (dolist (a arg-irs) (%vm-gen a cs))                 ; args left-to-right
+    (%vm-emit-op cs (%vm-op :tail-call-named))
+    (%vm-emit-uvar cs (%vm-cs-const cs sym)) (%vm-emit-u8 cs n)
+    (%vm-cs-set-sp cs (1+ base))))                       ; phantom value (dead continuation)
+
+(defun %vm-gen-tail-call (fn-ir arg-irs cs)
+  (let ((base (%vm-cs-sp cs)) (n (length arg-irs)))
+    (%vm-gen fn-ir cs)                                   ; callee
+    (dolist (a arg-irs) (%vm-gen a cs))                 ; args
+    (%vm-emit-op cs (%vm-op :tail-call)) (%vm-emit-u8 cs n)
+    (%vm-cs-set-sp cs (1+ base))))
+
+(defun %vm-gen-tail-if (node cs)
+  (let ((l-else (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+    (%vm-gen (cadr node) cs)
+    (%vm-emit-jump cs (%vm-op :jump-if-nil) l-else) (%vm-cs-sp+ cs -1)
+    (let ((base (%vm-cs-sp cs)))
+      (%vm-gen-tail (caddr node) cs)
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-emit-label cs l-else) (%vm-cs-set-sp cs base)
+      (%vm-gen-tail (cadddr node) cs)
+      (%vm-emit-label cs l-end))))
+
+(defun %vm-gen-tail-progn (forms cs)
+  (cond ((null forms) (%vm-gen-const nil cs))
+        (t (loop for r on forms do
+             (if (cdr r)
+                 (progn (%vm-gen (car r) cs) (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))
+                 (%vm-gen-tail (car r) cs))))))
+
 (defun %vm-compile-lambda (lir)
   "Generate a runnable CompiledFunction from a (:LAMBDA ...) IR node."
   (let* ((plist   (cdr lir))
@@ -1150,8 +1204,8 @@
       (let ((al (%vm-cs-scratch cs)) (marker (list :vm-key-unsupplied)))
         (%vm-gen-effect (list :lset 0 al (list :lref 0 0)) cs)
         (%vm-gen-prologue params al marker cs)))
-    (%vm-gen body cs)
-    (%vm-emit-op cs (%vm-op :return))
+    (%vm-gen-tail body cs)                             ; body in TAIL position (emits TAIL_CALLs)
+    (%vm-emit-op cs (%vm-op :return))                 ; catches every non-tail-call fall-through
     (values
      (%make-compiled-function
       nil                                             ; anonymous template

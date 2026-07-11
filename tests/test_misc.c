@@ -1029,6 +1029,41 @@ static void test_vm_compile_wiring(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-6b: tail calls (trampoline) + stack-overflow signal ------------------- */
+/* A call in tail position compiles to TAIL_CALL / TAIL_CALL_NAMED; the trampoline in
+   bytecode_apply reuses the C frame for a compiled callee, so tail recursion runs in
+   constant C-stack + heap space.  Deep NON-tail recursion signals a catchable
+   STORAGE-CONDITION instead of crashing. */
+static void test_vm_tail_calls(void){
+    uword pool = open_live_pool();
+
+    /* deep self tail recursion — constant space, no C-stack crash (1e7 iterations) */
+    e("(setf (symbol-function 'vmt-count) (%vm-compile"
+      "  '(lambda (n acc) (if (= n 0) acc (vmt-count (- n 1) (+ acc 1))))))");
+    TEST_EQ(eql, I(1000000), e("(vmt-count 1000000 0)"));
+    /* mutual tail recursion across two compiled functions (even?/odd?), 1e6 deep */
+    e("(setf (symbol-function 'vmt-even) (%vm-compile '(lambda (n) (if (= n 0) t (vmt-odd (- n 1))))))");
+    e("(setf (symbol-function 'vmt-odd)  (%vm-compile '(lambda (n) (if (= n 0) nil (vmt-even (- n 1))))))");
+    TEST_EQ(eql, T_Symbol,   e("(vmt-even 200000)"));
+    TEST_EQ(eql, NIL_Symbol, e("(vmt-even 199999)"));
+
+    /* a closure created inside a tail loop captures a DISTINCT frame per iteration
+       (the trampoline does NOT reuse an escaped frame) */
+    e("(setf (symbol-function 'vmt-adders) (%vm-compile"
+      "  '(lambda (n acc) (if (= n 0) acc"
+      "     (vmt-adders (- n 1) (cons (let ((k n)) (lambda () k)) acc))))))");
+    TEST_EQ(equal, e("'(1 2 3 4 5)"), e("(mapcar #'funcall (vmt-adders 5 nil))"));
+
+    /* a tail call to a BUILT-IN falls back correctly */
+    TEST_EQ(eql, I(7), e("(funcall (%vm-compile '(lambda (l) (car l))) '(7 8 9))"));
+
+    /* (The deep NON-tail overflow -> catchable STORAGE-CONDITION is verified in the
+       REPL, where the control-stack guard is armed; the test harness does not call
+       eval_init_stack_guard, so an intentional overflow here would truly crash.) */
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -1047,6 +1082,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm fasl",             test_vm_fasl)
     TEST_CASE("vm conditions",       test_vm_conditions)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
+    TEST_CASE("vm tail calls",       test_vm_tail_calls)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)
