@@ -20,3 +20,21 @@ LIKELY CAUSE
   or `(set-symbol-function (symbol-function 'conditionp) 'condition-p)` — and the loader's
   per-form recovery skips forward.  Find the erroring form (load the prelude with a form-by-
   form trace / *load-verbose*) and fix it so the whole section loads.
+
+====================================================================
+NOT A BUG — closed (v1.8.25).  The reported "skip" was a DIAGNOSTIC ARTIFACT: the symptom
+command tested (fboundp 'condition-report-string) from CL-USER, but CONDITION-REPORT-STRING /
+SIMPLE-CONDITION-P / CONDITION-P are internal to COMMON-LISP (not exported), so the unqualified
+CL-USER symbol is a DIFFERENT, unbound symbol -> fboundp NIL.  In the COMMON-LISP package they
+are all fbound, and they work:
+    condition-p, simple-condition-p, condition-report-string -> T / correct results
+    make-condition CLOS routing (the 5796 redefinition) -> a user DEFINE-CONDITION instance's
+    reader returns its slot.
+So the whole condition-utilities section loads fine at boot; nothing is skipped.
+
+Follow-up done: the vm-conditions EXITED-extent conditions, which had been placed in the
+DEFCLASS block on the strength of this false premise, were moved back to their natural spot
+(DEFINE-CONDITION next to CONDITION-REPORT-STRING) and verified (class + signalers load, the
+interpreted + compiled RETURN-FROM/GO-exited behaviour and HANDLER-BIND diversion still work).
+The real, separate condition-printing limitation is clos-condition-report-not-printed.issue.
+====================================================================
