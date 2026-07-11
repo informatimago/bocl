@@ -91,6 +91,9 @@ Ref environment_frames(Ref environment){
           case frame_restart:
               push(list(S(RESTART),frame_env,frame->parameters.restart.restarts,NULL),&results);
               break;
+          case frame_vm_call:  /* byte-code VM markers live on g_frame_stack only, never on an
+                                  environment's lexical frame list, so this is unreachable here. */
+              break;
           default: break;}
         frame=frame->next;}
     results=nreverse(results);

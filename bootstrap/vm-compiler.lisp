@@ -1272,8 +1272,12 @@
    function.  Any error from the VM path falls back rather than propagating."
   (let ((lam (and *vm-compile-enable* (%vm-lambda-of definition))))
     (if lam
+        ;; Fall back on ANY serious condition, not just ERROR: byte-compiling a deeply
+        ;; nested form can exhaust the control stack (a STORAGE-CONDITION, which is NOT an
+        ;; ERROR) — the interpreted path is always correct, so never let a compile failure
+        ;; escape.  (vm-9: this keeps COMPILE-FILE of a whole prelude from aborting.)
         (handler-case (%vm-compile lam)
-          (error () (%vm-compile-interpreted definition)))
+          (serious-condition () (%vm-compile-interpreted definition)))
         (%vm-compile-interpreted definition))))
 
 ;;; Now that COMPILE emits real byte-code, CL:COMPILED-FUNCTION-P must recognise it
@@ -1297,8 +1301,120 @@
              (and (consp fn) (eq (car fn) 'function)
                   (consp (cadr fn)) (eq (car (cadr fn)) 'lambda))))
       (let ((template (handler-case (%vm-compile (cadr (fourth form)))
-                        (error () nil))))
+                        ;; SERIOUS-CONDITION, not ERROR: a stack overflow while compiling
+                        ;; one form must leave the rest of the file compilable (this form
+                        ;; simply stays interpreted).  vm-9.
+                        (serious-condition () nil))))
         (if template
             (list (car form) (second form) (third form) (list 'quote template))
             form))
       form))
+
+;;; ===========================================================================
+;;; vm-9 — byte-code DISASSEMBLE
+;;; ---------------------------------------------------------------------------
+;;; A disassembler for CompiledFunction / CompiledClosure templates: it decodes the
+;;; octet code stream into a readable opcode listing (mnemonic + operands, with
+;;; constants and jump targets resolved).  DISASSEMBLE (CLHS 25.1) prints it and
+;;; returns NIL.  The operand-format table must match the encodings the codegen emits
+;;; and the VM decodes; %VM-DISASSEMBLE consumes the stream octet-for-octet and prints
+;;; a warning if it does not decode cleanly (a self-check against table drift).
+;;; ===========================================================================
+
+(defparameter *vm-operand-formats*
+  '((:push-const  :const)
+    (:drop        :u8)
+    (:load-local  :uvar :uvar)  (:store-local :uvar :uvar)
+    (:load-global :gconst)      (:store-global :gconst)  (:load-function :gconst)
+    (:make-closure :tmpl)
+    (:jump :svar) (:jump-if-nil :svar) (:jump-if-not-nil :svar)
+    (:call :u8) (:call-named :gconst :u8)
+    (:tail-call :u8) (:tail-call-named :gconst :u8)
+    (:values :u8)
+    (:catch-open :svar) (:dynamic-bind :gconst) (:unwind-protect :svar))
+  "Opcode keyword -> list of operand kinds (:u8 :uvar :svar :const :gconst :tmpl).
+   Opcodes absent from this table take no operands.  :const/:gconst/:tmpl are a :uvar
+   index into the constant pool (a value / a symbol / a nested template).")
+
+(defun %vm-opcode-names ()
+  "Alist (number . keyword) inverting *VM-OPCODES* (drops the :VERSION pseudo-entry)."
+  (let ((out '()))
+    (dolist (pair *vm-opcodes* out)
+      (unless (eq (car pair) :version)
+        (push (cons (cdr pair) (car pair)) out)))))
+
+(defun %vm-code-octet (code i) (char-code (char code i)))
+
+(defun %vm-decode-uvar (code pos)
+  "Read an unsigned LEB128 varint at POS; return (values value new-pos)."
+  (let ((val 0) (shift 0) (i pos))
+    (loop
+      (let ((b (%vm-code-octet code i)))
+        (incf i)
+        (setq val (logior val (ash (logand b #x7f) shift)))
+        (incf shift 7)
+        (when (zerop (logand b #x80)) (return))))
+    (values val i)))
+
+(defun %vm-decode-svar (code pos)
+  "Read a zig-zag LEB128 signed varint at POS; return (values value new-pos)."
+  (multiple-value-bind (z i) (%vm-decode-uvar code pos)
+    (values (if (evenp z) (ash z -1) (- (- (ash z -1)) 1)) i)))
+
+(defun %vm-disassemble (object &optional (stream *standard-output*))
+  "Print a byte-code listing of OBJECT (a CompiledFunction / CompiledClosure) to STREAM.
+   Returns NIL.  Warns if the code stream does not decode octet-for-octet."
+  (multiple-value-bind (name code constants) (%compiled-function-parts object)
+    (unless (stringp code)
+      (format stream "~&;; ~S is not a byte-compiled function~%" object)
+      (return-from %vm-disassemble nil))
+    (let ((names (%vm-opcode-names)) (len (length code)) (pc 0))
+      (format stream "~&;; disassembly of ~A (~D octets):~%"
+              (if name (prin1-to-string name) "an anonymous function") len)
+      (block walk
+        (loop while (< pc len) do
+          (let* ((op (%vm-code-octet code pc)) (kw (cdr (assoc op names))) (start pc))
+            (incf pc)
+            (when (null kw)
+              (format stream ";; ~4D  <unknown opcode ~D> — stopping~%" start op)
+              (return-from walk))
+            (let ((opnds '()))
+              (dolist (fmt (cdr (assoc kw *vm-operand-formats*)))
+                (ecase fmt
+                  (:u8   (push (format nil "~D" (%vm-code-octet code pc)) opnds) (incf pc))
+                  (:uvar (multiple-value-bind (v np) (%vm-decode-uvar code pc)
+                           (push (format nil "~D" v) opnds) (setq pc np)))
+                  (:svar (multiple-value-bind (v np) (%vm-decode-svar code pc)
+                           (push (format nil "@~D" (+ np v)) opnds) (setq pc np)))
+                  ((:const :gconst :tmpl)
+                   (multiple-value-bind (v np) (%vm-decode-uvar code pc)
+                     (let ((k (and (vectorp constants) (< v (length constants)) (aref constants v))))
+                       (push (if (eq fmt :tmpl)
+                                 (format nil "~D=~:[<template>~;~:*~S~]" v
+                                         (and (%compiled-function-p k)
+                                              (nth-value 0 (%compiled-function-parts k))))
+                                 (format nil "~D=~S" v k))
+                             opnds))
+                     (setq pc np)))))
+              (format stream ";; ~4D  ~A~{ ~A~}~%"
+                      start (string-downcase (symbol-name kw)) (nreverse opnds))))))
+      (when (> pc len)
+        (format stream ";; WARNING: decoded ~D octets past the ~D-octet code vector~%" pc len))))
+  nil)
+
+;;; DISASSEMBLE (redefined; vm-compiler loads last) now prints byte-code for a compiled
+;;; function and still falls back to the macroexpanded lambda for an interpreted one.
+(defun disassemble (fn)
+  "Write FN's disassembly to *STANDARD-OUTPUT* and return NIL (CLHS 25.1).  For a
+   byte-compiled function this is the VM opcode listing (%VM-DISASSEMBLE); for an
+   interpreted function it is the macroexpanded lambda expression (bocl keeps no native
+   code).  FN is a function, a function-name, or a (LAMBDA ...) expression (compiled
+   first)."
+  (let ((f (cond ((and (consp fn) (eq (car fn) 'lambda)) (compile nil fn))
+                 ((and (symbolp fn) (fboundp fn))        (symbol-function fn))
+                 (t                                       fn))))
+    (if (%compiled-function-p f)
+        (%vm-disassemble f)
+        (let ((expr (function-lambda-expression f)))
+          (when expr (fresh-line) (prin1 expr) (terpri))))
+    nil))

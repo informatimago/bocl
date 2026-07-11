@@ -32,6 +32,13 @@ static void vm_push_frame(Frame* f){
     f->env_next = NULL; f->frame = NULL; f->target = NULL; }
 static Frame* vm_pop_frame(void){
     Frame* r = g_frame_stack; if(r){ g_frame_stack = r->next; } return r; }
+/* Pop any frame_vm_call backtrace markers off the top and return the first frame that
+   can RECEIVE control (has a live setjmp).  A marker carries no jmp_buf, so an unwind
+   must never longjmp to one; and an unwind THROUGH this activation discards its marker
+   anyway, so popping them here is exactly right.  Markers are never unwind targets. */
+static Frame* vm_top_live_frame(void){
+    while(g_frame_stack && g_frame_stack->type==frame_vm_call){ g_frame_stack = g_frame_stack->next; }
+    return g_frame_stack; }
 static Frame* vm_find_catch_frame(Ref tag){
     for(Frame* f=g_frame_stack; f; f=f->next){
         if(f->type==frame_catch && f->parameters.catch.object==tag){ return f; } }
@@ -39,7 +46,7 @@ static Frame* vm_find_catch_frame(Ref tag){
 /* Continue the unwind cascade after POPPED has been removed: hand control to the new
    top with the right code (target if it is POPPED's destination, else unwind). */
 static _Noreturn void vm_unwind_next_frame(Frame* popped){
-    Frame* next = g_frame_stack;
+    Frame* next = vm_top_live_frame();   /* skip backtrace markers: they carry no setjmp */
     if(next==NULL){ FATAL("vm_unwind_next_frame: %s","no next frame; target not reached"); }
     non_local_exit_t code = (next==popped->target) ? non_local_exit_target : non_local_exit_unwind;
     next->target = popped->target;
@@ -216,6 +223,13 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     volatile word nvf = 0;
     volatile int  frame_escaped = 0;   /* set by MAKE_CLOSURE: this frame must not be reused */
     size_t pc; word sp;
+    /* Backtrace marker for THIS activation (vm-9): a no-setjmp frame on g_frame_stack so a
+       compiled call shows up in (BACKTRACE) like a tree-walked one.  Pushed once; a tail
+       call (goto reinit) reuses this C frame, so we UPDATE the marker in place rather than
+       stack a new one each iteration.  callframe.parameters.block: name = the function's
+       name, function = the CompiledFunction, environment = the argument LIST (repurposed —
+       the VM has no Environment object; %BACKTRACE reads it as the args for this frame). */
+    Frame callframe; int callframe_pushed = 0;
 
   reinit:
     close_live_pool(pool);             /* free the previous iteration's roots (no-op on entry) */
@@ -279,6 +293,16 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     #define PUSH(v)  do { S[sp] = (v); gc_write_barrier(Sbar); sp++; } while(0)
     #define POP()    (S[--sp])
     #define TOP()    (S[sp-1])
+
+    /* Publish the backtrace marker (name + function + args).  Push once; on a tail-call
+       reinit (nvf==0 guaranteed, so this marker is still the frame-stack top) just refresh
+       its fields.  Its Refs stay live via the activation's live pool (g_frame_stack is not
+       GC-scanned), which the trim/re-root above keeps rooted. */
+    callframe.type = frame_vm_call;
+    callframe.parameters.block.name        = compiled_function_name(cf);
+    callframe.parameters.block.function    = cf;
+    callframe.parameters.block.environment = arguments;   /* the arg list, not an Environment */
+    if(!callframe_pushed){ vm_push_frame(&callframe); callframe_pushed = 1; }
 
     nvf = 0;
     pc = 0; sp = 0;
@@ -593,7 +617,7 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
             Frame* target = vm_find_catch_frame(tag);
             if(target==NULL){ ERROR("THROW: no CATCH is active for the thrown tag%s",""); }
             if(target->results != results){ *(target->results) = *results; }
-            Frame* top = g_frame_stack;
+            Frame* top = vm_top_live_frame();   /* skip backtrace markers (no setjmp) */
             if(top==NULL){ ERROR("THROW: %s","no active frame"); }
             top->target = target;
             longjmp(top->non_local_exit,
@@ -611,4 +635,9 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     #undef PUSH
     #undef POP
     #undef TOP
+    /* Remove our backtrace marker.  On a normal return nvf==0, so the marker is the
+       frame-stack top (any dynamic frames the body opened were balanced-closed).  An
+       unwind that longjmps PAST this activation never reaches here — the cascade
+       (vm_top_live_frame) already popped the marker on its way out. */
+    if(callframe_pushed && g_frame_stack==&callframe){ vm_pop_frame(); }
     close_live_pool(pool);}

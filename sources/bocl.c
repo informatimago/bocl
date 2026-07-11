@@ -1635,6 +1635,19 @@ static void kernel_COMPILED_FUNCTION_P(unused Ref f, Ref arguments, MultipleValu
     results->count=1;
     results->values[0] = (compiled_function_p(o) || compiled_closure_p(o)) ? T_Symbol : NIL_Symbol;}
 
+/* (%COMPILED-FUNCTION-PARTS object) -> (values name code constants arity), the raw
+   template fields the byte-code DISASSEMBLE (vm-9) decodes.  Accepts a CompiledFunction
+   or a CompiledClosure (unwrapped to its template).  NIL for anything else. */
+static void kernel_COMPILED_FUNCTION_PARTS(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref o = cons_car(arguments);
+    if(compiled_closure_p(o)){ o = compiled_closure_function(o); }
+    if(!compiled_function_p(o)){ results->count=1; results->values[0]=NIL_Symbol; return; }
+    results->count = 4;
+    results->values[0] = compiled_function_name(o);
+    results->values[1] = compiled_function_code(o);
+    results->values[2] = compiled_function_constants(o);
+    results->values[3] = compiled_function_arity(o);}
+
 /* (%BYTECODE-OPCODES) -> an alist ((:opcode-name . value) ...) plus
    (:version . BYTECODE_VERSION), built straight from the C enum so the Lisp codegen
    has a SINGLE source of truth for opcode numbers (no hard-coded magic constants
@@ -1978,6 +1991,8 @@ void bocl_register_load(void){
         set_symbol_function(sc,built_in_function_new(sc,NIL_Symbol,kernel_BYTECODE_OPCODES)); }
     {   Ref sc=symbol_intern_cstring("%COMPILED-FUNCTION-P");
         set_symbol_function(sc,built_in_function_new(sc,list(S(OBJECT),NULL),kernel_COMPILED_FUNCTION_P)); }
+    {   Ref sc=symbol_intern_cstring("%COMPILED-FUNCTION-PARTS");
+        set_symbol_function(sc,built_in_function_new(sc,list(S(OBJECT),NULL),kernel_COMPILED_FUNCTION_PARTS)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");

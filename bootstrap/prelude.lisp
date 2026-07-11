@@ -9622,7 +9622,15 @@ result array; return that array."
              name)
             ((symbolp name)
              (let ((fn (%compile-definition definition)))
-               (when (functionp fn) (setf (symbol-function name) fn))
+               (cond
+                 ;; A byte-compiled function: install it NAME-PRESERVINGLY so its
+                 ;; lisp_name is NAME (BACKTRACE / FUNCTION-LAMBDA-EXPRESSION report it),
+                 ;; keeping any existing documentation.  DEFINE-FUNCTION does the stamping.
+                 ((and (compiled-function-p fn) (find-package "BOCL")
+                       (find-symbol "DEFINE-FUNCTION" "BOCL"))
+                  (funcall (find-symbol "DEFINE-FUNCTION" "BOCL")
+                           name (documentation name 'function) fn))
+                 ((functionp fn) (setf (symbol-function name) fn)))
                name))
             (t (error "COMPILE: NAME must be NIL or a symbol, got ~S" name)))))
     (values result nil nil)))

@@ -135,6 +135,10 @@ typedef enum {
     frame_handler_bind,          /* HANDLER-BIND: call handler in signal's dynamic context */
     frame_handler_bind_inactive, /* same frame, temporarily deactivated while handler runs */
     frame_restart,
+    frame_vm_call,               /* byte-code VM activation marker: name+function+args for the
+                                    backtrace ONLY.  Carries NO setjmp (unlike every other frame),
+                                    so the unwind cascade must SKIP it; never a RETURN-FROM/THROW
+                                    target (the VM handles BLOCK/TAGBODY lexically). */
 } frame_type;
 
 typedef struct Frame {

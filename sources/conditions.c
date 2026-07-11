@@ -6,6 +6,7 @@
 #include "variable.h"
 #include "stream.h"
 #include "printer.h"
+#include "bytecode.h"    /* compiled_function_lambda_list — for frame_vm_call backtrace frames */
 
 extern Ref Object_new(Ref class, Slots* slots);
 
@@ -517,6 +518,26 @@ static void kernel_BACKTRACE(unused Ref function, unused Ref arguments, Multiple
                 desc = list(keyword_intern_cstring("BLOCK"), f->parameters.block.name, NULL);
             }
             break;
+          case frame_vm_call: {
+            /* A byte-code VM activation (vm-9): report it as a :CALL frame exactly like a
+               tree-walked one — (:CALL name (param . value) ...).  block.function is the
+               CompiledFunction and block.environment is the argument LIST (the VM has no
+               Environment object).  Pair the lambda-list's leading required parameters with
+               their argument values (best-effort: stop at the first &-keyword / non-symbol,
+               so &optional/&rest/&key niceties don't matter for the backtrace). */
+            Ref cf = f->parameters.block.function;
+            Ref binds = NIL_Symbol;
+            for(Ref p = compiled_function_lambda_list(cf), a = f->parameters.block.environment;
+                consp(p) && consp(a); p = cons_cdr(p), a = cons_cdr(a)){
+                Ref pv = cons_car(p);
+                if(!symbolp(pv)){ break; }
+                { const char* nm = string_cstring(symbol_name(pv)); if(nm && nm[0]=='&'){ break; } }
+                Ref pair = cons(pv, cons_car(a));
+                add_to_live_pool(pair);
+                push(pair, &binds); add_to_live_pool(binds); }
+            binds = nreverse(binds); add_to_live_pool(binds);
+            desc = cons(keyword_intern_cstring("CALL"), cons(f->parameters.block.name, binds));
+            break; }
           case frame_catch:
             desc = list(keyword_intern_cstring("CATCH"), f->parameters.catch.object, NULL); break;
           case frame_tagbody:

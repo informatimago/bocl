@@ -1119,6 +1119,75 @@ static void test_vm_clos_cache(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-9: byte-code frames in the backtrace --------------------------------- */
+/* A byte-code activation pushes a frame_vm_call marker on g_frame_stack, so a compiled
+   call appears in (BACKTRACE) as a :CALL frame with its name + argument bindings, just
+   like a tree-walked one.  The marker carries no setjmp; the unwind cascade skips it,
+   so THROW / errors through compiled frames still work (also covered by test_vm_nlx). */
+static void test_vm_backtrace(void){
+    uword pool = open_live_pool();
+
+    /* two compiled functions; the inner one captures the backtrace.  OUTER binds the
+       result in a LET so the call to INNER is NOT in tail position — otherwise the
+       trampoline (correctly) reuses OUTER's frame for INNER and OUTER would not appear
+       (that TCO frame-merge is a feature, exercised by test_vm_tail_calls). */
+    e("(bocl:define-function 'v9bt-inner nil (%vm-compile '(lambda (a b) (bocl:backtrace))))");
+    e("(bocl:define-function 'v9bt-outer nil (%vm-compile '(lambda (x) (let ((r (v9bt-inner x (* x 2)))) r))))");
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (symbol-function 'v9bt-inner)) t nil)"));
+
+    /* both compiled frames show up as named :CALL frames */
+    e("(defvar *v9bt* (v9bt-outer 5))");
+    e("(defvar *v9bt-calls* (remove-if-not (lambda (f) (eq (bocl:frame-kind f) :call)) *v9bt*))");
+    TEST_EQ(eql, T_Symbol,
+            e("(if (find 'v9bt-inner *v9bt-calls* :key #'bocl:frame-name) t nil)"));
+    TEST_EQ(eql, T_Symbol,
+            e("(if (find 'v9bt-outer *v9bt-calls* :key #'bocl:frame-name) t nil)"));
+    /* and the argument bindings are recovered: inner A=5, outer X=5 */
+    TEST_EQ(eql, I(5),
+            e("(cdr (assoc 'a (bocl:frame-bindings"
+              "  (find 'v9bt-inner *v9bt-calls* :key #'bocl:frame-name))))"));
+    TEST_EQ(eql, I(5),
+            e("(cdr (assoc 'x (bocl:frame-bindings"
+              "  (find 'v9bt-outer *v9bt-calls* :key #'bocl:frame-name))))"));
+
+    /* unwind-safety: a THROW crossing a compiled frame still delivers its value (the
+       marker skip must not corrupt the cascade) */
+    e("(bocl:define-function 'v9bt-thrower nil (%vm-compile '(lambda () (throw 'v9tag 42))))");
+    e("(bocl:define-function 'v9bt-mid nil (%vm-compile '(lambda () (v9bt-thrower))))");
+    TEST_EQ(eql, I(42), e("(catch 'v9tag (v9bt-mid))"));
+
+    close_live_pool(pool);
+}
+
+/* ---- vm-9: byte-code DISASSEMBLE --------------------------------------------- */
+/* %VM-DISASSEMBLE decodes a CompiledFunction's octet stream into a mnemonic listing
+   with constants + jump targets resolved.  The decoder consumes the code octet-for-octet
+   (a self-check against operand-table drift): a clean listing has no "unknown opcode"
+   and no "WARNING" (over-read) line, and includes the terminal RETURN. */
+static void test_vm_disassemble(void){
+    uword pool = open_live_pool();
+
+    /* branch + arithmetic + named calls */
+    e("(defvar *v9d1* (with-output-to-string (o)"
+      "  (%vm-disassemble (compile nil '(lambda (x) (if (> x 0) (* x x) 0))) o)))");
+    TEST_EQ(eql, T_Symbol, e("(if (search \"return\" *v9d1*) t nil)"));
+    TEST_EQ(eql, T_Symbol, e("(if (search \"call-named\" *v9d1*) t nil)"));
+    TEST_EQ(eql, NIL_Symbol, e("(if (search \"unknown\" *v9d1*) t nil)"));
+    TEST_EQ(eql, NIL_Symbol, e("(if (search \"WARNING\" *v9d1*) t nil)"));
+
+    /* a loop (jumps) + locals: still decodes clean and octet-exact */
+    e("(defvar *v9d2* (with-output-to-string (o)"
+      "  (%vm-disassemble (compile nil '(lambda (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s i)))))) o)))");
+    TEST_EQ(eql, T_Symbol,   e("(if (search \"jump\" *v9d2*) t nil)"));
+    TEST_EQ(eql, NIL_Symbol, e("(if (search \"unknown\" *v9d2*) t nil)"));
+    TEST_EQ(eql, NIL_Symbol, e("(if (search \"WARNING\" *v9d2*) t nil)"));
+
+    /* CL:DISASSEMBLE returns NIL and prints the byte-code for a compiled function */
+    TEST_EQ(eql, NIL_Symbol, e("(disassemble (compile nil '(lambda (x) (+ x 1))))"));
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -1139,6 +1208,8 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
     TEST_CASE("vm clos cache",       test_vm_clos_cache)
+    TEST_CASE("vm backtrace",        test_vm_backtrace)
+    TEST_CASE("vm disassemble",      test_vm_disassemble)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

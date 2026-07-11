@@ -176,6 +176,9 @@ unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
 static _Noreturn void unwind_next_frame(Frame* popped, unused Ref environment){
     /* `popped` has just been removed from the global frame stack; the new top
        is the next frame to unwind through on the way to popped->target. */
+    /* Skip byte-code VM call markers (frame_vm_call): they carry no setjmp, are pure
+       backtrace info, and an unwind through their activation discards them. */
+    while(g_frame_stack && g_frame_stack->type==frame_vm_call){ g_frame_stack = g_frame_stack->next; }
     Frame* next = g_frame_stack;
     if(next == NULL){
         FATAL("unwind_next_frame: %s","no next frame; target not reached");}
