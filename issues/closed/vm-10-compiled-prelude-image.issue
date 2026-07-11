@@ -47,3 +47,27 @@ iteration+multiple-values, conditions) to a byte-code fasl and runs it green.  T
 only the fast-startup packaging + selective/fast-apply strategy + boot wiring.
 
 DEPENDS ON: vm-9 (done), fast-apply (vm-6b deferred).
+
+CLOSE-OUT (v1.8.27, branch vm)
+  DONE — byte-compiled prelude boot image shipped.
+  - make target: `make -C sources prelude-image` -> bootstrap/prelude.cfasl
+    (778 fns byte-compiled; ~10 min build; gitignored generated artifact).
+  - main.c prefers a sibling prelude.cfasl when present + cfasl/byte-code
+    version-compatible (bocl_fasl_load returns NIL on mismatch -> source
+    fallback, never a half-image); --no-compiled-prelude and $BOCL_PRELUDE_IMAGE
+    override.
+  - COMPILE-FILE reworked for the bootstrap semantics concern (#3 above): the
+    whole-file MACROEXPAND-ALL is dropped (it was slow, stack-overflowed, and
+    baked the fully-booted compiler's macros into forms the boot had not reached
+    — e.g. a doc'd DEFPARAMETER's (SETF (DOCUMENTATION ...)) before that
+    setf-expander exists).  Now only DEFUNs are expanded (to BOCL:DEFINE-FUNCTION
+    for the byte-compile hook); every other form is kept RAW so LOAD expands it
+    in boot order, exactly like a source boot.  Blanket-compile (not selective)
+    turned out fine once this was fixed.
+  - Two boot-order defects fixed: SET-SYMBOL-FUNCTION now accepts a
+    COMPILED-CLOSURE (DEFGENERIC installs one); the prelude sibling loader keys
+    on the last "/" not the literal "prelude.lisp".
+  VALIDATION: full 42-suite green (source boot, shared kernel/prelude changes);
+  image boot behaviourally identical to source boot across a broad feature
+  exercise; startup ~3.17s -> ~1.07s (~3x).  New regression: test_misc
+  "vm compiled prelude".
