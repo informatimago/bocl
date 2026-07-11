@@ -139,6 +139,26 @@ typedef enum {
     BC_HANDLER_BIND_OPEN,/* vm-conditions: push a frame_handler_bind (bindings on stack) */
     BC_HANDLER_BIND_CLOSE,/* vm-conditions: normal exit — pop the handler-bind frame */
     BC_TAIL_CALL_NAMED,  /* vm-6b: TAIL_CALL by name (uvar s, u8 n); BC_TAIL_CALL is above */
+    /* vm-inline-primitives: the hottest fixed-arity standard primitives as dedicated ops.
+       No operands — they pop their args off the operand stack and push the result, skipping
+       the (build-arg-list -> kernel_apply -> C builtin) round-trip.  Codegen emits them only
+       for a call to the UNSHADOWED standard CL symbol; each computes exactly what the builtin
+       would (same numeric-tower core / same eq/eql/car), so redefinition-free programs are
+       unaffected (redefining a CL standard function is undefined, CLHS 11.1.2.1.2).       */
+    BC_ADD2,     /* (+ a b)  ( a b -- a+b )    2-arg arithmetic via num_combine            */
+    BC_SUB2,     /* (- a b)  ( a b -- a-b )                                                 */
+    BC_MUL2,     /* (* a b)  ( a b -- a*b )                                                 */
+    BC_NUM_EQ2,  /* (= a b)  ( a b -- bool )   2-arg numeric comparison                     */
+    BC_LT2,      /* (< a b)                                                                 */
+    BC_GT2,      /* (> a b)                                                                 */
+    BC_LE2,      /* (<= a b)                                                                */
+    BC_GE2,      /* (>= a b)                                                                */
+    BC_CONS,     /* (cons a b) ( a b -- (a . b) )                                           */
+    BC_CAR,      /* (car x)  ( x -- (car x) )  LIST_Class type-checked, nil-safe            */
+    BC_CDR,      /* (cdr x)                                                                 */
+    BC_EQ,       /* (eq a b) ( a b -- bool )                                                */
+    BC_EQL,      /* (eql a b)                                                               */
+    BC_NULL,     /* (null x)/(not x) ( x -- bool )                                          */
     BC_OPCODE_COUNT
 } bytecode_op_t;
 
@@ -146,8 +166,9 @@ typedef enum {
    byte-code fasl (vm-8) can refuse an incompatible image.  v2: BC_MV_LIST.
    v3: BC_CATCH_CLOSE + CATCH_OPEN/THROW.  v4: BC_DYNAMIC_BIND/UNBIND.
    v5: BC_UNWIND_PROTECT + BC_UNWIND_NORMAL/END.  v6: BC_PROGV_BIND/UNBIND.
-   v7: BC_HANDLER_BIND_OPEN/CLOSE.  v8: BC_TAIL_CALL / BC_TAIL_CALL_NAMED. */
-#define BYTECODE_VERSION 8
+   v7: BC_HANDLER_BIND_OPEN/CLOSE.  v8: BC_TAIL_CALL / BC_TAIL_CALL_NAMED.
+   v9: inline primitives (BC_ADD2..BC_NULL). */
+#define BYTECODE_VERSION 9
 
 /* ---- Arity descriptor -------------------------------------------------------
    A compiled function's argument shape, packed in a fixnum so the VM's entry

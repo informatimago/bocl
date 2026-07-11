@@ -770,12 +770,48 @@
       (%vm-gen else cs)                                  ; base -> base+1
       (%vm-emit-label cs l-end))))
 
+;;; --- inline primitives (vm-inline-primitives) ------------------------------------
+;;; A CALL to one of these UNSHADOWED standard CL functions, at the listed arg count,
+;;; compiles to a dedicated stack op (no arg-list cons, no kernel_apply) instead of
+;;; CALL_NAMED.  The op computes exactly what the builtin would (same C core), and
+;;; redefining a CL standard function is undefined (CLHS 11.1.2.1.2), so this needs no
+;;; runtime guard.  The analyzer only produces :call-named for the GLOBAL function, so a
+;;; lexical FLET/LABELS shadowing `+` is never inlined.  1+/1- expand to ADD2/SUB2 with a
+;;; literal 1 (no dedicated opcode needed).
+(defparameter *vm-inline-primitives*
+  '((+ 2 :add2) (- 2 :sub2) (* 2 :mul2)
+    (= 2 :num-eq2) (< 2 :lt2) (> 2 :gt2) (<= 2 :le2) (>= 2 :ge2)
+    (cons 2 :cons) (eq 2 :eq) (eql 2 :eql)
+    (car 1 :car) (cdr 1 :cdr) (null 1 :null) (not 1 :null)))
+
+(defun %vm-inline-op (sym n)
+  "The inline opcode keyword for a call (SYM a1..aN), or NIL if SYM/N is not inlinable."
+  (dolist (e *vm-inline-primitives* nil)
+    (when (and (eq sym (car e)) (= n (cadr e))) (return (caddr e)))))
+
+(defun %vm-inline-call-p (sym n)
+  "True when (SYM . N args) compiles to inline byte-code (a table op, or 1+/1-)."
+  (or (%vm-inline-op sym n)
+      (and (member sym '(1+ 1-)) (= n 1))))
+
 (defun %vm-gen-call-named (sym arg-irs cs)
-  (let ((n (length arg-irs)))
-    (dolist (a arg-irs) (%vm-gen a cs))                 ; args left-to-right (+n)
-    (%vm-emit-op cs (%vm-op :call-named)) (%vm-emit-uvar cs (%vm-cs-const cs sym))
-    (%vm-emit-u8 cs n)
-    (%vm-cs-sp+ cs (- 1 n))))                            ; pops n, pushes 1
+  (let* ((n (length arg-irs)) (op (%vm-inline-op sym n)))
+    (cond
+      (op                                               ; a table primitive (2-arg / 1-arg)
+       (dolist (a arg-irs) (%vm-gen a cs))              ; args left-to-right (+n)
+       (%vm-emit-op cs (%vm-op op))
+       (%vm-cs-sp+ cs (- 1 n)))                         ; pops n, pushes 1
+      ((and (eq sym '1+) (= n 1))                       ; (1+ x) -> x 1 ADD2
+       (%vm-gen (car arg-irs) cs) (%vm-gen-const 1 cs)
+       (%vm-emit-op cs (%vm-op :add2)) (%vm-cs-sp+ cs -1))
+      ((and (eq sym '1-) (= n 1))                       ; (1- x) -> x 1 SUB2
+       (%vm-gen (car arg-irs) cs) (%vm-gen-const 1 cs)
+       (%vm-emit-op cs (%vm-op :sub2)) (%vm-cs-sp+ cs -1))
+      (t
+       (dolist (a arg-irs) (%vm-gen a cs))              ; args left-to-right (+n)
+       (%vm-emit-op cs (%vm-op :call-named)) (%vm-emit-uvar cs (%vm-cs-const cs sym))
+       (%vm-emit-u8 cs n)
+       (%vm-cs-sp+ cs (- 1 n))))))                      ; pops n, pushes 1
 
 (defun %vm-gen-call (fn-ir arg-irs cs)
   (let ((n (length arg-irs)))
@@ -838,7 +874,14 @@
 (defun %vm-gen-for-values (node cs)
   (case (car node)
     ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect :progv :handler-bind :block)
-     (%vm-gen node cs))                                          ; sets the MV buffer
+     ;; A real CALL sets the MV buffer; but an INLINED :call-named (an arithmetic/cons/… op)
+     ;; leaves only a single value on the stack and does NOT touch the buffer, so it is a
+     ;; single-valued leaf — sync the buffer with VALUES 1 (as for a constant / lref).
+     (if (and (eq (car node) :call-named)
+              (%vm-inline-call-p (cadr node) (length (cddr node))))
+         (progn (%vm-gen node cs)
+                (%vm-emit-op cs (%vm-op :values)) (%vm-emit-u8 cs 1))
+         (%vm-gen node cs)))                                     ; sets the MV buffer
     (:if
      (let ((l-else (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
        (%vm-gen (cadr node) cs)
@@ -1150,7 +1193,11 @@
   (if (%vm-cs-dframe-active-p cs)
       (%vm-gen node cs)
       (case (car node)
-        (:call-named (%vm-gen-tail-call-named (cadr node) (cddr node) cs))
+        (:call-named (if (%vm-inline-call-p (cadr node) (length (cddr node)))
+                         ;; an inline primitive is not a CALL — emit it (value on the stack)
+                         ;; and let the function's trailing RETURN return that value.
+                         (%vm-gen node cs)
+                         (%vm-gen-tail-call-named (cadr node) (cddr node) cs)))
         (:call       (%vm-gen-tail-call (cadr node) (cddr node) cs))
         (:if         (%vm-gen-tail-if node cs))
         (:progn      (%vm-gen-tail-progn (cdr node) cs))

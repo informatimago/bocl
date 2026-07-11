@@ -9,9 +9,12 @@
 #include "kernel_types.h"
 #include "kernel_objects.h"
 #include "kernel_functions.h"
+#include "arithmetic.h"    /* num_combine / num_lt / num_eq — inline arithmetic ops */
 #include "memory.h"
 #include "boerror.h"
 #include <setjmp.h>
+
+extern bool eq(Ref a, Ref b);   /* hash_table.h; used by BC_EQ (avoid the heavy include) */
 
 extern Ref Object_new(Ref class, Slots* slots);   /* defined in kernel.c (as in reader.c) */
 extern void eval_stack_guard_check(void);          /* eval.c: control-stack overflow guard */
@@ -728,6 +731,25 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
             longjmp(top->non_local_exit,
                     (top==target)?(int)non_local_exit_target:(int)non_local_exit_unwind);
         }
+        /* ---- inline primitives (vm-inline-primitives) ---------------------------------
+           Each pops its operands and pushes the result.  A popped value stays in its (now
+           above-sp) stack slot, which the GC still traces (the whole operand-stack vector is
+           rooted), so it survives the allocation num_combine/cons may do before PUSH re-roots
+           the result.  Semantics are exactly the corresponding builtin's (same C core). */
+        case BC_ADD2:   { Ref b=POP(); Ref a=POP(); PUSH(num_combine('+',a,b)); break; }
+        case BC_SUB2:   { Ref b=POP(); Ref a=POP(); PUSH(num_combine('-',a,b)); break; }
+        case BC_MUL2:   { Ref b=POP(); Ref a=POP(); PUSH(num_combine('*',a,b)); break; }
+        case BC_NUM_EQ2:{ Ref b=POP(); Ref a=POP(); PUSH(as_boolean(num_eq(a,b))); break; }
+        case BC_LT2:    { Ref b=POP(); Ref a=POP(); PUSH(as_boolean(num_lt(a,b))); break; }
+        case BC_GT2:    { Ref b=POP(); Ref a=POP(); PUSH(as_boolean(num_lt(b,a))); break; }
+        case BC_LE2:    { Ref b=POP(); Ref a=POP(); PUSH(as_boolean(!num_lt(b,a))); break; }
+        case BC_GE2:    { Ref b=POP(); Ref a=POP(); PUSH(as_boolean(!num_lt(a,b))); break; }
+        case BC_CONS:   { Ref b=POP(); Ref a=POP(); PUSH(cons(a,b)); break; }
+        case BC_CAR:    { Ref x=POP(); PUSH(car(x)); break; }
+        case BC_CDR:    { Ref x=POP(); PUSH(cdr(x)); break; }
+        case BC_EQ:     { Ref b=POP(); Ref a=POP(); PUSH(as_boolean(eq(a,b))); break; }
+        case BC_EQL:    { Ref b=POP(); Ref a=POP(); PUSH(as_boolean(eql(a,b))); break; }
+        case BC_NULL:   { Ref x=POP(); PUSH(as_boolean(nullp(x))); break; }
         case BC_RETURN:{ Ref v = (sp>0) ? TOP() : NIL_Symbol;
                          if(results->count<=1 || results->values[0]!=v){ results->count=1; results->values[0]=v; }
                          goto done; }

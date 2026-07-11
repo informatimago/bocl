@@ -1684,6 +1684,12 @@ static void kernel_BYTECODE_OPCODES(unused Ref f, unused Ref arguments, Multiple
     OPC("HANDLER-BIND-OPEN",BC_HANDLER_BIND_OPEN);
     OPC("HANDLER-BIND-CLOSE",BC_HANDLER_BIND_CLOSE);
     OPC("TAIL-CALL",BC_TAIL_CALL); OPC("TAIL-CALL-NAMED",BC_TAIL_CALL_NAMED);
+    /* vm-inline-primitives (operand-less; args on the operand stack) */
+    OPC("ADD2",BC_ADD2); OPC("SUB2",BC_SUB2); OPC("MUL2",BC_MUL2);
+    OPC("NUM-EQ2",BC_NUM_EQ2); OPC("LT2",BC_LT2); OPC("GT2",BC_GT2);
+    OPC("LE2",BC_LE2); OPC("GE2",BC_GE2);
+    OPC("CONS",BC_CONS); OPC("CAR",BC_CAR); OPC("CDR",BC_CDR);
+    OPC("EQ",BC_EQ); OPC("EQL",BC_EQL); OPC("NULL",BC_NULL);
     OPC("VERSION",BYTECODE_VERSION);
     #undef OPC
     results->count = 1; results->values[0] = a;

@@ -1119,6 +1119,71 @@ static void test_vm_fast_apply(void){
     close_live_pool(pool);
 }
 
+/* ---- inline primitives: +,-,*,<,cons,car,eq,null,... as byte-code ops --------- */
+/* A CALL to an unshadowed standard primitive at its inline arity compiles to a dedicated
+   stack op (no arg-list cons / no kernel_apply).  It must be SEMANTICALLY identical to the
+   builtin (numeric tower, bignum promotion, type errors, car nil-safety, eq/eql), fall
+   back to CALL_NAMED at other arities, and NOT fire for a lexically shadowed name. */
+static void test_vm_inline_primitives(void){
+    uword pool = open_live_pool();
+
+    /* arithmetic + 1+/1- (compiled) */
+    TEST_EQ(eql, I(12), e("(funcall (compile nil '(lambda (a b) (+ a b))) 8 4)"));
+    TEST_EQ(eql, I(4),  e("(funcall (compile nil '(lambda (a b) (- a b))) 8 4)"));
+    TEST_EQ(eql, I(32), e("(funcall (compile nil '(lambda (a b) (* a b))) 8 4)"));
+    TEST_EQ(eql, I(9),  e("(funcall (compile nil '(lambda (a) (1+ a))) 8)"));
+    TEST_EQ(eql, I(7),  e("(funcall (compile nil '(lambda (a) (1- a))) 8)"));
+    /* the compiled body actually uses the inline op, not a call */
+    TEST_EQ(eql, T_Symbol,   e("(let ((s (with-output-to-string (o)"
+                              "  (%vm-disassemble (compile nil '(lambda (a b) (+ a b))) o))))"
+                              "  (if (and (search \"add2\" s) (not (search \"call\" s))) t nil))"));
+
+    /* full numeric tower preserved: fixnum overflow -> bignum, integer/integer -> ratio */
+    TEST_EQ(eql, T_Symbol, e("(if (= (funcall (compile nil '(lambda (n) (* n n))) 1000000000000)"
+                             "       (* 1000000000000 1000000000000)) t nil)"));
+    TEST_EQ(equal, e("5/2"), e("(funcall (compile nil '(lambda (a b) (/ a b))) 5 2)"));  /* / not inlined */
+    /* type error just like the builtin */
+    TEST_EQ(eql, T_Symbol, e("(if (nth-value 1 (ignore-errors"
+                             "  (funcall (compile nil '(lambda (a b) (+ a b))) 'x 1))) t nil)"));
+
+    /* comparisons */
+    TEST_EQ(equal, e("'(nil t nil t nil)"),
+            e("(funcall (compile nil '(lambda (a b) (list (< a b) (> a b) (<= a b) (>= a b) (= a b)))) 8 4)"));
+    TEST_EQ(equal, e("'(nil nil t t t)"),
+            e("(funcall (compile nil '(lambda (a b) (list (< a b) (> a b) (<= a b) (>= a b) (= a b)))) 4 4)"));
+
+    /* cons / car / cdr — incl. car nil-safety and a LIST type error */
+    TEST_EQ(equal, e("'(1 . 2)"), e("(funcall (compile nil '(lambda (a b) (cons a b))) 1 2)"));
+    TEST_EQ(eql, I(1), e("(funcall (compile nil '(lambda (l) (car l))) '(1 2))"));
+    TEST_EQ(eql, I(2), e("(funcall (compile nil '(lambda (l) (cadr l))) '(1 2))"));
+    TEST_EQ(eql, NIL_Symbol, e("(funcall (compile nil '(lambda (l) (car l))) nil)"));   /* (car nil)=nil */
+    TEST_EQ(eql, T_Symbol, e("(if (nth-value 1 (ignore-errors"
+                             "  (funcall (compile nil '(lambda (x) (car x))) 5))) t nil)"));  /* (car 5) errors */
+
+    /* eq / eql / null / not */
+    TEST_EQ(equal, e("'(t t nil nil)"),
+            e("(funcall (compile nil '(lambda (a b) (list (eq a b) (eql a b) (null a) (not b)))) 'x 'x)"));
+    TEST_EQ(equal, e("'(nil t t t)"),   /* eq on equal bignums may differ; eql t; (null nil)=t; (not nil)=t */
+            e("(funcall (compile nil '(lambda () (list (eq (* 1000000000000 1000000000000)"
+              "                                           (* 1000000000000 1000000000000))"
+              "                                       (eql (* 1000000000000 1000000000000)"
+              "                                            (* 1000000000000 1000000000000))"
+              "                                       (null nil) (not nil)))))"));
+
+    /* inline op in TAIL position returns correctly (emitted then the trailing RETURN) */
+    TEST_EQ(eql, I(30), e("(funcall (compile nil '(lambda (a b) (+ a b))) 10 20)"));
+
+    /* FALLBACK: wrong arity keeps variadic semantics via CALL_NAMED */
+    TEST_EQ(eql, I(6),  e("(funcall (compile nil '(lambda (a b c) (+ a b c))) 1 2 3)"));
+    TEST_EQ(eql, I(0),  e("(funcall (compile nil '(lambda () (+))))"));
+    TEST_EQ(eql, T_Symbol, e("(funcall (compile nil '(lambda (a b c) (< a b c))) 1 2 3)"));
+
+    /* FALLBACK: a lexically shadowed name is NOT inlined (calls the local FLET function) */
+    TEST_EQ(eql, I(100), e("(funcall (compile nil '(lambda (a b) (flet ((+ (x y) (* x y))) (+ a b)))) 10 10)"));
+
+    close_live_pool(pool);
+}
+
 /* ---- vm-7: CLOS dispatch effective-method cache ------------------------------- */
 /* Generic dispatch now caches the effective method per generic function keyed on the
    argument-class tuple (a repeat call with the same classes skips applicable-methods +
@@ -1222,11 +1287,13 @@ static void test_vm_backtrace(void){
 static void test_vm_disassemble(void){
     uword pool = open_live_pool();
 
-    /* branch + arithmetic + named calls */
+    /* branch + inline arithmetic (gt2/mul2) + a genuine named call (list) all decode */
     e("(defvar *v9d1* (with-output-to-string (o)"
-      "  (%vm-disassemble (compile nil '(lambda (x) (if (> x 0) (* x x) 0))) o)))");
+      "  (%vm-disassemble (compile nil '(lambda (x) (if (> x 0) (list (* x x)) 0))) o)))");
     TEST_EQ(eql, T_Symbol, e("(if (search \"return\" *v9d1*) t nil)"));
-    TEST_EQ(eql, T_Symbol, e("(if (search \"call-named\" *v9d1*) t nil)"));
+    TEST_EQ(eql, T_Symbol, e("(if (search \"call-named\" *v9d1*) t nil)"));   /* (list ...) */
+    TEST_EQ(eql, T_Symbol, e("(if (search \"gt2\" *v9d1*) t nil)"));          /* (> x 0) inlined */
+    TEST_EQ(eql, T_Symbol, e("(if (search \"mul2\" *v9d1*) t nil)"));         /* (* x x) inlined */
     TEST_EQ(eql, NIL_Symbol, e("(if (search \"unknown\" *v9d1*) t nil)"));
     TEST_EQ(eql, NIL_Symbol, e("(if (search \"WARNING\" *v9d1*) t nil)"));
 
@@ -1308,6 +1375,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
     TEST_CASE("vm fast-apply",       test_vm_fast_apply)
+    TEST_CASE("vm inline primitives", test_vm_inline_primitives)
     TEST_CASE("vm clos cache",       test_vm_clos_cache)
     TEST_CASE("vm backtrace",        test_vm_backtrace)
     TEST_CASE("vm disassemble",      test_vm_disassemble)

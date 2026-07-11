@@ -57,7 +57,11 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-*** BYTE-CODE COMPILER (plan-2): vm-1..vm-9 DONE (branch `vm`, v1.8.18).  READ
+*** BYTE-CODE COMPILER (plan-2): vm-1..vm-9 + fast-apply + inline-primitives DONE
+    (branch `vm`, v1.8.20).  Inline primitives (+,-,*,<,>,<=,>=,=,cons,car,cdr,eq,eql,null
+    as byte-code ops) FIXED the alloc-loop regression (revbuild 0.7x->1.4x) and bumped tight
+    loops (~10x); call-bound fib/tak stay ~1x (per-activation cost dominates — the next lever
+    is frame pooling, not inlining).  READ
     issues/open/vm-COMPILER-PLAN.md first.  COMPILE / COMPILE-FILE emit byte-code (safe
     SERIOUS-CONDITION fallback); real code runs on the VM, full 42-suite green.  vm-9 added
     the debugger view of compiled frames (backtrace :CALL frames + DISASSEMBLE), proved the
@@ -77,6 +81,5 @@ hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
 vm-conditions.issue                  (plan-2) — RESTART-* remains (HANDLER-* done)
-vm-inline-primitives.issue           (plan-2) — inline +,-,<,cons,... as opcodes (real call-bound lever)
-vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (needs inline-primitives)
+vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (regression now fixed)
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler

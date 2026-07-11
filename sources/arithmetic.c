@@ -77,8 +77,11 @@ static bool either_ratio(Ref a, Ref b){
  *  (- a b c) -> a-b-c, (/ a b c) -> a/b/c.                              *
  * -------------------------------------------------------------------- */
 
-/* Combine two numbers with a binary op (+, -, *, / coded as a single char). */
-static Ref num_combine(char op, Ref a, Ref b){
+/* Combine two numbers with a binary op (+, -, *, / coded as a single char).
+   Non-static: the byte-code VM's inline arithmetic ops (BC_ADD2/SUB2/MUL2) call this
+   directly, so they get the identical numeric tower (float/bignum/ratio/complex, integer
+   overflow -> bignum) and identical error signalling as the variadic +,-,* builtins. */
+Ref num_combine(char op, Ref a, Ref b){
     check_number(a); check_number(b);
     /* Float contagion: if either is float, result is float */
     if(either_float(a,b)){
@@ -250,7 +253,7 @@ static int rational_cross_cmp(Ref a, Ref b){
     set_garbage_collection_enabled(saved);
     return r;}
 
-static bool num_eq(Ref a, Ref b){
+bool num_eq(Ref a, Ref b){
     check_number(a); check_number(b);
     /* Complex: equal iff real and imaginary parts are each =.  complex_realpart/
        imagpart of a real return the number / 0, so (= 1 #C(1 1)) is correctly
@@ -266,7 +269,7 @@ static bool num_eq(Ref a, Ref b){
     if(bignump(a)||bignump(b)) return bignum_compare(a,b)==0;
     return integer_value(a)==integer_value(b);}
 
-static bool num_lt(Ref a, Ref b){
+bool num_lt(Ref a, Ref b){
     check_number(a); check_number(b);
     if(either_float(a,b))
         return as_floating(a)<as_floating(b);
