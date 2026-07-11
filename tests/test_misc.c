@@ -1064,6 +1064,61 @@ static void test_vm_tail_calls(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-7: CLOS dispatch effective-method cache ------------------------------- */
+/* Generic dispatch now caches the effective method per generic function keyed on the
+   argument-class tuple (a repeat call with the same classes skips applicable-methods +
+   specificity sort + method-combination).  Must be transparent: same results, and the
+   cache invalidates on add-method and class redefinition. */
+static void test_vm_clos_cache(void){
+    uword pool = open_live_pool();
+    e("(defclass v7-animal () ())");
+    e("(defclass v7-dog (v7-animal) ())");
+    e("(defclass v7-cat (v7-animal) ())");
+    e("(defgeneric v7-speak (a))");
+    e("(defmethod v7-speak ((a v7-animal)) (list :animal))");
+    e("(defmethod v7-speak ((a v7-dog)) (cons :woof (call-next-method)))");
+    e("(defmethod v7-speak :around ((a v7-dog)) (cons :around (call-next-method)))");
+    e("(defvar *v7-d* (make-instance 'v7-dog))");
+    e("(defvar *v7-c* (make-instance 'v7-cat))");
+
+    /* method combination: around + primary + call-next-method */
+    TEST_EQ(equal, e("'(:around :woof :animal)"), e("(v7-speak *v7-d*)"));
+    TEST_EQ(equal, e("'(:animal)"),               e("(v7-speak *v7-c*)"));
+    /* repeat calls (cache hits) give the same results */
+    TEST_EQ(equal, e("'(:around :woof :animal)"), e("(v7-speak *v7-d*)"));
+    TEST_EQ(equal, e("'(:animal)"),               e("(v7-speak *v7-c*)"));
+
+    /* add a method -> cache invalidated -> new behavior */
+    e("(defmethod v7-speak ((a v7-cat)) (list :meow))");
+    TEST_EQ(equal, e("'(:meow)"), e("(v7-speak *v7-c*)"));
+
+    /* class redefinition -> cache invalidated -> dispatch still correct */
+    e("(defclass v7-dog (v7-animal) ((tricks :initform nil)))");
+    TEST_EQ(equal, e("'(:around :woof :animal)"), e("(v7-speak *v7-d*)"));
+
+    /* built-in / T specializers dispatch (and cache) correctly */
+    e("(defgeneric v7-kind (x))");
+    e("(defmethod v7-kind ((x integer)) :int)");
+    e("(defmethod v7-kind ((x string)) :str)");
+    e("(defmethod v7-kind ((x t)) :other)");
+    TEST_EQ(eql, e("':int"),   e("(v7-kind 5)"));
+    TEST_EQ(eql, e("':str"),   e("(v7-kind \"hi\")"));
+    TEST_EQ(eql, e("':other"), e("(v7-kind 'sym)"));
+    TEST_EQ(eql, e("':int"),   e("(v7-kind 42)"));   /* cache hit, same class */
+
+    /* the cache reduces work: full dispatch runs %applicable-methods per call; the
+       cache runs it only on a miss (once per distinct class tuple) */
+    e("(defvar *v7-ac* 0)");
+    e("(let ((orig (symbol-function '%applicable-methods)))"
+      "  (setf (symbol-function '%applicable-methods)"
+      "        (lambda (gf args) (setq *v7-ac* (+ *v7-ac* 1)) (funcall orig gf args))))");
+    e("(setq *v7-ac* 0) (dotimes (i 20) (v7-speak *v7-d*) (v7-speak *v7-c*))");
+    TEST_EQ(eql, T_Symbol,
+            e("(if (< *v7-ac* 5) t nil)"));   /* ~2 misses (dog, cat); NOT 40 (one per call) */
+
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -1083,6 +1138,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm conditions",       test_vm_conditions)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
+    TEST_CASE("vm clos cache",       test_vm_clos_cache)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

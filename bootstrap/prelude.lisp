@@ -4197,11 +4197,18 @@ SETQ/INCF/DECF is left in place (sequential)."
 (defstruct (%gf (:predicate %gf-p) (:copier nil))
   name          ; symbol
   lambda-list   ; lambda-list as stored by DEFGENERIC
-  methods)      ; list of %mth objects
+  methods       ; list of %mth objects
+  (cache nil)   ; vm-7 dispatch cache: EQUAL hash-table  arg-class-tuple -> effective-method
+  (cache-gen -1)) ; the *%dispatch-gen* the cache was built under (stale if it differs)
 
 ;;; ---- 3. Registries -------------------------------------------------------
 
 (defparameter *%classes* (make-hash-table))  ; symbol -> %cls
+
+(defparameter *%dispatch-gen* 0)  ; vm-7: global dispatch-cache generation (bumped on
+                                  ; class (re)definition to invalidate all effective-method
+                                  ; caches at once).  Defined here — before ENSURE-CLOS-CLASS,
+                                  ; which bumps it during boot.
 
 (defparameter *%gfs* (make-hash-table :test 'equal))  ; name -> %gf
 ;; EQUAL (not EQL) so a (SETF FOO) cons function-name keys consistently across
@@ -4558,6 +4565,9 @@ SETQ/INCF/DECF is left in place (sequential)."
     (dolist (super supers)
       (when (%is-cls super)
         (pushnew cls (%cls-dsubs super))))
+    ;; vm-7: a class (re)definition changes CPLs, so any dispatch cache keyed on this
+    ;; class or a subclass may be stale — invalidate every gf's cache at once.
+    (setq *%dispatch-gen* (+ *%dispatch-gen* 1))
     cls))
 
 ;;; ---- 14. DEFCLASS macro --------------------------------------------------
@@ -4746,8 +4756,12 @@ SETQ/INCF/DECF is left in place (sequential)."
 
 ;;; ---- 18. Standard method combination / dispatch -------------------------
 
-(defun %invoke-effective-method (sorted-methods args)
-  "Implement standard method combination for SORTED-METHODS and ARGS."
+(defun %compute-effective-method (sorted-methods)
+  "Return a function of (ARGS) that runs standard method combination for
+   SORTED-METHODS.  The around/before/primary/after partition depends only on the
+   sorted applicable methods — which are fixed for a given argument-class tuple — so
+   this closure is CACHED per generic function per class-tuple (vm-7); the runtime ARGS
+   are passed to the returned closure, not captured here."
   (let ((arounds  (remove-if-not
                    (lambda (m) (equal (%mth-qualifiers m) '(:around))) sorted-methods))
         (befores  (remove-if-not
@@ -4757,49 +4771,101 @@ SETQ/INCF/DECF is left in place (sequential)."
         (afters   (nreverse
                    (remove-if-not
                     (lambda (m) (equal (%mth-qualifiers m) '(:after))) sorted-methods))))
+    (let ((primary-fns (mapcar #'%mth-function primaries)))
+      (lambda (args)
+        (unless primaries
+          (error "No applicable primary method for args ~S" args))
+        ;; Build the primary chain: most-specific primary calls less specific via
+        ;; *%cnm-nexts*.  Use %cnm-call (setq-based) since bocl LET = lexical only.
+        (let ((core-thunk
+                (lambda (&rest core-args)
+                  (let ((actual (if core-args core-args args)))
+                    (dolist (m befores)                          ; befores (no cnm)
+                      (%cnm-call t nil actual
+                                  (let ((mf (%mth-function m)))
+                                    (lambda () (apply mf actual)))))
+                    ;; Primary chain, preserving ALL its values (CLHS 7.6.6); the afters
+                    ;; run for effect, then the primary values are returned.
+                    (multiple-value-prog1
+                        (%cnm-call t (cdr primary-fns) actual
+                                   (let ((fn (car primary-fns)))
+                                     (lambda () (apply fn actual))))
+                      (dolist (m afters)                         ; afters (reversed; no cnm)
+                        (%cnm-call t nil actual
+                                    (let ((mf (%mth-function m)))
+                                      (lambda () (apply mf actual))))))))))
+          ;; Wrap with arounds: each around's next is the following around or core.
+          (if (null arounds)
+              (apply core-thunk args)
+              (labels ((make-chain (around-fns)
+                         (if (null around-fns)
+                             core-thunk
+                             (let* ((next    (make-chain (cdr around-fns)))
+                                    (this-fn (%mth-function (car around-fns))))
+                               (lambda (&rest a)
+                                 (let ((actual (if a a args)))
+                                   (%cnm-call t (list next) actual
+                                               (lambda () (apply this-fn actual)))))))))
+                (apply (make-chain arounds) args))))))))
 
-    (unless primaries
-      (error "No applicable primary method for args ~S" args))
+(defun %invoke-effective-method (sorted-methods args)
+  "Run standard method combination for SORTED-METHODS and ARGS (uncached path)."
+  (funcall (%compute-effective-method sorted-methods) args))
 
-    ;; Build the primary chain: most-specific primary calls less specific via
-    ;; *%cnm-nexts*.  Use %cnm-call (setq-based) since bocl LET = lexical only.
-    (let* ((primary-fns (mapcar #'%mth-function primaries))
+;;; ---- Dispatch cache (vm-7) ----------------------------------------------
+;;; Every generic call recomputes applicability + specificity sort + the effective
+;;; method — the dominant cost in method-heavy code.  Cache the effective method per
+;;; generic function keyed on the tuple of the specialized (required) arguments'
+;;; CLASSES: a repeat call with the same argument classes skips straight to the cached
+;;; effective method.  Sound because (for the specializer kinds bocl supports — a CLOS
+;;; class, a built-in/condition type name, or T) both applicability and specificity
+;;; depend only on the arguments' classes, not their values (no EQL specializers).
+;;; A miss falls back to full dispatch and fills the cache.  Invalidated by bumping the
+;;; global generation on any class (re)definition, and by clearing a gf's cache when a
+;;; method is added/removed on it.
 
-           ;; Core thunk: runs before*, primary chain, after*
-           (core-thunk
-             (lambda (&rest core-args)
-               (let ((actual (if core-args core-args args)))
-                 ;; Run befores (no cnm)
-                 (dolist (m befores)
-                   (%cnm-call t nil actual
-                               (let ((mf (%mth-function m)))
-                                 (lambda () (apply mf actual)))))
-                 ;; Run primary chain, preserving ALL its values (CLHS 7.6.6); the
-                 ;; afters run for effect afterwards, then the primary values are
-                 ;; returned — MULTIPLE-VALUE-PROG1 captures them across the afters.
-                 (multiple-value-prog1
-                     (%cnm-call t (cdr primary-fns) actual
-                                (let ((fn (car primary-fns)))
-                                  (lambda () (apply fn actual))))
-                   ;; Run afters (reversed; no cnm)
-                   (dolist (m afters)
-                     (%cnm-call t nil actual
-                                 (let ((mf (%mth-function m)))
-                                   (lambda () (apply mf actual))))))))))
+(defun %dispatch-invalidate ()
+  "Invalidate ALL dispatch caches (call after a class redefinition changes CPLs)."
+  (setq *%dispatch-gen* (+ *%dispatch-gen* 1)))
 
-      ;; Wrap with arounds: each around's next is the following around or core
-      (if (null arounds)
-          (apply core-thunk args)
-          (labels ((make-chain (around-fns)
-                     (if (null around-fns)
-                         core-thunk
-                         (let* ((next    (make-chain (cdr around-fns)))
-                                (this-fn (%mth-function (car around-fns))))
-                           (lambda (&rest a)
-                             (let ((actual (if a a args)))
-                               (%cnm-call t (list next) actual
-                                           (lambda () (apply this-fn actual)))))))))
-            (apply (make-chain arounds) args))))))
+(defun %gf-key (gf args)
+  "The dispatch-cache key for a call: the list of CLASSES of the specialized (required)
+   arguments — as many as the methods specialize on."
+  (let* ((methods (%gf-methods gf))
+         (k (if methods (length (%mth-specializers (car methods))) 0))
+         (key '()) (a args) (i 0))
+    (loop
+      (when (or (>= i k) (null a)) (return (nreverse key)))
+      (push (class-of (car a)) key)
+      (setq a (cdr a) i (+ i 1)))))
+
+(defparameter *%dispatch-cache-enable* t
+  "When NIL, generic-function dispatch recomputes the effective method every call
+   (the pre-vm-7 path) — for benchmarking / debugging the cache.")
+
+(defun %gf-dispatch (gf name args)
+  "Dispatch a call to GF on ARGS through the per-gf effective-method cache."
+  (if *%dispatch-cache-enable*
+      (progn
+        (when (or (null (%gf-cache gf)) (/= (%gf-cache-gen gf) *%dispatch-gen*))
+          (setf (%gf-cache gf) (make-hash-table :test 'equal)
+                (%gf-cache-gen gf) *%dispatch-gen*))
+        (let* ((key (%gf-key gf args))
+               (em  (gethash key (%gf-cache gf))))
+          (unless em
+            (let ((sorted (%sort-methods (%applicable-methods gf args) args)))
+              (when (null sorted)
+                (error "No applicable method for generic function ~S with arguments ~S"
+                       name args))
+              (setq em (%compute-effective-method sorted))
+              (setf (gethash key (%gf-cache gf)) em)))
+          (funcall em args)))
+      ;; uncached: full dispatch every call
+      (let ((sorted (%sort-methods (%applicable-methods gf args) args)))
+        (when (null sorted)
+          (error "No applicable method for generic function ~S with arguments ~S"
+                 name args))
+        (%invoke-effective-method sorted args))))
 
 ;;; ---- 19. Generic function installation ----------------------------------
 
@@ -4808,12 +4874,8 @@ SETQ/INCF/DECF is left in place (sequential)."
 (defun %install-discriminating-function (name gf)
   "Install a discriminating function for GF as the global function binding of NAME."
   (let ((df (lambda (&rest args)
-              (let* ((applicable (%applicable-methods gf args))
-                     (sorted     (%sort-methods applicable args)))
-                (when (null sorted)
-                  (error "No applicable method for generic function ~S with arguments ~S"
-                         name args))
-                (%invoke-effective-method sorted args)))))
+              ;; vm-7: dispatch through the per-gf effective-method cache.
+              (%gf-dispatch gf name args))))
     (sethash df *%gf-by-fn* gf)   ; so FIND-METHOD can map #'gf back to its %gf
     ;; A (SETF accessor) generic function is installed as ACCESSOR's setf-function
     ;; (consulted by the SETF macro), not as a symbol-function.
@@ -4866,6 +4928,7 @@ SETQ/INCF/DECF is left in place (sequential)."
                             (equal (%mth-specializers m) specializers)))
                      (%gf-methods gf)))
     (push method (%gf-methods gf))
+    (setf (%gf-cache gf) nil)                 ; vm-7: adding/redefining a method invalidates this gf's cache
     (%install-discriminating-function gf-name gf)
     gf-name))
 
