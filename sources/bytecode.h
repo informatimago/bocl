@@ -159,6 +159,13 @@ typedef enum {
     BC_EQ,       /* (eq a b) ( a b -- bool )                                                */
     BC_EQL,      /* (eql a b)                                                               */
     BC_NULL,     /* (null x)/(not x) ( x -- bool )                                          */
+    /* vm-conditions RESTART: RESTART-BIND is a frame_restart registry frame, structurally a
+       HANDLER-BIND (a no-cleanup dynamic frame, never a longjmp target — INVOKE-RESTART
+       applies a restart-bind restart's function IN PLACE; on an unwind-through, pop + cascade).
+       INVOKE-RESTART / FIND-RESTART (conditions.c) walk g_frame_stack and are shared with the
+       tree-walker.  RESTART-CASE is a Lisp-level expansion to RESTART-BIND + CATCH/THROW.   */
+    BC_RESTART_BIND_OPEN,  /* pop a restarts list ((name fn ifn tfn)...), push a frame_restart */
+    BC_RESTART_BIND_CLOSE, /* normal exit: pop the frame                                       */
     BC_OPCODE_COUNT
 } bytecode_op_t;
 
@@ -167,8 +174,8 @@ typedef enum {
    v3: BC_CATCH_CLOSE + CATCH_OPEN/THROW.  v4: BC_DYNAMIC_BIND/UNBIND.
    v5: BC_UNWIND_PROTECT + BC_UNWIND_NORMAL/END.  v6: BC_PROGV_BIND/UNBIND.
    v7: BC_HANDLER_BIND_OPEN/CLOSE.  v8: BC_TAIL_CALL / BC_TAIL_CALL_NAMED.
-   v9: inline primitives (BC_ADD2..BC_NULL). */
-#define BYTECODE_VERSION 9
+   v9: inline primitives (BC_ADD2..BC_NULL).  v10: BC_RESTART_BIND_OPEN/CLOSE. */
+#define BYTECODE_VERSION 10
 
 /* ---- Arity descriptor -------------------------------------------------------
    A compiled function's argument shape, packed in a fixnum so the VM's entry

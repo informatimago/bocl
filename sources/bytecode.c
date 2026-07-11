@@ -59,7 +59,7 @@ static _Noreturn void vm_unwind_next_frame(Frame* popped){
    after a longjmp as (VmDyn*)g_frame_stack (the frame receiving control is the stack
    top).  Fields other than FRAME are read only via that recovered pointer or via the
    volatile depth counter, never via a stale automatic — safe across setjmp/longjmp. */
-enum { VMK_CATCH=1, VMK_PROTECT, VMK_DBIND, VMK_PROGV, VMK_HANDLER_BIND };
+enum { VMK_CATCH=1, VMK_PROTECT, VMK_DBIND, VMK_PROGV, VMK_HANDLER_BIND, VMK_RESTART_BIND };
 typedef struct VmDyn {
     Frame  frame;          /* MUST be first */
     size_t handler_pc;     /* CATCH: resume pc on throw; PROTECT: cleanup pc */
@@ -669,6 +669,32 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
             vm_unwind_next_frame(&a->frame);
         }
         case BC_HANDLER_BIND_CLOSE:{                /* normal exit: drop the frame */
+            vm_pop_frame(); nvf--; break; }
+        case BC_RESTART_BIND_OPEN:{
+            /* stack: [... restarts] where restarts = ((name fn ifn tfn) ...).  Push a
+               frame_restart so FIND-RESTART / INVOKE-RESTART (conditions.c, shared with the
+               tree-walker) find it.  Like HANDLER-BIND it is NEVER a longjmp target — a
+               restart-bind restart's function is applied IN PLACE by INVOKE-RESTART — so the
+               only non-normal path is an unwind PASSING THROUGH (pop + continue the cascade).
+               RESTART-CASE is expanded (in the analyzer) to RESTART-BIND whose functions
+               THROW, so its unwind travels through here too. */
+            Ref restarts = POP();
+            add_to_live_pool(restarts);            /* g_frame_stack is not GC-scanned */
+            if(nvf >= VM_DYN_MAX){ ERROR("VM: too many nested dynamic frames%s",""); }
+            VmDyn* d = &vdyn[nvf];
+            d->frame.type = frame_restart;
+            d->frame.parameters.restart.restarts     = restarts;
+            d->frame.parameters.restart.matched_name = NIL_Symbol;
+            d->frame.parameters.restart.matched_args = NIL_Symbol;
+            d->frame.results = results;
+            d->kind = VMK_RESTART_BIND;
+            int rc = setjmp(d->frame.non_local_exit);
+            if(rc==0){ vm_push_frame(&d->frame); nvf++; break; }
+            VmDyn* a = (VmDyn*)g_frame_stack;      /* unwinding through: pop + cascade */
+            vm_pop_frame(); nvf--;
+            vm_unwind_next_frame(&a->frame);
+        }
+        case BC_RESTART_BIND_CLOSE:{                /* normal exit: drop the frame */
             vm_pop_frame(); nvf--; break; }
         case BC_UNWIND_PROTECT:{
             /* operand: svar offset to the cleanup code.  Establish a protect frame; the

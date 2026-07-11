@@ -1690,6 +1690,8 @@ static void kernel_BYTECODE_OPCODES(unused Ref f, unused Ref arguments, Multiple
     OPC("LE2",BC_LE2); OPC("GE2",BC_GE2);
     OPC("CONS",BC_CONS); OPC("CAR",BC_CAR); OPC("CDR",BC_CDR);
     OPC("EQ",BC_EQ); OPC("EQL",BC_EQL); OPC("NULL",BC_NULL);
+    OPC("RESTART-BIND-OPEN",BC_RESTART_BIND_OPEN);
+    OPC("RESTART-BIND-CLOSE",BC_RESTART_BIND_CLOSE);
     OPC("VERSION",BYTECODE_VERSION);
     #undef OPC
     results->count = 1; results->values[0] = a;

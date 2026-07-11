@@ -371,7 +371,14 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
             Ref spec = car(rs);
             if(consp(spec) && car(spec)==name){
                 Ref fn = consp(cdr(spec)) ? cadr(spec) : NIL_Symbol;
-                if(functionp(fn) || closurep(fn) || built_in_function_p(fn)){
+                /* A RESTART-BIND restart's 2nd element is a FUNCTION (apply it in place); a
+                   RESTART-CASE restart's is a lambda-LIST (fall through to the unwind).  The
+                   function may be a byte-code CompiledFunction / CompiledClosure, which are
+                   NOT FUNCTION_Class — include them or a compiled restart-bind fn (e.g. a
+                   RESTART-CASE clause's throwing closure) is mistaken for a RESTART-CASE and
+                   wrongly longjmp'd into its non-target frame. */
+                if(functionp(fn) || closurep(fn) || built_in_function_p(fn)
+                   || compiled_function_p(fn) || compiled_closure_p(fn)){
                     kernel_apply(fn, restart_args, results);
                     close_live_pool(pool);
                     return;}

@@ -101,10 +101,10 @@
 (defun %vm-special-operator-p (op)
   "Operators the analyzer routes to %VM-ANALYZE-SPECIAL: the standard special operators
    PLUS the kernel special operators that — a bocl quirk — are NOT in SPECIAL-OPERATOR-P's
-   list (eval.c handles them inline).  HANDLER-BIND/HANDLER-CASE are handled; the RESTART
-   operators and the top-level def-forms are recognized only so the analyzer ERRORS on
-   them (compile time) instead of miscompiling them into calls — so a caller with a safe
-   fallback (COMPILE) reverts to the tree-walker for such a function."
+   list (eval.c handles them inline).  HANDLER-BIND/HANDLER-CASE and RESTART-BIND/RESTART-CASE
+   are handled; the top-level def-forms are recognized only so the analyzer ERRORS on them
+   (compile time) instead of miscompiling them into calls — so a caller with a safe fallback
+   (COMPILE) reverts to the tree-walker for such a function."
   (or (special-operator-p op)
       (member op '(handler-bind handler-case
                    restart-bind restart-case
@@ -365,6 +365,11 @@
      ;; expand it HERE (analyzer-local, so the tree-walker's own special op is untouched)
      ;; and re-analyze.
      (%vm-analyze-form (%vm-expand-handler-case form) cenv lexenv))
+    ((restart-bind) (%vm-analyze-restart-bind (cadr form) (cddr form) cenv lexenv))
+    ((restart-case)
+     ;; RESTART-CASE = RESTART-BIND (throwing functions) + BLOCK/RETURN-FROM + CATCH/THROW,
+     ;; exactly parallel to HANDLER-CASE.  Expand analyzer-locally and re-analyze.
+     (%vm-analyze-form (%vm-expand-restart-case form) cenv lexenv))
     (t (error "VM compiler: unhandled special operator ~S" op))))
 
 (defun %vm-analyze-handler-bind (bindings body cenv lexenv)
@@ -419,6 +424,70 @@
                                                      (list* 'handler-bind (nreverse handlers)
                                                             (list normal))))))
                         (list* 'case which (nreverse cases))))))))
+
+;;; --- RESTART system (vm-conditions RESTART) --------------------------------------
+;;; RESTART-BIND is structurally HANDLER-BIND: a no-cleanup dynamic frame_restart that
+;;; FIND-RESTART / INVOKE-RESTART (conditions.c, shared with the tree-walker) walk.  A
+;;; restart-bind restart's spec is (name fn interactive-fn test-fn) — INVOKE-RESTART tells
+;;; it from a RESTART-CASE restart by the 2nd element being CALLABLE, and applies it in
+;;; place.  RESTART-CASE reuses this: each clause becomes a restart-bind restart whose fn
+;;; THROWs, so invoking it unwinds to a CATCH that runs the clause (parallel to HANDLER-CASE).
+
+(defun %vm-restart-option (opts key)
+  "The value form for KEY in a RESTART-BIND option plist OPTS (:interactive-function /
+   :test-function / :report-function ...), or NIL."
+  (loop for r on opts by #'cddr
+        when (and (consp (cdr r)) (eq (car r) key)) do (return (cadr r))))
+
+(defun %vm-analyze-restart-bind (bindings body cenv lexenv)
+  "RESTART-BIND: analyze each (name fn . options) into an IR list
+   (name-const fn-ir interactive-fn-ir test-fn-ir); the codegen builds the runtime spec."
+  (list :restart-bind
+        (mapcar (lambda (b)
+                  (let ((name (car b)) (fn (cadr b)) (opts (cddr b)))
+                    (let ((ifn (%vm-restart-option opts :interactive-function))
+                          (tfn (%vm-restart-option opts :test-function)))
+                      (list (list :const name)
+                            (%vm-analyze-form fn cenv lexenv)
+                            (%vm-analyze-form (if ifn ifn nil) cenv lexenv)
+                            (%vm-analyze-form (if tfn tfn nil) cenv lexenv)))))
+                bindings)
+        (%vm-analyze-progn body cenv lexenv)))
+
+(defun %vm-expand-restart-case (form)
+  "Rewrite (RESTART-CASE form clause...) into RESTART-BIND (throwing functions) +
+   BLOCK/RETURN-FROM + CATCH/THROW.  Invoking restart R (INVOKE-RESTART applies its
+   restart-bind function IN PLACE) THROWs the clause index + args to a fresh-cons tag; the
+   CATCH returns the index and a CASE runs that clause's body with its lambda-list bound to
+   the invocation arguments (full ordinary lambda list via APPLY)."
+  (let* ((rform (cadr form))
+         (clauses (cddr form))
+         (tag (gensym "RC-TAG-")) (which (gensym "RC-WHICH-")) (avar (gensym "RC-ARGS-"))
+         (bname (gensym "RC-BLOCK-"))
+         (restarts '()) (cases '()) (i 0))
+    (dolist (cl clauses)
+      (let* ((name (car cl)) (rest (cdr cl))
+             (varlist (car rest)) (rest2 (cdr rest)))
+        ;; skip leading :report / :interactive / :test option pairs (a body may itself
+        ;; begin with a keyword literal, so only skip these three known options)
+        (loop while (and (consp rest2) (consp (cdr rest2))
+                         (member (car rest2) '(:report :interactive :test)))
+              do (setq rest2 (cddr rest2)))
+        (let ((idx i) (rargs (gensym "RC-A-")))
+          (push (list name (list 'lambda (list '&rest rargs)
+                                 (list 'setq avar rargs) (list 'throw tag idx)))
+                restarts)
+          (push (list idx (list* 'apply (list* 'lambda varlist rest2) (list avar)))
+                cases)
+          (setq i (1+ i)))))
+    (list 'let (list (list tag (list 'cons nil nil)) (list which nil) (list avar nil))
+          (list 'block bname
+                (list 'let (list (list which
+                                       (list 'catch tag
+                                             (list 'return-from bname
+                                                   (list* 'restart-bind (nreverse restarts)
+                                                          (list rform))))))
+                      (list* 'case which (nreverse cases)))))))
 
 (defun %vm-analyze-setq (pairs cenv lexenv)
   (cond
@@ -717,6 +786,7 @@
     (:catch      (%vm-gen-catch (cadr node) (caddr node) cs))
     (:throw      (%vm-gen-throw (cadr node) (caddr node) cs))
     (:handler-bind (%vm-gen-handler-bind (cadr node) (caddr node) cs))
+    (:restart-bind (%vm-gen-restart-bind (cadr node) (caddr node) cs))
     (:unwind-protect (%vm-gen-unwind-protect (cadr node) (caddr node) cs))
     (:progv      (%vm-gen-progv (cadr node) (caddr node) (cadddr node) cs))
     (:load-time-value (%vm-gen-load-time-value (cadr node) (caddr node) cs))
@@ -873,7 +943,8 @@
 ;;; single-valued leaves so BC-MV-LIST (which reads the buffer) captures all values.
 (defun %vm-gen-for-values (node cs)
   (case (car node)
-    ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect :progv :handler-bind :block)
+    ((:call :call-named :mv-call :mv-prog1 :catch :unwind-protect :progv
+      :handler-bind :restart-bind :block)
      ;; A real CALL sets the MV buffer; but an INLINED :call-named (an arithmetic/cons/… op)
      ;; leaves only a single value on the stack and does NOT touch the buffer, so it is a
      ;; single-valued leaf — sync the buffer with VALUES 1 (as for a constant / lref).
@@ -956,6 +1027,18 @@
     (%vm-gen-for-values body-ir cs)                       ; body value + MV
     (%vm-cs-pop-control cs)
     (%vm-emit-op cs (%vm-op :handler-bind-close))))       ; drop the frame (no stack effect)
+
+;;; RESTART-BIND: mirror HANDLER-BIND.  Each spec is (name-ir fn-ir ifn-ir tfn-ir); build
+;;; (list (list name fn ifn tfn) ...) at runtime, push a frame_restart, run body, pop.
+(defun %vm-gen-restart-bind (specs body-ir cs)
+  (let ((list-ir (list* :call-named 'list
+                        (mapcar (lambda (s) (list* :call-named 'list s)) specs))))
+    (%vm-gen list-ir cs)                                  ; the restarts list on stack (+1)
+    (%vm-emit-op cs (%vm-op :restart-bind-open)) (%vm-cs-sp+ cs -1)  ; pop list, push frame
+    (%vm-cs-push-control cs (list :dframe :restart))      ; a lexical exit must pop this frame
+    (%vm-gen-for-values body-ir cs)                       ; body value + MV
+    (%vm-cs-pop-control cs)
+    (%vm-emit-op cs (%vm-op :restart-bind-close))))       ; drop the frame (no stack effect)
 
 ;;; UNWIND-PROTECT: the cleanup runs on BOTH normal completion and any non-local exit
 ;;; through the protected form.  A frame_protect on g_frame_stack catches the unwind;
@@ -1072,6 +1155,7 @@
         (:dbind    (%vm-emit-op cs (%vm-op :dynamic-unbind)))
         (:progv    (%vm-emit-op cs (%vm-op :progv-unbind)))
         (:handler  (%vm-emit-op cs (%vm-op :handler-bind-close)))
+        (:restart  (%vm-emit-op cs (%vm-op :restart-bind-close)))
         (:catch    (%vm-emit-op cs (%vm-op :catch-close)))
         (:uprotect (%vm-gen (caddr s) cs)                  ; run the cleanup for effect
                    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)

@@ -77,3 +77,43 @@ NOT a blocker for vm-8 part 2 if COMPILE uses a SAFE FALLBACK (compile with the 
 fall back to minimal compilation when the analyzer errors) — the analyzer should ERROR
 on the still-unsupported kernel special operators (restart-*) so they trigger fallback
 rather than miscompile.
+
+====================================================================
+DONE — RESTART system (v1.8.21, branch vm).  vm-conditions is now COMPLETE.
+
+RESTART-BIND is a VM special form: BC_RESTART_BIND_OPEN pops a runtime restarts list
+((name fn interactive-fn test-fn) ...) and pushes a frame_restart — structurally a
+HANDLER-BIND (a no-cleanup dynamic VmDyn, VMK_RESTART_BIND; never a longjmp target, so an
+unwind-through just pops + continues the cascade; BYTECODE_VERSION -> 10).  Codegen
+(%vm-gen-restart-bind) builds the specs at runtime; the analyzer (%vm-analyze-restart-bind)
+parses :interactive-function / :test-function; a :dframe :restart control scope makes a
+lexical exit pop the frame.  FIND-RESTART / INVOKE-RESTART / COMPUTE-RESTARTS (conditions.c)
+are SHARED with the tree-walker and already walk g_frame_stack for frame_restart, so they
+find the VM's frame with no new code.
+
+RESTART-CASE is analyzer-EXPANDED (%vm-expand-restart-case, exactly parallel to
+HANDLER-CASE) into RESTART-BIND + BLOCK/RETURN-FROM + CATCH/THROW: each clause becomes a
+restart-bind restart whose function stashes the invocation args and THROWs the clause index
+to a fresh-cons tag; the CATCH returns the index and a CASE runs that clause's body with its
+(full ordinary) lambda-list bound to the args via APPLY.  So RESTART-CASE needs no new VM
+opcode.
+
+BUG FIXED (shared, was latent): INVOKE-RESTART decided "apply a RESTART-BIND fn in place vs
+unwind to a RESTART-CASE frame" by (functionp || closurep || built_in_function_p) — which
+EXCLUDES byte-code CompiledFunction / CompiledClosure.  So a COMPILED restart-bind function
+(and every RESTART-CASE clause's throwing CLOSURE) was mistaken for a RESTART-CASE restart
+and longjmp'd into the frame_restart, which is NOT a target (it is a HANDLER-BIND-style
+pass-through) -> the cascade ran off the end ("unwind_next_frame: no next frame").  Fixed by
+also accepting compiled_function_p / compiled_closure_p (conditions.c).
+
+ACCEPTANCE MET: compiled RESTART-CASE + INVOKE-RESTART round-trips (normal + invoked), binds
+the clause lambda-list (incl. &rest) to the invocation args, is invocable from a HANDLER-BIND
+handler, selects the right clause among several, nests, and MATCHES the tree-walker;
+FIND-RESTART / COMPUTE-RESTARTS see the compiled restart.  test_vm_restarts.  Full 42-suite
+green, -std=c17 -Wpedantic -Wextra clean.
+
+KNOWN LIMITATION (orthogonal, pre-existing vm-6 gap, NOT restart-specific): an escaping
+RETURN-FROM out of an inner closure to an outer BLOCK does not byte-compile (COMPILE falls
+back to interpreted).  A RESTART-BIND function that transfers via such a RETURN-FROM thus
+runs interpreted; one that transfers via THROW / a restart-case clause compiles.
+====================================================================

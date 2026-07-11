@@ -1,0 +1,32 @@
+vm-escaping-return-from — byte-compile a RETURN-FROM out of an inner closure to an outer BLOCK
+[plan-2, a vm-6 gap]
+
+SYMPTOM
+  (compile nil '(lambda (l) (block done
+                              (mapc (lambda (x) (when (minusp x) (return-from done x))) l)
+                              nil)))
+  The VM analyzer signals "RETURN-FROM DONE has no lexically visible block (escaping is
+  vm-6)".  COMPILE falls back to the interpreter, so it RUNS correctly — just not as
+  byte-code.  Surfaced while implementing vm-conditions RESTART: a RESTART-BIND function
+  that transfers via RETURN-FROM to an outer block hits this (one that transfers via THROW
+  or a RESTART-CASE clause compiles fine).
+
+WHY
+  vm-6 compiled BLOCK / RETURN-FROM as LEXICAL byte-code JUMPs within a single function
+  (constant, cheap).  A RETURN-FROM whose target BLOCK is in an ENCLOSING function — i.e.
+  the exit escapes the current activation from inside a nested closure — cannot be a local
+  jump; it is a genuine non-local exit up the dynamic stack, like THROW.
+
+DESIGN (one option)
+  Model an escaping BLOCK as a dynamic frame (a fresh catch-like tag per BLOCK activation,
+  captured by the closure) so RETURN-FROM to it becomes a THROW to that tag — exactly the
+  machinery CATCH/THROW already provide (vm-5).  Only BLOCKs that are actually
+  captured-and-returned-from-nonlocally need the dynamic frame; a purely lexical BLOCK stays
+  a jump (detect at analysis time — the return-from crosses a lambda boundary).  TAGBODY/GO
+  has the same escaping case.
+
+PRIORITY: low.  COMPILE's safe fallback means such functions still run (interpreted); only
+the byte-code speedup is missed.  Matters for vm-10 (a prelude function that uses an
+escaping return-from would load interpreted in a compiled-prelude image).
+
+DEPENDS ON: vm-5 (CATCH/THROW frames), vm-6 (lexical BLOCK).

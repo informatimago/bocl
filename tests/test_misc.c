@@ -992,6 +992,67 @@ static void test_vm_conditions(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-conditions RESTART: RESTART-BIND / RESTART-CASE / INVOKE-RESTART ------- */
+/* RESTART-BIND is a frame_restart the shared FIND-RESTART/INVOKE-RESTART walk; RESTART-CASE
+   is analyzer-expanded to RESTART-BIND + CATCH/THROW.  A compiled RESTART-CASE + INVOKE-
+   RESTART must round-trip, bind the clause lambda-list to the invocation args, be invocable
+   from a HANDLER-BIND handler, and match the tree-walker. */
+static void test_vm_restarts(void){
+    uword pool = open_live_pool();
+
+    /* RESTART-CASE normal completion vs restart invoked */
+    e("(setf (symbol-function 'r-basic) (%vm-compile"
+      "  '(lambda (x) (restart-case (if (< x 0) (invoke-restart 'use-zero) x) (use-zero () 0)))))");
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (symbol-function 'r-basic)) t nil)"));
+    TEST_EQ(eql, I(5), e("(r-basic 5)"));      /* form returns normally */
+    TEST_EQ(eql, I(0), e("(r-basic -1)"));     /* restart invoked -> clause runs */
+
+    /* invocation args bound to the clause's (full) lambda-list */
+    e("(setf (symbol-function 'r-args) (%vm-compile"
+      "  '(lambda () (restart-case (invoke-restart 'uv 40 2) (uv (a b) (+ a b))))))");
+    TEST_EQ(eql, I(42), e("(r-args)"));
+    /* &rest in a clause lambda-list */
+    e("(setf (symbol-function 'r-rest) (%vm-compile"
+      "  '(lambda () (restart-case (invoke-restart 'uv 1 2 3) (uv (&rest r) r)))))");
+    TEST_EQ(equal, e("'(1 2 3)"), e("(r-rest)"));
+
+    /* clause selection: the right one of several runs */
+    e("(setf (symbol-function 'r-multi) (%vm-compile"
+      "  '(lambda (n) (restart-case (invoke-restart (case n (1 'a) (2 'b) (t 'c)))"
+      "                 (a () :a) (b () :b) (c () :c)))))");
+    TEST_EQ(eql, e("':a"), e("(r-multi 1)"));
+    TEST_EQ(eql, e("':b"), e("(r-multi 2)"));
+    TEST_EQ(eql, e("':c"), e("(r-multi 9)"));
+
+    /* a HANDLER-BIND handler invokes a restart established (in compiled code) around SIGNAL */
+    e("(setf (symbol-function 'r-hand) (%vm-compile"
+      "  '(lambda (x) (handler-bind ((error (lambda (c) (declare (ignore c)) (invoke-restart 'cont 99))))"
+      "                 (restart-case (if (< x 0) (error \"neg\") x) (cont (v) v))))))");
+    TEST_EQ(eql, I(7),  e("(r-hand 7)"));
+    TEST_EQ(eql, I(99), e("(r-hand -1)"));
+
+    /* RESTART-BIND: the restart function is applied IN PLACE (it does its own transfer —
+       here a THROW; an escaping RETURN-FROM out of the fn closure is a separate vm-6 gap). */
+    e("(setf (symbol-function 'r-bind) (%vm-compile"
+      "  '(lambda (x) (catch 'done (restart-bind ((jump (lambda (v) (throw 'done (* v 10)))))"
+      "                              (if (< x 0) (invoke-restart 'jump 5) x))))))");
+    TEST_EQ(eql, I(3),  e("(r-bind 3)"));
+    TEST_EQ(eql, I(50), e("(r-bind -1)"));
+
+    /* FIND-RESTART sees the compiled restart; nested RESTART-CASE picks the inner one */
+    TEST_EQ(eql, T_Symbol, e("(if (funcall (%vm-compile"
+                            "  '(lambda () (restart-case (and (find-restart 'r1) t) (r1 () nil))))) t nil)"));
+    e("(setf (symbol-function 'r-nest) (%vm-compile"
+      "  '(lambda () (restart-case (restart-case (invoke-restart 'r) (r () :inner)) (r () :outer)))))");
+    TEST_EQ(eql, e("':inner"), e("(r-nest)"));
+
+    /* parity with the tree-walker */
+    TEST_EQ(eql, e("(let ((x -1)) (restart-case (if (< x 0) (invoke-restart 'z) x) (z () 0)))"),
+            e("(r-basic -1)"));
+
+    close_live_pool(pool);
+}
+
 /* ---- vm-8 (part 2): COMPILE / COMPILE-FILE emit byte-code -------------------- */
 static void test_vm_compile_wiring(void){
     uword pool = open_live_pool();
@@ -1000,11 +1061,14 @@ static void test_vm_compile_wiring(void){
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (x) (* x x)))) t nil)"));
     /* ... a compiled closure ... */
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (n) (lambda (x) (+ x n))))) t nil)"));
-    /* ... and FALLS BACK (interpreted) for a form the VM can't handle (RESTART-CASE),
-       which still runs correctly. */
+    /* ... and FALLS BACK (interpreted) for a form the VM can't handle — an escaping
+       RETURN-FROM out of an inner closure to an outer block (a vm-6 gap) — which still
+       runs correctly.  (RESTART-CASE is byte-compiled now, so it is no longer the example.) */
     TEST_EQ(eql, NIL_Symbol,
-            e("(if (compiled-function-p (compile nil '(lambda (x) (restart-case x (r () 0))))) t nil)"));
-    TEST_EQ(eql, I(9), e("(funcall (compile nil '(lambda (x) (restart-case x (r () 0)))) 9)"));
+            e("(if (compiled-function-p (compile nil"
+              "   '(lambda (l) (block done (mapc (lambda (x) (when (minusp x) (return-from done x))) l) nil)))) t nil)"));
+    TEST_EQ(eql, I(-3), e("(funcall (compile nil"
+              "   '(lambda (l) (block done (mapc (lambda (x) (when (minusp x) (return-from done x))) l) nil))) '(1 2 -3 4))"));
     /* results match the interpreter */
     TEST_EQ(eql, I(36), e("(funcall (compile nil '(lambda (x) (+ (* x x) (* 2 x) 1))) 5)"));
 
@@ -1372,6 +1436,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm closures",         test_vm_closures)
     TEST_CASE("vm fasl",             test_vm_fasl)
     TEST_CASE("vm conditions",       test_vm_conditions)
+    TEST_CASE("vm restarts",         test_vm_restarts)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
     TEST_CASE("vm fast-apply",       test_vm_fast_apply)
