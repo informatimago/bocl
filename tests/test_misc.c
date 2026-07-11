@@ -1053,6 +1053,57 @@ static void test_vm_restarts(void){
     close_live_pool(pool);
 }
 
+/* ---- escaping RETURN-FROM: a nested closure returns from an outer BLOCK ------- */
+/* A BLOCK whose RETURN-FROM crosses a lambda boundary can't be a local JUMP; it compiles to
+   a UNIQUE per-activation tag (a fresh cons) stored in a local and captured by the closure
+   through the display, and RETURN-FROM THROWs to it (unwinding the intervening frames).  The
+   identity is LEXICAL: two blocks with the SAME name resolve by scope, not dynamically. */
+static void test_vm_escaping_blocks(void){
+    uword pool = open_live_pool();
+
+    /* classic early-exit via an escaping closure */
+    TEST_EQ(eql, I(-3), e("(funcall (compile nil"
+        "  '(lambda (l) (block done (mapc (lambda (x) (when (minusp x) (return-from done x))) l) nil)))"
+        "  '(1 2 -3 4))"));
+    /* it is compiled, not a fallback */
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil"
+        "  '(lambda (l) (block done (mapc (lambda (x) (return-from done x)) l) nil)))) t nil)"));
+    /* escaping RETURN-FROM carries MULTIPLE VALUES */
+    TEST_EQ(equal, e("'(7 14)"), e("(funcall (compile nil"
+        "  '(lambda () (multiple-value-list (block b (mapc (lambda (x) (return-from b (values x (* x 2)))) '(7)) nil)))))"));
+    /* an escaping RETURN-FROM runs a crossed UNWIND-PROTECT cleanup */
+    TEST_EQ(equal, e("'(:cleanup)"), e("(funcall (compile nil"
+        "  '(lambda () (let ((log '())) (block b (unwind-protect (mapc (lambda (x) (return-from b x)) '(9))"
+        "                                          (push :cleanup log))) log))))"));
+    /* recursion: each activation's BLOCK is a distinct target (fresh tag per call) */
+    TEST_EQ(equal, e("'(2 2)"), e("(funcall (compile nil"
+        "  '(lambda () (labels ((f (n) (block out"
+        "                                (mapc (lambda (x) (when (> x 0) (return-from out (list n x)))) (list n))"
+        "                                (if (> n 0) (f (1- n)) :base)))) (f 2)))))"));
+
+    /* THE LEXICAL CASE — two DIFFERENTLY-named blocks, mutually-recursive escaping lambdas */
+    e("(setf (symbol-function 'ev-ex1) (compile nil"
+      "  '(lambda () (loop for x from 42 to 43 collect"
+      "     (list 'block-odd (block odd (list 'block-even (block even"
+      "       (let (o e) (setf o (lambda (x e) (if (oddp x) (return-from odd x) (funcall e x o)))"
+      "                        e (lambda (x o) (if (evenp x) (return-from even x) (funcall o x e))))"
+      "                  (funcall o x e))))))))))");
+    TEST_EQ(equal, e("'((block-odd (block-even 42)) (block-odd 43))"), e("(ev-ex1)"));
+
+    /* two SAME-named blocks (`operation`) referenced by two closures — must resolve by LEXICAL
+       scope (o -> the outer block, e -> the inner), NOT by dynamic nearest-name. */
+    e("(setf (symbol-function 'ev-ex2) (compile nil"
+      "  '(lambda () (loop for x from 42 to 43 collect"
+      "     (let (o e) (list 'block-odd (block operation"
+      "       (setf o (lambda (x e) (if (oddp x) (return-from operation x) (funcall e x o))))"
+      "       (list 'block-even (block operation"
+      "         (setf e (lambda (x o) (if (evenp x) (return-from operation x) (funcall o x e))))"
+      "         (funcall o x e))))))))))");
+    TEST_EQ(equal, e("'((block-odd (block-even 42)) (block-odd 43))"), e("(ev-ex2)"));
+
+    close_live_pool(pool);
+}
+
 /* ---- vm-8 (part 2): COMPILE / COMPILE-FILE emit byte-code -------------------- */
 static void test_vm_compile_wiring(void){
     uword pool = open_live_pool();
@@ -1061,14 +1112,18 @@ static void test_vm_compile_wiring(void){
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (x) (* x x)))) t nil)"));
     /* ... a compiled closure ... */
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (n) (lambda (x) (+ x n))))) t nil)"));
-    /* ... and FALLS BACK (interpreted) for a form the VM can't handle — an escaping
-       RETURN-FROM out of an inner closure to an outer block (a vm-6 gap) — which still
-       runs correctly.  (RESTART-CASE is byte-compiled now, so it is no longer the example.) */
+    /* ... and FALLS BACK (interpreted) for a form the VM can't handle — an escaping GO out
+       of an inner closure to an outer TAGBODY (escaping BLOCK/RETURN-FROM compiles now;
+       TAGBODY/GO is the remaining escaping gap) — which still runs correctly. */
     TEST_EQ(eql, NIL_Symbol,
             e("(if (compiled-function-p (compile nil"
-              "   '(lambda (l) (block done (mapc (lambda (x) (when (minusp x) (return-from done x))) l) nil)))) t nil)"));
-    TEST_EQ(eql, I(-3), e("(funcall (compile nil"
-              "   '(lambda (l) (block done (mapc (lambda (x) (when (minusp x) (return-from done x))) l) nil))) '(1 2 -3 4))"));
+              "   '(lambda (l) (let ((r :none)) (tagbody"
+              "       (mapc (lambda (x) (when (minusp x) (go found))) l) (go done)"
+              "       found (setq r :neg) done) r)))) t nil)"));
+    TEST_EQ(eql, e("':neg"), e("(funcall (compile nil"
+              "   '(lambda (l) (let ((r :none)) (tagbody"
+              "       (mapc (lambda (x) (when (minusp x) (go found))) l) (go done)"
+              "       found (setq r :neg) done) r))) '(1 -1 2))"));
     /* results match the interpreter */
     TEST_EQ(eql, I(36), e("(funcall (compile nil '(lambda (x) (+ (* x x) (* 2 x) 1))) 5)"));
 
@@ -1437,6 +1492,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm fasl",             test_vm_fasl)
     TEST_CASE("vm conditions",       test_vm_conditions)
     TEST_CASE("vm restarts",         test_vm_restarts)
+    TEST_CASE("vm escaping blocks",  test_vm_escaping_blocks)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
     TEST_CASE("vm fast-apply",       test_vm_fast_apply)

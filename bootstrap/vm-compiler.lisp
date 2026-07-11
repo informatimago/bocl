@@ -328,12 +328,27 @@
      (%vm-analyze-progn (cddr form) cenv
                         (%vm-lexenv-add-symbol-macros lexenv (cadr form))))
     ((block)
-     (list :block (cadr form)
-           (%vm-analyze-progn (cddr form) cenv
-                              (%vm-lexenv-add-block lexenv (cadr form)))))
+     ;; The block's EXIT is modelled as a hidden lexical binding (namespace :BLOCK) in the
+     ;; current function level, so %VM-RESOLVE resolves a RETURN-FROM to it with a DEPTH
+     ;; (lexical, honouring same-name shadowing) and MARKS IT CAPTURED when the RETURN-FROM
+     ;; crosses a lambda — i.e. escapes.  A non-escaping block still compiles to a JUMP; an
+     ;; escaping one (captured tag) compiles to a per-activation unique tag + a frame the
+     ;; RETURN-FROM unwinds to (like the tree-walker's lexical block, via CATCH/THROW frames).
+     (let ((fl (car cenv)))
+       (%vm-flevel-push-scope fl)
+       (let* ((idx  (%vm-flevel-alloc fl))
+              (tagb (%vm-binding (cadr form) :block idx nil)))
+         (%vm-flevel-add fl tagb)
+         (let ((body-ir (%vm-analyze-progn (cddr form) cenv
+                                           (%vm-lexenv-add-block lexenv (cadr form)))))
+           (%vm-flevel-pop-scope fl)
+           (list :block (cadr form) tagb body-ir)))))
     ((return-from)
-     (list :return-from (cadr form)
-           (if (cddr form) (%vm-analyze-form (caddr form) cenv lexenv) (list :const nil))))
+     (multiple-value-bind (tagb depth) (%vm-resolve (cadr form) :block cenv)
+       (unless tagb
+         (error "VM compiler: RETURN-FROM ~S — no lexically visible BLOCK" (cadr form)))
+       (list :return-from (cadr form) tagb depth
+             (if (cddr form) (%vm-analyze-form (caddr form) cenv lexenv) (list :const nil)))))
     ((tagbody) (%vm-analyze-tagbody (cdr form) cenv lexenv))
     ((go) (list :go (cadr form)))
     ((catch)
@@ -777,8 +792,8 @@
     (:function   (%vm-gen-function (cadr node) cs))
     (:let        (%vm-gen-let (cadr node) (caddr node) cs nil))
     (:let*       (%vm-gen-let (cadr node) (caddr node) cs t))
-    (:block      (%vm-gen-block (cadr node) (caddr node) cs))
-    (:return-from(%vm-gen-return-from (cadr node) (caddr node) cs))
+    (:block      (%vm-gen-block (cadr node) (caddr node) (cadddr node) cs))
+    (:return-from(%vm-gen-return-from (cadr node) (caddr node) (cadddr node) (nth 4 node) cs))
     (:tagbody    (%vm-gen-tagbody (cadr node) cs))
     (:go         (%vm-gen-go (cadr node) cs))
     (:mv-call    (%vm-gen-mv-call (cadr node) (cddr node) cs))
@@ -1127,7 +1142,13 @@
           (setq remaining (- remaining k))))
       (%vm-cs-sp+ cs (- n)))))
 
-(defun %vm-gen-block (name body-ir cs)
+(defun %vm-gen-block (name tagb body-ir cs)
+  (if (%vm-binding-captured-p tagb)
+      (%vm-gen-block-escaping name (%vm-binding-index tagb) body-ir cs)
+      (%vm-gen-block-lexical  name body-ir cs)))
+
+(defun %vm-gen-block-lexical (name body-ir cs)
+  "Non-escaping BLOCK: a RETURN-FROM is a JUMP to the block's end within this function."
   (let* ((base  (%vm-cs-sp cs))
          (slot  (%vm-cs-scratch cs))
          (l-end (%vm-cs-label cs)))
@@ -1141,6 +1162,32 @@
     (%vm-emit-label cs l-end)
     (%vm-emit-op cs (%vm-op :load-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs slot)
     (%vm-cs-sp+ cs 1)))                                    ; block value on top (sp = base+1)
+
+(defun %vm-gen-block-escaping (name tag-index body-ir cs)
+  "Escaping BLOCK (a nested closure RETURN-FROMs it): allocate a UNIQUE per-activation tag
+   (a fresh cons) into local slot TAG-INDEX — so a nested closure captures THIS block's
+   identity through the display (lexical, distinct even for two same-named blocks) — and
+   establish a frame the RETURN-FROM (a THROW to that tag) unwinds to.  Same shape as CATCH,
+   so multiple values + crossed UNWIND-PROTECTs are handled by the existing machinery.  A
+   same-function RETURN-FROM to this block also THROWs (tag at depth 0), so there is no
+   mixed jump/throw path."
+  (declare (ignore name))
+  (let ((l-handler (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
+    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
+    (%vm-emit-op cs (%vm-op :cons)) (%vm-cs-sp+ cs -1)     ; fresh unique tag (cons nil nil)
+    (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs tag-index)
+    (%vm-emit-jump cs (%vm-op :catch-open) l-handler)      ; CATCH_OPEN pops the tag
+    (%vm-cs-sp+ cs -1)
+    (let ((base (%vm-cs-sp cs)))
+      (%vm-cs-push-control cs (list :dframe :catch))       ; a lexical exit must pop this frame
+      (%vm-gen-for-values body-ir cs)                      ; body value + MV buffer
+      (%vm-cs-pop-control cs)
+      (%vm-emit-op cs (%vm-op :catch-close))               ; normal exit: drop the frame
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-emit-label cs l-handler)                        ; RETURN-FROM (THROW) resumes here
+      (%vm-cs-set-sp cs (1+ base))                         ; VM pushed the returned primary
+      (%vm-emit-label cs l-end))))
 
 (defun %vm-emit-unwind-to (cs target-scope)
   "Emit the dynamic-frame unwinds for every dynamic frame between here and
@@ -1161,10 +1208,26 @@
                    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
                    (%vm-emit-op cs (%vm-op :catch-close)))))))  ; then pop the protect frame
 
-(defun %vm-gen-return-from (name value-ir cs)
+(defun %vm-gen-return-from (name tagb depth value-ir cs)
+  (if (%vm-binding-captured-p tagb)
+      (%vm-gen-return-from-escaping depth (%vm-binding-index tagb) value-ir cs)
+      (%vm-gen-return-from-lexical name value-ir cs)))
+
+(defun %vm-gen-return-from-escaping (depth tag-index value-ir cs)
+  "Escaping RETURN-FROM: load this block's unique tag (from the current frame if depth=0, or
+   an upvalue if the RETURN-FROM is inside a nested closure — %VM-GEN-LREF bumps the capture
+   depth so the closure captures the block's frame) and THROW the value to it.  THROW's
+   unwind cascade runs every crossed frame's cleanup on the way to the block's frame."
+  (let ((s (%vm-cs-sp cs)))
+    (%vm-gen-lref depth tag-index cs)                    ; the block's tag (+1, marks capture)
+    (%vm-gen-for-values value-ir cs)                     ; primary + MV buffer (+1)
+    (%vm-emit-op cs (%vm-op :throw))                     ; unwinds to the block's frame
+    (%vm-cs-set-sp cs (1+ s))))                          ; phantom value (dead continuation)
+
+(defun %vm-gen-return-from-lexical (name value-ir cs)
   (let ((scope (%vm-cs-find-block cs name)))
     (unless scope
-      (error "VM codegen: RETURN-FROM ~S has no lexically visible block (escaping is vm-6)" name))
+      (error "VM codegen: RETURN-FROM ~S has no lexically visible block" name))
     (let ((base (caddr scope)) (slot (cadddr scope)) (l-end (nth 4 scope))
           (site (%vm-cs-sp cs)))
       (%vm-gen-for-values value-ir cs)                     ; value + MV buffer (sp = site+1)

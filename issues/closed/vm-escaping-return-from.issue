@@ -1,0 +1,67 @@
+vm-escaping-return-from — byte-compile a RETURN-FROM out of an inner closure to an outer BLOCK
+[plan-2, a vm-6 gap]
+
+SYMPTOM
+  (compile nil '(lambda (l) (block done
+                              (mapc (lambda (x) (when (minusp x) (return-from done x))) l)
+                              nil)))
+  The VM analyzer signals "RETURN-FROM DONE has no lexically visible block (escaping is
+  vm-6)".  COMPILE falls back to the interpreter, so it RUNS correctly — just not as
+  byte-code.  Surfaced while implementing vm-conditions RESTART: a RESTART-BIND function
+  that transfers via RETURN-FROM to an outer block hits this (one that transfers via THROW
+  or a RESTART-CASE clause compiles fine).
+
+WHY
+  vm-6 compiled BLOCK / RETURN-FROM as LEXICAL byte-code JUMPs within a single function
+  (constant, cheap).  A RETURN-FROM whose target BLOCK is in an ENCLOSING function — i.e.
+  the exit escapes the current activation from inside a nested closure — cannot be a local
+  jump; it is a genuine non-local exit up the dynamic stack, like THROW.
+
+DESIGN (one option)
+  Model an escaping BLOCK as a dynamic frame (a fresh catch-like tag per BLOCK activation,
+  captured by the closure) so RETURN-FROM to it becomes a THROW to that tag — exactly the
+  machinery CATCH/THROW already provide (vm-5).  Only BLOCKs that are actually
+  captured-and-returned-from-nonlocally need the dynamic frame; a purely lexical BLOCK stays
+  a jump (detect at analysis time — the return-from crosses a lambda boundary).  TAGBODY/GO
+  has the same escaping case.
+
+PRIORITY: low.  COMPILE's safe fallback means such functions still run (interpreted); only
+the byte-code speedup is missed.  Matters for vm-10 (a prelude function that uses an
+escaping return-from would load interpreted in a compiled-prelude image).
+
+DEPENDS ON: vm-5 (CATCH/THROW frames), vm-6 (lexical BLOCK).
+
+====================================================================
+DONE — escaping RETURN-FROM (v1.8.22, branch vm).
+
+APPROACH (per the user's guidance: unwind a runtime-variable number of frames, but resolve
+the target BLOCK LEXICALLY — NOT a dynamic name search).  The block's exit is modelled as a
+HIDDEN LEXICAL BINDING (a fresh namespace :BLOCK entry in the current function level):
+  - %VM-RESOLVE resolves a RETURN-FROM to it with a DEPTH, honouring lexical shadowing
+    (two same-named nested blocks resolve to distinct bindings by scope), and MARKS the
+    binding CAPTURED when the RETURN-FROM crosses a lambda — i.e. escapes.  So escape
+    detection is automatic and handles macros (it is resolution, not a syntactic walk).
+  - A NON-escaping block still compiles to a JUMP (unchanged, fast).
+  - An ESCAPING block allocates a UNIQUE per-activation tag (a fresh cons) into its local
+    slot; because the tag binding is captured, a nested closure captures THIS block's frame
+    through the vm-6 display — so the tag it sees is lexically THIS block's, distinct even
+    for two same-named blocks.  RETURN-FROM loads the tag (LOAD-LOCAL at its resolved depth
+    — an upvalue when nested, which bumps the capture depth) and THROWs the value to it; the
+    existing THROW/unwind cascade runs every crossed frame's cleanup (UNWIND-PROTECT etc.)
+    on the way to the block's frame.  A same-function RETURN-FROM to an escaping block also
+    THROWs (tag at depth 0), so there is no mixed jump/throw path.
+  No new opcode (reuses CATCH_OPEN/CATCH_CLOSE/THROW + the closure display); no C change.
+
+ACCEPTANCE: the user's TWO examples compile and give the LEXICALLY-CORRECT result, including
+the tricky two-same-named-blocks case ((block-odd (block-even 42)) (block-odd 43)) — where
+the byte-code VM is actually MORE correct than the tree-walker (see
+interp-samename-block-dynamic.issue: the interpreter resolves that case dynamically).
+Also: classic early-exit, escaping RETURN-FROM carrying multiple values, a crossed
+UNWIND-PROTECT cleanup, and recursion (a distinct block per activation) all match the
+interpreter.  test_vm_escaping_blocks.  Full 42-suite green (this rewires EVERY function's
+implicit block), -std=c17 -Wpedantic -Wextra clean.
+
+STILL A GAP (not done here): escaping TAGBODY/GO (same shape) — an escaping GO still falls
+back to the interpreter (COMPILE's safe fallback).  Could be done the same way (a unique tag
+per tagbody activation, GO -> THROW to it) if wanted.
+====================================================================

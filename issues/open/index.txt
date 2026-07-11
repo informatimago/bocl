@@ -72,10 +72,12 @@ Implementation issues, in global order:
     green — the only dispatch build.  The condition system is COMPLETE (v1.8.21): RESTART-BIND
     is a frame_restart, RESTART-CASE expands to it + CATCH/THROW, INVOKE/FIND/COMPUTE-RESTARTS
     are shared with the tree-walker.  So the WHOLE CL language now byte-compiles (except an
-    escaping RETURN-FROM out of a closure — a vm-6 gap that falls back).  NEXT (off critical
-    path): vm-10 (byte-compiled prelude BOOT image; regression fixed), per-CALL frame pooling
-    (the call-bound lever), escaping return-from (vm-6 gap).  Branch ~33 commits ahead of
-    master, all suite-green, NOT merged (user decides the merge + minor bump). ***
+    escaping RETURN-FROM out of a closure — now DONE v1.8.22).  Escaping BLOCK/RETURN-FROM
+    compiles (unique per-activation tag captured lexically; MORE correct than the interpreter
+    on same-named nested blocks).  NEXT (off critical path): vm-10 (byte-compiled prelude
+    BOOT image; regression fixed), per-CALL frame pooling (the call-bound lever), escaping
+    TAGBODY/GO (the remaining escaping gap).  Branch ~35 commits ahead of master, all
+    suite-green, NOT merged (user decides the merge + minor bump). ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
@@ -84,5 +86,5 @@ hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
 vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (regression now fixed)
-vm-escaping-return-from.issue        (plan-2) — compile RETURN-FROM out of an inner closure
+interp-samename-block-dynamic.issue  (bug) — interp resolves same-named nested BLOCK dynamically
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler
