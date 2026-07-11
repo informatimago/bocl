@@ -1,0 +1,25 @@
+CLOS conditions (DEFINE-CONDITION / DEFCLASS) do not print their report / format-control.
+
+SYMPTOM
+  A user condition prints as "#<TYPE 0xADDR>" instead of its report message:
+  - (make-condition 'my-err :format-control "x ~S" :format-arguments '(5)) then ~A / princ
+    -> "#<MY-ERR 0x...>"  (SIMPLE-CONDITION-FORMAT-CONTROL on it returns a %CLS, not the
+    string — the :FORMAT-CONTROL initarg does not bind the inherited SIMPLE-ERROR slot).
+  - DEFINE-CONDITION's :REPORT option generates a (defmethod print-object ((c NAME) s) ...),
+    and a manual such defmethod, are BOTH ignored — the C condition printer routes to the
+    (condition t) method, not the most-specific method.
+  Related existing note: "issue make-condition-clos-initargs" (prelude ~5765).
+
+IMPACT
+  vm-conditions' RETURN-FROM-EXITED-BLOCK-ERROR / GO-EXITED-TAGBODY-ERROR are correctly typed
+  and carry the block-name/tag slot (handler-bind/-case work), but their descriptive message
+  ("Cannot RETURN-FROM the block FOO, it has already exited.") does not render — an unhandled
+  one shows "Unhandled RETURN-FROM-EXITED-BLOCK-ERROR: #<...>".  The TYPE is descriptive; the
+  sentence is lost.
+
+FIX (either)
+  (a) Make SIMPLE-CONDITION-FORMAT-CONTROL / -FORMAT-ARGUMENTS read the CLOS slots (so the
+      (condition t) method's simple-condition branch prints inherited simple-error conditions),
+      and make the :FORMAT-CONTROL initarg bind the inherited slot; OR
+  (b) Route the C condition printer through the full PRINT-OBJECT generic dispatch so a
+      DEFINE-CONDITION :REPORT / user print-object method wins.

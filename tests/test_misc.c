@@ -1139,6 +1139,49 @@ static void test_vm_escaping_blocks(void){
     close_live_pool(pool);
 }
 
+/* ---- non-local exit to an EXITED extent (per pjb) ------------------------------ */
+/* RETURN-FROM a BLOCK / GO to a TAGBODY whose extent has already exited signals a
+   descriptive TYPED condition (naming the block/tags) IN the RETURN-FROM/GO's context —
+   BEFORE unwinding — so a HANDLER-BIND may divert.  Works in the tree-walker AND compiled;
+   the fix also repaired HANDLER-BIND on ANY user CLOS condition class (it crashed before). */
+static void test_vm_exited_extent(void){
+    uword pool = open_live_pool();
+
+    /* pre-existing bug this feature required fixing: HANDLER-BIND on a user CLOS condition */
+    e("(define-condition tvee-c (error) ())");
+    TEST_EQ(eql, e("':diverted"),
+            e("(block a (handler-bind ((tvee-c (lambda (c) (declare (ignore c)) (return-from a :diverted))))"
+              "           (error 'tvee-c)))"));
+
+    /* INTERPRETED: return-from an exited block -> typed condition naming the block */
+    e("(defvar *tvee-c* (let (c) (block g (setf c (lambda () (return-from g 1)))) c))");
+    TEST_EQ(equal, e("'(return-from-exited-block-error g)"),
+            e("(handler-case (funcall *tvee-c*)"
+              "  (return-from-exited-block-error (e)"
+              "    (list (type-of e) (return-from-exited-block-error-block-name e))))"));
+    /* and a HANDLER-BIND diverts (the bolded requirement: alternative non-local exit) */
+    TEST_EQ(eql, I(42),
+            e("(block alt (handler-bind ((return-from-exited-block-error (lambda (e) (declare (ignore e)) (return-from alt 42))))"
+              "             (funcall *tvee-c*)))"));
+
+    /* INTERPRETED: go to an exited tagbody -> typed condition */
+    e("(defvar *tvee-g* (let (c) (tagbody (setf c (lambda () (go done))) done) c))");
+    TEST_EQ(eql, e("'go-exited-tagbody-error"),
+            e("(handler-case (funcall *tvee-g*) (go-exited-tagbody-error (e) (type-of e)))"));
+
+    /* COMPILED: same, through the byte-code VM (BC_THROW's not-found path) */
+    e("(defvar *tvee-cc* (funcall (compile nil '(lambda () (block g (let (c) (setf c (lambda () (return-from g 1))) c)))))) ");
+    TEST_EQ(equal, e("'(return-from-exited-block-error g)"),
+            e("(handler-case (funcall *tvee-cc*)"
+              "  (return-from-exited-block-error (e)"
+              "    (list (type-of e) (return-from-exited-block-error-block-name e))))"));
+    TEST_EQ(eql, e("':caught"),
+            e("(handler-case (funcall (funcall (compile nil '(lambda () (let (c) (tagbody (setf c (lambda () (go d))) d) c)))))"
+              "  (go-exited-tagbody-error () :caught))"));
+
+    close_live_pool(pool);
+}
+
 /* ---- vm-8 (part 2): COMPILE / COMPILE-FILE emit byte-code -------------------- */
 static void test_vm_compile_wiring(void){
     uword pool = open_live_pool();
@@ -1523,6 +1566,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm conditions",       test_vm_conditions)
     TEST_CASE("vm restarts",         test_vm_restarts)
     TEST_CASE("vm escaping blocks",  test_vm_escaping_blocks)
+    TEST_CASE("vm exited extent",    test_vm_exited_extent)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
     TEST_CASE("vm fast-apply",       test_vm_fast_apply)

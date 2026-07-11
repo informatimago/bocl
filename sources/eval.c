@@ -1332,9 +1332,25 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                            string_cstring(prin1_to_string(clause)));}
                  Ref type_spec  = car(clause);
                  Ref fn_form    = cadr(clause);
-                 Ref type_class = symbolp(type_spec) ? find_class(type_spec) : type_spec;
+                 /* Resolve type_spec to a class object.  Kernel classes first; if not found,
+                    fall back to the CLOS class registry via the Lisp FIND-CLASS — otherwise a
+                    HANDLER-BIND clause typed on a user DEFINE-CONDITION class resolves to NULL
+                    and typep(NULL,...) dereferences it (was a crash).  Mirrors HANDLER-CASE. */
+                 Ref type_class;
+                 if(symbolp(type_spec)){
+                     type_class = find_class(type_spec);            /* kernel lookup */
+                     if(type_class == NULL){
+                         Ref lisp_fc = symbol_function(S(FIND-CLASS));
+                         if(lisp_fc != NULL && lisp_fc != UNBOUND_Object &&
+                            (closurep(lisp_fc)||functionp(lisp_fc)||built_in_function_p(lisp_fc))){
+                             MultipleValues fc_res = {0};
+                             kernel_apply(lisp_fc, list(type_spec, NULL), &fc_res);
+                             type_class = (fc_res.count > 0) ? fc_res.values[0] : NULL;}}}
+                 else {
+                     type_class = type_spec;}
                  add_to_live_pool(type_class); /* protect across evale */
-                 if(!typep(type_class,T_Class)){
+                 if((type_class == NULL || type_class == NIL_Symbol) ||
+                    (!typep(type_class,T_Class) && !clos_class_p(type_class))){
                      ERROR("HANDLER-BIND: unknown type %s",
                            string_cstring(prin1_to_string(type_spec)));}
                  MultipleValues fn_results;
@@ -1546,7 +1562,19 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref result=cadr(arguments);
             Frame* target_frame=find_block_frame(name,environment);
             if(NULL==target_frame){
-                ERROR("No block named %s",string_cstring(prin1_to_string(name)));}
+                /* The block is lexically valid (the analyzer/reader saw it) but its dynamic
+                   extent has already EXITED — a closure captured this RETURN-FROM and is
+                   being called after the block returned.  Signal a descriptive, TYPED error
+                   HERE — in the dynamic context of the RETURN-FROM, BEFORE any unwinding —
+                   so a HANDLER-BIND active at this point may provide an alternative
+                   non-local exit (per CLHS 5.2 / the requested behaviour).  Falls back to a
+                   generic error before the prelude defines the signaler (early boot). */
+                Ref sig=symbol_intern_cstring("%RETURN-FROM-EXITED-BLOCK-ERROR");
+                if(symbol_fboundp(sig)){
+                    MultipleValues mv;
+                    kernel_apply(symbol_function(sig),list(name,(Ref)NULL),&mv);}
+                ERROR("RETURN-FROM: the block %s has already exited (or was never established)",
+                      string_cstring(prin1_to_string(name)));}
             evale(result,environment,target_frame->results);
             NON_LOCAL_EXIT(target_frame);}
 
@@ -1618,10 +1646,18 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,1,1);
             Ref tag=car(arguments);
             Frame* target_frame=find_tagbody_frame(tag,environment);
-            target_frame->parameters.tagbody.target_tag=tag;
             if(NULL==target_frame){
-                /* TODO: save the environment so error() and handlers can find it! */
-                ERROR("No active catch for tag %p",(void*)tag);}
+                /* The tag is lexically valid but its TAGBODY's dynamic extent has EXITED —
+                   signal a descriptive, typed error in the GO's context (before unwinding),
+                   like RETURN-FROM above.  (Also fixes a pre-existing NULL-deref: the
+                   target_tag was set BEFORE this NULL check.) */
+                Ref sig=symbol_intern_cstring("%GO-EXITED-TAGBODY-ERROR");
+                if(symbol_fboundp(sig)){
+                    MultipleValues mv;
+                    kernel_apply(symbol_function(sig),list(tag,(Ref)NULL),&mv);}
+                ERROR("GO: the tag %s's TAGBODY has already exited (or the tag is unknown)",
+                      string_cstring(prin1_to_string(tag)));}
+            target_frame->parameters.tagbody.target_tag=tag;
             NON_LOCAL_EXIT(target_frame);}
 
         /* operator is not a special operator. Lookup order matters here

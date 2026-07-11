@@ -1201,12 +1201,13 @@
    establish a frame the RETURN-FROM (a THROW to that tag) unwinds to.  Same shape as CATCH,
    so multiple values + crossed UNWIND-PROTECTs are handled by the existing machinery.  A
    same-function RETURN-FROM to this block also THROWs (tag at depth 0), so there is no
-   mixed jump/throw path."
-  (declare (ignore name))
+   mixed jump/throw path.  The tag is (cons NAME :%vm-nlx-block) — a fresh cons (unique
+   identity for eq) whose car+marker let BC_THROW, if the block has EXITED, signal a
+   descriptive RETURN-FROM-EXITED-BLOCK-ERROR naming NAME (parallel to the tree-walker)."
   (let ((l-handler (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
-    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
-    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
-    (%vm-emit-op cs (%vm-op :cons)) (%vm-cs-sp+ cs -1)     ; fresh unique tag (cons nil nil)
+    (%vm-gen-const name cs)                                ; car = block name
+    (%vm-gen-const ':%vm-nlx-block cs)                     ; cdr = marker BC_THROW recognises
+    (%vm-emit-op cs (%vm-op :cons)) (%vm-cs-sp+ cs -1)     ; fresh unique tag (NAME . :marker)
     (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs tag-index)
     (%vm-emit-jump cs (%vm-op :catch-open) l-handler)      ; CATCH_OPEN pops the tag
     (%vm-cs-sp+ cs -1)
@@ -1302,10 +1303,12 @@
                    (when (eq (car it) :tag)
                      (push (list i (cadr it) (%vm-cs-label cs)) acc) (incf i)))))
          (l-loop (%vm-cs-label cs)) (l-caught (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
-    ;; fresh unique tag -> the tagbody's local slot
-    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
-    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
-    (%vm-emit-op cs (%vm-op :cons)) (%vm-cs-sp+ cs -1)
+    ;; fresh unique tag -> the tagbody's local slot.  The tag is (cons TAG-NAMES :%vm-nlx-
+    ;; tagbody) so BC_THROW can, if this TAGBODY has EXITED, signal a descriptive
+    ;; GO-EXITED-TAGBODY-ERROR naming its tags (parallel to the tree-walker).
+    (%vm-gen-const (mapcar #'cadr tags) cs)               ; car = list of this tagbody's tags
+    (%vm-gen-const ':%vm-nlx-tagbody cs)                  ; cdr = marker BC_THROW recognises
+    (%vm-emit-op cs (%vm-op :cons)) (%vm-cs-sp+ cs -1)    ; fresh unique tag (TAGS . :marker)
     (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs tag-index)
     (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
     (%vm-gen-const -1 cs)                                  ; disp = -1 : start of body

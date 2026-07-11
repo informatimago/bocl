@@ -88,4 +88,6 @@ hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
 vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (regression now fixed)
+prelude-condition-utils-skip.issue    (bug) — a form aborts boot loading of the condition-utils chunk
+clos-condition-report-not-printed.issue (bug) — user conditions print #<TYPE>, not their report
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler

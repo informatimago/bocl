@@ -749,7 +749,25 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
             (void)POP();                            /* value primary (also results[0]) */
             Ref tag = POP();
             Frame* target = vm_find_catch_frame(tag);
-            if(target==NULL){ ERROR("THROW: no CATCH is active for the thrown tag%s",""); }
+            if(target==NULL){
+                /* An escaping RETURN-FROM / GO whose BLOCK / TAGBODY dynamic extent has
+                   already EXITED: the codegen made the tag a (NAME . :%vm-nlx-block) or
+                   (TAGS . :%vm-nlx-tagbody) cons, so signal the descriptive TYPED condition
+                   HERE — in the throw's dynamic context, BEFORE unwinding — naming the block
+                   / tags (parallel to the tree-walker).  A plain user THROW to a dead tag
+                   stays the generic control error below. */
+                if(consp(tag)){
+                    Ref marker = cons_cdr(tag);
+                    const char* signame =
+                        (marker == keyword_intern_cstring("%VM-NLX-BLOCK"))   ? "%RETURN-FROM-EXITED-BLOCK-ERROR" :
+                        (marker == keyword_intern_cstring("%VM-NLX-TAGBODY")) ? "%GO-EXITED-TAGBODY-ERROR" : NULL;
+                    if(signame){
+                        Ref sig = symbol_intern_cstring(signame);
+                        if(symbol_fboundp(sig)){
+                            MultipleValues mv;
+                            kernel_apply(symbol_function(sig), cons(cons_car(tag), NIL_Symbol), &mv);}}}
+                ERROR("THROW: no CATCH is active for the thrown tag%s","");
+            }
             if(target->results != results){ *(target->results) = *results; }
             Frame* top = vm_top_live_frame();   /* skip backtrace markers (no setjmp) */
             if(top==NULL){ ERROR("THROW: %s","no active frame"); }

@@ -1,0 +1,22 @@
+prelude: a form in the condition-utilities section aborts boot loading of the following chunk.
+
+SYMPTOM
+  At boot (bootstrap/prelude.lisp loaded by main.c), a form in the "Condition utilities"
+  region (~ after DEFINE-CONDITION's definition) errors, and the loader skips several
+  following top-level forms.  Confirmed unfbound at boot: SIMPLE-CONDITION-P,
+  CONDITION-REPORT-STRING (and likely the MAKE-CONDITION CLOS-routing redefinition) — while
+  forms before (WARN, DEFINE-CONDITION) and after (INPUT-STREAM-P onward) DO load.
+    bocl -norc -b -e '(prin1 (list (fboundp (quote condition-report-string)) (fboundp (quote input-stream-p))))'
+    => (NIL T)
+
+IMPACT
+  Those condition helpers are simply absent at runtime.  It also means new condition-related
+  definitions placed in that region silently do not load — vm-conditions' EXITED-extent
+  conditions had to be moved to the DEFCLASS block (see return-from-exited-block work).
+
+LIKELY CAUSE
+  A single form between DEFINE-CONDITION (~5715) and SIMPLE-CONDITION-P (~5756) signals at
+  load — candidates: the CONDITIONP extension `(let ((old ...)) (set-symbol-function ...))`
+  or `(set-symbol-function (symbol-function 'conditionp) 'condition-p)` — and the loader's
+  per-form recovery skips forward.  Find the erroring form (load the prelude with a form-by-
+  form trace / *load-verbose*) and fix it so the whole section loads.
