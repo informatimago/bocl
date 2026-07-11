@@ -1,0 +1,46 @@
+vm-10 — ship a byte-compiled prelude boot image (fast startup)  [plan-2, follow-up to vm-9]
+
+WHAT
+  A build step compiles bootstrap/prelude.lisp -> a byte-code fasl loaded at boot instead of
+  re-reading + re-macroexpanding the ~11k-line source every start.  The MECHANISM already
+  exists after vm-8/vm-9: COMPILE-FILE emits a byte-code fasl (DEFUN bodies pre-compiled),
+  LOAD installs the templates with no recompilation, and the COMPILE-FILE fallback now
+  survives a per-form control-stack overflow (falls back to interpreted for that form).
+  What remains is the BUILD + BOOT wiring and the validation.
+
+WHY IT WAS DEFERRED OUT OF vm-9 (measured, not assumed)
+  1. Uniform compilation is NOT a uniform win.  vm-9 microbenchmarks (COMPILE'd vs
+     tree-walked, same source):
+        tight arithmetic loop (sumsq 2e6)   ~9.8x   FASTER   <- the VM sweet spot
+        naive fib 28 / tak                  ~1.0x   (both hit the ~150us/funcall floor;
+                                                     call-bound code sees no VM win)
+        push-in-a-loop (revbuild 3e5)       ~0.7x   SLOWER   <- the VM builds a Lisp arg
+                                                     list per CALL; in a tight cons loop that
+                                                     alloc + GC exceeds the dispatch saving.
+     So compiling the WHOLE prelude could SLOW DOWN allocation-/call-bound prelude paths.
+     The fix is fast-apply (bind operand-stack args straight into the callee frame, skipping
+     the arg-list cons) — deferred in vm-6b.  vm-10 should land ON TOP of fast-apply, or
+     compile SELECTIVELY (hot arithmetic/loop functions only), not blanket-compile.
+  2. Cost/robustness of a build-time whole-prelude compile: compiling all ~972 prelude
+     functions in one process took >10 min and can overflow on individual deeply-nested
+     forms (now survived by the SERIOUS-CONDITION fallback, but each fallback loses the win).
+  3. Whole-file compilation SEMANTICS: the prelude relies on compile-time side effects
+     (defmacro / eval-when / in-package ordering).  Booting from a compiled image must
+     reproduce them exactly; needs its own validation pass against the full 42-suite.
+
+PLAN
+  - Prereq (or concurrent): fast-apply (vm-6b deferred item) so compiled call/alloc-heavy
+    code is >= the tree-walker, removing the revbuild-style regression.
+  - Add a `make` target: boot a stage-0 bocl, (compile-file "prelude.lisp") -> prelude.cfasl.
+  - main.c: prefer prelude.cfasl over prelude.lisp when present + version-compatible
+    (BYTECODE_VERSION / CFASL_VERSION check); --no-compiled-prelude to force source.
+  - VALIDATE: full 42-suite green booted from the compiled image; measure startup delta and
+    an end-to-end (require :asdf) compile+load+OPERATE vs the ~240-300s original + plan-1.
+
+STATUS OF THE UNDERLYING PIECES (all DONE, on branch vm): COMPILE / COMPILE-FILE emit
+byte-code with a safe SERIOUS-CONDITION fallback; LOAD installs templates name-preservingly;
+tests/test_misc.c::test_vm_selfhost compiles a feature-spanning corpus (recursion, closures,
+iteration+multiple-values, conditions) to a byte-code fasl and runs it green.  This ticket is
+only the fast-startup packaging + selective/fast-apply strategy + boot wiring.
+
+DEPENDS ON: vm-9 (done), fast-apply (vm-6b deferred).

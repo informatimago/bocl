@@ -1188,6 +1188,51 @@ static void test_vm_disassemble(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-9: self-hosting — a real-code file compiles to byte-code and runs ------ */
+/* COMPILE-FILE byte-compiles each DEFUN body into the fasl (self-hosting: the byte-code
+   compiler, itself running, compiles the file); LOAD installs the templates with no
+   re-compilation.  This corpus spans the feature surface real code (and the prelude)
+   uses — recursion, closures/HOFs, iteration + multiple values, and conditions — proving
+   the pipeline handles breadth, not just a couple of arithmetic functions.  Anything the
+   VM can't compile falls back to interpreted (correct, just not byte-code). */
+static void test_vm_selfhost(void){
+    uword pool = open_live_pool();
+
+    e("(with-open-file (f \"/tmp/bocl_vm9_corpus.lisp\" :direction :output :if-exists :supersede)"
+      "  (write-line \"(in-package :common-lisp)\" f)"
+      "  (write-line \"(defun v9-fact (n) (if (< n 2) 1 (* n (v9-fact (- n 1)))))\" f)"
+      "  (write-line \"(defun v9-adder (k) (lambda (x) (+ x k)))\" f)"                 /* closure */
+      "  (write-line \"(defun v9-sumsq (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s (* i i))))))\" f)"
+      "  (write-line \"(defun v9-both (a b) (floor a b))\" f)"                          /* multiple values */
+      "  (write-line \"(defun v9-safe (x) (handler-case (if (zerop x) (error \\\"zero\\\") (/ 10 x)) (error () :zero)))\" f)"
+      "  (write-line \"(defun v9-map (l) (mapcar (v9-adder 100) l))\" f))");
+    Ref fasl = e("(compile-file \"/tmp/bocl_vm9_corpus.lisp\")");
+    add_to_live_pool(fasl);
+    TEST_EQ(eql, T_Symbol,
+            e("(if (%cfasl-file-p (namestring (compile-file-pathname \"/tmp/bocl_vm9_corpus.lisp\"))) t nil)"));
+    e("(load (compile-file-pathname \"/tmp/bocl_vm9_corpus.lisp\"))");
+
+    /* the DEFUN bodies loaded as byte-code (self-hosted) ... */
+    TEST_EQ(eql, T_Symbol, e("(if (and (compiled-function-p (symbol-function 'v9-fact))"
+                             "          (compiled-function-p (symbol-function 'v9-adder))"
+                             "          (compiled-function-p (symbol-function 'v9-sumsq))"
+                             "          (compiled-function-p (symbol-function 'v9-both))"
+                             "          (compiled-function-p (symbol-function 'v9-safe))"
+                             "          (compiled-function-p (symbol-function 'v9-map))) t nil)"));
+    /* ... and every feature runs correctly */
+    TEST_EQ(eql, I(3628800), e("(v9-fact 10)"));
+    TEST_EQ(eql, I(15),      e("(funcall (v9-adder 5) 10)"));
+    TEST_EQ(eql, I(285),     e("(v9-sumsq 10)"));               /* 0+1+4+...+81 */
+    TEST_EQ(equal, e("'(3 2)"), e("(multiple-value-list (v9-both 17 5))"));
+    TEST_EQ(eql, I(5),       e("(v9-safe 2)"));
+    TEST_EQ(eql, e("':zero"), e("(v9-safe 0)"));                /* handler-case caught */
+    TEST_EQ(equal, e("'(101 102 103)"), e("(v9-map '(1 2 3))"));
+
+    e("(ignore-errors (delete-file \"/tmp/bocl_vm9_corpus.lisp\"))");
+    e("(ignore-errors (delete-file (compile-file-pathname \"/tmp/bocl_vm9_corpus.lisp\")))");
+    close_live_pool(pool);
+}
+
 TEST_INITIALIZE(test_misc);
 TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl primitives",    test_cfasl_primitives)
@@ -1210,6 +1255,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm clos cache",       test_vm_clos_cache)
     TEST_CASE("vm backtrace",        test_vm_backtrace)
     TEST_CASE("vm disassemble",      test_vm_disassemble)
+    TEST_CASE("vm selfhost",         test_vm_selfhost)
     TEST_CASE("profile interface",   test_profile_interface)
     TEST_CASE("make-array",          test_make_array)
     TEST_CASE("array-info",          test_array_info)

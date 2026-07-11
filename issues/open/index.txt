@@ -57,13 +57,17 @@ Planification issues (read first, not implemented directly):
 
 Implementation issues, in global order:
 
-*** BYTE-CODE COMPILER (plan-2): vm-1..vm-6, vm-conditions (handler-*), vm-8 DONE
-    (branch `vm`, v1.8.13).  READ issues/open/vm-COMPILER-PLAN.md first.  COMPILE and
-    COMPILE-FILE now EMIT BYTE-CODE (with a safe fallback) — real code runs on the VM,
-    full suite green.  NEXT: vm-9 (self-host: compile the prelude/ASDF, benchmark).
-    Off-path / partial: vm-conditions RESTART-* (handler-* done).  DONE recently:
-    vm-6b (tail calls + overflow signal), vm-7 (CLOS effective-method cache, ~31x faster
-    dispatch).  Branch ~24 commits ahead of master, all
+*** BYTE-CODE COMPILER (plan-2): vm-1..vm-9 DONE (branch `vm`, v1.8.18).  READ
+    issues/open/vm-COMPILER-PLAN.md first.  COMPILE / COMPILE-FILE emit byte-code (safe
+    SERIOUS-CONDITION fallback); real code runs on the VM, full 42-suite green.  vm-9 added
+    the debugger view of compiled frames (backtrace :CALL frames + DISASSEMBLE), proved the
+    COMPILE-FILE -> byte-code-fasl -> LOAD self-host pipeline on a feature-spanning corpus,
+    and benchmarked (COMPILE'd vs tree-walked: ~9.8x on tight arithmetic loops, ~31x on CLOS
+    dispatch (vm-7), ~1x call-bound (shared kernel_apply floor), ~0.7x alloc-in-loop until
+    fast-apply).  Portability: the VM is a single portable C17 `switch` build (-Wpedantic),
+    green — the only dispatch build.  NEXT (off critical path): vm-10 (ship a byte-compiled
+    prelude BOOT image for fast startup — needs fast-apply / selective compile first),
+    vm-conditions RESTART-* (handler-* done).  Branch ~26 commits ahead of master, all
     suite-green, NOT merged (user decides the merge + minor bump). ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
@@ -72,5 +76,6 @@ hot-3-frame-representation.issue     (plan-3)
 hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
-vm-conditions.issue                  (plan-2) — HANDLER-BIND/-CASE/RESTART (blocks vm-8 part 2)
-vm-9-debug-bootstrap-validate.issue  (plan-2)
+vm-conditions.issue                  (plan-2) — RESTART-* remains (HANDLER-* done)
+vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (needs fast-apply)
+division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler
