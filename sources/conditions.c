@@ -6,7 +6,8 @@
 #include "variable.h"
 #include "stream.h"
 #include "printer.h"
-#include "bytecode.h"    /* compiled_function_lambda_list — for frame_vm_call backtrace frames */
+#include "bytecode.h"    /* vm_call_frame_bindings — for frame_vm_call backtrace frames */
+#include "eval.h"        /* frame_top_live — skip byte-code VM markers when unwinding */
 
 extern Ref Object_new(Ref class, Slots* slots);
 
@@ -82,7 +83,7 @@ Ref signal_condition(Ref cond, unused Ref environment){
                     /* Unwind toward this handler through every intervening
                        frame (running their cleanups) via the UNWIND machinery:
                        longjmp into the current top frame, chaining to target. */
-                    Frame* top = g_frame_stack;
+                    Frame* top = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
                     if(top == NULL){
                         FATAL("signal_condition: %s",
                               "no frames yet a handler matched");}
@@ -105,7 +106,7 @@ Ref signal_condition(Ref cond, unused Ref environment){
 /*  initargs) wait for the macro system.                                */
 /* ------------------------------------------------------------------ */
 
-extern Ref eval_global_environment(void);
+/* eval_global_environment / frame_top_live are declared in eval.h (included above). */
 
 static Ref build_condition(Ref default_class, Ref arguments){
     if(!consp(arguments)){
@@ -381,7 +382,7 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     target->parameters.restart.matched_args = restart_args;
     /* Trigger a non-local exit toward `target`: longjmp into the current top
        frame, letting the UNWIND chain propagate through intermediates. */
-    Frame* top = g_frame_stack;
+    Frame* top = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
     if(top == NULL){
         FATAL("INVOKE-RESTART: %s","no active frame");}
     top->target = target;
@@ -477,7 +478,7 @@ static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
         ERROR("ABORT: no active ABORT restart%s", "");}
     target->parameters.restart.matched_name = S(ABORT);
     target->parameters.restart.matched_args = NIL_Symbol;
-    Frame* top = g_frame_stack;
+    Frame* top = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
     if(top == NULL){ FATAL("ABORT: %s","no active frame"); }
     top->target = target;
     int code = (top == target) ? (int)non_local_exit_target : (int)non_local_exit_unwind;
@@ -521,21 +522,12 @@ static void kernel_BACKTRACE(unused Ref function, unused Ref arguments, Multiple
           case frame_vm_call: {
             /* A byte-code VM activation (vm-9): report it as a :CALL frame exactly like a
                tree-walked one — (:CALL name (param . value) ...).  block.function is the
-               CompiledFunction and block.environment is the argument LIST (the VM has no
-               Environment object).  Pair the lambda-list's leading required parameters with
-               their argument values (best-effort: stop at the first &-keyword / non-symbol,
-               so &optional/&rest/&key niceties don't matter for the backtrace). */
-            Ref cf = f->parameters.block.function;
-            Ref binds = NIL_Symbol;
-            for(Ref p = compiled_function_lambda_list(cf), a = f->parameters.block.environment;
-                consp(p) && consp(a); p = cons_cdr(p), a = cons_cdr(a)){
-                Ref pv = cons_car(p);
-                if(!symbolp(pv)){ break; }
-                { const char* nm = string_cstring(symbol_name(pv)); if(nm && nm[0]=='&'){ break; } }
-                Ref pair = cons(pv, cons_car(a));
-                add_to_live_pool(pair);
-                push(pair, &binds); add_to_live_pool(binds); }
-            binds = nreverse(binds); add_to_live_pool(binds);
+               CompiledFunction and block.environment is the activation's LOCALS vector;
+               vm_call_frame_bindings (bytecode.c) reconstructs the parameter alist from it
+               (so fast-apply need not cons an arg list per call just for a maybe-backtrace). */
+            Ref binds = vm_call_frame_bindings(f->parameters.block.function,
+                                               f->parameters.block.environment);
+            add_to_live_pool(binds);
             desc = cons(keyword_intern_cstring("CALL"), cons(f->parameters.block.name, binds));
             break; }
           case frame_catch:

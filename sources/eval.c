@@ -173,13 +173,21 @@ unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
 /* find_restart_frame: implemented in conditions.c as part of FIND-RESTART /
    INVOKE-RESTART.  The stub is removed. */
 
+/* Pop byte-code VM backtrace markers (frame_vm_call — they carry NO setjmp, they are pure
+   backtrace info) off the top of the global frame stack and return the first frame that can
+   RECEIVE a longjmp.  Every non-local exit — THROW, RETURN-FROM/GO, SIGNAL/ERROR to a
+   handler, INVOKE-RESTART — must route its "longjmp into the current top frame" through
+   this, or it could jump into a marker's uninitialised jmp_buf and crash.  Popping is
+   correct: an unwind through a marker's activation ends that activation's extent, and a
+   marker is never itself an unwind target (the VM handles BLOCK/TAGBODY lexically). */
+Frame* frame_top_live(void){
+    while(g_frame_stack && g_frame_stack->type==frame_vm_call){ g_frame_stack = g_frame_stack->next; }
+    return g_frame_stack;}
+
 static _Noreturn void unwind_next_frame(Frame* popped, unused Ref environment){
     /* `popped` has just been removed from the global frame stack; the new top
        is the next frame to unwind through on the way to popped->target. */
-    /* Skip byte-code VM call markers (frame_vm_call): they carry no setjmp, are pure
-       backtrace info, and an unwind through their activation discards them. */
-    while(g_frame_stack && g_frame_stack->type==frame_vm_call){ g_frame_stack = g_frame_stack->next; }
-    Frame* next = g_frame_stack;
+    Frame* next = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
     if(next == NULL){
         FATAL("unwind_next_frame: %s","no next frame; target not reached");}
     non_local_exit_t exit = (next == popped->target)
@@ -300,7 +308,7 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
    frames list — that's the "current top frame" for unwind purposes. */
 #define NON_LOCAL_EXIT(target_frame)                                    \
     do {                                                                \
-        Frame* current_top = g_frame_stack;                             \
+        Frame* current_top = frame_top_live();                          \
         if(current_top==NULL){                                          \
             FATAL("NON_LOCAL_EXIT: %s","no active frame");}             \
         current_top->target=(target_frame);                             \

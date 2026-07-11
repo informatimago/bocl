@@ -164,6 +164,41 @@ static const char* cf_name_cstr(Ref cf){
     Ref name = compiled_function_name(cf);
     return symbolp(name) ? string_cstring(symbol_name(name)) : "anonymous byte-code function";}
 
+/* Reconstruct the ((param . value) ...) argument alist for a frame_vm_call backtrace frame
+   from the activation's LOCALS vector (vm-9 stores that in the marker so fast-apply need not
+   cons an arg list per call).  Best-effort: the leading required/optional parameters, whose
+   slots the analyzer assigns 0,1,2,... in lambda-list order; it stops at the first
+   &-lambda-list-keyword or non-symbol.  A RAW (&key/&aux/&optional-default) entry keeps the
+   whole arg list in slot 0, so zip the lambda list against THAT list instead.  Called from
+   conditions.c (%BACKTRACE); declared in bytecode.h. */
+Ref vm_call_frame_bindings(Ref cf, Ref locals){
+    if(!compiled_function_p(cf) || !vectorp(locals)){ return NIL_Symbol; }
+    word arity = integer_value(compiled_function_arity(cf));
+    Ref ll = compiled_function_lambda_list(cf);
+    Ref binds = NIL_Symbol;
+    uword pool = open_live_pool(); add_to_live_pool(binds);
+    if(BC_ARITY_RAW_P(arity)){
+        Ref args = (vector_length(locals) > 0) ? svref(locals, integer_from_word(0)) : NIL_Symbol;
+        for(Ref p = ll, a = args; consp(p) && consp(a); p = cons_cdr(p), a = cons_cdr(a)){
+            Ref pv = cons_car(p);
+            if(!symbolp(pv)){ break; }
+            { const char* nm = string_cstring(symbol_name(pv)); if(nm && nm[0]=='&'){ break; } }
+            Ref pair = cons(pv, cons_car(a)); add_to_live_pool(pair);
+            binds = cons(pair, binds); add_to_live_pool(binds); }
+    } else {
+        uword n = vector_length(locals); word i = 0;
+        for(Ref p = ll; consp(p) && (uword)i < n; p = cons_cdr(p)){
+            Ref pv = cons_car(p);
+            if(!symbolp(pv)){ break; }
+            { const char* nm = string_cstring(symbol_name(pv)); if(nm && nm[0]=='&'){ break; } }
+            Ref pair = cons(pv, svref(locals, integer_from_word(i))); add_to_live_pool(pair);
+            binds = cons(pair, binds); add_to_live_pool(binds);
+            i++; }
+    }
+    binds = nreverse(binds);
+    close_live_pool(pool); add_to_live_pool(binds);
+    return binds;}
+
 /* LEB128 readers over the code octets; *pc advances past the operand. */
 static uint64_t vm_read_uvar(const octet* code, size_t* pc){
     uint64_t v=0; int shift=0; uint8_t b;
@@ -197,7 +232,35 @@ static int64_t vm_read_svar(const octet* code, size_t* pc){
         goto done;` (a normal recursive call).  Correct everywhere — it just loses the
         constant-C-stack property for tail loops (deep tail recursion would then trip the
         eval_stack_guard_check overflow signal, as non-tail recursion already does). */
+/* The activation core.  ARGUMENTS is a Lisp arg list when FROM_STACK==0 (the kernel_apply
+   entry).  When FROM_STACK==1 (the fast-apply entry, vm-6b/vm-10) the ARGC actual args are
+   instead in the C array ARGV — the CALLER's operand stack — and no Lisp list is built; the
+   VM binds them straight into the callee's locals.  Only the FIRST activation can be
+   stack-sourced; a tail-call reinit rebinds from a freshly-built list (arguments), so
+   from_stack is cleared after the initial bind. */
+static void bytecode_apply_impl(Ref function, Ref arguments,
+                                Ref* argv, word argc, int from_stack,
+                                MultipleValues* results);
+
+/* ---- fast-apply entry (vm-6b/vm-10) ----------------------------------------------
+   Bind ARGC args from the C array ARGV directly into the callee, skipping the per-call
+   Lisp arg-list cons that CALL/CALL_NAMED would otherwise build for a compiled callee.
+   ARGV aliases the CALLER's operand-stack vector, which the caller keeps GC-rooted for the
+   whole activation; the non-moving GC never relocates its elements, so the pointers and the
+   Refs they hold stay valid across the allocations bytecode_apply_impl does before binding.
+   (Like the tail-call trampoline, this rests on the operand stack being an ordinary rooted
+   object; if a future target's ABI ever broke that, route these calls back through the
+   list path — kernel_apply(callee, <built list>, results) — for correctness at the cost of
+   the saved cons.) */
+static void bytecode_apply_stack(Ref function, Ref* argv, word argc, MultipleValues* results){
+    bytecode_apply_impl(function, NIL_Symbol, argv, argc, 1, results); }
+
 void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
+    bytecode_apply_impl(function, arguments, NULL, 0, 0, results); }
+
+static void bytecode_apply_impl(Ref function, Ref arguments,
+                                Ref* argv, word argc, int from_stack,
+                                MultipleValues* results){
     /* Deep NON-tail VM recursion (each nested call is a new bytecode_apply C frame via
        kernel_apply) would overflow the C stack; signal a catchable STORAGE-CONDITION
        instead.  Checked once per activation — a tail loop reuses this frame (goto
@@ -271,7 +334,36 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     K = constants->slots->array.elements->elements;        /* constant pool, direct */
 
     /* --- bind arguments into locals[0..] : required, optional, rest --- */
-    if(BC_ARITY_RAW_P(arity)){
+    if(from_stack){
+        /* FAST-APPLY: the ARGC actuals are in the C array ARGV (the caller's operand
+           stack), no Lisp list.  Bind straight into locals — building a list ONLY for a
+           &rest tail or a RAW (&key/&aux) entry.  ARGV/its Refs stay live via the caller's
+           rooted stack (see bytecode_apply_stack); a cons below may GC, but the already
+           copied L[] entries are rooted (locals) and the not-yet-copied argv[] are rooted
+           by the caller, so nothing is lost. */
+        if(BC_ARITY_RAW_P(arity)){
+            Ref lst = NIL_Symbol;
+            for(word i=argc-1;i>=0;i--){ add_to_live_pool(lst); lst = cons(argv[i], lst); }
+            L[0] = lst;
+        } else {
+            word req = BC_ARITY_REQUIRED(arity), opt = BC_ARITY_OPTIONAL(arity);
+            int rest = BC_ARITY_REST_P(arity);
+            word ai = 0, li = 0;
+            for(word i=0;i<req;i++){
+                if(ai>=argc){ ERROR("%s: too few arguments", cf_name_cstr(cf)); }
+                L[li++] = argv[ai++]; }
+            for(word i=0;i<opt;i++){
+                if(ai<argc){ L[li++] = argv[ai++]; } else { L[li++] = NIL_Symbol; } }
+            if(rest){
+                Ref lst = NIL_Symbol;
+                for(word i=argc-1;i>=ai;i--){ add_to_live_pool(lst); lst = cons(argv[i], lst); }
+                L[li++] = lst;
+            } else if(ai<argc){ ERROR("%s: too many arguments", cf_name_cstr(cf)); }
+        }
+        gc_write_barrier(locals->slots->array.elements);
+        from_stack = 0;   /* only the first activation is stack-sourced; a tail reinit binds
+                             from the freshly-built `arguments` list below */
+    } else if(BC_ARITY_RAW_P(arity)){
         /* RAW entry: the whole arg list into slot 0; a compiled prologue binds the
            rest (defaults / supplied-p / &key / &aux) into the analyzer's slots. */
         L[0] = arguments;
@@ -294,14 +386,17 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     #define POP()    (S[--sp])
     #define TOP()    (S[sp-1])
 
-    /* Publish the backtrace marker (name + function + args).  Push once; on a tail-call
+    /* Publish the backtrace marker (name + function + LOCALS).  Push once; on a tail-call
        reinit (nvf==0 guaranteed, so this marker is still the frame-stack top) just refresh
        its fields.  Its Refs stay live via the activation's live pool (g_frame_stack is not
-       GC-scanned), which the trim/re-root above keeps rooted. */
+       GC-scanned), which the trim/re-root above keeps rooted.  block.environment holds the
+       activation's LOCALS vector (not an arg list): %BACKTRACE reconstructs the argument
+       bindings from it on demand (vm_call_frame_bindings), so fast-apply never has to cons
+       an arg list just in case a backtrace is taken. */
     callframe.type = frame_vm_call;
     callframe.parameters.block.name        = compiled_function_name(cf);
     callframe.parameters.block.function    = cf;
-    callframe.parameters.block.environment = arguments;   /* the arg list, not an Environment */
+    callframe.parameters.block.environment = locals;   /* the locals vector, not an Environment */
     if(!callframe_pushed){ vm_push_frame(&callframe); callframe_pushed = 1; }
 
     nvf = 0;
@@ -356,32 +451,41 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
         case BC_CALL:{
             uint8_t n = code[pc++];
             Ref callee = S[sp-n-1];
-            Ref args = NIL_Symbol;
-            {   uword cp = open_live_pool(); add_to_live_pool(callee);
+            MultipleValues r = {0};
+            if(compiled_function_p(callee) || compiled_closure_p(callee)){
+                /* fast-apply: bind the n operand-stack args straight into the compiled
+                   callee, no arg-list cons (args are S[sp-n .. sp-1], callee at S[sp-n-1]). */
+                bytecode_apply_stack(callee, &S[sp-n], (word)n, &r);
+            } else {
+                uword cp = open_live_pool(); add_to_live_pool(callee);
+                Ref args = NIL_Symbol;
                 for(word i=sp-1;i>=sp-n;i--){ add_to_live_pool(args); args = cons(S[i], args); }
                 add_to_live_pool(args);
-                MultipleValues r = {0};
                 kernel_apply(callee, args, &r);
-                sp -= (n+1);
-                PUSH(r.count>0 ? r.values[0] : NIL_Symbol);
-                *results = r;   /* keep MV for a following RETURN */
                 close_live_pool(cp);
             }
+            sp -= (n+1);
+            PUSH(r.count>0 ? r.values[0] : NIL_Symbol);
+            *results = r;   /* keep MV for a following RETURN */
             break; }
         case BC_CALL_NAMED:{
             uint64_t s = vm_read_uvar(code,&pc); uint8_t n = code[pc++];
             Ref callee = symbol_function(K[s]);
-            Ref args = NIL_Symbol;
-            {   uword cp = open_live_pool(); add_to_live_pool(callee);
+            MultipleValues r = {0};
+            if(compiled_function_p(callee) || compiled_closure_p(callee)){
+                /* fast-apply (args are S[sp-n .. sp-1]; the callee comes from the symbol) */
+                bytecode_apply_stack(callee, &S[sp-n], (word)n, &r);
+            } else {
+                uword cp = open_live_pool(); add_to_live_pool(callee);
+                Ref args = NIL_Symbol;
                 for(word i=sp-1;i>=sp-n;i--){ add_to_live_pool(args); args = cons(S[i], args); }
                 add_to_live_pool(args);
-                MultipleValues r = {0};
                 kernel_apply(callee, args, &r);
-                sp -= n;
-                PUSH(r.count>0 ? r.values[0] : NIL_Symbol);
-                *results = r;
                 close_live_pool(cp);
             }
+            sp -= n;
+            PUSH(r.count>0 ? r.values[0] : NIL_Symbol);
+            *results = r;
             break; }
         case BC_TAIL_CALL:
         case BC_TAIL_CALL_NAMED:{
@@ -391,15 +495,16 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
                tree-walked / defensively nvf>0) call through kernel_apply and RETURN the
                result to our caller (we are in tail position).
 
-               NOTE: we build a Lisp arg LIST here (cheap — bocl eval is CPU-bound, not
-               allocation-bound) and the per-iteration pool trim frees it, so this is
-               already constant-space.  A "fast APPLY" would instead copy the operand-stack
-               args into a fixed C-stack buffer and bind them straight into the new locals,
-               skipping the cons — but that adds ANOTHER C-stack-frame assumption (a
-               live C array whose Refs must stay valid across the frame setup), so it, like
-               the goto-reinit reuse above, would need to be CONDITIONALIZED if a target's
-               C ABI ever misbehaves.  Deferred as a low-value micro-opt; see
-               issues/closed/vm-6b-tail-calls-and-fast-apply.issue. */
+               NOTE: the TAIL path deliberately keeps the arg-LIST build.  The trampoline
+               rebinds this same C frame via `goto reinit`, and the reinit binder reads a
+               Lisp list (`arguments`); the per-iteration pool trim frees it, so a tail loop
+               is already constant-space.  Fast-apply (binding straight from the operand
+               stack, no cons) is used on the NON-tail CALL / CALL_NAMED path instead
+               (bytecode_apply_stack) — there argv can safely alias the caller's live
+               operand stack across the nested activation.  Pointing argv into THIS frame's
+               stack across a `goto reinit` (which may reuse or reallocate that very vector)
+               would be far more delicate for a self-tail-loop whose list build is already
+               free, so it is intentionally not done here. */
             Ref callee; uint8_t n;
             if(op==BC_TAIL_CALL_NAMED){
                 uint64_t s = vm_read_uvar(code,&pc); n = code[pc++];

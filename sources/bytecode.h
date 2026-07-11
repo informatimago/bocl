@@ -207,6 +207,10 @@ Ref compiled_function_source(Ref cf);
 Ref compiled_closure_function(Ref cc);
 Ref compiled_closure_upvalues(Ref cc);
 
+/* Backtrace support (vm-9): reconstruct the ((param . value) ...) arg alist of a
+   frame_vm_call marker from its stored LOCALS vector.  Used by conditions.c %BACKTRACE. */
+Ref vm_call_frame_bindings(Ref cf, Ref locals);
+
 /* APPLY a compiled function / closure.  vm-1 provides a stub that signals an
    error; vm-2 replaces it with the VM loop.  kernel_apply dispatches to it. */
 struct MultipleValues;

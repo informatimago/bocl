@@ -77,5 +77,6 @@ hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
 vm-conditions.issue                  (plan-2) — RESTART-* remains (HANDLER-* done)
-vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (needs fast-apply)
+vm-inline-primitives.issue           (plan-2) — inline +,-,<,cons,... as opcodes (real call-bound lever)
+vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (needs inline-primitives)
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler

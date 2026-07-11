@@ -12,15 +12,17 @@ WHY IT WAS DEFERRED OUT OF vm-9 (measured, not assumed)
   1. Uniform compilation is NOT a uniform win.  vm-9 microbenchmarks (COMPILE'd vs
      tree-walked, same source):
         tight arithmetic loop (sumsq 2e6)   ~9.8x   FASTER   <- the VM sweet spot
-        naive fib 28 / tak                  ~1.0x   (both hit the ~150us/funcall floor;
-                                                     call-bound code sees no VM win)
-        push-in-a-loop (revbuild 3e5)       ~0.7x   SLOWER   <- the VM builds a Lisp arg
-                                                     list per CALL; in a tight cons loop that
-                                                     alloc + GC exceeds the dispatch saving.
-     So compiling the WHOLE prelude could SLOW DOWN allocation-/call-bound prelude paths.
-     The fix is fast-apply (bind operand-stack args straight into the callee frame, skipping
-     the arg-list cons) — deferred in vm-6b.  vm-10 should land ON TOP of fast-apply, or
-     compile SELECTIVELY (hot arithmetic/loop functions only), not blanket-compile.
+        naive fib 28 / tak                  ~1.0x   (call-bound; hot calls are to BUILT-INS)
+        push-in-a-loop (revbuild 3e5)       ~0.7x   SLOWER   <- a tight cons loop; cons is a
+                                                     BUILT-IN, so each call builds an arg list
+                                                     + kernel_apply.
+     So compiling the WHOLE prelude could SLOW DOWN call-bound prelude paths.  UPDATE
+     (v1.8.19): fast-apply is now implemented, but it did NOT fix these — it only skips the
+     arg list for COMPILED callees, and the hot calls here are to BUILT-INS (`+ - < ` /
+     `cons`), which still build an arg list.  The actual fix is vm-inline-primitives.issue
+     (execute the hot arithmetic/cons/car/cdr/compare primitives as byte-code ops).  vm-10
+     should land ON TOP of inline-primitives, or compile SELECTIVELY (hot arithmetic/loop
+     functions only), not blanket-compile.
   2. Cost/robustness of a build-time whole-prelude compile: compiling all ~972 prelude
      functions in one process took >10 min and can overflow on individual deeply-nested
      forms (now survived by the SERIOUS-CONDITION fallback, but each fallback loses the win).
@@ -29,8 +31,9 @@ WHY IT WAS DEFERRED OUT OF vm-9 (measured, not assumed)
      reproduce them exactly; needs its own validation pass against the full 42-suite.
 
 PLAN
-  - Prereq (or concurrent): fast-apply (vm-6b deferred item) so compiled call/alloc-heavy
-    code is >= the tree-walker, removing the revbuild-style regression.
+  - Prereq (or concurrent): vm-inline-primitives so compiled call-/alloc-bound code is >=
+    the tree-walker, removing the revbuild-style regression.  (fast-apply, v1.8.19, is done
+    but insufficient on its own — see above.)
   - Add a `make` target: boot a stage-0 bocl, (compile-file "prelude.lisp") -> prelude.cfasl.
   - main.c: prefer prelude.cfasl over prelude.lisp when present + version-compatible
     (BYTECODE_VERSION / CFASL_VERSION check); --no-compiled-prelude to force source.

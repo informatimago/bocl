@@ -1064,6 +1064,61 @@ static void test_vm_tail_calls(void){
     close_live_pool(pool);
 }
 
+/* ---- fast-apply: CALL/CALL_NAMED bind operand-stack args directly ------------- */
+/* When the callee is a compiled function/closure, CALL binds the operand-stack args
+   straight into the callee (bytecode_apply_stack) with no arg-list cons.  It must be
+   semantically identical to the list path across every arity shape, and multiple values
+   must still propagate. */
+static void test_vm_fast_apply(void){
+    uword pool = open_live_pool();
+
+    /* required args, compiled caller -> compiled callee (the fast path) */
+    e("(setf (symbol-function 'fa-add) (%vm-compile '(lambda (a b c) (+ a (* b c)))))");
+    e("(setf (symbol-function 'fa-use) (%vm-compile '(lambda (x) (fa-add x x x))))");
+    TEST_EQ(eql, I(20), e("(fa-use 4)"));                 /* 4 + 4*4 */
+
+    /* &optional: supplied and defaulted, through the fast path */
+    e("(setf (symbol-function 'fa-opt) (%vm-compile '(lambda (a &optional (b 100)) (list a b))))");
+    e("(setf (symbol-function 'fa-opt2) (%vm-compile '(lambda () (fa-opt 1 2))))");
+    e("(setf (symbol-function 'fa-opt1) (%vm-compile '(lambda () (fa-opt 7))))");
+    TEST_EQ(equal, e("'(1 2)"),   e("(fa-opt2)"));
+    TEST_EQ(equal, e("'(7 100)"), e("(fa-opt1)"));
+
+    /* &rest: the rest list is built from the stack args */
+    e("(setf (symbol-function 'fa-rest) (%vm-compile '(lambda (a &rest r) (cons a r))))");
+    e("(setf (symbol-function 'fa-rest0) (%vm-compile '(lambda () (fa-rest 1))))");
+    e("(setf (symbol-function 'fa-rest3) (%vm-compile '(lambda () (fa-rest 1 2 3 4))))");
+    TEST_EQ(equal, e("'(1)"),       e("(fa-rest0)"));
+    TEST_EQ(equal, e("'(1 2 3 4)"), e("(fa-rest3)"));
+
+    /* multiple values propagate through the fast path */
+    e("(setf (symbol-function 'fa-mv) (%vm-compile '(lambda (a b) (floor a b))))");
+    e("(setf (symbol-function 'fa-mvc) (%vm-compile '(lambda () (multiple-value-list (fa-mv 17 5)))))");
+    TEST_EQ(equal, e("'(3 2)"), e("(fa-mvc)"));
+
+    /* arg-count errors match the list path (too few / too many required) */
+    e("(setf (symbol-function 'fa-two) (%vm-compile '(lambda (a b) (+ a b))))");
+    TEST_EQ(eql, T_Symbol, e("(if (nth-value 1 (ignore-errors (funcall (%vm-compile '(lambda () (fa-two 1))) ))) t nil)"));
+    TEST_EQ(eql, T_Symbol, e("(if (nth-value 1 (ignore-errors (funcall (%vm-compile '(lambda () (fa-two 1 2 3)))))) t nil)"));
+
+    /* a compiled closure callee also takes the fast path */
+    e("(setf (symbol-function 'fa-mkadder) (%vm-compile '(lambda (k) (lambda (x) (+ x k)))))");
+    e("(setf (symbol-function 'fa-call-clo) (%vm-compile '(lambda (k v) (funcall (fa-mkadder k) v))))");
+    TEST_EQ(eql, I(15), e("(fa-call-clo 10 5)"));
+
+    /* An ERROR signalled by a compiled callee must unwind to a HANDLER-CASE in a compiled
+       caller — crossing the caller's frame_vm_call backtrace marker.  This is the exact
+       gap fast-apply first exposed: the SIGNAL->handler unwind must skip no-setjmp markers
+       (frame_top_live) or it longjmps into garbage.  Value must arrive intact. */
+    e("(setf (symbol-function 'fa-boom) (%vm-compile '(lambda (x) (if (< x 0) (error \"neg\") x))))");
+    e("(setf (symbol-function 'fa-guard) (%vm-compile"
+      "  '(lambda (x) (handler-case (+ 1 (fa-boom x)) (error () :caught)))))");
+    TEST_EQ(eql, I(6),        e("(fa-guard 5)"));      /* no error: 1 + 5 */
+    TEST_EQ(eql, e("':caught"), e("(fa-guard -3)"));   /* error crosses the marker, caught */
+
+    close_live_pool(pool);
+}
+
 /* ---- vm-7: CLOS dispatch effective-method cache ------------------------------- */
 /* Generic dispatch now caches the effective method per generic function keyed on the
    argument-class tuple (a repeat call with the same classes skips applicable-methods +
@@ -1252,6 +1307,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm conditions",       test_vm_conditions)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
+    TEST_CASE("vm fast-apply",       test_vm_fast_apply)
     TEST_CASE("vm clos cache",       test_vm_clos_cache)
     TEST_CASE("vm backtrace",        test_vm_backtrace)
     TEST_CASE("vm disassemble",      test_vm_disassemble)
