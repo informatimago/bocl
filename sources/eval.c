@@ -1569,7 +1569,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                    so a HANDLER-BIND active at this point may provide an alternative
                    non-local exit (per CLHS 5.2 / the requested behaviour).  Falls back to a
                    generic error before the prelude defines the signaler (early boot). */
-                Ref sig=symbol_intern_cstring("%RETURN-FROM-EXITED-BLOCK-ERROR");
+                Ref sig=package_intern_cstring_in("%RETURN-FROM-EXITED-BLOCK-ERROR",BOCL_Package);
                 if(symbol_fboundp(sig)){
                     MultipleValues mv;
                     kernel_apply(symbol_function(sig),list(name,(Ref)NULL),&mv);}
@@ -1651,7 +1651,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                    signal a descriptive, typed error in the GO's context (before unwinding),
                    like RETURN-FROM above.  (Also fixes a pre-existing NULL-deref: the
                    target_tag was set BEFORE this NULL check.) */
-                Ref sig=symbol_intern_cstring("%GO-EXITED-TAGBODY-ERROR");
+                Ref sig=package_intern_cstring_in("%GO-EXITED-TAGBODY-ERROR",BOCL_Package);
                 if(symbol_fboundp(sig)){
                     MultipleValues mv;
                     kernel_apply(symbol_function(sig),list(tag,(Ref)NULL),&mv);}

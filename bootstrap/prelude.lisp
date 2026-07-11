@@ -5783,39 +5783,6 @@ the class object it denotes, so two specializers compare by class identity."
   (with-output-to-string (s)
     (print-object condition s)))
 
-;;; ---- non-local exit to an EXITED extent (per pjb) -------------------------------
-;;; RETURN-FROM a BLOCK / GO to a TAGBODY whose dynamic extent has already exited (a closure
-;;; captured the exit and is called after the block/tagbody returned) signals a DESCRIPTIVE,
-;;; TYPED error — IN THE LEXICAL+DYNAMIC CONTEXT of the RETURN-FROM/GO, i.e. BEFORE any stack
-;;; unwinding, so an active HANDLER-BIND may provide an alternative non-local exit.  The
-;;; tree-walker (eval.c) and the byte-code VM (bytecode.c THROW) call the %...-error signaler
-;;; AFTER failing to find the target frame — having searched first and NOT unwound.  (The
-;;; :REPORT sentence does not yet render — user CLOS conditions print #<TYPE>; see
-;;; clos-condition-report-not-printed.issue — but the type + block/tag are what handlers use.)
-(define-condition return-from-exited-block-error (program-error simple-error)
-  ((block-name :initarg :name :reader return-from-exited-block-error-block-name))
-  (:report (lambda (c s)
-             (format s "Cannot RETURN-FROM the block ~S, it has already exited."
-                     (return-from-exited-block-error-block-name c)))))
-(define-condition go-exited-tagbody-error (program-error simple-error)
-  ((tag :initarg :tag :reader go-exited-tagbody-error-tag))
-  (:report (lambda (c s)
-             (format s "Cannot GO to the tag ~S, its TAGBODY has already exited."
-                     (go-exited-tagbody-error-tag c)))))
-(defun %return-from-exited-block-error (name)
-  "Signal that a RETURN-FROM named the block NAME whose dynamic extent has already exited."
-  (error 'return-from-exited-block-error :name name
-         :format-control "Cannot RETURN-FROM the block ~S, it has already exited."
-         :format-arguments (list name)))
-(defun %go-exited-tagbody-error (tag)
-  "Signal that a GO named the tag TAG whose TAGBODY's dynamic extent has already exited."
-  (error 'go-exited-tagbody-error :tag tag
-         :format-control "Cannot GO to the tag ~S, its TAGBODY has already exited."
-         :format-arguments (list tag)))
-;; Export the extension conditions + readers so user code catches them unqualified.
-(export '(return-from-exited-block-error return-from-exited-block-error-block-name
-          go-exited-tagbody-error go-exited-tagbody-error-tag))
-
 ;;; ---- Write-char is now a kernel built-in (see bocl.c). -------------------
 
 ;;; ---- Stream predicates ----------------------------------------------------
@@ -10724,7 +10691,41 @@ the rest take :INITIAL-ELEMENT."
       (otherwise       (format stream "~(~A~)" kind))))
   frame)
 
-(export '(*init-hook* *abort-hook* *quit-hook* *stop-hook* *cont-hook*
+;;; ---- non-local exit to an EXITED extent (per pjb) -------------------------------
+;;; RETURN-FROM a BLOCK / GO to a TAGBODY whose dynamic extent has already exited (a closure
+;;; captured the exit and is called after the block/tagbody returned) signals a DESCRIPTIVE,
+;;; TYPED error — IN THE LEXICAL+DYNAMIC CONTEXT of the RETURN-FROM/GO, i.e. BEFORE any stack
+;;; unwinding, so an active HANDLER-BIND may provide an alternative non-local exit.  The
+;;; tree-walker (eval.c) and the byte-code VM (bytecode.c THROW) call the BOCL::%...-error
+;;; signaler AFTER failing to find the target frame — having searched first and NOT unwound.
+;;; These conditions are bocl EXTENSIONS (not CL), so they live in and are exported from the
+;;; BOCL package (like BACKTRACE / FRAME-KIND above).  (The :REPORT sentence does not yet
+;;; render — user CLOS conditions print #<TYPE>; see clos-condition-report-not-printed.issue —
+;;; but the type + block/tag are what handlers use.)
+(define-condition return-from-exited-block-error (program-error simple-error)
+  ((block-name :initarg :name :reader return-from-exited-block-error-block-name))
+  (:report (lambda (c s)
+             (format s "Cannot RETURN-FROM the block ~S, it has already exited."
+                     (return-from-exited-block-error-block-name c)))))
+(define-condition go-exited-tagbody-error (program-error simple-error)
+  ((tag :initarg :tag :reader go-exited-tagbody-error-tag))
+  (:report (lambda (c s)
+             (format s "Cannot GO to the tag ~S, its TAGBODY has already exited."
+                     (go-exited-tagbody-error-tag c)))))
+(defun %return-from-exited-block-error (name)
+  "Signal that a RETURN-FROM named the block NAME whose dynamic extent has already exited."
+  (error 'return-from-exited-block-error :name name
+         :format-control "Cannot RETURN-FROM the block ~S, it has already exited."
+         :format-arguments (list name)))
+(defun %go-exited-tagbody-error (tag)
+  "Signal that a GO named the tag TAG whose TAGBODY's dynamic extent has already exited."
+  (error 'go-exited-tagbody-error :tag tag
+         :format-control "Cannot GO to the tag ~S, its TAGBODY has already exited."
+         :format-arguments (list tag)))
+
+(export '(return-from-exited-block-error return-from-exited-block-error-block-name
+          go-exited-tagbody-error go-exited-tagbody-error-tag
+          *init-hook* *abort-hook* *quit-hook* *stop-hook* *cont-hook*
           *prompt-function* quit
           *on-error* backtrace frame-kind frame-name frame-bindings print-frame
           *debugger-print-array* *debugger-print-base* *debugger-print-case*

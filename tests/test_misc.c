@@ -1153,31 +1153,32 @@ static void test_vm_exited_extent(void){
             e("(block a (handler-bind ((tvee-c (lambda (c) (declare (ignore c)) (return-from a :diverted))))"
               "           (error 'tvee-c)))"));
 
-    /* INTERPRETED: return-from an exited block -> typed condition naming the block */
+    /* INTERPRETED: return-from an exited block -> typed condition naming the block.  The
+       conditions are bocl EXTENSIONS, exported from the BOCL package (BOCL:...). */
     e("(defvar *tvee-c* (let (c) (block g (setf c (lambda () (return-from g 1)))) c))");
-    TEST_EQ(equal, e("'(return-from-exited-block-error g)"),
+    TEST_EQ(equal, e("(list 'bocl:return-from-exited-block-error 'g)"),
             e("(handler-case (funcall *tvee-c*)"
-              "  (return-from-exited-block-error (e)"
-              "    (list (type-of e) (return-from-exited-block-error-block-name e))))"));
+              "  (bocl:return-from-exited-block-error (e)"
+              "    (list (type-of e) (bocl:return-from-exited-block-error-block-name e))))"));
     /* and a HANDLER-BIND diverts (the bolded requirement: alternative non-local exit) */
     TEST_EQ(eql, I(42),
-            e("(block alt (handler-bind ((return-from-exited-block-error (lambda (e) (declare (ignore e)) (return-from alt 42))))"
+            e("(block alt (handler-bind ((bocl:return-from-exited-block-error (lambda (e) (declare (ignore e)) (return-from alt 42))))"
               "             (funcall *tvee-c*)))"));
 
     /* INTERPRETED: go to an exited tagbody -> typed condition */
     e("(defvar *tvee-g* (let (c) (tagbody (setf c (lambda () (go done))) done) c))");
-    TEST_EQ(eql, e("'go-exited-tagbody-error"),
-            e("(handler-case (funcall *tvee-g*) (go-exited-tagbody-error (e) (type-of e)))"));
+    TEST_EQ(eql, e("'bocl:go-exited-tagbody-error"),
+            e("(handler-case (funcall *tvee-g*) (bocl:go-exited-tagbody-error (e) (type-of e)))"));
 
     /* COMPILED: same, through the byte-code VM (BC_THROW's not-found path) */
     e("(defvar *tvee-cc* (funcall (compile nil '(lambda () (block g (let (c) (setf c (lambda () (return-from g 1))) c)))))) ");
-    TEST_EQ(equal, e("'(return-from-exited-block-error g)"),
+    TEST_EQ(equal, e("(list 'bocl:return-from-exited-block-error 'g)"),
             e("(handler-case (funcall *tvee-cc*)"
-              "  (return-from-exited-block-error (e)"
-              "    (list (type-of e) (return-from-exited-block-error-block-name e))))"));
+              "  (bocl:return-from-exited-block-error (e)"
+              "    (list (type-of e) (bocl:return-from-exited-block-error-block-name e))))"));
     TEST_EQ(eql, e("':caught"),
             e("(handler-case (funcall (funcall (compile nil '(lambda () (let (c) (tagbody (setf c (lambda () (go d))) d) c)))))"
-              "  (go-exited-tagbody-error () :caught))"));
+              "  (bocl:go-exited-tagbody-error () :caught))"));
 
     close_live_pool(pool);
 }

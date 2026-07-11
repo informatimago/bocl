@@ -10,6 +10,7 @@
 #include "kernel_objects.h"
 #include "kernel_functions.h"
 #include "arithmetic.h"    /* num_combine / num_lt / num_eq — inline arithmetic ops */
+#include "packages.h"     /* BOCL_Package — the BOCL::%...-error nlx signalers */
 #include "memory.h"
 #include "boerror.h"
 #include <setjmp.h>
@@ -762,7 +763,7 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
                         (marker == keyword_intern_cstring("%VM-NLX-BLOCK"))   ? "%RETURN-FROM-EXITED-BLOCK-ERROR" :
                         (marker == keyword_intern_cstring("%VM-NLX-TAGBODY")) ? "%GO-EXITED-TAGBODY-ERROR" : NULL;
                     if(signame){
-                        Ref sig = symbol_intern_cstring(signame);
+                        Ref sig = package_intern_cstring_in(signame, BOCL_Package);
                         if(symbol_fboundp(sig)){
                             MultipleValues mv;
                             kernel_apply(symbol_function(sig), cons(cons_car(tag), NIL_Symbol), &mv);}}}
