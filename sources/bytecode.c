@@ -169,7 +169,27 @@ static int64_t vm_read_svar(const octet* code, size_t* pc){
 /* Run one compiled function / closure.  ARGUMENTS is a Lisp list; the VM binds it
    into the locals per the packed arity, then loops over the bytecode.  Nested
    CALLs dispatch through kernel_apply (uniform interop; the stack-based fast path
-   is vm-6).  Non-control opcodes only (control / NLX are vm-5). */
+   is vm-6).  Non-control opcodes only (control / NLX are vm-5).
+
+   ---- PORTABILITY CAVEAT: the tail-call trampoline reuses THIS C stack frame ----
+   TAIL_CALL / TAIL_CALL_NAMED re-bind a new function into this activation via
+   `goto reinit` instead of recursing, so a tail loop runs in constant C-stack space.
+   That reuse rests on two assumptions about the target's C ABI / compiler:
+     1. A backward `goto` into the middle of the function reuses the SAME C frame (true
+        for every mainstream compiler — this is just structured control flow), and
+     2. the mutable per-function state (cf/code/L/S/K/... below) survives across the
+        goto with defined values.  We deliberately keep that state NON-volatile: a
+        TAIL_CALL fires only when nvf==0 (no dynamic frame / no live setjmp target — the
+        codegen invariant), so this state is never "modified between a setjmp and its
+        longjmp", the one case C leaves such automatics indeterminate (C17 7.13.2.1p2).
+        Only nvf and frame_escaped (mutated in the loop AND read after a longjmp) are
+        volatile.  This reasoning is standard C, but if some future target / toolchain
+        mis-handles it (an aggressive optimizer, a segmented / split-stack ABI, an
+        interpreter for C, ...), CONDITIONALIZE the trampoline: keep the arg-list build
+        but, instead of `goto reinit`, fall back to `kernel_apply(callee, args, results);
+        goto done;` (a normal recursive call).  Correct everywhere — it just loses the
+        constant-C-stack property for tail loops (deep tail recursion would then trip the
+        eval_stack_guard_check overflow signal, as non-tail recursion already does). */
 void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
     /* Deep NON-tail VM recursion (each nested call is a new bytecode_apply C frame via
        kernel_apply) would overflow the C stack; signal a catchable STORAGE-CONDITION
@@ -345,7 +365,17 @@ void bytecode_apply(Ref function, Ref arguments, MultipleValues* results){
                arg list; if the callee is COMPILED, reuse this C frame (goto reinit) — a
                tail loop then runs in constant C-stack space.  Otherwise (built-in /
                tree-walked / defensively nvf>0) call through kernel_apply and RETURN the
-               result to our caller (we are in tail position). */
+               result to our caller (we are in tail position).
+
+               NOTE: we build a Lisp arg LIST here (cheap — bocl eval is CPU-bound, not
+               allocation-bound) and the per-iteration pool trim frees it, so this is
+               already constant-space.  A "fast APPLY" would instead copy the operand-stack
+               args into a fixed C-stack buffer and bind them straight into the new locals,
+               skipping the cons — but that adds ANOTHER C-stack-frame assumption (a
+               live C array whose Refs must stay valid across the frame setup), so it, like
+               the goto-reinit reuse above, would need to be CONDITIONALIZED if a target's
+               C ABI ever misbehaves.  Deferred as a low-value micro-opt; see
+               issues/closed/vm-6b-tail-calls-and-fast-apply.issue. */
             Ref callee; uint8_t n;
             if(op==BC_TAIL_CALL_NAMED){
                 uint64_t s = vm_read_uvar(code,&pc); n = code[pc++];
