@@ -1101,6 +1101,41 @@ static void test_vm_escaping_blocks(void){
       "         (funcall o x e))))))))))");
     TEST_EQ(equal, e("'((block-odd (block-even 42)) (block-odd 43))"), e("(ev-ex2)"));
 
+    /* the TREE-WALKER now agrees (each BLOCK gets its own child env, so same-named nested
+       blocks are lexically distinct) — evaluate ex2's body directly (interpreted). */
+    TEST_EQ(equal, e("'((block-odd (block-even 42)) (block-odd 43))"),
+            e("(loop for x from 42 to 43 collect"
+              "  (let (o e) (list 'block-odd (block operation"
+              "    (setf o (lambda (x e) (if (oddp x) (return-from operation x) (funcall e x o))))"
+              "    (list 'block-even (block operation"
+              "      (setf e (lambda (x o) (if (evenp x) (return-from operation x) (funcall o x e))))"
+              "      (funcall o x e)))))))"));
+
+    /* ---- escaping GO (same mechanism as RETURN-FROM: a nested closure GOes to an outer
+       TAGBODY's tag; the tag's ordinal is THROWn, a re-entrant catch dispatches to it) ---- */
+    /* early exit from inside a closure */
+    TEST_EQ(eql, e("':neg"), e("(funcall (compile nil"
+        "  '(lambda (l) (let ((r :none)) (tagbody"
+        "     (mapc (lambda (x) (when (minusp x) (go found))) l) (go done)"
+        "     found (setq r :neg) done) r))) '(1 -2 3))"));
+    TEST_EQ(eql, e("':none"), e("(funcall (compile nil"
+        "  '(lambda (l) (let ((r :none)) (tagbody"
+        "     (mapc (lambda (x) (when (minusp x) (go found))) l) (go done)"
+        "     found (setq r :neg) done) r))) '(1 2 3))"));
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil"
+        "  '(lambda () (let (r) (tagbody (funcall (lambda () (go d))) d) r)))) t nil)"));  /* not a fallback */
+    /* a BACKWARD escaping GO (loop) across a closure terminates and collects 0 1 2 */
+    TEST_EQ(equal, e("'(0 1 2)"), e("(funcall (compile nil"
+        "  '(lambda () (let ((acc '()) (i 0)) (tagbody"
+        "     top (funcall (lambda () (push i acc) (incf i) (when (< i 3) (go top)))) done)"
+        "     (nreverse acc)))))"));
+    /* mutually-recursive escaping GO between two tags (the GO analog of ev-ex1) */
+    TEST_EQ(equal, e("'((:odd 3) (:even 2) (:odd 1) (:even 0))"), e("(funcall (compile nil"
+        "  '(lambda () (let ((out '()) o e) (tagbody"
+        "     (setf o (lambda (n) (push (list :odd n) out) (if (> n 0) (funcall e (1- n)) (go done)))"
+        "           e (lambda (n) (push (list :even n) out) (if (> n 0) (funcall o (1- n)) (go done))))"
+        "     (funcall o 3) done) (nreverse out)))))"));
+
     close_live_pool(pool);
 }
 
@@ -1112,18 +1147,13 @@ static void test_vm_compile_wiring(void){
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (x) (* x x)))) t nil)"));
     /* ... a compiled closure ... */
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (compile nil '(lambda (n) (lambda (x) (+ x n))))) t nil)"));
-    /* ... and FALLS BACK (interpreted) for a form the VM can't handle — an escaping GO out
-       of an inner closure to an outer TAGBODY (escaping BLOCK/RETURN-FROM compiles now;
-       TAGBODY/GO is the remaining escaping gap) — which still runs correctly. */
+    /* ... and FALLS BACK (interpreted) for a form the VM can't handle — a top-level def-form
+       (DEFVAR) nested in a lambda, which the analyzer errors on — but which still runs. */
     TEST_EQ(eql, NIL_Symbol,
             e("(if (compiled-function-p (compile nil"
-              "   '(lambda (l) (let ((r :none)) (tagbody"
-              "       (mapc (lambda (x) (when (minusp x) (go found))) l) (go done)"
-              "       found (setq r :neg) done) r)))) t nil)"));
-    TEST_EQ(eql, e("':neg"), e("(funcall (compile nil"
-              "   '(lambda (l) (let ((r :none)) (tagbody"
-              "       (mapc (lambda (x) (when (minusp x) (go found))) l) (go done)"
-              "       found (setq r :neg) done) r))) '(1 -1 2))"));
+              "   '(lambda () (progn (defvar *vm-fb-probe* 99) *vm-fb-probe*)))) t nil)"));
+    TEST_EQ(eql, I(99), e("(funcall (compile nil"
+              "   '(lambda () (progn (defvar *vm-fb-probe* 99) *vm-fb-probe*))))"));
     /* results match the interpreter */
     TEST_EQ(eql, I(36), e("(funcall (compile nil '(lambda (x) (+ (* x x) (* 2 x) 1))) 5)"));
 

@@ -90,6 +90,13 @@
   (list (first le) (append pairs (second le)) (third le) (fourth le)))
 (defun %vm-lexenv-add-block (le name)
   (list (first le) (second le) (cons name (third le)) (fourth le)))
+;;; TAGS (4th slot) is an alist  TAG -> (TAGBODY-NAME . TAG-INDEX)  so a GO can find both
+;;; which tagbody its tag belongs to (lexically) and the tag's ordinal (for the dispatch).
+(defun %vm-lexenv-add-tags (le tagbody-name tag-index-alist)
+  (list (first le) (second le) (third le)
+        (append (mapcar (lambda (ti) (cons (car ti) (cons tagbody-name (cdr ti)))) tag-index-alist)
+                (fourth le))))
+(defun %vm-lexenv-tag (le tag) (assoc tag (fourth le) :test #'eql))
 (defun %vm-local-macro  (le name) (cdr    (assoc name (%vm-lexenv-macros le))))
 (defun %vm-symbol-macro (le name) (assoc name (%vm-lexenv-symbol-macros le)))
 
@@ -350,7 +357,15 @@
        (list :return-from (cadr form) tagb depth
              (if (cddr form) (%vm-analyze-form (caddr form) cenv lexenv) (list :const nil)))))
     ((tagbody) (%vm-analyze-tagbody (cdr form) cenv lexenv))
-    ((go) (list :go (cadr form)))
+    ((go)
+     ;; Resolve the tag to its TAGBODY's hidden lexical identity (like RETURN-FROM -> BLOCK):
+     ;; %VM-RESOLVE gives the DEPTH and marks the tagbody CAPTURED when the GO crosses a
+     ;; lambda (escaping).  A free/unseen tag stays (:go tag nil nil nil) so codegen errors.
+     (let ((entry (%vm-lexenv-tag lexenv (cadr form))))
+       (if entry
+           (multiple-value-bind (tagb depth) (%vm-resolve (cadr entry) :tagbody cenv)
+             (list :go (cadr form) tagb depth (cddr entry)))
+           (list :go (cadr form) nil nil nil))))
     ((catch)
      (list :catch (%vm-analyze-form (cadr form) cenv lexenv)
                   (%vm-analyze-progn (cddr form) cenv lexenv)))
@@ -598,12 +613,28 @@
       (list :const nil)))
 
 (defun %vm-analyze-tagbody (items cenv lexenv)
-  (let ((result '()))
-    (dolist (item items)
-      (if (or (symbolp item) (integerp item))
-          (push (list :tag item) result)
-          (push (list :stmt (%vm-analyze-form item cenv lexenv)) result)))
-    (list :tagbody (nreverse result))))
+  ;; Give the TAGBODY a hidden lexical identity (namespace :TAGBODY) so a GO that crosses a
+  ;; lambda resolves to it with a DEPTH and marks it CAPTURED (escaping) — exactly as BLOCK/
+  ;; RETURN-FROM.  The tags are threaded into the lexenv (with their 0-based ordinals) so a
+  ;; GO — even inside a nested closure — finds which tagbody + which tag it targets.
+  (let ((fl        (car cenv))
+        (tbname    (gensym "TB-"))
+        (tag-alist (let ((acc '()) (i 0))
+                     (dolist (it items (nreverse acc))
+                       (when (or (symbolp it) (integerp it))
+                         (push (cons it i) acc) (incf i))))))
+    (%vm-flevel-push-scope fl)
+    (let* ((idx     (%vm-flevel-alloc fl))
+           (tagb    (%vm-binding tbname :tagbody idx nil))
+           (lexenv* (%vm-lexenv-add-tags lexenv tbname tag-alist)))
+      (%vm-flevel-add fl tagb)
+      (let ((result '()))
+        (dolist (item items)
+          (if (or (symbolp item) (integerp item))
+              (push (list :tag item) result)
+              (push (list :stmt (%vm-analyze-form item cenv lexenv*)) result)))
+        (%vm-flevel-pop-scope fl)
+        (list :tagbody tagb (nreverse result))))))
 
 ;;; ===========================================================================
 ;;; Entry point + a small IR pretty-printer (eyeballing addresses)
@@ -794,8 +825,8 @@
     (:let*       (%vm-gen-let (cadr node) (caddr node) cs t))
     (:block      (%vm-gen-block (cadr node) (caddr node) (cadddr node) cs))
     (:return-from(%vm-gen-return-from (cadr node) (caddr node) (cadddr node) (nth 4 node) cs))
-    (:tagbody    (%vm-gen-tagbody (cadr node) cs))
-    (:go         (%vm-gen-go (cadr node) cs))
+    (:tagbody    (%vm-gen-tagbody (cadr node) (caddr node) cs))
+    (:go         (%vm-gen-go (cadr node) (caddr node) (cadddr node) (nth 4 node) cs))
     (:mv-call    (%vm-gen-mv-call (cadr node) (cddr node) cs))
     (:mv-prog1   (%vm-gen-mv-prog1 (cadr node) (cddr node) cs))
     (:catch      (%vm-gen-catch (cadr node) (caddr node) cs))
@@ -1238,7 +1269,12 @@
       (%vm-emit-jump cs (%vm-op :jump) l-end)
       (%vm-cs-set-sp cs (1+ site)))))                      ; phantom value for dead continuation
 
-(defun %vm-gen-tagbody (items cs)
+(defun %vm-gen-tagbody (tagb items cs)
+  (if (%vm-binding-captured-p tagb)
+      (%vm-gen-tagbody-escaping (%vm-binding-index tagb) items cs)
+      (%vm-gen-tagbody-lexical items cs)))
+
+(defun %vm-gen-tagbody-lexical (items cs)
   (let* ((base (%vm-cs-sp cs))
          (tag-labels (let ((acc '()))
                        (dolist (it items (nreverse acc))
@@ -1253,10 +1289,81 @@
     (%vm-cs-pop-control cs)
     (%vm-gen-const nil cs)))                               ; TAGBODY returns NIL
 
-(defun %vm-gen-go (tag cs)
+(defun %vm-gen-tagbody-escaping (tag-index items cs)
+  "Escaping TAGBODY (a nested closure GOes to one of its tags): a UNIQUE per-activation tag
+   (fresh cons) into local slot TAG-INDEX — captured by nested closures via the display, so
+   the identity is lexical.  A GO THROWs its target tag's ORDINAL to that tag; a re-entrant
+   CATCH catches it and DISPATCHES to that tag's label (the tree-walker's while-loop, done as
+   byte-code).  All GOs in this tagbody throw (uniform, like an escaping BLOCK), so there is
+   no jump crossing the catch frame; internal GOs simply re-enter the dispatch."
+  (let* ((disp-slot (%vm-cs-scratch cs))
+         (tags (let ((acc '()) (i 0))                      ; (ordinal tag label) in body order
+                 (dolist (it items (nreverse acc))
+                   (when (eq (car it) :tag)
+                     (push (list i (cadr it) (%vm-cs-label cs)) acc) (incf i)))))
+         (l-loop (%vm-cs-label cs)) (l-caught (%vm-cs-label cs)) (l-end (%vm-cs-label cs)))
+    ;; fresh unique tag -> the tagbody's local slot
+    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
+    (%vm-emit-op cs (%vm-op :push-nil)) (%vm-cs-sp+ cs 1)
+    (%vm-emit-op cs (%vm-op :cons)) (%vm-cs-sp+ cs -1)
+    (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs tag-index)
+    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
+    (%vm-gen-const -1 cs)                                  ; disp = -1 : start of body
+    (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs disp-slot)
+    (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
+    (%vm-emit-label cs l-loop)
+    (let ((base (%vm-cs-sp cs)))
+      ;; (re)establish the catch frame each iteration (a GO consumes it on the way in)
+      (%vm-emit-op cs (%vm-op :load-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs tag-index)
+      (%vm-cs-sp+ cs 1)
+      (%vm-emit-jump cs (%vm-op :catch-open) l-caught) (%vm-cs-sp+ cs -1)
+      ;; dispatch on disp: jump to the matching tag, else (disp=-1) fall through to the start
+      (dolist (te tags)
+        (%vm-emit-op cs (%vm-op :load-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs disp-slot)
+        (%vm-cs-sp+ cs 1)
+        (%vm-gen-const (car te) cs)
+        (%vm-emit-op cs (%vm-op :eql)) (%vm-cs-sp+ cs -1)
+        (%vm-emit-jump cs (%vm-op :jump-if-not-nil) (caddr te)) (%vm-cs-sp+ cs -1))
+      ;; body — a :dframe :catch scope so an OUTER lexical exit crossing this tagbody closes
+      ;; the frame; its own GOs throw, so no :tagbody jump scope is needed.
+      (%vm-cs-push-control cs (list :dframe :catch))
+      (dolist (it items)
+        (case (car it)
+          (:tag  (%vm-emit-label cs (caddr (find (cadr it) tags :key #'cadr :test #'eql))))
+          (:stmt (%vm-gen (cadr it) cs) (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))))
+      (%vm-cs-pop-control cs)
+      (%vm-emit-op cs (%vm-op :catch-close))               ; normal completion: drop the frame
+      (%vm-gen-const nil cs)                                ; TAGBODY returns NIL
+      (%vm-emit-jump cs (%vm-op :jump) l-end)
+      (%vm-emit-label cs l-caught)                         ; a GO threw its target ordinal
+      (%vm-cs-set-sp cs (1+ base))
+      (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs disp-slot)
+      (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1)
+      (%vm-emit-jump cs (%vm-op :jump) l-loop)             ; re-establish + re-dispatch
+      (%vm-emit-label cs l-end)
+      (%vm-cs-set-sp cs (1+ base)))))                      ; the NIL result on the stack
+
+(defun %vm-gen-go (tag tagb depth index cs)
+  (if (and tagb (%vm-binding-captured-p tagb))
+      (%vm-gen-go-escaping depth (%vm-binding-index tagb) index cs)
+      (%vm-gen-go-lexical tag cs)))
+
+(defun %vm-gen-go-escaping (depth tag-index index cs)
+  "Escaping GO: load the tagbody's unique tag (an upvalue when nested — %VM-GEN-LREF bumps
+   the capture depth) and THROW the target tag's ORDINAL to it; the tagbody's re-entrant
+   CATCH dispatches to that tag.  The unwind cascade runs crossed cleanups en route."
+  (let ((s (%vm-cs-sp cs)))
+    (%vm-gen-lref depth tag-index cs)                     ; the tagbody's tag (+1)
+    ;; the target ordinal is the THROWn value — it must go through the MV buffer (THROW
+    ;; carries `results`, not the stack top), so gen it FOR VALUES, not a bare PUSH-CONST.
+    (%vm-gen-for-values (list :const index) cs)          ; ordinal -> stack + MV buffer
+    (%vm-emit-op cs (%vm-op :throw))
+    (%vm-cs-set-sp cs (1+ s))))                           ; phantom value (dead continuation)
+
+(defun %vm-gen-go-lexical (tag cs)
   (let ((scope (%vm-cs-find-tag cs tag)) (site (%vm-cs-sp cs)))
     (unless scope
-      (error "VM codegen: GO ~S has no lexically visible tag (escaping is vm-6)" tag))
+      (error "VM codegen: GO ~S has no lexically visible tag" tag))
     (let ((base (cadr scope)) (label (cdr (assoc tag (caddr scope) :test #'eql))))
       (%vm-emit-unwind-to cs scope)                       ; unwind crossed dynamic frames
       (%vm-emit-drop cs (- site base))                    ; cut to tagbody base

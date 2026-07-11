@@ -39,3 +39,16 @@ LIKELY CAUSE
 FOUND-WHILE
   Implementing vm-escaping-return-from (the user's own example highlighted this exact
   same-name case).  Low priority: same-named nested escaping blocks are exotic.
+
+====================================================================
+FIXED (v1.8.23, branch vm) — per pjb's suggestion (rename block labels / a gensym in the
+lexical scope), realised as: the BLOCK special operator (eval.c) now evaluates its body in
+its OWN CHILD ENVIRONMENT and pushes the block frame there.  Two lexically-nested BLOCKs with
+the same name thus land in DIFFERENT environments, so find_block_frame — which walks a
+CLOSURE'S captured lexical env chain — finds the frame in the env the closure captured (the
+lexically-correct one) instead of the innermost same-named frame.  Same effect as
+alpha-renaming each block to a fresh gensym, without a rename pass.  The reproducer now
+gives ((BLOCK-ODD (BLOCK-EVEN 42)) (BLOCK-ODD 43)) in the interpreter, matching the VM.
+Full 42-suite green.  (eval_body_in_block — the function-body implicit block — is a separate,
+rarer collision source and is left as-is.)  Test: test_vm_escaping_blocks (interpreted arm).
+====================================================================

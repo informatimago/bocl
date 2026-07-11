@@ -1517,6 +1517,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count_min(arguments,1);
             Ref name=car(arguments);
             Ref body=cdr(arguments);
+            /* Give each BLOCK its OWN child environment, so two lexically-nested BLOCKs with
+               the SAME name land in DIFFERENT environments.  find_block_frame walks a
+               closure's captured lexical env chain, so a closure created in the OUTER block's
+               scope RETURN-FROMs the OUTER block (correct, lexical) rather than the innermost
+               same-named frame — the effect of alpha-renaming the block to a gensym, without
+               a rename pass.  (The UWBODY macro pushes the frame into and evaluates the body
+               in `environment`, so we rebind it to the child.) */
+            environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(environment);
             Frame frame;
             frame.type=frame_block;
             frame.parameters.block.name=name;

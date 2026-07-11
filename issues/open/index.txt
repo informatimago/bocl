@@ -72,12 +72,14 @@ Implementation issues, in global order:
     green — the only dispatch build.  The condition system is COMPLETE (v1.8.21): RESTART-BIND
     is a frame_restart, RESTART-CASE expands to it + CATCH/THROW, INVOKE/FIND/COMPUTE-RESTARTS
     are shared with the tree-walker.  So the WHOLE CL language now byte-compiles (except an
-    escaping RETURN-FROM out of a closure — now DONE v1.8.22).  Escaping BLOCK/RETURN-FROM
-    compiles (unique per-activation tag captured lexically; MORE correct than the interpreter
-    on same-named nested blocks).  NEXT (off critical path): vm-10 (byte-compiled prelude
-    BOOT image; regression fixed), per-CALL frame pooling (the call-bound lever), escaping
-    TAGBODY/GO (the remaining escaping gap).  Branch ~35 commits ahead of master, all
-    suite-green, NOT merged (user decides the merge + minor bump). ***
+    escaping RETURN-FROM/GO out of a closure — now DONE v1.8.22/v1.8.23).  Escaping
+    BLOCK/RETURN-FROM and TAGBODY/GO both compile (unique per-activation tag captured
+    lexically; a GO throws its target tag's ordinal to a re-entrant catch that dispatches).
+    So the WHOLE CL language byte-compiles (only top-level def-forms fall back, by design).
+    The tree-walker's same-named-nested-BLOCK bug is also fixed (v1.8.23: each BLOCK gets its
+    own child env).  NEXT (off critical path): vm-10 (byte-compiled prelude BOOT image;
+    regression fixed), per-CALL frame pooling (the call-bound lever).  Branch ~37 commits
+    ahead of master, all suite-green, NOT merged (user decides the merge + minor bump). ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
@@ -86,5 +88,4 @@ hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
 vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (regression now fixed)
-interp-samename-block-dynamic.issue  (bug) — interp resolves same-named nested BLOCK dynamically
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler
