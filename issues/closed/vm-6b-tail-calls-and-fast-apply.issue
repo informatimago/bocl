@@ -72,3 +72,20 @@ directly from the operand stack into the new frame for simple arities, skipping 
 arg-list cons entirely (a speed micro-opt; the trampoline is already constant-space via
 the per-iteration pool trim).  And a lazy/heap vdyn[] would let a dynamic-frame-free
 function have a tiny frame and recurse as deep as memory allows.
+
+--------------------------------------------------------------------
+CLOSING (v1.8.14).  The two substantive items — genuine TAIL_CALL (constant-space
+trampoline) and the stack-overflow SIGNAL — are done, tested, and full-suite-green.
+
+The stack-based FAST APPLY is INTENTIONALLY DEFERRED as a low-value micro-opt: its only
+saving is the per-call arg-list cons, which (a) the trampoline already frees each
+iteration (constant space is met without it), and (b) is CHEAP — a documented project
+finding is that bocl eval is CPU-per-operation bound, NOT allocation bound (see
+[[bocl-interpreter-perf]]), so avoiding a couple of conses per tail call would not
+meaningfully "beat the arg-list path".  The design, should it ever be wanted: in the
+TAIL_CALL handler, for a SIMPLE-arity (no &rest / no RAW) compiled callee whose frame is
+reused (no allocation -> no GC between copy and bind), copy the n operand-stack args into
+a fixed C buffer and bind them straight into the new locals, skipping the cons; keep the
+arg-list path for &rest / RAW / the allocate-fresh-frame case (where the args must be
+GC-rooted across make_vm_vector).  A lazy/heap vdyn[] (so a dynamic-frame-free function
+has a tiny C frame and recurses as deep as memory) is a separate, higher-value follow-up.

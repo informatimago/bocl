@@ -62,7 +62,7 @@ Implementation issues, in global order:
     COMPILE-FILE now EMIT BYTE-CODE (with a safe fallback) — real code runs on the VM,
     full suite green.  NEXT: vm-9 (self-host: compile the prelude/ASDF, benchmark).
     Off-path / partial: vm-conditions RESTART-* (handler-* done), vm-7 (CLOS cache,
-    speed), vm-6b (TCO / fast APPLY).  Branch ~24 commits ahead of master, all
+    speed).  DONE this round: vm-6b (tail calls + overflow signal).  Branch ~24 commits ahead of master, all
     suite-green, NOT merged (user decides the merge + minor bump). ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
@@ -71,7 +71,6 @@ hot-3-frame-representation.issue     (plan-3)
 hot-4-arglist-avoidance.issue        (plan-3)
 hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
 hot-6-benchmark-validate.issue       (plan-3)
-vm-6b-tail-calls-and-fast-apply.issue (plan-2) — DEFERRED opt: TCO trampoline, fast APPLY
 vm-7-clos-inline-cache.issue         (plan-2)
 vm-conditions.issue                  (plan-2) — HANDLER-BIND/-CASE/RESTART (blocks vm-8 part 2)
 vm-9-debug-bootstrap-validate.issue  (plan-2)
