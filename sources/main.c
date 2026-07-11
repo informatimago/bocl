@@ -18,6 +18,7 @@
 #include "stream.h"
 #include "printer.h"
 #include "reader.h"
+#include "cfasl.h"
 #include "variable.h"
 #include "eval.h"
 #include "version.h"
@@ -43,6 +44,7 @@ static char* all_encoding;
 static char* terminal_encoding;
 static bool do_norc=false;
 static bool do_noprelude=false;
+static bool do_no_compiled_prelude=false;
 static bool do_quiet=false;
 static bool do_verbose=false;
 static bool do_batch=false;
@@ -250,6 +252,7 @@ static struct {
     {{"--terminal-encoding",NULL},          NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {.name=NULL},                              "suppress loading of default init file ~/.boclrc"},
     {{"--no-prelude",NULL},                 &do_noprelude, none, {.name=NULL},                            "suppress loading of bootstrap/prelude.lisp (bare kernel only)"},
+    {{"--no-compiled-prelude",NULL},        &do_no_compiled_prelude, none, {.name=NULL},                "ignore any prelude.cfasl boot image; always load the prelude from source"},
     {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {.name=NULL},                              "if --batch, also suppress printing of heralds, prompts."},
     {{"-b","--batch",NULL},                 &do_batch,   none, {.name=NULL},                              "exit when EOF on *STANDARD-INPUT*"},
     {{"--verbose",NULL},                    &do_verbose, none, {.name=NULL},                              "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
@@ -610,7 +613,35 @@ int main(int argc,char** argv){
                 strcpy(exports+base,"cl-exports.lisp");
                 bocl_load_cstring(exports);
                 free(exports);}
-            bocl_load_cstring(prelude);
+            /* Prefer a byte-compiled boot image (prelude.cfasl, sibling of
+               prelude.lisp) when present, readable, and this build's cfasl
+               version: it loads pre-byte-compiled DEFUN templates with no reader
+               and no macroexpansion, so startup is much faster.  %CFASL-FILE-P /
+               %CHECK-FASL-VERSION style checks live in bocl_fasl_load, which
+               returns NIL (loading nothing) on a magic / version mismatch — so we
+               fall back to the source prelude and never boot a half-image.
+               $BOCL_PRELUDE_IMAGE overrides the path; --no-compiled-prelude and a
+               NIL result both force the source path. */
+            bool booted_from_image=false;
+            if(!do_no_compiled_prelude && p){
+                const char* img_env=getenv("BOCL_PRELUDE_IMAGE");
+                char* image=NULL;
+                if(img_env && access(img_env,R_OK)==0){
+                    image=strdup(img_env);
+                } else {
+                    size_t base=(size_t)(p-prelude);
+                    image=malloc(base+sizeof("prelude.cfasl"));
+                    memcpy(image,prelude,base);
+                    strcpy(image+base,"prelude.cfasl");
+                }
+                if(image && access(image,R_OK)==0){
+                    Ref r=bocl_fasl_load(image);
+                    booted_from_image=!nullp(r);
+                    if(booted_from_image && do_verbose){
+                        fprintf(stderr,";; booted from compiled prelude image %s\n",image);}}
+                free(image);}
+            if(!booted_from_image){
+                bocl_load_cstring(prelude);}
             free(prelude);
         } else if(!do_quiet){
             fprintf(stderr,

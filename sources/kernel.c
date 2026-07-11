@@ -1581,8 +1581,12 @@ Ref set_symbol_value(Ref symbol,Ref new_value){
 
 Ref set_symbol_function(Ref symbol,Ref new_function){
     check_type(symbol,SYMBOL_Class);
-    /* Accept any callable: kernel function, user closure, or built-in. */
-    if(!functionp(new_function) && !closurep(new_function) && !built_in_function_p(new_function)){
+    /* Accept any callable: kernel function, user closure, built-in, or a
+       byte-compiled function / closure (vm-8..10 — booting from a compiled
+       prelude image installs byte-compiled discriminating functions, so a
+       COMPILED-CLOSURE must be accepted here just like an interpreted one). */
+    if(!functionp(new_function) && !closurep(new_function) && !built_in_function_p(new_function)
+       && !compiled_function_p(new_function) && !compiled_closure_p(new_function)){
         TYPE_ERROR(new_function,FUNCTION_Class);}
     symbol->slots->symbol.function=new_function;
     gc_write_barrier(symbol->slots);

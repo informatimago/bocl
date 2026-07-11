@@ -1,6 +1,7 @@
 *~
 *\!*.asd
 *.fasl
+*.cfasl
 *.sse2f
 *.[dao]
 *.so

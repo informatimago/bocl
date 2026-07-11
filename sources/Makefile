@@ -39,7 +39,7 @@ INCLUDES     += $(libbocl_INCS)
 LIBRARIES    += $(libbocl_LIBS)
 
 .PHONY = clean prepare-macos deps build predefines run sign-gdb gdb \
-	run-print-limits run-print-types
+	run-print-limits run-print-types prelude-image
 
 include common.mk
 deps:   $(all_SRCS:%.c=%.d)
@@ -106,6 +106,24 @@ libbocl.$(SO): $(SHLIB)
 bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
 	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o) $(LDLIBS)
+
+# ----------------------------------------------------------------------
+# vm-10 — optional byte-compiled boot image.  COMPILE-FILE the prelude to a
+# cfasl so the runtime boots pre-byte-compiled with no reader and no
+# macroexpansion (bootstrap/prelude.cfasl, sibling of prelude.lisp; the
+# runtime auto-detects it and falls back to source on absence or a cfasl /
+# byte-code version mismatch — --no-compiled-prelude forces source).
+# NOT part of the default `build`: byte-compiling the whole prelude with the
+# interpreted compiler takes a few minutes.  Run `make prelude-image`.
+# ----------------------------------------------------------------------
+PRELUDE_IMAGE = ../bootstrap/prelude.cfasl
+prelude-image: $(PRELUDE_IMAGE)
+$(PRELUDE_IMAGE): bocl ../bootstrap/prelude.lisp ../bootstrap/cl-exports.lisp \
+                  ../bootstrap/vm-compiler.lisp
+	@ printf "# Byte-compiling prelude boot image %s (takes a few minutes)\n" "$@"
+	$(VERBOSE) ./bocl --no-compiled-prelude -norc -b \
+	    -e '(compile-file "../bootstrap/prelude.lisp" :output-file "$(PRELUDE_IMAGE)")' \
+	    -quit
 
 #bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) libbocl.$(SO)
 #	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"

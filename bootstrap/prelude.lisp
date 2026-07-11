@@ -9840,6 +9840,16 @@ result array; return that array."
    check version compatibility (see %BOCL-FASL-VERSION).  A BINARY (cfasl) fasl
    instead starts with the \"BOCLFASL\" magic (see cfasl.h / %CFASL-FILE-P).")
 
+(defvar *compile-verbose* t
+  "Default for COMPILE-FILE's :VERBOSE (CLHS 25.1.1): when true it prints a note
+   naming the file it is compiling.  Byte-compiling a whole file is slow, so this
+   is on by default to show the compile started.")
+
+(defvar *compile-print* nil
+  "Default for COMPILE-FILE's :PRINT (CLHS 25.1.1): when true it prints one line
+   per top-level form as it is byte-compiled — essential live progress for a
+   multi-minute whole-prelude compile.")
+
 (defvar *compile-file-binary* t
   "When true (the default), COMPILE-FILE writes a compact BINARY (cfasl) fast-load
    file and LOAD dispatches on its magic; the already-macroexpanded top-level form
@@ -9897,20 +9907,40 @@ result array; return that array."
           (terpri dst)))))
   t)
 
-(defun compile-file (input-file &key output-file &allow-other-keys)
+(defun %compile-file-defun-name (form)
+  "If FORM is a (BOCL:DEFINE-FUNCTION 'NAME ...) — the macroexpansion of a DEFUN —
+   return NAME, else NIL.  Used for COMPILE-FILE's :PRINT progress line."
+  (and (consp form) (>= (length form) 2)
+       (let ((nm (second form)))
+         (if (and (consp nm) (eq (car nm) 'quote)) (cadr nm) nm))))
+
+(defun compile-file (input-file &key output-file
+                                     (verbose *compile-verbose*)
+                                     (print *compile-print*)
+                                &allow-other-keys)
   "Minimal-compile INPUT-FILE to a fast-load file and return its truename.  Each
    top-level form is read; its compile-time effects fire (%COMPILE-FILE-TOPLEVEL —
-   EVAL-WHEN :COMPILE-TOPLEVEL, IN-PACKAGE, DEFMACRO, ...), then it is
-   MACROEXPAND-ALL'd and collected together with the package in effect for it.
-   The collected macro-free forms are written to OUTPUT-FILE (default: source with
-   type *DEFAULT-COMPILED-FILE-TYPE*), preceded by an IN-PACKAGE pinning the load
+   EVAL-WHEN :COMPILE-TOPLEVEL, IN-PACKAGE, DEFMACRO, ...), then only its TOP-LEVEL
+   macro is expanded (DEFUN -> BOCL:DEFINE-FUNCTION, so the byte-compile hook sees
+   it) and it is collected with the package in effect for it — NOT a whole-form
+   MACROEXPAND-ALL, which is slow and can exhaust the stack on a deeply nested body.
+   In the BINARY (cfasl) path each DEFUN body is then byte-compiled per-function
+   (%VM-COMPILE-FILE-FORM; the compiler macroexpands the body itself, one bounded
+   function at a time); every other form is stored shallowly expanded and LOAD
+   evaluates it, re-macroexpanding exactly as a source boot would.
+   The result is written to OUTPUT-FILE (default: source with type
+   *DEFAULT-COMPILED-FILE-TYPE*), preceded by an IN-PACKAGE pinning the load
    package, as a compact BINARY cfasl (the default; see *COMPILE-FILE-BINARY*) or,
    when binary is disabled or a form holds a literal the binary writer cannot
    serialize, as the readable TEXT fasl.  A compile-time IN-PACKAGE is contained
-   by the *PACKAGE* rebinding.  Returns (values output-truename warnings-p
-   failure-p): warnings-p is always NIL; failure-p is T if some form could not be
-   macroexpanded (it was collected verbatim)."
-  (let* ((merged (merge-pathnames input-file *default-pathname-defaults*))
+   by the *PACKAGE* rebinding.  VERBOSE (default *COMPILE-VERBOSE*) notes the file
+   being compiled; PRINT (default *COMPILE-PRINT*) prints a line per byte-compiled
+   DEFUN — live progress for the multi-minute whole-prelude compile.  Returns
+   (values output-truename warnings-p failure-p): warnings-p is always NIL;
+   failure-p is T if some form's top-level macro could not be expanded (it was
+   collected verbatim)."
+  (let* ((%verbose verbose) (%print print)
+         (merged (merge-pathnames input-file *default-pathname-defaults*))
          ;; Select the actual source file (issue lisp-file-types pseudocode):
          ;; an explicit type or an existing file is used as is; otherwise search
          ;; the accepted source file types.
@@ -9927,6 +9957,9 @@ result array; return that array."
          (std-rt   (copy-readtable nil))        ; the TEXT fasl is written with the standard one
          (failure nil)
          (entries '()))                         ; (package . expanded-form), reverse order
+    (when %verbose
+      (format t "~&; compiling file ~S (to ~S)~%" actual out-ns)
+      (finish-output))
     ;; Pin the load package to the compile-time package, in case the source
     ;; carries no IN-PACKAGE of its own.
     (push (cons *package* (list 'in-package (package-name *package*))) entries)
@@ -9938,13 +9971,32 @@ result array; return that array."
           (let ((form (read src nil eof)))
             (when (eq form eof) (return))
             (%compile-file-toplevel form)                 ; compile-time effects
-            (multiple-value-bind (expanded ok)
-                (handler-case (values (macroexpand-all form) t)
-                  (error () (values form nil)))
-              (unless ok (setq failure t))
+            ;; Expand the top-level macro ONLY to expose a DEFUN as
+            ;; BOCL:DEFINE-FUNCTION for the byte-compile hook below; KEEP every
+            ;; other form RAW.  Two reasons not to store the expansion of a
+            ;; non-DEFUN form:
+            ;;   * a whole-form MACROEXPAND-ALL is slow and can exhaust the control
+            ;;     stack on a deeply nested body;
+            ;;   * more importantly, COMPILE-FILE expands with the FULLY-BOOTED
+            ;;     compiler's macros, but the fasl is LOADed into a partially-built
+            ;;     image — an expansion can bake in a macro / setf-expander the boot
+            ;;     has not reached yet (e.g. a DEFPARAMETER docstring expands to
+            ;;     (SETF (DOCUMENTATION ...) ...) before that setf-expander is
+            ;;     registered).  Storing the form raw lets LOAD expand it with the
+            ;;     macros defined SO FAR, exactly as a source boot does.
+            ;; DEFUN bodies are still byte-compiled below (the compiler macroexpands
+            ;; each body internally, one bounded function at a time).
+            (let* ((def-function (and (find-package "BOCL")
+                                      (find-symbol "DEFINE-FUNCTION"
+                                                   (find-package "BOCL"))))
+                   (expanded (handler-case (macroexpand form)
+                               (error () (setq failure t) form)))
+                   (keep (if (and (consp expanded) (eq (car expanded) def-function))
+                             expanded            ; a DEFUN — byte-compile it
+                             form)))             ; everything else stays raw
               ;; Capture *PACKAGE* per form so a multi-package file's symbols
               ;; qualify correctly should we fall back to the text writer.
-              (push (cons *package* expanded) entries))))))
+              (push (cons *package* keep) entries))))))
     (setq entries (nreverse entries))
     ;; Binary by default; fall back to text when disabled or when a form holds an
     ;; object the binary writer cannot serialize (%WRITE-CFASL then returns NIL,
@@ -9952,10 +10004,27 @@ result array; return that array."
     ;; bodies are byte-compiled into the binary fasl (%VM-COMPILE-FILE-FORM installs a
     ;; pre-compiled template); the text path always uses the plain macroexpanded forms.
     (let ((bin-forms (if (fboundp '%vm-compile-file-form)
-                         (mapcar (lambda (e) (%vm-compile-file-form (cdr e))) entries)
+                         (let ((i 0))
+                           (mapcar (lambda (e)
+                                     (incf i)
+                                     (let ((bf (%vm-compile-file-form (cdr e))))
+                                       ;; :PRINT — one line per byte-compiled DEFUN
+                                       ;; (a template quote in slot 4 marks success);
+                                       ;; live progress for a multi-minute compile.
+                                       (when (and %print
+                                                  (consp bf) (= (length bf) 4)
+                                                  (consp (fourth bf))
+                                                  (eq (car (fourth bf)) 'quote))
+                                         (format t "~&;   [~D] byte-compiled ~S~%"
+                                                 i (%compile-file-defun-name bf))
+                                         (finish-output))
+                                       bf))
+                                   entries))
                          (mapcar #'cdr entries))))
       (or (and *compile-file-binary* (%write-cfasl out-ns bin-forms))
           (%write-text-fasl out-ns actual entries std-rt)))
+    (when %verbose
+      (format t "~&; wrote ~S~%" out-ns) (finish-output))
     (values (truename out) nil failure)))
 
 (defun %bocl-fasl-version (path)
@@ -11373,8 +11442,11 @@ the rest take :INITIAL-ELEMENT."
   (let ((here (or *load-truename* *load-pathname*)))
     (when here
       (let* ((ns  (if (stringp here) here (namestring here)))
-             (pos (search "prelude.lisp" ns :from-end t))
-             (dir (if pos (subseq ns 0 pos) "")))
+             ;; Take everything up to and including the last "/" — this file may
+             ;; be loaded as prelude.lisp OR as the compiled prelude.cfasl boot
+             ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
+             (pos (position #\/ ns :from-end t))
+             (dir (if pos (subseq ns 0 (1+ pos)) "")))
         (load (concatenate 'string dir "bignum.lisp"))
         (load (concatenate 'string dir "bignum-integration.lisp"))))))
 
@@ -11386,8 +11458,11 @@ the rest take :INITIAL-ELEMENT."
   (let ((here (or *load-truename* *load-pathname*)))
     (when here
       (let* ((ns  (if (stringp here) here (namestring here)))
-             (pos (search "prelude.lisp" ns :from-end t))
-             (dir (if pos (subseq ns 0 pos) "")))
+             ;; Take everything up to and including the last "/" — this file may
+             ;; be loaded as prelude.lisp OR as the compiled prelude.cfasl boot
+             ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
+             (pos (position #\/ ns :from-end t))
+             (dir (if pos (subseq ns 0 (1+ pos)) "")))
         (load (concatenate 'string dir "socket.lisp"))))))
 
 ;;; ---- BYTE-CODE COMPILER (plan-2) ------------------------------------------
@@ -11399,6 +11474,9 @@ the rest take :INITIAL-ELEMENT."
   (let ((here (or *load-truename* *load-pathname*)))
     (when here
       (let* ((ns  (if (stringp here) here (namestring here)))
-             (pos (search "prelude.lisp" ns :from-end t))
-             (dir (if pos (subseq ns 0 pos) "")))
+             ;; Take everything up to and including the last "/" — this file may
+             ;; be loaded as prelude.lisp OR as the compiled prelude.cfasl boot
+             ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
+             (pos (position #\/ ns :from-end t))
+             (dir (if pos (subseq ns 0 (1+ pos)) "")))
         (load (concatenate 'string dir "vm-compiler.lisp"))))))

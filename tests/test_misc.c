@@ -1222,6 +1222,44 @@ static void test_vm_compile_wiring(void){
     close_live_pool(pool);
 }
 
+/* ---- vm-10: compiled-prelude boot image regressions --------------------------- */
+/* Booting from a byte-compiled prelude.cfasl uncovered two defects, guarded here:
+   (1) SET-SYMBOL-FUNCTION must accept a byte-compiled COMPILED-CLOSURE (DEFGENERIC
+       installs a byte-compiled discriminating function) — it used to reject anything
+       that was not an interpreted FUNCTION / closure / built-in.
+   (2) COMPILE-FILE must keep a DEFPARAMETER (and its docstring) RAW rather than
+       macroexpanding it at compile time — a compile-time expansion bakes in the
+       (SETF (DOCUMENTATION ...)) setf-expander, which on a fresh boot is not yet
+       registered.  The DEFUN in the same file is still byte-compiled. */
+static void test_vm_compiled_prelude(void){
+    uword pool = open_live_pool();
+
+    /* (1) install a genuine COMPILED-CLOSURE (captures a free variable) as a
+       symbol-function and call it — this is what DEFGENERIC does at boot. */
+    e("(defvar *vmcp-mk* (compile nil '(lambda (n) (lambda (x) (+ x n)))))");
+    e("(defvar *vmcp-clo* (funcall *vmcp-mk* 10))");
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p *vmcp-clo*) t nil)"));
+    e("(setf (symbol-function 'vmcp-add10) *vmcp-clo*)");     /* must not TYPE-ERROR */
+    TEST_EQ(eql, I(15), e("(vmcp-add10 5)"));
+
+    /* (2) a DEFPARAMETER with a docstring + a DEFUN round-trip through a cfasl:
+       COMPILE-FILE keeps the DEFPARAMETER raw, so LOAD never errors on the
+       docstring's (SETF (DOCUMENTATION ...)) — it expands in boot order — and the
+       parameter's value is correct; the DEFUN loads byte-compiled. */
+    e("(with-open-file (f \"/tmp/bocl_vm10_cf.lisp\" :direction :output :if-exists :supersede)"
+      "  (write-line \"(in-package :common-lisp)\" f)"
+      "  (write-line \"(defparameter *vm10-p* (list 'sentinel) \\\"a doc string\\\")\" f)"
+      "  (write-line \"(defun vm10-cube (x) (* x x x))\" f))");
+    e("(load (compile-file \"/tmp/bocl_vm10_cf.lisp\"))");   /* must not error on the docstring */
+    TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (symbol-function 'vm10-cube)) t nil)"));
+    TEST_EQ(eql, I(27),    e("(vm10-cube 3)"));
+    TEST_EQ(equal, e("'(sentinel)"), e("*vm10-p*"));
+    e("(ignore-errors (delete-file \"/tmp/bocl_vm10_cf.lisp\"))");
+    e("(ignore-errors (delete-file (compile-file-pathname \"/tmp/bocl_vm10_cf.lisp\")))");
+
+    close_live_pool(pool);
+}
+
 /* ---- vm-6b: tail calls (trampoline) + stack-overflow signal ------------------- */
 /* A call in tail position compiles to TAIL_CALL / TAIL_CALL_NAMED; the trampoline in
    bytecode_apply reuses the C frame for a compiled callee, so tail recursion runs in
@@ -1569,6 +1607,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm escaping blocks",  test_vm_escaping_blocks)
     TEST_CASE("vm exited extent",    test_vm_exited_extent)
     TEST_CASE("vm compile wiring",   test_vm_compile_wiring)
+    TEST_CASE("vm compiled prelude", test_vm_compiled_prelude)
     TEST_CASE("vm tail calls",       test_vm_tail_calls)
     TEST_CASE("vm fast-apply",       test_vm_fast_apply)
     TEST_CASE("vm inline primitives", test_vm_inline_primitives)

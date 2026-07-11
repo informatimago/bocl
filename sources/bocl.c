@@ -340,6 +340,12 @@ Ref bocl_fasl_load(const char* path){
         if(!(functionp(wrapper) || built_in_function_p(wrapper) || closurep(wrapper))){ wrapper = NIL_Symbol; }
     }
 
+    /* Maintenance diagnostic (vm-10): with $BOCL_CFASL_DEBUG set, trace each
+       top-level form as it loads ("[cfasl N] OP NAME").  Booting from a compiled
+       prelude image is order-sensitive (a form runs before its later helper is
+       defined), so a form-by-form trace is the way to localise a bad load. */
+    int cfasl_dbg = getenv("BOCL_CFASL_DEBUG") ? 1 : 0;
+    long cfasl_formn = 0;
     int ok = 1;
     for(;;){
         if(cfasl_at_end(&in) || in.data[in.pos] == CFASL_TAG_EOF){ break; }
@@ -356,6 +362,26 @@ Ref bocl_fasl_load(const char* path){
             break;
         }
         add_to_live_pool(form);
+        cfasl_formn++;
+        if(cfasl_dbg){
+            Ref op = consp(form) ? cons_car(form) : form;
+            char opbuf[64]="?"; char nmbuf[96]="";
+            if(symbolp(op) && stringp(symbol_name(op))){
+                char* s = string_cstring(symbol_name(op));
+                snprintf(opbuf,sizeof(opbuf),"%s",s); free(s);
+            }
+            /* (define-function 'NAME ...) — dig out NAME for identification */
+            if(consp(form) && consp(cons_cdr(form))){
+                Ref a = cons_car(cons_cdr(form));
+                if(consp(a) && consp(cons_cdr(a))) a = cons_car(cons_cdr(a)); /* (quote NAME) */
+                if(symbolp(a) && stringp(symbol_name(a))){
+                    char* s = string_cstring(symbol_name(a));
+                    snprintf(nmbuf,sizeof(nmbuf)," %s",s); free(s);
+                }
+            }
+            fprintf(stderr, ";; [cfasl %ld] %s%s\n", cfasl_formn, opbuf, nmbuf);
+            fflush(stderr);
+        }
         PROFILE_ENTER(PROF_EVAL);
         if(!nullp(wrapper)){
             MultipleValues res = {0};
