@@ -307,8 +307,8 @@ static struct {
     {{"-x","-e","--eval",NULL},             NULL,        elst, {"form",{.list=&expressions_and_loads}},   "evaluate form (may need to quote form in shell)"},
     {{"-l","--load",NULL},                  NULL,        load, {"file",{.list=&expressions_and_loads}},   "load file"},
     {{"-p","--package",NULL},               NULL,        strg, {"package",{.string=&package}},            "start in the package"},
-    {{"-repl","--repl",NULL},               &do_repl,    none, {.name=NULL},                              "enter the interactive read-eval-print loop when done (default)"},
-    {{"-quit","--quit",NULL},               &do_quit,    none, {.name=NULL},                              "quit when argument processing is done"},
+    {{"-repl","--repl",NULL},               &do_repl,    none, {.name=NULL},                              "enter the interactive read-eval-print loop when done (default; -quit overrides)"},
+    {{"-quit","--quit",NULL},               &do_quit,    none, {.name=NULL},                              "quit when argument processing is done (do not enter the REPL)"},
     {{"-w","--wait",NULL},                  &do_wait,    none, {.name=NULL},                              "wait for a keypress after program termination"},
     {{NULL},NULL,none,{.name=NULL},NULL}};
 
@@ -575,7 +575,10 @@ static Ref run_session(void* ctx){
     if(package){
         bocl_in_package(bocl_read_cstring(package));}
 
-    if(do_repl){
+    /* -quit suppresses the (default-on) REPL: without this, a scripted
+       invocation (-e ... -quit) on a tty — e.g. the Makefile's byte-compile
+       rules under `make install` — would sit at the interactive prompt. */
+    if(do_repl && !do_quit){
         /* The interactive REPL defaults to DEBUG; if --on-error was given
            anywhere, BOCL:*ON-ERROR* already holds its final value. */
         if(!any_on_error){ apply_on_error(on_error_debug); }
