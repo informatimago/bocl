@@ -1663,6 +1663,86 @@ static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* resu
         free(p);}
     cfasl_out_free(&b);}
 
+/* (%CFASL-VALIDATE namestring) -> (values valid-p form-count message version)
+   Structurally validate a compiled fasl WITHOUT evaluating anything: check the
+   magic, the format version, that every top-level form reads back through the
+   ordinary cfasl reader, and that the image ends with the end-of-image tag as
+   its final byte (the invariant the v1.8.32 loader enforces).  VALID-P is T
+   only when every check passes; FORM-COUNT is how many top-level forms read
+   cleanly; MESSAGE is a string naming the first problem, or NIL; VERSION is
+   the image's format version byte, or NIL when the header itself is
+   unreadable.  Reading materialises each form (rooted per form, then dropped)
+   but never evaluates it, so validating an image is side-effect free. */
+static void kernel_CFASL_VALIDATE(unused Ref f, Ref arguments, MultipleValues* results){
+    char msg[512];
+    results->count=4;
+    results->values[0]=NIL_Symbol;                 /* valid-p    */
+    results->values[1]=integer_from_word(0);       /* form-count */
+    results->values[2]=NIL_Symbol;                 /* message    */
+    results->values[3]=NIL_Symbol;                 /* version    */
+    Ref path = cons_car(arguments);
+    check_type(path,STRING_Class);
+    char* pth = string_cstring(path);
+    uint8_t* buf = NULL;
+    long sz = -1;
+    FILE* fp = fopen(pth,"rb");
+    if(fp && fseek(fp,0,SEEK_END)==0 && (sz=ftell(fp))>=0 && fseek(fp,0,SEEK_SET)==0){
+        buf = (uint8_t*)malloc((size_t)sz);
+        if(buf && fread(buf,1,(size_t)sz,fp)!=(size_t)sz){ free(buf); buf=NULL; }}
+    if(fp){ fclose(fp); }
+    if(!buf){
+        snprintf(msg,sizeof msg,"cannot read %s",pth);
+        results->values[2]=string_new_cstring(msg);
+        free(pth);
+        return; }
+    free(pth);
+    if(sz < (long)(CFASL_MAGIC_LEN+2+1)){          /* header + at least the EOF tag */
+        snprintf(msg,sizeof msg,"too short to be a cfasl (%ld octets)",sz); }
+    else if(memcmp(buf,CFASL_MAGIC,CFASL_MAGIC_LEN)!=0){
+        snprintf(msg,sizeof msg,"bad magic: not a %s image",CFASL_MAGIC); }
+    else{
+        uint8_t ver = buf[CFASL_MAGIC_LEN];
+        results->values[3]=integer_from_word((word)ver);
+        if(ver!=CFASL_VERSION){
+            snprintf(msg,sizeof msg,
+                     "format version v%u; this build reads v%u — cannot check the body",
+                     (unsigned)ver,(unsigned)CFASL_VERSION); }
+        else{
+            cfasl_in in;
+            cfasl_in_init(&in, buf+CFASL_MAGIC_LEN+2, (size_t)sz-CFASL_MAGIC_LEN-2);
+            long formn=0;
+            int saw_eof=0, bad=0;
+            size_t badpos=0;
+            for(;;){
+                if(cfasl_at_end(&in)){ break; }
+                if(in.data[in.pos]==CFASL_TAG_EOF){ saw_eof=1; break; }
+                uword form_pool=open_live_pool();  /* root the form graph across the read,
+                                                      then drop it — validation only */
+                cfasl_rctx* rc = cfasl_rctx_new(&in);
+                if(rc){ (void)cfasl_read_object(rc); }
+                bad = (!rc || cfasl_rctx_error(rc));
+                if(rc){ cfasl_rctx_free(rc); }
+                close_live_pool(form_pool);
+                if(bad){ badpos=in.pos; break; }
+                formn++; }
+            results->values[1]=integer_from_word(formn);
+            msg[0]='\0';
+            if(bad){
+                snprintf(msg,sizeof msg,
+                         "form %ld is malformed (at octet %lu of %ld); %ld forms read cleanly before it",
+                         formn+1,(unsigned long)(badpos+CFASL_MAGIC_LEN+2),sz,formn); }
+            else if(!saw_eof){
+                snprintf(msg,sizeof msg,
+                         "missing end-of-image tag: truncated after %ld complete forms",formn); }
+            else if((long)(in.pos+1+CFASL_MAGIC_LEN+2)!=sz){
+                snprintf(msg,sizeof msg,
+                         "%ld trailing octets after the end-of-image tag",
+                         sz-(long)(in.pos+1+CFASL_MAGIC_LEN+2)); }
+            else{
+                results->values[0]=T_Symbol; }}}
+    if(msg[0]){ results->values[2]=string_new_cstring(msg); }
+    free(buf);}
+
 /* (%GLOBALLY-SPECIAL-P symbol) -> T if SYMBOL is globally proclaimed special
    (DEFVAR/DEFPARAMETER/proclaim SPECIAL set the $SPECIAL plist marker).  Used by
    the byte-code compiler's lexical analyzer (vm-3) to decide whether a free
@@ -2248,7 +2328,9 @@ void bocl_register_load(void){
             set_symbol_function(symbol_intern_cstring("%CFASL-LOAD"),
                 built_in_function_new(symbol_intern_cstring("%CFASL-LOAD"),list(symbol_intern_cstring("PATH"),NULL),kernel_CFASL_LOAD));
             set_symbol_function(symbol_intern_cstring("%WRITE-CFASL"),
-                built_in_function_new(symbol_intern_cstring("%WRITE-CFASL"),pathfs,kernel_WRITE_CFASL)); }
+                built_in_function_new(symbol_intern_cstring("%WRITE-CFASL"),pathfs,kernel_WRITE_CFASL));
+            set_symbol_function(symbol_intern_cstring("%CFASL-VALIDATE"),
+                built_in_function_new(symbol_intern_cstring("%CFASL-VALIDATE"),path1,kernel_CFASL_VALIDATE)); }
         {   Ref nv=list(symbol_intern_cstring("NAME"),symbol_intern_cstring("VALUE"),NULL);
             Ref n =list(symbol_intern_cstring("NAME"),NULL);
             set_symbol_function(symbol_intern_cstring("%DEFINE-VARIABLE"),

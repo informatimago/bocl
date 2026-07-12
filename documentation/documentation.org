@@ -645,6 +645,33 @@ minimal-compilation saving the result in "fasl" files.
 The variables must be defined and used where relevant (=LOAD=,
 =COMPILE-FILE=, =#+/#-= etc).
 
+*** Function BOCL:VALIDATE-CFASL
+
+: (bocl:validate-cfasl path &key (report t) (stream *standard-output*))
+:   -> (values valid-p form-count message version)
+
+Structurally validate the compiled fasl (=.cfasl=) file at =PATH=
+without evaluating anything from it: the =BOCLFASL= magic, the format
+version, that every top-level form reads back through the cfasl
+reader, and that the image ends with the end-of-image tag as its
+final byte.  When =REPORT= is true (the default), a one-line verdict
+is printed to =STREAM=.  =VALID-P= is =T= when every check passes;
+=FORM-COUNT= is the number of top-level forms that read cleanly;
+=MESSAGE= is a string naming the first problem (or =NIL=); =VERSION=
+is the image's format version (or =NIL= when the header is
+unreadable).
+
+A truncated or corrupt boot image is already rejected automatically
+(with a warning and a fallback to the source); this function is the
+explicit inspection tool that says /what/ is wrong with an image:
+
+: bocl> (bocl:validate-cfasl "bootstrap/prelude.cfasl")
+: ;; bootstrap/prelude.cfasl: valid cfasl (format v2, 1166 top-level forms).
+: T
+: 1166
+: NIL
+: 2
+
 ** 25. Environment
 
 The kernel provide environment operators that depend on the platform.

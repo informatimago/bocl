@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>   /* open O_WRONLY|O_TRUNC — test_cfasl_validate rewrites its temp image */
 
 #include "simple_test.h"
 #include "kernel.h"
@@ -376,6 +377,74 @@ static void test_cfasl_load_file(void){
     cfasl_out_free(&b);
 }
 
+/* BOCL:VALIDATE-CFASL / %CFASL-VALIDATE — structural validation of a compiled
+   image WITHOUT evaluating it (the inspection companion to the v1.8.32
+   truncated-image boot defenses). */
+static void test_cfasl_validate(void){
+    /* Assemble a valid two-form image (one writer context per form, exactly
+       like kernel_WRITE_CFASL / the per-form reader). */
+    cfasl_out b; cfasl_out_init(&b);
+    cfasl_put_bytes(&b, CFASL_MAGIC, CFASL_MAGIC_LEN);
+    cfasl_put_u8(&b, (uint8_t)CFASL_VERSION);
+    cfasl_put_u8(&b, 0);                                  /* flags */
+    {   cfasl_wctx* w = cfasl_wctx_new(&b);
+        cfasl_write_object(w, e("'(defun %cfv-never-defined (x) x)"));
+        TEST_EQ(eql, NIL_Symbol, cfasl_wctx_error(w) ? T_Symbol : NIL_Symbol);
+        cfasl_wctx_free(w); }
+    {   cfasl_wctx* w = cfasl_wctx_new(&b);
+        cfasl_write_object(w, e("'(list 1 2 3)"));
+        TEST_EQ(eql, NIL_Symbol, cfasl_wctx_error(w) ? T_Symbol : NIL_Symbol);
+        cfasl_wctx_free(w); }
+    cfasl_put_u8(&b, CFASL_TAG_EOF);
+    TEST_EQ(eql, NIL_Symbol, b.error ? T_Symbol : NIL_Symbol);
+
+    char path[] = "/tmp/bocl_cfvalXXXXXX";
+    int fd = mkstemp(path);
+    TEST_EQ(eql, T_Symbol, (fd>=0) ? T_Symbol : NIL_Symbol);
+    ssize_t wr = write(fd, b.data, b.len); (void)wr; close(fd);
+
+    char form[512];
+    /* Intact image: (values T 2 NIL CFASL_VERSION) — and validation must NOT
+       have evaluated the forms (the DEFUN must not take effect). */
+    snprintf(form,sizeof form,
+             "(equal (multiple-value-list (bocl:validate-cfasl \"%s\" :report nil))"
+             "       (list t 2 nil %d))",path,(int)CFASL_VERSION);
+    TEST_EQ(eql, T_Symbol, e(form));
+    TEST_EQ(eql, NIL_Symbol, e("(fboundp '%cfv-never-defined)"));
+
+    /* Truncated by one octet (the end-of-image tag): invalid, both forms still
+       read cleanly, and the message names the missing tag. */
+    {   int fd2 = open(path, O_WRONLY|O_TRUNC);
+        TEST_EQ(eql, T_Symbol, (fd2>=0) ? T_Symbol : NIL_Symbol);
+        ssize_t w2 = write(fd2, b.data, b.len-1); (void)w2; close(fd2);
+        snprintf(form,sizeof form,
+                 "(multiple-value-bind (ok n msg) (bocl:validate-cfasl \"%s\" :report nil)"
+                 "  (list ok n (and (stringp msg) (search \"end-of-image\" msg) t)))",path);
+        TEST_EQ(equal, e("'(nil 2 t)"), e(form)); }
+
+    /* Truncated mid-form: invalid, and the message reports a malformed form
+       or the missing tag (where the cut lands decides which). */
+    {   int fd3 = open(path, O_WRONLY|O_TRUNC);
+        TEST_EQ(eql, T_Symbol, (fd3>=0) ? T_Symbol : NIL_Symbol);
+        ssize_t w3 = write(fd3, b.data, b.len/2); (void)w3; close(fd3);
+        snprintf(form,sizeof form,
+                 "(multiple-value-bind (ok n msg) (bocl:validate-cfasl \"%s\" :report nil)"
+                 "  (declare (ignore n)) (list ok (stringp msg)))",path);
+        TEST_EQ(equal, e("'(nil t)"), e(form)); }
+
+    /* Not a cfasl at all: invalid with a bad-magic message. */
+    {   int fd4 = open(path, O_WRONLY|O_TRUNC);
+        TEST_EQ(eql, T_Symbol, (fd4>=0) ? T_Symbol : NIL_Symbol);
+        ssize_t w4 = write(fd4, "definitely not a fasl", 21); (void)w4; close(fd4);
+        snprintf(form,sizeof form,
+                 "(multiple-value-bind (ok n msg ver) (bocl:validate-cfasl \"%s\" :report nil)"
+                 "  (declare (ignore n)) (list ok ver (and (stringp msg) (search \"magic\" msg) t)))",
+                 path);
+        TEST_EQ(equal, e("'(nil nil t)"), e(form)); }
+
+    unlink(path);
+    cfasl_out_free(&b);
+}
 /* cfasl-5: compile-file -> binary fasl -> load must equal a source load across a
    feature corpus, AND a load large enough to trigger GC mid-deserialization must
    survive (regression guard for the reader live-pool rooting — Object_new does
@@ -1592,6 +1661,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("cfasl writer",        test_cfasl_writer)
     TEST_CASE("cfasl roundtrip",     test_cfasl_roundtrip)
     TEST_CASE("cfasl load file",     test_cfasl_load_file)
+    TEST_CASE("cfasl validate",      test_cfasl_validate)
     TEST_CASE("cfasl corpus",        test_cfasl_corpus)
     TEST_CASE("vm compiled-function", test_vm_compiled_function)
     TEST_CASE("vm execute",          test_vm_execute)

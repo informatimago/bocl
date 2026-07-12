@@ -11393,6 +11393,32 @@ the rest take :INITIAL-ELEMENT."
           bocl::with-profile-phase)
         "BOCL")
 
+;;; ---- Compiled fasl validation ----------------------------------------------
+;;; A truncated or corrupted .cfasl boot image is rejected by LOAD/the boot with
+;;; a warning and a fallback to the source (v1.8.32); BOCL:VALIDATE-CFASL is the
+;;; companion inspection tool — it checks an image explicitly and says WHAT is
+;;; wrong, without evaluating (loading) anything from it.
+(defun bocl::validate-cfasl (path &key (report t) (stream *standard-output*))
+  "Structurally validate the compiled fasl (cfasl) file at PATH without
+evaluating anything from it: the BOCLFASL magic, the format version, that
+every top-level form reads back through the cfasl reader, and that the image
+ends with the end-of-image tag as its final byte.  When REPORT is true (the
+default), print a one-line verdict to STREAM.  Returns (VALUES VALID-P
+FORM-COUNT MESSAGE VERSION): VALID-P is T when every check passes; FORM-COUNT
+is the number of top-level forms that read cleanly; MESSAGE is a string naming
+the first problem, or NIL; VERSION is the image's format version, or NIL when
+the header is unreadable."
+  (multiple-value-bind (valid-p form-count message version)
+      (%cfasl-validate (namestring (pathname path)))
+    (when report
+      (if valid-p
+          (format stream "~&;; ~A: valid cfasl (format v~A, ~A top-level forms).~%"
+                  (namestring (pathname path)) version form-count)
+          (format stream "~&;; ~A: INVALID cfasl: ~A~%"
+                  (namestring (pathname path)) message)))
+    (values valid-p form-count message version)))
+(export '(bocl::validate-cfasl) "BOCL")
+
 (define-condition bocl::invalid-module-plist (error)
   ((object :initarg :object :reader bocl::invalid-module-plist-object)
    (reason :initarg :reason :reader bocl::invalid-module-plist-reason)))
