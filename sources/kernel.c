@@ -2579,8 +2579,18 @@ void values(Ref arguments,MultipleValues* results){
 
 void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){
     /* CL function designator: a symbol names the function in its function cell. */
-    if(symbolp(function_or_closure) && symbol_fboundp(function_or_closure)){
-        function_or_closure=symbol_function(function_or_closure);}
+    if(symbolp(function_or_closure)){
+        if(symbol_fboundp(function_or_closure)){
+            function_or_closure=symbol_function(function_or_closure);}
+        else{
+            /* An unfbound designator is an UNDEFINED function.  Report it like
+               the evaluator does, NAMING the symbol — falling through to the
+               generic type check yields a baffling "TYPE ERROR: expected
+               FUNCTION, got SYMBOL" with no hint of WHICH function is missing
+               (this is what a byte-compiled call to an undefined global used
+               to signal). */
+            ERROR("Undefined function: %s",
+                  string_cstring(symbol_name(function_or_closure)));}}
     if(closurep(function_or_closure)){
         kernel_apply_closure(function_or_closure,&function_or_closure->slots->closure,arguments,results);}
     else if(built_in_function_p(function_or_closure)){

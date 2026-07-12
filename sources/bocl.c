@@ -307,6 +307,21 @@ Ref bocl_fasl_load(const char* path){
     if(got != (size_t)sz){ free(buf); return NIL_Symbol; }
 
     if(memcmp(buf, CFASL_MAGIC, CFASL_MAGIC_LEN) != 0){ free(buf); return NIL_Symbol; }
+    /* A complete image's FINAL byte is always CFASL_TAG_EOF (the writer emits
+       it last, after the forms; kernel_WRITE_CFASL serializes fully in memory
+       before the file is opened).  Check it BEFORE evaluating anything: a
+       truncated file (interrupted write, full disk, partial copy) whose cut
+       lands on a form boundary would otherwise load as a silent PREFIX of the
+       image — half a prelude that boots and then fails much later with
+       undefined functions — and rejecting it only after some forms have run
+       would leave the fallback source load to fight the partial state.
+       Rejected here, the source loads on a clean kernel. */
+    if(buf[sz-1] != CFASL_TAG_EOF){
+        fprintf(stderr, ";; WARNING: %s is truncated (missing end-of-image tag)"
+                        " — ignoring it.\n", path);
+        free(buf);
+        return NIL_Symbol;
+    }
     uint8_t ver = buf[CFASL_MAGIC_LEN];
     /* buf[CFASL_MAGIC_LEN+1] = flags (reserved) */
     if(ver != CFASL_VERSION){
@@ -347,8 +362,16 @@ Ref bocl_fasl_load(const char* path){
     int cfasl_dbg = getenv("BOCL_CFASL_DEBUG") ? 1 : 0;
     long cfasl_formn = 0;
     int ok = 1;
+    int saw_eof = 0;   /* a complete image ENDS with CFASL_TAG_EOF (the writer
+        always emits it — kernel_WRITE_CFASL serializes fully in memory first).
+        Running off the end of the buffer WITHOUT the tag means the file was
+        truncated AT a form boundary (interrupted write, full disk, partial
+        copy): the prefix loads cleanly form by form, so without this check the
+        boot would silently run on HALF a prelude and fail much later with
+        undefined functions. */
     for(;;){
-        if(cfasl_at_end(&in) || in.data[in.pos] == CFASL_TAG_EOF){ break; }
+        if(cfasl_at_end(&in)){ break; }
+        if(in.data[in.pos] == CFASL_TAG_EOF){ saw_eof = 1; break; }
         /* One live-pool frame per form: the form graph and its eval garbage are
            reclaimed before the next form, keeping GC scans O(form) not O(file);
            definitions survive via their symbols, exactly as the text loader. */
@@ -399,8 +422,18 @@ Ref bocl_fasl_load(const char* path){
     close_live_pool(load_pool);
     free(buf);
 
-    if(!ok){
-        fprintf(stderr, ";; WARNING: %s is a truncated / malformed cfasl.\n", path);
+    if(!ok || !saw_eof){
+        /* Corruption detected only after SOME forms already ran (the upfront
+           final-byte check passed, so this is interior corruption, not simple
+           truncation).  The state is partially loaded; the caller falls back
+           to the source, which may itself trip over the partial definitions —
+           say so, and name the remedy. */
+        fprintf(stderr, ";; WARNING: %s is a malformed cfasl%s; %ld forms were"
+                        " already evaluated — falling back to the source, but the"
+                        " session may be inconsistent.  Delete or rebuild the"
+                        " image (make -C sources prelude-image).\n",
+                path, (ok && !saw_eof) ? " (interior end-of-image tag)" : "",
+                cfasl_formn);
         return NIL_Symbol;
     }
     return T_Symbol;}
@@ -1620,11 +1653,14 @@ static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* resu
     if(ok && !b.error){
         char* p = string_cstring(path);
         FILE* fp = fopen(p, "wb");
-        free(p);
         if(fp){
             size_t wn = fwrite(b.data, 1, b.len, fp);
             fclose(fp);
-            if(wn==b.len){ results->values[0]=T_Symbol; }}}
+            if(wn==b.len){ results->values[0]=T_Symbol; }
+            else{ remove(p); }}   /* short write (e.g. full disk): do not leave
+                a partial image behind — the loader would reject it anyway, but
+                a form-boundary-truncated file used to load silently. */
+        free(p);}
     cfasl_out_free(&b);}
 
 /* (%GLOBALLY-SPECIAL-P symbol) -> T if SYMBOL is globally proclaimed special

@@ -31,6 +31,16 @@ extern void eval_stack_guard_check(void);          /* eval.c: control-stack over
    is identical to eval.c's, so mixed VM/tree-walker unwinds work. */
 extern Frame* g_frame_stack;   /* eval.c:44 (non-static; not otherwise declared) */
 
+/* Fetch SYM's global function for CALL-NAMED / (FUNCTION sym).  An unfbound
+   symbol signals UNDEFINED FUNCTION by NAME (mirroring eval.c): the raw
+   function cell holds the UNBOUND marker, which — leaked into kernel_apply —
+   used to produce the baffling "TYPE ERROR: expected FUNCTION, got SYMBOL"
+   with no hint of which function was missing. */
+static Ref vm_symbol_function(Ref sym){
+    if(!symbol_fboundp(sym)){
+        ERROR("Undefined function: %s", string_cstring(symbol_name(sym))); }
+    return symbol_function(sym);}
+
 static void vm_push_frame(Frame* f){
     f->next = g_frame_stack; g_frame_stack = f;
     f->env_next = NULL; f->frame = NULL; f->target = NULL; }
@@ -431,7 +441,7 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
                              PUSH(symbol_value(sym)); break; }
         case BC_STORE_GLOBAL:{ uint64_t s = vm_read_uvar(code,&pc); set_symbol_value(K[s], TOP()); break; }
         case BC_LOAD_FUNCTION:{ uint64_t s = vm_read_uvar(code,&pc); Ref sym = K[s];
-                             PUSH(symbol_function(sym)); break; }
+                             PUSH(vm_symbol_function(sym)); break; }
         case BC_MAKE_CLOSURE:{
             /* operand: constant index of the template.  Build a display over the
                current activation: [ this frame's locals, ...the current upvalues ],
@@ -474,7 +484,7 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
             break; }
         case BC_CALL_NAMED:{
             uint64_t s = vm_read_uvar(code,&pc); uint8_t n = code[pc++];
-            Ref callee = symbol_function(K[s]);
+            Ref callee = vm_symbol_function(K[s]);
             MultipleValues r = {0};
             if(compiled_function_p(callee) || compiled_closure_p(callee)){
                 /* fast-apply (args are S[sp-n .. sp-1]; the callee comes from the symbol) */
@@ -512,7 +522,7 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
             Ref callee; uint8_t n;
             if(op==BC_TAIL_CALL_NAMED){
                 uint64_t s = vm_read_uvar(code,&pc); n = code[pc++];
-                callee = symbol_function(K[s]);
+                callee = vm_symbol_function(K[s]);
             } else {
                 n = code[pc++];
                 callee = S[sp-n-1];
