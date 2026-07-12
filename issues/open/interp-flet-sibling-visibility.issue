@@ -1,0 +1,44 @@
+interp: FLET lets a local function's body see its SIBLINGS (LABELS semantics) —
+non-conforming, and it MASKS bugs the byte-compiler then exposes.
+
+SYMPTOM
+(flet ((g () 1)
+       (h () (g)))   ; CLHS: inside H, G is NOT the local (FLET bodies are
+  (h))               ; defined in the ENCLOSING environment — 'flet' bindings
+                     ; are visible only in the FLET's BODY, unlike LABELS)
+The tree-walker resolves (g) inside H to the local G and returns 1; conforming
+behavior is to call the GLOBAL function G (usually undefined).  The byte-code
+compiler implements FLET correctly, so the same code compiled signals
+"Undefined function: G".
+
+HOW FOUND (v1.8.34, thalassa)
+%LOOP-EXPAND used two FLETs whose functions called their siblings (ONE ->
+GRAB-TYPE, TRY! -> POP!, ...).  Interpreted, that worked (this bug); byte-
+compiled — which only happens where the control stack is large enough for the
+compiler not to decline the huge function, e.g. on thalassa — every LOOP with
+a WITH clause died at macroexpansion with "Undefined function: GRAB-TYPE"
+(pjb's asdf.lisp compile: DEFINE-PACKAGE -> LOOP :with -> crash).  Fixed at
+v1.8.35 by converting those FLETs to LABELS; the full-bootstrap audit
+(flet-sibling scan) found no other offender.
+
+REPRO
+(flet ((g () 1) (h () (g))) (h))
+  interpreted        -> 1                      (this bug)
+  (compile nil ...)  -> Undefined function: G  (conforming)
+
+CAUSE
+eval.c FLET evaluation extends ONE environment with all the local functions and
+evaluates the definitions' bodies in it (LABELS-style), instead of closing each
+definition over the ENCLOSING environment and binding the names only for the
+FLET body.
+
+FIX SKETCH
+In the FLET special form: build the function objects as closures over the
+OUTER environment, then push the name->function bindings into a NEW child env
+used for the BODY only.  (LABELS keeps the current behavior: close over the
+extended env.)  Suite + a full source boot are the gate: any prelude/module
+code still relying on sibling visibility will surface exactly like %LOOP-EXPAND
+did (fix those to LABELS as they appear).
+
+NOTE also MACROLET (CLHS: macro-function bodies are in the enclosing LEXICAL
+environment but local macros are NOT visible to each other) — check while here.

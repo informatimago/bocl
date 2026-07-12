@@ -2692,48 +2692,48 @@ SETQ/INCF/DECF is left in place (sequential)."
         (return-f  nil)
         (return-set nil)
         (end-tag   (gensym "END-")))  ; created here so WHILE/UNTIL can target it
-    (flet ((pk  ()     (car rest))
-           (pop! ()    (prog1 (car rest) (setq rest (cdr rest))))
-           (try! (nm)  (when (%lkw (car rest) nm) (pop!) t))
-           (take-body ()
-             (let ((acc nil))
-               (do () ((or (null rest) (%loop-kw-p (pk))))
-                 (push (pop!) acc))
-               (nreverse acc)))
-           (skip-type-spec ()
-             ;; Consume an optional LOOP type specifier after a variable: either
-             ;; "OF-TYPE <type>" or a bare type spec (FIXNUM, FLOAT, T, a cons
-             ;; like (INTEGER 0 9)).  bocl ignores the declaration.  Stop before
-             ;; the keywords that legitimately follow the variable.
-             (when (%lkw (pk) "OF-TYPE") (pop!) (pop!))
-             (when (and rest
-                        (not (%lkw (pk) "IN" "ON" "ACROSS" "FROM" "UPFROM"
-                                     "DOWNFROM" "BEING" "=" "TO" "UPTO" "BELOW"
-                                     "DOWNTO" "ABOVE" "BY" "THEN" "AND"))
-                        (not (%loop-kw-p (pk))))
-               (pop!)))
-           (add-accum (kind var e)
-             ;; Emit the per-iteration accumulation update in the loop BODY at
-             ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
-             ;; CLHS 6.1.1.4), and register the result variable (as its -body
-             ;; kind) for binding + the final result form — but only ONCE per var,
-             ;; so several clauses sharing a var (anonymous or same INTO) bind and
-             ;; reverse it a single time.
-             (setq body (append body (list (%loop-accum-step kind var e))))
-             (unless (dolist (a accums nil) (when (eq (second a) var) (return t)))
-               (push (list (%loop-accum-body-kind kind) var e) accums)))
-           (anon-var (kind)
-             ;; The shared accumulation variable for an anonymous clause of KIND's
-             ;; category, created on first use: like-typed anonymous accumulations
-             ;; all merge into one place (CLHS 6.1.3).
-             (cond ((member kind '(:collect :append :nconc))
-                    (or anon-list (setq anon-list (gensym "ACC-L-"))))
-                   ((member kind '(:sum :count))
-                    (or anon-sum (setq anon-sum (gensym "ACC-N-"))))
-                   ((eq kind :maximize)
-                    (or anon-max (setq anon-max (gensym "ACC-MX-"))))
-                   ((eq kind :minimize)
-                    (or anon-min (setq anon-min (gensym "ACC-MN-")))))))
+    (labels ((pk  ()     (car rest))
+             (pop! ()    (prog1 (car rest) (setq rest (cdr rest))))
+             (try! (nm)  (when (%lkw (car rest) nm) (pop!) t))
+             (take-body ()
+               (let ((acc nil))
+                 (do () ((or (null rest) (%loop-kw-p (pk))))
+                   (push (pop!) acc))
+                 (nreverse acc)))
+             (skip-type-spec ()
+               ;; Consume an optional LOOP type specifier after a variable: either
+               ;; "OF-TYPE <type>" or a bare type spec (FIXNUM, FLOAT, T, a cons
+               ;; like (INTEGER 0 9)).  bocl ignores the declaration.  Stop before
+               ;; the keywords that legitimately follow the variable.
+               (when (%lkw (pk) "OF-TYPE") (pop!) (pop!))
+               (when (and rest
+                          (not (%lkw (pk) "IN" "ON" "ACROSS" "FROM" "UPFROM"
+                                       "DOWNFROM" "BEING" "=" "TO" "UPTO" "BELOW"
+                                       "DOWNTO" "ABOVE" "BY" "THEN" "AND"))
+                          (not (%loop-kw-p (pk))))
+                 (pop!)))
+             (add-accum (kind var e)
+               ;; Emit the per-iteration accumulation update in the loop BODY at
+               ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
+               ;; CLHS 6.1.1.4), and register the result variable (as its -body
+               ;; kind) for binding + the final result form — but only ONCE per var,
+               ;; so several clauses sharing a var (anonymous or same INTO) bind and
+               ;; reverse it a single time.
+               (setq body (append body (list (%loop-accum-step kind var e))))
+               (unless (dolist (a accums nil) (when (eq (second a) var) (return t)))
+                 (push (list (%loop-accum-body-kind kind) var e) accums)))
+             (anon-var (kind)
+               ;; The shared accumulation variable for an anonymous clause of KIND's
+               ;; category, created on first use: like-typed anonymous accumulations
+               ;; all merge into one place (CLHS 6.1.3).
+               (cond ((member kind '(:collect :append :nconc))
+                      (or anon-list (setq anon-list (gensym "ACC-L-"))))
+                     ((member kind '(:sum :count))
+                      (or anon-sum (setq anon-sum (gensym "ACC-N-"))))
+                     ((eq kind :maximize)
+                      (or anon-max (setq anon-max (gensym "ACC-MX-"))))
+                     ((eq kind :minimize)
+                      (or anon-min (setq anon-min (gensym "ACC-MN-")))))))
       (do () ((null rest))
         (let ((kw (pop!)))
           (cond
@@ -2747,19 +2747,19 @@ SETQ/INCF/DECF is left in place (sequential)."
             ;; bound, so `with a = 1 and b = (+ a 2)` sees the outer A, not 1.
             ((%lkw kw "WITH")
              (let ((pairs nil))
-               (flet ((grab-type ()
-                        ;; OF-TYPE <type>, or a bare type spec; NIL if neither.
-                        (cond ((%lkw (pk) "OF-TYPE") (pop!) (pop!))
-                              ((and rest (not (%lkw (pk) "=")) (not (%loop-kw-p (pk))))
-                               (pop!))
-                              (t nil)))
-                      (one ()
-                        (let* ((v    (pop!))
-                               (type (grab-type))
-                               (eq?  (try! "="))
-                               (init (if (and eq? rest (not (%loop-kw-p (pk))))
-                                         (pop!) nil)))
-                          (push (list v init eq? type) pairs))))   ; (var init had-init type)
+               (labels ((grab-type ()
+                          ;; OF-TYPE <type>, or a bare type spec; NIL if neither.
+                          (cond ((%lkw (pk) "OF-TYPE") (pop!) (pop!))
+                                ((and rest (not (%lkw (pk) "=")) (not (%loop-kw-p (pk))))
+                                 (pop!))
+                                (t nil)))
+                        (one ()
+                          (let* ((v    (pop!))
+                                 (type (grab-type))
+                                 (eq?  (try! "="))
+                                 (init (if (and eq? rest (not (%loop-kw-p (pk))))
+                                           (pop!) nil)))
+                            (push (list v init eq? type) pairs))))   ; (var init had-init type)
                  (one)
                  (do () ((not (try! "AND"))) (one)))
                (let ((temps (mapcar (lambda (p) (cons (gensym "WITH-") p))
