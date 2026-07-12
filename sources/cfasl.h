@@ -163,6 +163,8 @@ typedef struct cfasl_rctx cfasl_rctx;
 cfasl_rctx* cfasl_rctx_new(cfasl_in* in);
 void        cfasl_rctx_free(cfasl_rctx* r);
 int         cfasl_rctx_error(cfasl_rctx* r);   /* truncated / malformed / bad ref */
+void        cfasl_rctx_set_lenient_packages(cfasl_rctx* r, int flag);   /* validation
+    mode: an unknown package reads as an uninterned symbol instead of an error */
 Ref         cfasl_read_object(cfasl_rctx* r);
 
 /* Load a binary fasl: verify magic + version, then deserialize and evaluate

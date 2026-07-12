@@ -661,6 +661,11 @@ is printed to =STREAM=.  =VALID-P= is =T= when every check passes;
 is the image's format version (or =NIL= when the header is
 unreadable).
 
+Validation is independent of the session's package state: a symbol in
+a package that the image itself would create (a =DEFPACKAGE= in an
+earlier form, which validation deliberately does not evaluate) reads
+as an uninterned placeholder instead of failing.
+
 A truncated or corrupt boot image is already rejected automatically
 (with a warning and a fallback to the source); this function is the
 explicit inspection tool that says /what/ is wrong with an image:

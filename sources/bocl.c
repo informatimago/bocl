@@ -1719,7 +1719,15 @@ static void kernel_CFASL_VALIDATE(unused Ref f, Ref arguments, MultipleValues* r
                 uword form_pool=open_live_pool();  /* root the form graph across the read,
                                                       then drop it — validation only */
                 cfasl_rctx* rc = cfasl_rctx_new(&in);
-                if(rc){ (void)cfasl_read_object(rc); }
+                /* Lenient package resolution: validation reads WITHOUT evaluating,
+                   so a package a preceding form would have created (DEFPACKAGE in
+                   the same file) cannot exist yet; an unknown package reads as an
+                   uninterned symbol.  Without this the verdict would depend on the
+                   session's package state (pjb: the SAME factorial.cfasl bytes
+                   validated INVALID before, VALID after, a compile-file that
+                   happened to create the FACTORIAL package). */
+                if(rc){ cfasl_rctx_set_lenient_packages(rc, 1);
+                        (void)cfasl_read_object(rc); }
                 bad = (!rc || cfasl_rctx_error(rc));
                 if(rc){ cfasl_rctx_free(rc); }
                 close_live_pool(form_pool);

@@ -10040,17 +10040,27 @@ result array; return that array."
                          (let ((i 0))
                            (mapcar (lambda (e)
                                      (incf i)
-                                     (let ((bf (%vm-compile-file-form (cdr e))))
+                                     (multiple-value-bind (bf declined)
+                                         (%vm-compile-file-form (cdr e))
                                        ;; :PRINT — one line per byte-compiled DEFUN
                                        ;; (a template quote in slot 4 marks success);
                                        ;; live progress for a multi-minute compile.
-                                       (when (and %print
-                                                  (consp bf) (= (length bf) 4)
-                                                  (consp (fourth bf))
-                                                  (eq (car (fourth bf)) 'quote))
-                                         (format t "~&;   [~D] byte-compiled ~S~%"
-                                                 i (%compile-file-defun-name bf))
-                                         (finish-output))
+                                       (cond
+                                         ((and %print
+                                               (consp bf) (= (length bf) 4)
+                                               (consp (fourth bf))
+                                               (eq (car (fourth bf)) 'quote))
+                                          (format t "~&;   [~D] byte-compiled ~S~%"
+                                                  i (%compile-file-defun-name bf))
+                                          (finish-output))
+                                         ;; A DEFUN the byte-compiler DECLINED stays
+                                         ;; interpreted in the fasl — say so (and WHY)
+                                         ;; under :PRINT or :VERBOSE, else the only
+                                         ;; symptom is a silently slower function.
+                                         ((and declined (or %print %verbose))
+                                          (format t "~&;   [~D] left interpreted ~S (byte-compilation declined: ~A)~%"
+                                                  i (%compile-file-defun-name bf) declined)
+                                          (finish-output)))
                                        bf))
                                    entries))
                          (mapcar #'cdr entries))))
@@ -11407,7 +11417,10 @@ default), print a one-line verdict to STREAM.  Returns (VALUES VALID-P
 FORM-COUNT MESSAGE VERSION): VALID-P is T when every check passes; FORM-COUNT
 is the number of top-level forms that read cleanly; MESSAGE is a string naming
 the first problem, or NIL; VERSION is the image's format version, or NIL when
-the header is unreadable."
+the header is unreadable.  Validation is independent of the session's package
+state: a symbol in a package the image itself would create (a DEFPACKAGE in an
+earlier form, which validation deliberately does not evaluate) reads as an
+uninterned placeholder instead of failing."
   (multiple-value-bind (valid-p form-count message version)
       (%cfasl-validate (namestring (pathname path)))
     (when report

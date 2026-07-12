@@ -1597,6 +1597,13 @@
 ;;; and LOAD deserializes + installs it with NO re-compilation / macroexpansion.  Any
 ;;; form the VM can't compile is left unchanged (loads interpreted, as before).
 (defun %vm-compile-file-form (form)
+  "Byte-compile a (BOCL:DEFINE-FUNCTION 'NAME doc #'(lambda ...)) top-level form.
+   Returns (values FORM* CONDITION): on success FORM* carries the pre-compiled
+   template in place of the lambda and CONDITION is NIL; when the byte-compiler
+   declines, FORM* is FORM unchanged (the function stays interpreted) and
+   CONDITION is the SERIOUS-CONDITION that made it decline — COMPILE-FILE
+   reports it under :PRINT / :VERBOSE, so a silently-interpreted function is
+   visible and diagnosable.  A form of any other shape returns (values FORM NIL)."
   (if (and (consp form)
            (eq (car form) (and (find-package "BOCL")
                                (find-symbol "DEFINE-FUNCTION" (find-package "BOCL"))))
@@ -1604,15 +1611,16 @@
            (let ((fn (fourth form)))
              (and (consp fn) (eq (car fn) 'function)
                   (consp (cadr fn)) (eq (car (cadr fn)) 'lambda))))
-      (let ((template (handler-case (%vm-compile (cadr (fourth form)))
-                        ;; SERIOUS-CONDITION, not ERROR: a stack overflow while compiling
-                        ;; one form must leave the rest of the file compilable (this form
-                        ;; simply stays interpreted).  vm-9.
-                        (serious-condition () nil))))
+      (let* ((condition nil)
+             (template (handler-case (%vm-compile (cadr (fourth form)))
+                         ;; SERIOUS-CONDITION, not ERROR: a stack overflow while compiling
+                         ;; one form must leave the rest of the file compilable (this form
+                         ;; simply stays interpreted).  vm-9.
+                         (serious-condition (c) (setq condition c) nil))))
         (if template
-            (list (car form) (second form) (third form) (list 'quote template))
-            form))
-      form))
+            (values (list (car form) (second form) (third form) (list 'quote template)) nil)
+            (values form condition)))
+      (values form nil)))
 
 ;;; ===========================================================================
 ;;; vm-9 — byte-code DISASSEMBLE

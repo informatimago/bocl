@@ -332,6 +332,13 @@ struct cfasl_rctx {
     size_t    cap;
     size_t    count;   /* == next id to assign */
     int       error;
+    int       lenient_packages;   /* validation mode: an unknown package reads as
+        an UNINTERNED symbol instead of an error.  The real loader must NOT set
+        this: there, a missing package is a genuine failure (the defining form
+        should have run).  A validator cannot evaluate the package-DEFINING
+        forms, so without this the verdict would depend on which packages the
+        SESSION happens to have (a file defining its own package would validate
+        only after something else created it). */
 };
 
 cfasl_rctx* cfasl_rctx_new(cfasl_in* in){
@@ -349,6 +356,10 @@ void cfasl_rctx_free(cfasl_rctx* r){
 
 int cfasl_rctx_error(cfasl_rctx* r){
     return !r || r->error || (r->in && r->in->error);
+}
+
+void cfasl_rctx_set_lenient_packages(cfasl_rctx* r, int flag){
+    if(r){ r->lenient_packages = flag; }
 }
 
 /* Append an id slot (holding OBJ) and return its id.  OBJ is rooted in the
@@ -411,7 +422,9 @@ Ref cfasl_read_object(cfasl_rctx* r){
             char* p = string_cstring(pkgname);
             char* nm = string_cstring(name);
             Ref pkg = package_find_cstring(p);
-            if(nullp(pkg)){ r->error = 1; }              /* package must exist by now */
+            if(nullp(pkg)){
+                if(r->lenient_packages){ sym = symbol_new(name); }   /* validate mode */
+                else{ r->error = 1; }}                   /* package must exist by now */
             else { sym = package_intern_cstring_in(nm, pkg); }
             free(p); free(nm);
         }
