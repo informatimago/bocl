@@ -911,6 +911,47 @@ static void test_vm_nlx(void){
    call (shared for mutation).  A fn that only relays a deeper frame to an inner
    closure is itself made a closure (max-depth propagation).  Interop (compiled <->
    tree-walked <-> built-in) already flows through kernel_apply. */
+
+/* FLET vs LABELS scoping conformance (issue interp-flet-sibling-visibility,
+   fixed v1.8.36): a FLET function's body must NOT see its siblings (they
+   resolve to the GLOBAL function), and a local function's body is closed over
+   its DEFINING environment, not the call site's.  LABELS keeps sibling
+   visibility.  Both the tree-walker and the VM must agree. */
+static void test_flet_scoping(void){
+    /* interpreted */
+    TEST_EQ(eql, e(":UNDEF"),
+            e("(handler-case (flet ((%fs-g () 1) (%fs-h () (%fs-g))) (%fs-h))"
+              "  (error () :undef))"));
+    e("(defun %fs-g2 () :global)");
+    TEST_EQ(eql, e(":GLOBAL"),
+            e("(flet ((%fs-g2 () :local) (%fs-h2 () (%fs-g2))) (%fs-h2))"));
+    TEST_EQ(eql, e(":OUTER"),
+            e("(flet ((%fs-f () :outer))"
+              "  (flet ((%fs-f () :inner) (%fs-h3 () (%fs-f))) (%fs-h3)))"));
+    TEST_EQ(eql, I(1),
+            e("(labels ((%fs-g4 () 1) (%fs-h4 () (%fs-g4))) (%fs-h4))"));
+    /* defining-env closure: the flet body sees x=10, never the call site's 20 */
+    TEST_EQ(eql, I(10),
+            e("(let ((x 10)) (flet ((%fs-g5 () x)) (let ((x 20)) x (%fs-g5))))"));
+    TEST_EQ(eql, I(10),
+            e("(let ((x 10)) (flet ((%fs-g6 () x))"
+              "  (let ((x 20)) x (funcall (function %fs-g6)))))"));
+    /* compiled — same five answers */
+    TEST_EQ(eql, e(":UNDEF"),
+            e("(handler-case (funcall (compile nil '(lambda ()"
+              "    (flet ((%fs-cg () 1) (%fs-ch () (%fs-cg))) (%fs-ch)))))"
+              "  (error () :undef))"));
+    TEST_EQ(eql, e(":GLOBAL"),
+            e("(funcall (compile nil '(lambda ()"
+              "  (flet ((%fs-g2 () :local) (%fs-h2 () (%fs-g2))) (%fs-h2)))))"));
+    TEST_EQ(eql, I(1),
+            e("(funcall (compile nil '(lambda ()"
+              "  (labels ((%fs-cg4 () 1) (%fs-ch4 () (%fs-cg4))) (%fs-ch4)))))"));
+    TEST_EQ(eql, I(10),
+            e("(funcall (compile nil '(lambda ()"
+              "  (let ((x 10)) (flet ((%fs-cg5 () x)) (let ((x 20)) x (%fs-cg5)))))))"));
+}
+
 static void test_vm_closures(void){
     uword pool = open_live_pool();
     e("(unless (fboundp 'vm4-cmp)"
@@ -1670,6 +1711,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm control",          test_vm_control)
     TEST_CASE("vm values",           test_vm_values)
     TEST_CASE("vm nlx",              test_vm_nlx)
+    TEST_CASE("flet scoping",        test_flet_scoping)
     TEST_CASE("vm closures",         test_vm_closures)
     TEST_CASE("vm fasl",             test_vm_fasl)
     TEST_CASE("vm conditions",       test_vm_conditions)

@@ -543,13 +543,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,1,1);
             Ref fname = car(arguments);
             if(symbolp(fname)){
-                /* Local function bound by FLET/LABELS? Wrap it as a real Function. */
+                /* Local function bound by FLET/LABELS? Wrap it as a real Function,
+                   closed over its DEFINING environment (see the call dispatch). */
                 Ref local = environment_find_function(fname,environment);
                 if(!nullp(local) && env_local_function_p(local)){
                     Ref fn=function_new(env_local_function_name(local),
                                         env_local_function_lambda_list(local),
                                         env_local_function_body(local));
-                    VALUES1(closure_new(fn,environment));}
+                    Ref defenv=env_local_function_env(local);
+                    VALUES1(closure_new(fn,nullp(defenv)?environment:defenv));}
                 if(symbol_fboundp(fname)){
                     VALUES1(symbol_function(fname));}
                 ERROR("Undefined function: %s",
@@ -982,7 +984,14 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             /* Skip DECLAREs at the head of body (only SPECIAL recognised so far). */
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
-            /* Build the new env. Local-function bodies see the OUTER env (parent of new). */
+            /* Build the new env holding the NAME bindings (visible to the FLET
+               BODY only).  Each function's wrapper records the OUTER env as its
+               defining environment (CLHS 3.1.2.1.2.1): a FLET function's body
+               does NOT see its siblings — (flet ((g ...) (h () (g))) ...) calls
+               the GLOBAL G — unlike LABELS.  The tree-walker used to close the
+               wrapper over the CALL-SITE env, which gave FLET LABELS semantics
+               and masked prelude bugs the (conforming) byte-compiler exposed
+               (issue interp-flet-sibling-visibility, the %LOOP-EXPAND case). */
             Ref new_environment=environment_new(environment,NIL_Symbol);
             add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
@@ -991,7 +1000,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref name=car(binding);
                     Ref lambda_list=cadr(binding);
                     Ref fn_body=cddr(binding);
-                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL));
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL),environment);
                     environment_add_function(fn_wrapper,new_environment);}}
              environment=new_environment;
              {dolist(subform,body){
@@ -1006,10 +1015,11 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref body=cdr(arguments);
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
-            /* Build the new env FIRST, then add wrappers — each fn body will resolve
-               its sibling references via the same env (because the wrapper's body is
-               evaluated only when the function is called, by which point all siblings
-               are bound). */
+            /* Build the new env FIRST, then add wrappers recording IT as their
+               defining environment — each fn body resolves its SIBLING references
+               via that same env (the wrapper's body is evaluated only when the
+               function is called, by which point all siblings are bound).  This
+               sibling visibility is what distinguishes LABELS from FLET. */
             Ref new_environment=environment_new(environment,NIL_Symbol);
             add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
@@ -1018,7 +1028,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref name=car(binding);
                     Ref lambda_list=cadr(binding);
                     Ref fn_body=cddr(binding);
-                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL));
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL),new_environment);
                     environment_add_function(fn_wrapper,new_environment);}}
              environment=new_environment;
              {dolist(subform,body){
@@ -1676,11 +1686,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             if(env_local_function_p(local)){
                 eval_counters.local_function++;
                 /* Build a transient Function from the wrapper and close it over
-                   the env in which it was bound. */
+                   its DEFINING environment (FLET: the env enclosing the flet;
+                   LABELS: the env holding all the bindings).  NIL (a wrapper
+                   built without an env, e.g. from Lisp) falls back to the
+                   call-site env — the historical behavior. */
                 Ref fn=function_new(env_local_function_name(local),
                                     env_local_function_lambda_list(local),
                                     env_local_function_body(local));
-                function=closure_new(fn,environment);}
+                Ref defenv=env_local_function_env(local);
+                function=closure_new(fn,nullp(defenv)?environment:defenv);}
             else if(env_local_macro_p(local) || env_global_macro_p(local)){
                 eval_counters.local_macro++;
                 macro=local;}

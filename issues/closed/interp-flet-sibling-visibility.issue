@@ -42,3 +42,36 @@ did (fix those to LABELS as they appear).
 
 NOTE also MACROLET (CLHS: macro-function bodies are in the enclosing LEXICAL
 environment but local macros are NOT visible to each other) — check while here.
+
+--------------------------------------------------------------------------------
+FIXED (v1.8.36) — the tree-walker's FLET is now conforming; interp == VM.
+
+Root of the non-conformance was DEEPER than sibling visibility: the local-
+function wrapper carried no environment at all, and the call dispatch (and
+the FUNCTION special op) closed the transient closure over the environment
+CURRENT AT THE CALL SITE.  A local function therefore saw everything between
+its definition and its call — siblings (the reported symptom) but also
+call-site LET bindings:
+    (let ((x 10)) (flet ((g () x)) (let ((x 20)) (g))))
+returned 20 (call-site X) instead of 10 (defining-env X).
+
+FIX:
+- LOCAL-FUNCTION gains an ENV slot (generate-structures.lisp + the generated
+  kernel_structure_functions.* / structure_functions.* / lisp listing, applied
+  by hand — see generated-sources-drift.issue for why `make regenerate` could
+  not be used wholesale).  NIL means "close over the call site" (fallback for
+  wrappers built without an env).
+- eval.c FLET records the env ENCLOSING the flet as each wrapper's defining
+  env (siblings invisible, CLHS 3.1.2.1.2.1); LABELS records the NEW env
+  holding all the bindings (siblings visible).  The call dispatch and
+  (FUNCTION name) close over the wrapper's recorded env.
+
+VERIFIED (tests/test_misc.c::test_flet_scoping, interpreted AND compiled):
+sibling call errors (or resolves to the GLOBAL of the same name when one
+exists); nested-flet sibling resolves to the OUTER local; LABELS siblings and
+recursion unchanged; the defining-env closure returns 10 above, under both
+(g) and (funcall #'g).  MACROLET checked per the note: already conforming —
+a sibling used in an expander BODY is not visible (errors), a sibling in the
+EXPANSION is expanded in the body environment (works).  Full source boot OK
+(the v1.8.35 prelude has no flet-sibling references) and the full suite is
+green (42 suites, failure count = 0).

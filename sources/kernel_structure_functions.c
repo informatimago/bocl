@@ -442,11 +442,12 @@ Ref set_env_global_function_compiler_macro(Ref par_new_compiler_macro, Ref par_g
 Ref LOCAL_FUNCTION_Class;
 bool env_local_function_p(Ref par_object){
     return typep(par_object,LOCAL_FUNCTION_Class);}
-Ref env_make_local_function(Ref par_name, Ref par_lambda_list, Ref par_body){
+Ref env_make_local_function(Ref par_name, Ref par_lambda_list, Ref par_body, Ref par_env){
     uword pool=open_live_pool();
     add_to_live_pool(par_name);
     add_to_live_pool(par_lambda_list);
     add_to_live_pool(par_body);
+    add_to_live_pool(par_env);
     Ref instance = make_structure_instance(LOCAL_FUNCTION_Class);
     Ref pos = structure_class_instance_slots(LOCAL_FUNCTION_Class);
     {   Ref entry = assq(S(NAME),pos);
@@ -458,6 +459,9 @@ Ref env_make_local_function(Ref par_name, Ref par_lambda_list, Ref par_body){
     {   Ref entry = assq(S(BODY),pos);
         if(nullp(entry)){ FATAL("%s","BODY is not a slot-name of LOCAL-FUNCTION"); }
         structure_set(par_body,instance,cdr(entry));}
+    {   Ref entry = assq(S(ENV),pos);
+        if(nullp(entry)){ FATAL("%s","ENV is not a slot-name of LOCAL-FUNCTION"); }
+        structure_set(par_env,instance,cdr(entry));}
     close_live_pool(pool);
     add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
     return instance;}
@@ -546,6 +550,27 @@ Ref set_env_local_function_body(Ref par_new_body, Ref par_local_function_instanc
     structure_set(par_new_body,par_local_function_instance,cdr(entry));
     close_live_pool(pool);
     return par_new_body;}
+Ref env_local_function_env(Ref par_local_function_instance){
+    uword pool=open_live_pool();
+    add_to_live_pool(par_local_function_instance);
+    check_type(par_local_function_instance,LOCAL_FUNCTION_Class);
+    Ref pos = structure_class_instance_slots(LOCAL_FUNCTION_Class);
+    Ref entry = assq(S(ENV),pos);
+    if(nullp(entry)){ FATAL("%s","ENV is not a slot-name of LOCAL-FUNCTION"); }
+    Ref result=structure_get(par_local_function_instance,cdr(entry));
+    close_live_pool(pool);
+    return result;}
+Ref set_env_local_function_env(Ref par_new_env, Ref par_local_function_instance){
+    uword pool=open_live_pool();
+    add_to_live_pool(par_new_env);
+    add_to_live_pool(par_local_function_instance);
+    check_type(par_local_function_instance,LOCAL_FUNCTION_Class);
+    Ref pos = structure_class_instance_slots(LOCAL_FUNCTION_Class);
+    Ref entry = assq(S(ENV),pos);
+    if(nullp(entry)){ FATAL("%s","ENV is not a slot-name of LOCAL-FUNCTION"); }
+    structure_set(par_new_env,par_local_function_instance,cdr(entry));
+    close_live_pool(pool);
+    return par_new_env;}
 Ref GLOBAL_SYMBOL_MACRO_Class;
 bool env_global_symbol_macro_p(Ref par_object){
     return typep(par_object,GLOBAL_SYMBOL_MACRO_Class);}
