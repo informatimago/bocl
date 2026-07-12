@@ -38,7 +38,7 @@ asdf:
 	    $(MAKE) -C asdf-src build/asdf.lisp && \
 	    mkdir -p asdf && \
 	    cp asdf-src/build/asdf.lisp asdf/asdf.lisp && \
-	    printf '(:name "asdf"\n :files ("asdf.lisp"))\n' > asdf/module.manifest && \
+	    printf '(:name "asdf"\n :files ("asdf"))\n' > asdf/module.manifest && \
 	    printf "# Staged module asdf/ (asdf.lisp + module.manifest)\n" ; \
 	  else \
 	    printf "# ASDF submodule not present (modules/asdf-src/); skipping.\n" ; \

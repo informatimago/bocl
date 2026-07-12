@@ -207,6 +207,48 @@ static char* find_prelude(void){
 
     return NULL;}
 
+/* Write the byte-compiled sibling of a .lisp source path (its stem + ".cfasl")
+   into BUF; return 1 on success, 0 if BUF is too small. */
+static int cfasl_sibling(const char* src,char* buf,size_t n){
+    const char* slash=strrchr(src,'/');
+    const char* base =slash?slash+1:src;
+    const char* dot  =strrchr(base,'.');
+    size_t stem=dot?(size_t)(dot-src):strlen(src);
+    if(stem+sizeof(".cfasl")>=n){ return 0; }
+    memcpy(buf,src,stem);
+    strcpy(buf+stem,".cfasl");
+    return 1;}
+
+/* Load the system Lisp file SRC (a .lisp path), preferring its byte-compiled
+   image (a .cfasl sibling, or $ENV_OVERRIDE when set) when it exists, loads
+   cleanly, and — for the derived sibling — is at least as new as SRC.  A byte-
+   compiled image loads pre-compiled DEFUN templates with no reader and no
+   macroexpansion (much faster startup).  bocl_fasl_load returns NIL on a magic /
+   version mismatch or a truncated image, so we always fall back to the source
+   and never boot a stale or half image.  --no-compiled-prelude and an out-of-date
+   sibling both force the source; an explicit $ENV_OVERRIDE bypasses the date test
+   (the caller pointed us at it deliberately). */
+static void load_system_lisp(const char* src,const char* env_override){
+    if(!do_no_compiled_prelude){
+        const char* img=NULL;
+        char image[4096];
+        const char* ov=env_override?getenv(env_override):NULL;
+        if(ov && access(ov,R_OK)==0){
+            img=ov;
+        } else if(cfasl_sibling(src,image,sizeof image) && access(image,R_OK)==0){
+            /* Only prefer the sibling image when it is not OLDER than its source:
+               an edited-but-not-recompiled .lisp must win, so a stale image is
+               never loaded (the user's date-ordering requirement). */
+            struct stat si,ss;
+            if(stat(image,&si)==0 && stat(src,&ss)==0 && si.st_mtime>=ss.st_mtime){
+                img=image;}}
+        if(img){
+            Ref r=bocl_fasl_load(img);
+            if(!nullp(r)){
+                if(do_verbose){ fprintf(stderr,";; loaded compiled image %s\n",img); }
+                return;}}}
+    bocl_load_cstring(src);}
+
 
 #define PSOP(name) printf("%-30s = %s\n",#name,(name)?(name):"NULL")
 #define PBOP(name) printf("%-30s = %s\n",#name,(name)?"true":"false")
@@ -604,44 +646,19 @@ int main(int argc,char** argv){
             /* FIRST make the standard CL symbols external (generated
                cl-exports.lisp, sibling of prelude.lisp): it uses only QUOTE and
                the %EXPORT-STRINGS primitive, so it runs before the prelude and
-               the prelude's cl:FOO references then resolve to external symbols. */
+               the prelude's cl:FOO references then resolve to external symbols.
+               Then the prelude itself.  Each prefers its byte-compiled .cfasl
+               sibling when present and newer (see load_system_lisp); the prelude
+               also honours $BOCL_PRELUDE_IMAGE. */
             char* p=strstr(prelude,"prelude.lisp");
             if(p){
                 size_t base=(size_t)(p-prelude);
                 char* exports=malloc(base+sizeof("cl-exports.lisp"));
                 memcpy(exports,prelude,base);
                 strcpy(exports+base,"cl-exports.lisp");
-                bocl_load_cstring(exports);
+                load_system_lisp(exports,NULL);
                 free(exports);}
-            /* Prefer a byte-compiled boot image (prelude.cfasl, sibling of
-               prelude.lisp) when present, readable, and this build's cfasl
-               version: it loads pre-byte-compiled DEFUN templates with no reader
-               and no macroexpansion, so startup is much faster.  %CFASL-FILE-P /
-               %CHECK-FASL-VERSION style checks live in bocl_fasl_load, which
-               returns NIL (loading nothing) on a magic / version mismatch — so we
-               fall back to the source prelude and never boot a half-image.
-               $BOCL_PRELUDE_IMAGE overrides the path; --no-compiled-prelude and a
-               NIL result both force the source path. */
-            bool booted_from_image=false;
-            if(!do_no_compiled_prelude && p){
-                const char* img_env=getenv("BOCL_PRELUDE_IMAGE");
-                char* image=NULL;
-                if(img_env && access(img_env,R_OK)==0){
-                    image=strdup(img_env);
-                } else {
-                    size_t base=(size_t)(p-prelude);
-                    image=malloc(base+sizeof("prelude.cfasl"));
-                    memcpy(image,prelude,base);
-                    strcpy(image+base,"prelude.cfasl");
-                }
-                if(image && access(image,R_OK)==0){
-                    Ref r=bocl_fasl_load(image);
-                    booted_from_image=!nullp(r);
-                    if(booted_from_image && do_verbose){
-                        fprintf(stderr,";; booted from compiled prelude image %s\n",image);}}
-                free(image);}
-            if(!booted_from_image){
-                bocl_load_cstring(prelude);}
+            load_system_lisp(prelude,"BOCL_PRELUDE_IMAGE");
             free(prelude);
         } else if(!do_quiet){
             fprintf(stderr,

@@ -1,2 +1,2 @@
 (:name "factorial"
- :files ("factorial.lisp"))
+ :files ("factorial"))

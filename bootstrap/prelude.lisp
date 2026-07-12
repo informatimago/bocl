@@ -9452,12 +9452,21 @@ result array; return that array."
   "File types tried (in order) to find a source file given a typeless pathname.")
 
 (defparameter *accepted-compiled-file-types*
-  '("fasl" "FASL" (:case-insensitive "fasl")
+  '((:case-insensitive "cfasl")
+    "fasl" "FASL" (:case-insensitive "fasl")
     (:case-insensitive "fas") (:case-insensitive "obj") (:case-insensitive "o"))
-  "File types tried (in order) to find a compiled file given a typeless pathname.")
+  "File types tried (in order) to find a compiled file given a typeless pathname.
+   CFASL (the byte-compiled binary fast-load file) is tried FIRST so a type-less
+   LOAD prefers the byte-compiled image over a text fasl when both are present.")
 
-(defparameter *default-compiled-file-type* "fasl"
-  "The file type COMPILE-FILE gives its output file when none is specified.")
+(defparameter *default-compiled-file-type* "cfasl"
+  "The file type COMPILE-FILE gives its BINARY (byte-compiled cfasl) output file
+   when none is specified.  The readable TEXT-fasl fallback uses
+   *DEFAULT-TEXT-FASL-TYPE* instead.")
+
+(defparameter *default-text-fasl-type* "fasl"
+  "The file type COMPILE-FILE gives its output when it writes the readable TEXT
+   fasl (i.e. when *COMPILE-FILE-BINARY* is NIL, or the binary writer falls back).")
 
 (defun %ftype-string (ft) (if (consp ft) (second ft) ft))
 
@@ -9810,13 +9819,19 @@ result array; return that array."
 
 ;;; --- compile-file-pathname now honours *default-compiled-file-type* --
 (defun compile-file-pathname (input-file &key output-file &allow-other-keys)
-  "Pathname COMPILE-FILE writes to: the source pathname with its type changed to
-   *DEFAULT-COMPILED-FILE-TYPE* (default \"fasl\"), unless OUTPUT-FILE is given."
+  "Pathname COMPILE-FILE writes to, unless OUTPUT-FILE is given: the source
+   pathname with its type changed to *DEFAULT-COMPILED-FILE-TYPE* (\"cfasl\") when
+   COMPILE-FILE will write the byte-compiled binary (the default,
+   *COMPILE-FILE-BINARY* true), or *DEFAULT-TEXT-FASL-TYPE* (\"fasl\") when it will
+   write the readable text fasl."
   (or output-file
-      (let* ((in  (pathname input-file))
-             (dir (directory-namestring in))
-             (nm  (or (pathname-name in) "")))
-        (pathname (concatenate 'string dir nm "." *default-compiled-file-type*)))))
+      (let* ((in   (pathname input-file))
+             (dir  (directory-namestring in))
+             (nm   (or (pathname-name in) ""))
+             (type (if (and (boundp '*compile-file-binary*) *compile-file-binary*)
+                       *default-compiled-file-type*
+                       *default-text-fasl-type*)))
+        (pathname (concatenate 'string dir nm "." type)))))
 
 ;;;; THE END OF SLICE 44
 
@@ -9906,6 +9921,24 @@ result array; return that array."
           (prin1 (cdr entry) dst)
           (terpri dst)))))
   t)
+
+(defun %text-fasl-readable-p (path readtable)
+  "T if every form of the just-written TEXT fasl at PATH reads back without error
+   under the same controlled syntax LOAD uses.  A text fasl PRIN1s its forms, so a
+   form holding an object PRIN1 cannot round-trip (a #<FUNCTION ...> from a
+   #.(function ...) literal, a #<STRUCTURE ...>, ...) prints an unreadable #<...>
+   token; reading it back then signals, and this returns NIL — COMPILE-FILE uses
+   that to reject the broken fasl and load from source instead."
+  (ignore-errors
+    (with-open-file (s path :direction :input :if-does-not-exist nil)
+      (and s
+           (let ((*readtable*                 readtable)
+                 (*read-eval*                  nil)
+                 (*read-default-float-format*  'double-float)
+                 (*read-base*                  10)
+                 (eof                          '#:eof))
+             ;; READ skips the ';;'-comment header lines automatically.
+             (loop (when (eq (read s nil eof) eof) (return t))))))))
 
 (defun %compile-file-defun-name (form)
   "If FORM is a (BOCL:DEFINE-FUNCTION 'NAME ...) — the macroexpansion of a DEFUN —
@@ -10021,11 +10054,33 @@ result array; return that array."
                                        bf))
                                    entries))
                          (mapcar #'cdr entries))))
-      (or (and *compile-file-binary* (%write-cfasl out-ns bin-forms))
-          (%write-text-fasl out-ns actual entries std-rt)))
-    (when %verbose
-      (format t "~&; wrote ~S~%" out-ns) (finish-output))
-    (values (truename out) nil failure)))
+      ;; Write the binary cfasl (default).  It returns NIL when a form holds an
+      ;; object it cannot serialize (a function/closure embedded via #., a bignum,
+      ;; a structure — see cfasl-6); then fall back to the readable TEXT fasl.  The
+      ;; text fasl PRIN1s the forms, so a form holding an object PRIN1 cannot round-
+      ;; trip (e.g. #<FUNCTION ...> from a #.(function ...) literal in quoted data)
+      ;; would write an UNLOADABLE file.  Guard against that: after the text write,
+      ;; verify it reads back; if not, remove it and leave NO fasl so LOAD falls
+      ;; back to the source (never a broken image).  A file that genuinely cannot
+      ;; be externalised (e.g. bignum.lisp's #.(function char-equal) test data)
+      ;; thus simply loads from source.
+      (let ((wrote
+              (cond
+                ((and *compile-file-binary* (%write-cfasl out-ns bin-forms)) :binary)
+                ((and (%write-text-fasl out-ns actual entries std-rt)
+                      (%text-fasl-readable-p out-ns std-rt))               :text)
+                (t (ignore-errors (delete-file out-ns))
+                   (setq failure t)
+                   nil))))
+        (when %verbose
+          (if wrote
+              (format t "~&; wrote ~S (~(~A~))~%" out-ns wrote)
+              (format t "~&; ~S holds an un-externalisable object; no fasl written ~
+                          (loads from source)~%" actual))
+          (finish-output))
+        ;; TRUENAME needs an existing file; when we wrote none, return the
+        ;; conventional output pathname unresolved (CLHS allows this).
+        (values (if wrote (truename out) out) nil failure)))))
 
 (defun %bocl-fasl-version (path)
   "If the file at PATH begins with a bocl fasl header
@@ -11447,8 +11502,10 @@ the rest take :INITIAL-ELEMENT."
              ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
              (pos (position #\/ ns :from-end t))
              (dir (if pos (subseq ns 0 (1+ pos)) "")))
-        (load (concatenate 'string dir "bignum.lisp"))
-        (load (concatenate 'string dir "bignum-integration.lisp"))))))
+        ;; Type-less LOAD: prefer a byte-compiled sibling (bignum.cfasl) over the
+        ;; source when it is present and newer (see *ACCEPTED-COMPILED-FILE-TYPES*).
+        (load (concatenate 'string dir "bignum"))
+        (load (concatenate 'string dir "bignum-integration"))))))
 
 ;;; ---- SOCKET support -------------------------------------------------------
 ;;; When the kernel was built with BSD-socket support (the %SOCKET primitive is
@@ -11463,7 +11520,7 @@ the rest take :INITIAL-ELEMENT."
              ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
              (pos (position #\/ ns :from-end t))
              (dir (if pos (subseq ns 0 (1+ pos)) "")))
-        (load (concatenate 'string dir "socket.lisp"))))))
+        (load (concatenate 'string dir "socket"))))))   ; type-less: prefer socket.cfasl
 
 ;;; ---- BYTE-CODE COMPILER (plan-2) ------------------------------------------
 ;;; Load the plan-2 byte-code compiler's Lisp front-end (bootstrap/vm-compiler.lisp),
@@ -11479,4 +11536,4 @@ the rest take :INITIAL-ELEMENT."
              ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
              (pos (position #\/ ns :from-end t))
              (dir (if pos (subseq ns 0 (1+ pos)) "")))
-        (load (concatenate 'string dir "vm-compiler.lisp"))))))
+        (load (concatenate 'string dir "vm-compiler"))))))  ; type-less: prefer vm-compiler.cfasl

@@ -228,16 +228,18 @@ static void write_cf_fasl_src(void){
 
 static void test_compile_file_fasl(void){
     write_cf_fasl_src();
-    /* compile-file writes a real fasl that PROBE-FILE finds ... */
+    /* compile-file writes a real fast-load file that PROBE-FILE finds — the
+       default output type is now "cfasl" (the byte-compiled binary; see
+       *DEFAULT-COMPILED-FILE-TYPE*) ... */
     e("(compile-file \"/tmp/bocl-s25-fasl-src.lisp\")");
     TEST_EQ(eql, T_Symbol,
-            e("(if (probe-file \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
-    /* ... which is a binary cfasl (the COMPILE-FILE default), recognised by its
-       magic so LOAD dispatches to the binary loader ... */
+            e("(if (probe-file \"/tmp/bocl-s25-fasl-src.cfasl\") t nil)"));
+    /* ... which is a binary cfasl, recognised by its magic so LOAD dispatches to
+       the binary loader ... */
     TEST_EQ(eql, T_Symbol,
-            e("(if (%cfasl-file-p \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
+            e("(if (%cfasl-file-p \"/tmp/bocl-s25-fasl-src.cfasl\") t nil)"));
     /* ... which loads and defines everything, the macro having expanded. */
-    e("(load \"/tmp/bocl-s25-fasl-src.fasl\")");
+    e("(load \"/tmp/bocl-s25-fasl-src.cfasl\")");
     TEST_EQ(eql, T_Symbol, e("(boundp '*s25-fasl-loaded*)"));
     TEST_EQ(eql, I(6),  e("(s25-usedbl 3)"));
     TEST_EQ(eql, I(10), e("(s25-sum '(1 2 3 4))"));
