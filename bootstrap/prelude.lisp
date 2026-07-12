@@ -9414,10 +9414,10 @@ result array; return that array."
            ;; CLHS: result-form evaluated INSIDE var's scope, with var = count.
            ,result)))))
 
-;;; ---- Per-form LOAD recovery (used under -on-error appease) ----------------
+;;; ---- Per-form LOAD recovery (used under --on-error appease) ----------------
 ;;; LOAD normally aborts the whole file on the first error.  When the kernel
 ;;; enables recovery (only for user files, never the bootstrap, and only under
-;;; -on-error appease), each top-level form is evaluated through this wrapper so
+;;; --on-error appease), each top-level form is evaluated through this wrapper so
 ;;; that one bad form is reported and skipped instead of killing the load.  This
 ;;; lets large suites — e.g. the ANSI tests — load every file they can and still
 ;;; reach their final report, rather than dying on the first unsupported form.

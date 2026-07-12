@@ -76,21 +76,21 @@ Evaluate @var{form} (quote it for the shell).
 Start in @var{package}.
 @item -b, --batch
 Exit on end of file on @code{*STANDARD-INPUT*}.
-@item -n, -norc, --no-init
+@item -n, --norc, --no-init
 Do not load @file{~/.boclrc}.
 @item --no-prelude
 Bare kernel only --- do not load the prelude.
 @item --on-error @var{action}
 What to do when an unhandled error reaches the top level: one of @code{exit}
 (the default), @code{debug}, @code{abort}, @code{appease}.  @xref{Error handling}.
-@item -quit, --quit
+@item -q, --quit
 Quit when argument processing is done (otherwise enter the REPL).
 @end table
 
 @node Error handling
 @chapter Error handling
 
-The @option{--on-error} option (legacy alias @option{-on-error}) selects what bocl
+The @option{--on-error} option selects what bocl
 does when an @emph{unhandled} @code{SERIOUS-CONDITION} reaches the top level --- an
 error your own code did not catch with @code{HANDLER-CASE}, @code{IGNORE-ERRORS}, or
 a restart.  The action is published to Lisp as @code{BOCL:*ON-ERROR*}.  When

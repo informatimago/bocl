@@ -62,7 +62,7 @@ full list.
      Start in PACKAGE.
 ‘-b, --batch’
      Exit on end of file on ‘*STANDARD-INPUT*’.
-‘-n, -norc, --no-init’
+‘-n, --norc, --no-init’
      Do not load ‘~/.boclrc’.
 ‘--no-prelude’
      Bare kernel only -- do not load the prelude.
@@ -70,7 +70,7 @@ full list.
      What to do when an unhandled error reaches the top level: one of
      ‘exit’ (the default), ‘debug’, ‘abort’, ‘appease’.  *Note Error
      handling::.
-‘-quit, --quit’
+‘-q, --quit’
      Quit when argument processing is done (otherwise enter the REPL).
 
 
@@ -79,13 +79,13 @@ File: bocl.info,  Node: Error handling,  Next: Files,  Prev: Invocation,  Up: To
 3 Error handling
 ****************
 
-The ‘--on-error’ option (legacy alias ‘-on-error’) selects what bocl
-does when an _unhandled_ ‘SERIOUS-CONDITION’ reaches the top level -- an
-error your own code did not catch with ‘HANDLER-CASE’, ‘IGNORE-ERRORS’,
-or a restart.  The action is published to Lisp as ‘BOCL:*ON-ERROR*’.
-When ‘--on-error’ is _not_ given, option processing, the init/rc files
-and ‘-l’ / ‘-x’ forms run under ‘exit’ (fail hard, good for batch),
-while the interactive REPL instead defaults to ‘debug’.
+The ‘--on-error’ option selects what bocl does when an _unhandled_
+‘SERIOUS-CONDITION’ reaches the top level -- an error your own code did
+not catch with ‘HANDLER-CASE’, ‘IGNORE-ERRORS’, or a restart.  The
+action is published to Lisp as ‘BOCL:*ON-ERROR*’.  When ‘--on-error’ is
+_not_ given, option processing, the init/rc files and ‘-l’ / ‘-x’ forms
+run under ‘exit’ (fail hard, good for batch), while the interactive REPL
+instead defaults to ‘debug’.
 
    An ‘--on-error’ given _before_ the first ‘-i’ (or ‘--no-init’) sets
 the policy used to load the rc and init files; one given _after_ the
@@ -182,10 +182,10 @@ Tag Table:
 Node: Top329
 Node: Overview852
 Node: Invocation1265
-Node: Error handling2267
-Node: Files4900
-Node: Debugger5610
-Node: Further reading6300
+Node: Error handling2265
+Node: Files4868
+Node: Debugger5578
+Node: Further reading6268
 
 End Tag Table
 

@@ -141,9 +141,9 @@ BOOTSTRAP_CFASL = $(BOOTSTRAP_LISP:.lisp=.cfasl)
 # the missing target.  (All current system files DO compile.)
 ../bootstrap/%.cfasl: ../bootstrap/%.lisp | bocl
 	@ printf "# Byte-compiling %s (prelude takes a few minutes)\n" "$(@F)"
-	$(VERBOSE) ./bocl --no-compiled-prelude -norc -b \
+	$(VERBOSE) ./bocl --no-compiled-prelude --norc -b \
 	    -e '(let ((*package* (find-package "COMMON-LISP"))) (compile-file "$<" :output-file "$@"))' \
-	    -quit
+	    --quit
 
 # All system images + the module images (see the `modules` root target).
 fasls: $(BOOTSTRAP_CFASL) module-fasls
@@ -161,7 +161,7 @@ module-fasls: | bocl
 	        cf=`printf '%s' "$$lf" | sed 's/\.lisp$$/.cfasl/'` ; \
 	        [ "$$cf" -nt "$$lf" ] && continue ; \
 	        printf "#   %s\n" "$$cf" ; \
-	        ./bocl -norc -b -e "(compile-file \"$$lf\" :output-file \"$$cf\")" -quit || true ; \
+	        ./bocl --norc -b -e "(compile-file \"$$lf\" :output-file \"$$cf\")" --quit || true ; \
 	    done ; \
 	done
 

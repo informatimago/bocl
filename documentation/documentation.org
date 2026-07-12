@@ -143,19 +143,19 @@ However a standard REPL is provided for tests.
 | =-E encoding=                  | set encodings                                                          |
 | =-Eterminal encoding=          | specify character encoding to use for =*TERMINAL-IO*=                  |
 | =--terminal-encoding encoding= | specify character encoding to use for =*TERMINAL-IO*=                  |
-| =-n¦-norc¦--no-init=           | suppress loading of default init file =~/.boclrc=                      |
+| =-n¦--norc¦--no-init=          | suppress loading of default init file =~/.boclrc=                      |
 | =-x¦-e¦--eval form=            | evaluate form (may need to quote form in shell)                        |
 | =-l¦--load file=               | load file                                                              |
-| =-Q¦-q¦--quiet¦--silent=       | if =--batch=, also suppress printing of heralds, prompts.              |
+| =-Q¦--quiet¦--silent=          | if =--batch=, also suppress printing of heralds, prompts.              |
 | =--verbose=                    | verbosity level: affects banner, =*LOAD-VERBOSE*=, =*COMPILE-VERBOSE*= |
 | =--print=                      | sets =*LOAD-PRINT*=, =*COMPILE-PRINT*=                                 |
 | =-b¦--batch=                   | exit when EOF on =*STANDARD-INPUT*=                                    |
 | =--no-sigtrap=                 | obscure option for running under GDB                                   |
-| =-on-error action=             | action can be one of debug, exit, abort, appease                       |
+| =--on-error action=            | action can be one of debug, exit, abort, appease                       |
 | =-i¦--init file=               | load initfile (can be repeated)                                        |
 | =-p¦--package package=         | start in the package                                                   |
-| =-repl¦--repl=                 | enter the interactive read-eval-print loop when done (default)         |
-| =-quit¦--quit=                 | quit when argument processing is done                                  |
+| =--repl=                       | enter the interactive read-eval-print loop when done (default; --quit overrides) |
+| =-q¦--quit=                    | quit when argument processing is done (do not enter the REPL)          |
 | =-w¦--wait=                    | wait for a keypress after program termination                          |
 |                                |                                                                        |
 
@@ -175,7 +175,7 @@ $ (quit)
 
 ** Error handling: the =--on-error= option
 
-The =--on-error= option (legacy alias =-on-error=) selects what bocl does when an
+The =--on-error= option selects what bocl does when an
 /unhandled/ =SERIOUS-CONDITION= reaches the top level --- that is, an error your own
 code did not catch with =HANDLER-CASE=, =IGNORE-ERRORS=, or a restart.  The action
 is published to Lisp as =BOCL:*ON-ERROR*=.  There are four actions.  When
@@ -973,7 +973,7 @@ the debug level.
 
 *** Init (rc) files
 
-Unless =-n= / =-norc= / =--no-init= is given, bocl loads at most one init
+Unless =-n= / =--norc= / =--no-init= is given, bocl loads at most one init
 file at start-up, the first that exists from this list (a leading =~/= is
 the user's home directory, =(USER-HOMEDIR-PATHNAME)=):
 

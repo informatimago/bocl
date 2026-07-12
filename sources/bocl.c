@@ -181,7 +181,7 @@ Ref bocl_in_package(Ref package_designator){
 /* When true, each top-level form is evaluated through the Lisp wrapper
    %LOAD-EVAL-TOPLEVEL-FORM, which catches errors so a single bad form does not
    abort the whole file.  main.c enables this only after the prelude has loaded
-   and only under -on-error appease — never during the bootstrap. */
+   and only under --on-error appease — never during the bootstrap. */
 bool bocl_load_recover = false;
 
 Ref bocl_load_cstring(const char* path){

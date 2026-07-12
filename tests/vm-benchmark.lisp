@@ -4,7 +4,7 @@
 ;;;; COMPILE'd (the byte-code VM) — from the SAME source, and prints the speedup.  Not a
 ;;;; unit test (timings are machine/load dependent); a documented, reproducible A/B.
 ;;;;
-;;;;   bocl -norc -b --load tests/vm-benchmark.lisp -quit </dev/null
+;;;;   bocl --norc -b --load tests/vm-benchmark.lisp --quit </dev/null
 ;;;;
 ;;;; Representative results (see issues/closed/vm-9-debug-bootstrap-validate.issue):
 ;;;;   sumsq (tight arithmetic loop) ~9.8x   fib/tak (call-bound) ~1.0x

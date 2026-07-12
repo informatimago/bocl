@@ -292,23 +292,23 @@ static struct {
     {{"-E",NULL},                           NULL,        strg, {"encoding",{.string=&all_encoding}},      "set encodings"},
     {{"-Eterminal",NULL},                   NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"--terminal-encoding",NULL},          NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
-    {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {.name=NULL},                              "suppress loading of default init file ~/.boclrc"},
+    {{"-n","--norc","--no-init",NULL},      &do_norc,    none, {.name=NULL},                              "suppress loading of default init file ~/.boclrc"},
     {{"--no-prelude",NULL},                 &do_noprelude, none, {.name=NULL},                            "suppress loading of bootstrap/prelude.lisp (bare kernel only)"},
     {{"--no-compiled-prelude",NULL},        &do_no_compiled_prelude, none, {.name=NULL},                "ignore any prelude.cfasl boot image; always load the prelude from source"},
-    {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {.name=NULL},                              "if --batch, also suppress printing of heralds, prompts."},
+    {{"-Q","--quiet","--silent",NULL},      &do_quiet,   none, {.name=NULL},                              "if --batch, also suppress printing of heralds, prompts."},
     {{"-b","--batch",NULL},                 &do_batch,   none, {.name=NULL},                              "exit when EOF on *STANDARD-INPUT*"},
     {{"--verbose",NULL},                    &do_verbose, none, {.name=NULL},                              "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
     {{"--print",NULL},                      &do_print,   none, {.name=NULL},                              "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
     {{"--dump",NULL},                       &do_dump,    none, {.name=NULL},                              "dumps the heap"},/* TODO: put that in expressions_and_loads */
     {{"--dribble",NULL},                    &do_dribble, none, {.name=NULL},                              "record the session to a dribble file (or --dribble=FILE)"},
     {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {.name=NULL},                              "obscure option for running under GDB"},
-    {{"--on-error","-on-error",NULL},       NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
+    {{"--on-error",NULL},                   NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
     {{"-i","--init",NULL},                  NULL,        elst, {"file",{.list=&initfiles}},               "load initfile (can be repeated)"},
     {{"-x","-e","--eval",NULL},             NULL,        elst, {"form",{.list=&expressions_and_loads}},   "evaluate form (may need to quote form in shell)"},
     {{"-l","--load",NULL},                  NULL,        load, {"file",{.list=&expressions_and_loads}},   "load file"},
     {{"-p","--package",NULL},               NULL,        strg, {"package",{.string=&package}},            "start in the package"},
-    {{"-repl","--repl",NULL},               &do_repl,    none, {.name=NULL},                              "enter the interactive read-eval-print loop when done (default; -quit overrides)"},
-    {{"-quit","--quit",NULL},               &do_quit,    none, {.name=NULL},                              "quit when argument processing is done (do not enter the REPL)"},
+    {{"--repl",NULL},                       &do_repl,    none, {.name=NULL},                              "enter the interactive read-eval-print loop when done (default; --quit overrides)"},
+    {{"-q","--quit",NULL},                  &do_quit,    none, {.name=NULL},                              "quit when argument processing is done (do not enter the REPL)"},
     {{"-w","--wait",NULL},                  &do_wait,    none, {.name=NULL},                              "wait for a keypress after program termination"},
     {{NULL},NULL,none,{.name=NULL},NULL}};
 
@@ -575,8 +575,8 @@ static Ref run_session(void* ctx){
     if(package){
         bocl_in_package(bocl_read_cstring(package));}
 
-    /* -quit suppresses the (default-on) REPL: without this, a scripted
-       invocation (-e ... -quit) on a tty — e.g. the Makefile's byte-compile
+    /* --quit suppresses the (default-on) REPL: without this, a scripted
+       invocation (-e ... -q) on a tty — e.g. the Makefile's byte-compile
        rules under `make install` — would sit at the interactive prompt. */
     if(do_repl && !do_quit){
         /* The interactive REPL defaults to DEBUG; if --on-error was given

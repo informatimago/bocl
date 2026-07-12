@@ -35,14 +35,14 @@ Set the character encodings.
 Character encoding for
 .BR *TERMINAL\-IO* .
 .TP
-.BR \-n ", " \-norc ", " \-\-no\-init
+.BR \-n ", " \-\-norc ", " \-\-no\-init
 Suppress loading the default init file
 .IR ~/.boclrc .
 .TP
 .B \-\-no\-prelude
 Suppress loading the prelude (bare kernel only).
 .TP
-.BR \-Q ", " \-q ", " \-\-quiet ", " \-\-silent
+.BR \-Q ", " \-\-quiet ", " \-\-silent
 With
 .BR \-\-batch ,
 also suppress heralds and prompts.
@@ -71,9 +71,7 @@ Do not trap signals (for running under a debugger).
 .BI \-\-on\-error " action"
 What to do when an
 .B unhandled
-error reaches the top level
-.RB ( \-on\-error
-is a legacy alias).
+error reaches the top level.
 .I action
 is one of:
 .RS
@@ -139,11 +137,13 @@ Load
 Start in
 .IR package .
 .TP
-.BR \-repl ", " \-\-repl
-Enter the REPL when argument processing is done (default).
+.B \-\-repl
+Enter the REPL when argument processing is done (default;
+.B \-\-quit
+overrides).
 .TP
-.BR \-quit ", " \-\-quit
-Quit when argument processing is done.
+.BR \-q ", " \-\-quit
+Quit when argument processing is done (do not enter the REPL).
 .TP
 .BR \-w ", " \-\-wait
 Wait for a keypress after termination.
