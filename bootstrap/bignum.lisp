@@ -119,8 +119,8 @@
                   ( (" !"           "abc")        "abc")
                   ( (""             "abc")        "abc")
                   ( ("abc"          "abcabc")     "")
-                  ( ("ABC" "abcABCxyz" :test #.(function char-equal))  "xyz" )
-                  ( (""    "abcABCxyz" :test #.(function char-equal))  "abcABCxyz" ))
+                  ( ("ABC" "abcABCxyz" :test char-equal)  "xyz" )
+                  ( (""    "abcABCxyz" :test char-equal)  "abcABCxyz" ))
            :success)
     (destructuring-bind ((bag sequence &rest rest) expected-result) test
       (assert (equal (apply (function sequence-left-trim) bag

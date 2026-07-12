@@ -135,9 +135,10 @@ BOOTSTRAP_LISP  = ../bootstrap/prelude.lisp     ../bootstrap/cl-exports.lisp    
 BOOTSTRAP_CFASL = $(BOOTSTRAP_LISP:.lisp=.cfasl)
 
 # Byte-compile one system .lisp -> .cfasl with the boot package (COMMON-LISP).
-# A file that cannot be externalised (e.g. bignum.lisp embeds a live function via
-# #.(function char-equal) in test data) writes no cfasl and simply loads from
-# source — COMPILE-FILE handles that, and make tolerates the missing target.
+# A file that cannot be externalised (one that embeds a live object PRIN1 cannot
+# round-trip — e.g. a function via #.(function ...) in quoted data) writes no
+# cfasl and simply loads from source: COMPILE-FILE detects it and make tolerates
+# the missing target.  (All current system files DO compile.)
 ../bootstrap/%.cfasl: ../bootstrap/%.lisp | bocl
 	@ printf "# Byte-compiling %s (prelude takes a few minutes)\n" "$(@F)"
 	$(VERBOSE) ./bocl --no-compiled-prelude -norc -b \

@@ -10061,9 +10061,8 @@ result array; return that array."
       ;; trip (e.g. #<FUNCTION ...> from a #.(function ...) literal in quoted data)
       ;; would write an UNLOADABLE file.  Guard against that: after the text write,
       ;; verify it reads back; if not, remove it and leave NO fasl so LOAD falls
-      ;; back to the source (never a broken image).  A file that genuinely cannot
-      ;; be externalised (e.g. bignum.lisp's #.(function char-equal) test data)
-      ;; thus simply loads from source.
+      ;; back to the source (never a broken image) — a file that genuinely cannot
+      ;; be externalised thus simply loads from source.
       (let ((wrote
               (cond
                 ((and *compile-file-binary* (%write-cfasl out-ns bin-forms)) :binary)
