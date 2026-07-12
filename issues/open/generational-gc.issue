@@ -224,3 +224,34 @@ ANSI-test load measured.
    / size-class free list (or reviving bump allocation within a zone) would remove
    the churn regression.  ANSI-test end-to-end still needs the CL-completeness
    features above before per-module timings can be taken on the real suite.
+
+--------------------------------------------------------------------------------
+NEW EVIDENCE (2026-07-12, vm branch v1.8.29, hot-6 benchmarking) — a minimal
+repro of the super-linearity, with -DBOCL_PROFILE attribution, showing it now
+dominates ANY allocation-heavy benchmark and poisons the process for LATER work:
+
+  (defun lsum (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s (* i i))))))
+  ;; ~6 boxed-int allocations/iteration either engine (VM: 12.0M allocs at n=2M,
+  ;; tree-walker: 28.0M — byte-code allocates 2.3x less than the interpreter).
+
+  Same process, byte-compiled lsum, x86-64 Linux 16-core, image boot:
+    run at n=1M   (repeated 3x): 2.6 s each — eval 1.1 s / gc 1.5 s (56%), stable.
+    fresh-process n=2M:          7.5 s      — gc 69%, per-GC ~0.18 s.
+    n=2M AFTER an interpreted n=2M run in the same process: 20.0 s — same 12.0M
+      allocations, same 29 gc-runs, but EVAL went 2.3 s -> 12.5 s (5.4x): the
+      allocator itself (charged to eval, not gc) degrades on the churned heap —
+      the first-fit free-list walk after the interpreter's 28M-allocation burst.
+    tests/vm-benchmark.lisp at loopsum n=2M (interp first, then VM, one process):
+      interp 157 s, VM 736 s (VM "0.2x") on the normal build — i.e. at this churn
+      level the numbers measure the allocator/GC, not the evaluator.  One
+      pathological collection was observed at 232 s wall (a later interpreted
+      200k run inheriting the heap of a VM 800k run).
+  Per-GC cost also grows with heap extent: ~0.10 s (after a 1M burst) ->
+  ~0.18 s (2M) -> ~0.5 s (after 28M cumulative churn).
+
+  Consequence for benchmarking (recorded in hot-6): keep per-process allocation
+  bursts below ~10M allocations or run each kernel in a fresh process; ratios
+  measured above that are GC artifacts.  This strengthens the case for this
+  branch (generational nursery) — the interpreter/VM work (hot-1..6, vm-1..10)
+  has lowered per-operation CPU to the point where the collector is the
+  dominant cost on allocation-heavy code even at moderate n.

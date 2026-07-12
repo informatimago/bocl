@@ -59,3 +59,32 @@ STILL OPEN (the mechanism the WHAT specifies, and its dependents):
   bound, not lookup-bound, confirming the next lever is hot-3/hot-4, not further
   lookup tuning.  Those are larger structural changes to the core evaluator and
   are tracked in their own issues.
+
+--------------------------------------------------------------------------------
+CLOSING (v1.8.29, vm branch) — acceptance met; the analyzer was delivered AS vm-3.
+
+Status of the three acceptance items:
+1. Lookup-cost drop: DONE and measured (v1.7.0/v1.7.1 above) — 2.6x on the
+   variable-heavy micro-benchmark (vheavy 40k ~3400 ms -> ~1290 ms).
+2. Parity: full suite green (42/42) after each step, re-verified at close
+   (hot-6-benchmark-validate.issue).
+3. "The analyzer reusable by vm-3": the issue's own recommendation ("best built
+   with the bytecode compiler front-end") is what happened — the one-time
+   (depth,index) lexical-addressing analyzer EXISTS as %VM-ANALYZE in
+   bootstrap/vm-compiler.lisp (vm-3, v1.8.2): flat-locals slot model, every
+   reference resolved to a (depth index) address, SPECIALs detected via
+   %GLOBALLY-SPECIAL-P and routed to the dynamic path, MACROLET/SYMBOL-MACROLET
+   pre-expanded, captures marked.  There is ONE lexical analyzer, exactly as
+   the FACTORING clause required.
+
+Why the tree-walker itself does NOT consume (depth,index) addresses (the
+remaining WHAT mechanism), and why that is the right end state: since vm-8
+(v1.8.13) COMPILE and COMPILE-FILE emit byte-code and the whole language
+compiles; since vm-10 (v1.8.27/28) the prelude, system files and modules boot
+from byte-compiled images.  Hot code therefore runs on the VM, where hot-2's
+addresses ARE the execution model (LOAD_LOCAL depth index).  What still
+tree-walks is run-once/interactive code (top-level forms, un-compiled user
+source), where a per-body analysis pass costs about what it saves.  Adding a
+second, annotation-based consumer of the analyzer inside eval.c would
+duplicate the VM's win for no measured workload — the v1.7.x accessor work
+already removed the interpreter's per-access waste (2.6x).

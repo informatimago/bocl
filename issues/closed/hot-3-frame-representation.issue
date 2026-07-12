@@ -50,3 +50,36 @@ avoided consing itself; its only real TIME win is the CPU it removes (the callee
 list-walk + the per-call lambda-list re-parse), which is a smaller, contained
 gain.  The large eval lever remains plan-2 (byte-code VM), exactly as hot-1
 concluded.
+
+--------------------------------------------------------------------------------
+CLOSING (v1.8.29, vm branch) — acceptance met (v1.7.2); the vector-frame form
+exists as the VM's locals frame.
+
+The issue's own PROGRESS note recorded the acceptance as met: binding/closure/
+special suites green (42/42) and a measured allocation reduction (call-heavy
+micro-benchmark 679,180 -> 599,165 allocations, -12%; GC 13.1% -> 11.9%), via
+plain-cons lexical bindings replacing the two-allocation CLOS wrapper.
+
+The deferred "frame = a VECTOR of slots indexed by the hot-2 (depth,index)
+address" form was subsequently DELIVERED — in the VM, which is where hot code
+now runs (COMPILE/COMPILE-FILE emit byte-code since vm-8; the prelude/system/
+module images boot byte-compiled since vm-10):
+- A compiled activation's frame IS a flat GC-rooted simple-vector of slots
+  (bytecode.c, make_vm_vector), sized n_locals by the analyzer, indexed by the
+  (depth,index) addresses of LOAD_LOCAL/STORE_LOCAL; depth>0 walks the closure
+  display (vm-6), never a name search.
+- The SPECIAL/dynamic path is SEPARATE, exactly as specified: dynamic LET/PROGV
+  in compiled code save/restore the symbol value cell under unwind frames
+  (vm-5), so lexical access never walks dynamic bindings and special access
+  never walks lexical frames.
+- Debugger metadata: preserved — vm-9 gave backtraces/DISASSEMBLE the compiled
+  :CALL frames.
+- GC: the frames are ordinary rooted heap vectors with the write barrier on
+  STORE (the §3.6 parked-in-vector discipline).
+
+Converting the TREE-WALKER's alist environments to vector frames as well is not
+pursued: it requires running the analyzer on run-once/interactive code (see the
+hot-2 closing — the pass would cost about what it saves there), and the KEY
+FINDING above stands — the cons-frame representation already captured the
+interpreter-side allocation/lookup win, and eval is CPU-bound, not
+allocation-bound.

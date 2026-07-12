@@ -38,3 +38,35 @@ every call (a cached parameter plan).  Scope hot-4 to those CPU wins (value stac
 the CPU baseline, not the allocation count — and weigh it against just doing
 plan-2 (the byte-code VM), which removes the whole per-form interpretation
 overhead that dominates here.
+
+--------------------------------------------------------------------------------
+CLOSING (v1.8.29, vm branch) — delivered by the VM's calling convention; the
+tree-walker-side conversion is declined per this issue's own NOTE.
+
+The WHAT's mechanism exists where hot code runs (the VM, since vm-8/vm-10):
+- VALUE STACK: a compiled caller evaluates arguments onto the GC-rooted operand
+  stack (vm-2) — no per-argument-list traversal in the caller.
+- CACHED PARAMETER PLAN: a compiled callee binds parameters via its compiled
+  PROLOGUE (vm-6: required/&optional-with-defaults-and-supplied-p/&key/&aux as
+  emitted byte-code) — the lambda list is parsed ONCE at compile time, never
+  re-parsed per call; &REST is the only list materialisation.
+- The layout is shared and documented (vm-COMPILER-PLAN.md, sources/bytecode.h),
+  which was this issue's "design the stack layout so the tree-walker and the VM
+  SHARE it" — realised as one ISA + one kernel_apply interop path.
+- TCO: the vm-6b trampoline additionally frees the per-iteration arg list, so
+  tail loops are constant-heap.
+
+What is intentionally NOT done, and why:
+- The remaining kernel_apply boundary cons (crossing between byte-code /
+  built-in / tree-walked callees builds a Lisp arg-list) was analyzed and
+  DEFERRED in vm-6b's closing note as a low-value micro-opt: bocl allocation is
+  cheap (eval is CPU-per-operation bound — GC ~2% prelude, ~12% churny loops;
+  the v1.7.2 -12%-allocations change was time-neutral), and the design for a
+  stack-based fast apply is recorded there should a profile ever justify it.
+- Rewiring the TREE-WALKER's callee to a value stack: this issue's NOTE already
+  scoped the real payoff to the CPU side and said to weigh it against plan-2;
+  plan-2 has since been executed to completion (vm-1..vm-10), which settles the
+  weighing.  The interpreter keeps the simple cons convention on the cold path.
+
+Per-CALL frame pooling (the measured next lever for call-bound code, fib/tak
+~1x) is tracked separately in the vm program (off critical path), not here.

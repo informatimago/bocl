@@ -53,7 +53,7 @@ plan-2's serialization layer; hot-2 is plan-2's compiler front-end).
 Planification issues (read first, not implemented directly):
   plan-1-compact-fasl.issue
   plan-2-bytecode-vm.issue
-  plan-3-interpreter-hotpath.issue
+  plan-3-interpreter-hotpath.issue  — CLOSED (hot-1..6 done; in issues/closed/)
 
 Implementation issues, in global order:
 
@@ -77,16 +77,21 @@ Implementation issues, in global order:
     lexically; a GO throws its target tag's ordinal to a re-entrant catch that dispatches).
     So the WHOLE CL language byte-compiles (only top-level def-forms fall back, by design).
     The tree-walker's same-named-nested-BLOCK bug is also fixed (v1.8.23: each BLOCK gets its
-    own child env).  NEXT (off critical path): vm-10 (byte-compiled prelude BOOT image;
-    regression fixed), per-CALL frame pooling (the call-bound lever).  Branch ~37 commits
-    ahead of master, all suite-green, NOT merged (user decides the merge + minor bump). ***
+    own child env).  vm-10 is DONE (v1.8.27/28: byte-compiled prelude/system/module boot
+    images, ~3x faster startup).  NEXT (off critical path): per-CALL frame pooling (the
+    call-bound lever).  Branch all suite-green, NOT merged (user decides the merge + minor
+    bump). ***
+
+*** INTERPRETER HOT-PATH (plan-3): hot-1..hot-6 CLOSED.  hot-1 (profiler +
+    baseline), hot-2/hot-3 interpreter side delivered v1.7.x (2.6x lookup-cost
+    drop, cons frames); their deferred mechanisms ((depth,index) analyzer,
+    vector frames, value-stack calling convention, dispatch cache) were
+    delivered BY plan-2 where hot code now runs: %VM-ANALYZE (vm-3), the VM's
+    flat locals vector + separate dynamic binds (vm-2/5/6), the operand stack +
+    compiled parameter prologue (vm-2/6/6b), and the shared per-gf effective-
+    method cache ~31x (vm-7, accelerates interpreted AND compiled dispatch).
+    hot-6 re-measured: see issues/closed/hot-6-benchmark-validate.issue. ***
 
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
-hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
-hot-3-frame-representation.issue     (plan-3)
-hot-4-arglist-avoidance.issue        (plan-3)
-hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
-hot-6-benchmark-validate.issue       (plan-3)
-vm-10-compiled-prelude-image.issue   (plan-2) — fast-startup compiled prelude (regression now fixed)
 clos-condition-report-not-printed.issue (bug) — user conditions print #<TYPE>, not their report
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler
