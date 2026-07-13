@@ -1,5 +1,5 @@
 diff --git a/lisp-action.lisp b/lisp-action.lisp
-index e304876..954cf9b 100644
+index e3048762..954cf9b7 100644
 --- a/lisp-action.lisp
 +++ b/lisp-action.lisp
 @@ -209,7 +209,23 @@ an OPERATION and a COMPONENT."
@@ -28,7 +28,7 @@ index e304876..954cf9b 100644
  
  ;;;; prepare-source-op, load-source-op
 diff --git a/uiop/common-lisp.lisp b/uiop/common-lisp.lisp
-index c76cb47..34c04fd 100644
+index c76cb472..34c04fdb 100644
 --- a/uiop/common-lisp.lisp
 +++ b/uiop/common-lisp.lisp
 @@ -21,7 +21,7 @@
@@ -41,7 +41,7 @@ index c76cb47..34c04fd 100644
  
  ;; (declaim (optimize (speed 1) (debug 3) (safety 3))) ; DON'T: trust implementation defaults.
 diff --git a/uiop/image.lisp b/uiop/image.lisp
-index 9ea0cec..d886dfa 100644
+index 9ea0ceca..d886dfad 100644
 --- a/uiop/image.lisp
 +++ b/uiop/image.lisp
 @@ -78,7 +78,8 @@ This is designed to abstract away the implementation specific quit forms."
@@ -65,7 +65,7 @@ index 9ea0cec..d886dfa 100644
  
    (defun command-line-arguments (&optional (arguments (raw-command-line-arguments)))
 diff --git a/uiop/os.lisp b/uiop/os.lisp
-index ab7e8a8..4efc263 100644
+index ab7e8a8d..963a546f 100644
 --- a/uiop/os.lisp
 +++ b/uiop/os.lisp
 @@ -116,7 +116,8 @@ use getenvp to return NIL in such a case."
@@ -78,6 +78,15 @@ index ab7e8a8..4efc263 100644
      (not-implemented-error 'getenv))
  
    (defsetf getenv (x) (val)
+@@ -306,7 +307,7 @@ suitable for use as a directory name to segregate Lisp FASLs, C dynamic librarie
+ (with-upgradability ()
+   (defun hostname ()
+     "return the hostname of the current host"
+-    #+(or abcl clasp clozure cmucl ecl genera lispworks mcl mezzano mkcl sbcl scl xcl) (machine-instance)
++    #+(or abcl bocl clasp clozure cmucl ecl genera lispworks mcl mezzano mkcl sbcl scl xcl) (machine-instance)
+     #+cormanlisp "localhost" ;; is there a better way? Does it matter?
+     #+allegro (symbol-call :excl.osi :gethostname)
+     #+clisp (first (split-string (machine-instance) :separator " "))
 @@ -339,6 +340,7 @@ suitable for use as a directory name to segregate Lisp FASLs, C dynamic librarie
          #+mkcl (mk-ext:getcwd)
          #+sbcl (sb-ext:parse-native-namestring (sb-unix:posix-getcwd/))
@@ -96,3 +105,29 @@ index ab7e8a8..4efc263 100644
        (not-implemented-error 'chdir))))
  
  
+diff --git a/uiop/package.lisp b/uiop/package.lisp
+index a760533b..6efe9a21 100644
+--- a/uiop/package.lisp
++++ b/uiop/package.lisp
+@@ -880,7 +880,7 @@ MIX directives, and reexport their contents as per the REEXPORT directive."
+             #+sbcl (setf (sb-impl::package-source-location (find-package ',package))
+                          (sb-c:source-location)))))
+     `(progn
+-       #+(or clasp ecl gcl mkcl) (defpackage ,package (:use))
++       #+(or bocl clasp ecl gcl mkcl) (defpackage ,package (:use))
+        (eval-when (:compile-toplevel :load-toplevel :execute)
+          ,ensure-form))))
+ 
+diff --git a/uiop/pathname.lisp b/uiop/pathname.lisp
+index e69f557d..6c9ba009 100644
+--- a/uiop/pathname.lisp
++++ b/uiop/pathname.lisp
+@@ -92,7 +92,7 @@ by the underlying implementation's MAKE-PATHNAME and other primitives"
+   ;; This will be :unspecific if supported, or NIL if not.
+   (defparameter *unspecific-pathname-type*
+     #+(or abcl allegro clozure cmucl lispworks sbcl scl) :unspecific
+-    #+(or genera clasp clisp ecl mkcl gcl xcl #|These haven't been tested:|# cormanlisp mcl mezzano) nil
++    #+(or bocl genera clasp clisp ecl mkcl gcl xcl #|These haven't been tested:|# cormanlisp mcl mezzano) nil
+     "Unspecific type component to use with the underlying implementation's MAKE-PATHNAME")
+ 
+   (defun make-pathname* (&rest keys &key directory host device name type version defaults

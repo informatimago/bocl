@@ -10042,6 +10042,15 @@ result array; return that array."
                          ;; without this only bare top-level DEFUNs compiled).
                          ;; A subform that is neither is kept RAW (unexpanded),
                          ;; same policy as a whole non-DEFUN top-level form.
+                         ;; DEFPACKAGE and IN-PACKAGE are ALWAYS kept raw, even
+                         ;; though their expansions are EVAL-WHENs this recursion
+                         ;; would otherwise rebuild: splicing them exposes no
+                         ;; DEFUN, and their textual identity is what lets
+                         ;; tooling that READS a fasl without loading it
+                         ;; (BOCL:VALIDATE-CFASL) track the packages the file
+                         ;; defines and switches to.
+                         (when (and (consp f) (member (car f) '(defpackage in-package)))
+                           (return-from process f))
                          (let ((expanded (handler-case (macroexpand f)
                                            (error () (setq failure t) f))))
                            (cond
@@ -11449,32 +11458,71 @@ the rest take :INITIAL-ELEMENT."
 ;;; a warning and a fallback to the source (v1.8.32); BOCL:VALIDATE-CFASL is the
 ;;; companion inspection tool — it checks an image explicitly and says WHAT is
 ;;; wrong, without evaluating (loading) anything from it.
+(defun bocl::%validate-scan-defpackages (form make-missing)
+  "Walk FORM (through PROGN / EVAL-WHEN nesting) for DEFPACKAGE forms and call
+   MAKE-MISSING with (name . nicknames) for each.  Used by text-fasl validation:
+   a fasl that DEFINES its own packages must have them exist for the READER to
+   accept later package-qualified tokens."
+  (when (consp form)
+    (cond
+      ((and (eq (car form) 'defpackage) (consp (cdr form)))
+       (let ((name (second form))
+             (nicknames '()))
+         (dolist (clause (cddr form))
+           (when (and (consp clause) (eq (car clause) :nicknames))
+             (setq nicknames (append nicknames (cdr clause)))))
+         (funcall make-missing (cons name nicknames))))
+      ((eq (car form) 'progn)
+       (dolist (f (cdr form)) (bocl::%validate-scan-defpackages f make-missing)))
+      ((and (eq (car form) 'eval-when) (consp (cdr form)))
+       (dolist (f (cddr form)) (bocl::%validate-scan-defpackages f make-missing))))))
+
 (defun bocl::%validate-text-fasl (path)
   "Read-validate a TEXT fasl at PATH: every top-level form must READ under the
-   controlled syntax LOAD uses; nothing is evaluated (only IN-PACKAGE forms
-   naming an EXISTING package retarget *PACKAGE* for the following reads).
+   controlled syntax LOAD uses; nothing is evaluated.  IN-PACKAGE forms naming
+   an EXISTING package retarget *PACKAGE* for the following reads, and packages
+   the fasl itself defines (DEFPACKAGE forms, also inside PROGN / EVAL-WHEN)
+   are created EMPTY so later package-qualified tokens read — then deleted
+   again on the way out, so validation leaves no packages behind.
    Returns (values valid-p form-count message)."
-  (with-open-file (s path :direction :input)
-    (let ((*readtable*                 (copy-readtable nil))
-          (*read-eval*                 nil)
-          (*read-default-float-format* 'double-float)
-          (*read-base*                 10)
-          (*package*                   *package*)
-          (eof                         '#:eof)
-          (n                           0))
-      (loop
-        (let ((form (handler-case (read s nil eof)
-                      (error (c)
-                        (return (values nil n
-                                        (format nil "form ~D does not read: ~A  (a text fasl that DEFINES its own packages can only be fully validated in a session where they exist, e.g. after loading it)"
-                                                (+ n 1) c)))))))
-          (when (eq form eof) (return (values t n nil)))
-          (setq n (+ n 1))
-          ;; Track IN-PACKAGE (without evaluating anything else) so the
-          ;; following forms' unqualified symbols read in the right package.
-          (when (and (consp form) (eq (car form) 'in-package) (consp (cdr form)))
-            (let ((p (find-package (second form))))
-              (when p (setq *package* p)))))))))
+  (let ((created '()))
+    (unwind-protect
+        (with-open-file (s path :direction :input)
+          (let ((*readtable*                 (copy-readtable nil))
+                (*read-eval*                 nil)
+                (*read-default-float-format* 'double-float)
+                (*read-base*                 10)
+                (*package*                   *package*)
+                (eof                         '#:eof)
+                (n                           0))
+            (loop
+              (let ((form (handler-case (read s nil eof)
+                            (error (c)
+                              (return (values nil n
+                                              (format nil "form ~D does not read: ~A"
+                                                      (+ n 1) c)))))))
+                (when (eq form eof) (return (values t n nil)))
+                (setq n (+ n 1))
+                ;; Track IN-PACKAGE (without evaluating anything else) so the
+                ;; following forms' unqualified symbols read in the right package.
+                (when (and (consp form) (eq (car form) 'in-package) (consp (cdr form)))
+                  (let ((p (find-package (second form))))
+                    (when p (setq *package* p))))
+                ;; Create (empty) any package this fasl defines, so the reader
+                ;; accepts the qualified symbols of the forms that follow.
+                (bocl::%validate-scan-defpackages
+                 form
+                 (lambda (name+nicks)
+                   (let ((name (string (car name+nicks))))
+                     (unless (find-package name)
+                       (push (make-package name
+                                           :nicknames (remove-if #'find-package
+                                                                 (mapcar #'string
+                                                                         (cdr name+nicks))))
+                             created)))))))))
+      ;; Leave no trace: delete the packages validation had to create.
+      (dolist (p created)
+        (ignore-errors (delete-package p))))))
 
 (defun bocl::validate-cfasl (path &key (report t) (stream *standard-output*))
   "Structurally validate the fast-load file at PATH without evaluating anything
@@ -11485,8 +11533,9 @@ independent of the session's package state (a symbol in a package the image
 itself would create reads as an uninterned placeholder).  A TEXT fasl
 (\";; BOCL <version> FASL\" header — COMPILE-FILE's fallback when a literal
 cannot be serialized in binary) is checked by READing every form under LOAD's
-controlled syntax; packages the file itself defines must exist for the check
-to complete (reading cannot substitute placeholders).  When REPORT is true
+controlled syntax; packages the fasl itself DEFINES are created empty for the
+read and deleted afterwards, so it too validates independently of the session
+(packages the fasl merely uses from elsewhere must exist).  When REPORT is true
 (the default), print a one-line verdict to STREAM.  Returns (VALUES VALID-P
 FORM-COUNT MESSAGE VERSION): VALID-P is T when every check passes; FORM-COUNT
 is the number of top-level forms that read cleanly; MESSAGE is a string naming
