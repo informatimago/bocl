@@ -408,6 +408,9 @@ regenerate:
 	@printf "# Forcing regeneration of committed generated C sources via host CL\n"
 	$(VERBOSE) rm -f $(GENERATED_SOURCES)
 	$(VERBOSE) $(MAKE) $(GENERATED_SOURCES)
+	@printf "# Applying the hand-fix patch on top of the generators' output\n"
+	$(VERBOSE) patch -p1 -d .. < generated-sources-fixes.patch
+	@printf "# Regeneration reproducible: the tree should now be identical to the committed sources\n"
 
 kernel_objects.h kernel_objects.c : | generate-kernel-objects.lisp
 	@printf "# Generating %s from %s\n" "$@" "$|"

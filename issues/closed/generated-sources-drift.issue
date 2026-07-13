@@ -33,3 +33,26 @@ c) split: keep generators for the mechanical parts, move the hand-fixed
    functions out of the generated files.
 Until then: NEVER run `make regenerate` and commit blindly — diff against the
 committed files and keep every hand fix.
+
+--------------------------------------------------------------------------------
+RESOLVED (v1.8.37) — option (b') per pjb: a REPRODUCIBLE hand-fix PATCH applied
+on top of the generators' output, instead of editing generated files by hand.
+
+- sources/generated-sources-fixes.patch holds every hand fix as a unified diff
+  (old = pristine generator output, new = the committed sources), with a
+  header documenting each fix and how to re-derive the patch if the
+  generators' output shifts.
+- `make regenerate` now regenerates the pristine sources and applies the patch
+  (patch -p1 from the repo root).  VERIFIED: after `make regenerate` the tree
+  is byte-identical to the committed sources (empty git diff over all nine
+  generated files + the lisp listings) — regeneration is reproducible and no
+  longer destructive.
+- The v1.8.36 ENV-slot change had already been folded into
+  generate-structures.lisp, so it regenerates faithfully and is NOT in the
+  patch: the patch carries only what the generators cannot express (TYPEP
+  symbol-type resolution, the C setters' (object, new-value) argument order,
+  extra includes, the hot-3 cons representation of LEXICAL-VARIABLE, the
+  hot-2 _fast accessors, the GC-rootset pinning).
+- Teaching the generators these forms (option a) remains possible future work;
+  each fix migrated into a generator spec simply shrinks the patch (the
+  regenerate round-trip check tells you when it is empty).

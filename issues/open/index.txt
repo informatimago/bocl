@@ -95,4 +95,3 @@ Implementation issues, in global order:
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 clos-condition-report-not-printed.issue (bug) — user conditions print #<TYPE>, not their report
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler
-generated-sources-drift.issue        (build) — `make regenerate` destroys hand fixes in the committed generated C (TYPEP, setter arg order, cons lexical vars, _fast accessors, GC rootset); sync generators or retire them
