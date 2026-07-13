@@ -142,7 +142,7 @@ BOOTSTRAP_CFASL = $(BOOTSTRAP_LISP:.lisp=.cfasl)
 ../bootstrap/%.cfasl: ../bootstrap/%.lisp | bocl
 	@ printf "# Byte-compiling %s (prelude takes a few minutes)\n" "$(@F)"
 	$(VERBOSE) ./bocl --no-compiled-prelude --norc -b \
-	    -e '(let ((*package* (find-package "COMMON-LISP"))) (compile-file "$<" :output-file "$@"))' \
+	    -e '(let ((*package* (find-package "COMMON-LISP")) (common-lisp::*compile-file-splice-toplevel* nil)) (compile-file "$<" :output-file "$@"))' \
 	    --quit
 
 # All system images + the module images (see the `modules` root target).

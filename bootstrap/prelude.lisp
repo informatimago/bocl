@@ -9865,6 +9865,16 @@ result array; return that array."
    per top-level form as it is byte-compiled — essential live progress for a
    multi-minute whole-prelude compile.")
 
+(defvar *compile-file-splice-toplevel* t
+  "When true (the default), COMPILE-FILE exposes DEFUNs to the byte-compile hook
+   THROUGH the top-level splicing forms of CLHS 3.2.3.1 (the bodies of a
+   top-level PROGN, and of a top-level EVAL-WHEN with :LOAD-TOPLEVEL) — e.g.
+   ASDF wraps nearly every DEFUN in WITH-UPGRADABILITY = EVAL-WHEN.  Bind to
+   NIL for the PRELUDE/system bootstrap self-compile (sources/Makefile does):
+   there the vm-10 rule applies — expand only BARE top-level DEFUNs, keep every
+   other form raw — because a spliced form bakes the fully-booted expansion into
+   an image position the partially-built boot has not reached yet.")
+
 (defvar *compile-file-binary* t
   "When true (the default), COMPILE-FILE writes a compact BINARY (cfasl) fast-load
    file and LOAD dispatches on its magic; the already-macroexpanded top-level form
@@ -10019,17 +10029,38 @@ result array; return that array."
             ;;     macros defined SO FAR, exactly as a source boot does.
             ;; DEFUN bodies are still byte-compiled below (the compiler macroexpands
             ;; each body internally, one bounded function at a time).
-            (let* ((def-function (and (find-package "BOCL")
-                                      (find-symbol "DEFINE-FUNCTION"
-                                                   (find-package "BOCL"))))
-                   (expanded (handler-case (macroexpand form)
-                               (error () (setq failure t) form)))
-                   (keep (if (and (consp expanded) (eq (car expanded) def-function))
-                             expanded            ; a DEFUN — byte-compile it
-                             form)))             ; everything else stays raw
-              ;; Capture *PACKAGE* per form so a multi-package file's symbols
-              ;; qualify correctly should we fall back to the text writer.
-              (push (cons *package* keep) entries))))))
+            (let ((def-function (and (find-package "BOCL")
+                                     (find-symbol "DEFINE-FUNCTION"
+                                                  (find-package "BOCL")))))
+              (labels ((process (f)
+                         ;; Expose DEFUNs to the byte-compile hook THROUGH the
+                         ;; top-level splicing forms of CLHS 3.2.3.1: the body
+                         ;; forms of a top-level PROGN, and of a top-level
+                         ;; EVAL-WHEN whose situations include :LOAD-TOPLEVEL,
+                         ;; are themselves top-level forms (ASDF wraps nearly
+                         ;; every DEFUN in WITH-UPGRADABILITY = EVAL-WHEN, so
+                         ;; without this only bare top-level DEFUNs compiled).
+                         ;; A subform that is neither is kept RAW (unexpanded),
+                         ;; same policy as a whole non-DEFUN top-level form.
+                         (let ((expanded (handler-case (macroexpand f)
+                                           (error () (setq failure t) f))))
+                           (cond
+                             ((and (consp expanded) (eq (car expanded) def-function))
+                              expanded)                   ; a DEFUN — byte-compile it
+                             ((and *compile-file-splice-toplevel*
+                                   (consp expanded) (eq (car expanded) 'progn))
+                              (cons 'progn (mapcar #'process (cdr expanded))))
+                             ((and *compile-file-splice-toplevel*
+                                   (consp expanded) (eq (car expanded) 'eval-when)
+                                   (consp (cdr expanded)) (listp (second expanded))
+                                   (or (member :load-toplevel (second expanded))
+                                       (member 'load (second expanded))))
+                              (list* 'eval-when (second expanded)
+                                     (mapcar #'process (cddr expanded))))
+                             (t f)))))                    ; everything else stays raw
+                ;; Capture *PACKAGE* per form so a multi-package file's symbols
+                ;; qualify correctly should we fall back to the text writer.
+                (push (cons *package* (process form)) entries)))))))
     (setq entries (nreverse entries))
     ;; Binary by default; fall back to text when disabled or when a form holds an
     ;; object the binary writer cannot serialize (%WRITE-CFASL then returns NIL,
@@ -10040,27 +10071,27 @@ result array; return that array."
                          (let ((i 0))
                            (mapcar (lambda (e)
                                      (incf i)
-                                     (multiple-value-bind (bf declined)
+                                     (multiple-value-bind (bf reports)
                                          (%vm-compile-file-form (cdr e))
                                        ;; :PRINT — one line per byte-compiled DEFUN
-                                       ;; (a template quote in slot 4 marks success);
-                                       ;; live progress for a multi-minute compile.
-                                       (cond
-                                         ((and %print
-                                               (consp bf) (= (length bf) 4)
-                                               (consp (fourth bf))
-                                               (eq (car (fourth bf)) 'quote))
-                                          (format t "~&;   [~D] byte-compiled ~S~%"
-                                                  i (%compile-file-defun-name bf))
-                                          (finish-output))
-                                         ;; A DEFUN the byte-compiler DECLINED stays
-                                         ;; interpreted in the fasl — say so (and WHY)
-                                         ;; under :PRINT or :VERBOSE, else the only
-                                         ;; symptom is a silently slower function.
-                                         ((and declined (or %print %verbose))
-                                          (format t "~&;   [~D] left interpreted ~S (byte-compilation declined: ~A)~%"
-                                                  i (%compile-file-defun-name bf) declined)
-                                          (finish-output)))
+                                       ;; (including DEFUNs nested in a top-level
+                                       ;; PROGN / EVAL-WHEN); a DEFUN the compiler
+                                       ;; DECLINED stays interpreted in the fasl —
+                                       ;; say so (and WHY) under :PRINT or :VERBOSE,
+                                       ;; else the only symptom is a silently slower
+                                       ;; function.
+                                       (dolist (r reports)
+                                         (case (first r)
+                                           (:compiled
+                                            (when %print
+                                              (format t "~&;   [~D] byte-compiled ~S~%"
+                                                      i (second r))
+                                              (finish-output)))
+                                           (:declined
+                                            (when (or %print %verbose)
+                                              (format t "~&;   [~D] left interpreted ~S (byte-compilation declined: ~A)~%"
+                                                      i (second r) (third r))
+                                              (finish-output)))))
                                        bf))
                                    entries))
                          (mapcar #'cdr entries))))
@@ -10075,7 +10106,17 @@ result array; return that array."
       ;; be externalised thus simply loads from source.
       (let ((wrote
               (cond
-                ((and *compile-file-binary* (%write-cfasl out-ns bin-forms)) :binary)
+                ((and *compile-file-binary*
+                      (multiple-value-bind (ok bad-i) (%write-cfasl out-ns bin-forms)
+                        ;; Name the culprit when binary falls back to text: the
+                        ;; 1-based index of the first form holding a literal the
+                        ;; binary writer cannot serialize (see cfasl-6).
+                        (when (and (not ok) bad-i (or %print %verbose))
+                          (format t "~&; binary fasl: form [~D] holds a literal the binary writer cannot serialize (cfasl-6) — writing the text fasl~%"
+                                  bad-i)
+                          (finish-output))
+                        ok))
+                 :binary)
                 ((and (%write-text-fasl out-ns actual entries std-rt)
                       (%text-fasl-readable-p out-ns std-rt))               :text)
                 (t (ignore-errors (delete-file out-ns))
@@ -11408,28 +11449,67 @@ the rest take :INITIAL-ELEMENT."
 ;;; a warning and a fallback to the source (v1.8.32); BOCL:VALIDATE-CFASL is the
 ;;; companion inspection tool — it checks an image explicitly and says WHAT is
 ;;; wrong, without evaluating (loading) anything from it.
+(defun bocl::%validate-text-fasl (path)
+  "Read-validate a TEXT fasl at PATH: every top-level form must READ under the
+   controlled syntax LOAD uses; nothing is evaluated (only IN-PACKAGE forms
+   naming an EXISTING package retarget *PACKAGE* for the following reads).
+   Returns (values valid-p form-count message)."
+  (with-open-file (s path :direction :input)
+    (let ((*readtable*                 (copy-readtable nil))
+          (*read-eval*                 nil)
+          (*read-default-float-format* 'double-float)
+          (*read-base*                 10)
+          (*package*                   *package*)
+          (eof                         '#:eof)
+          (n                           0))
+      (loop
+        (let ((form (handler-case (read s nil eof)
+                      (error (c)
+                        (return (values nil n
+                                        (format nil "form ~D does not read: ~A  (a text fasl that DEFINES its own packages can only be fully validated in a session where they exist, e.g. after loading it)"
+                                                (+ n 1) c)))))))
+          (when (eq form eof) (return (values t n nil)))
+          (setq n (+ n 1))
+          ;; Track IN-PACKAGE (without evaluating anything else) so the
+          ;; following forms' unqualified symbols read in the right package.
+          (when (and (consp form) (eq (car form) 'in-package) (consp (cdr form)))
+            (let ((p (find-package (second form))))
+              (when p (setq *package* p)))))))))
+
 (defun bocl::validate-cfasl (path &key (report t) (stream *standard-output*))
-  "Structurally validate the compiled fasl (cfasl) file at PATH without
-evaluating anything from it: the BOCLFASL magic, the format version, that
-every top-level form reads back through the cfasl reader, and that the image
-ends with the end-of-image tag as its final byte.  When REPORT is true (the
-default), print a one-line verdict to STREAM.  Returns (VALUES VALID-P
+  "Structurally validate the fast-load file at PATH without evaluating anything
+from it.  A BINARY cfasl (BOCLFASL magic) is checked completely: the format
+version, that every top-level form reads back through the cfasl reader, and
+that the image ends with the end-of-image tag as its final byte; validation is
+independent of the session's package state (a symbol in a package the image
+itself would create reads as an uninterned placeholder).  A TEXT fasl
+(\";; BOCL <version> FASL\" header — COMPILE-FILE's fallback when a literal
+cannot be serialized in binary) is checked by READing every form under LOAD's
+controlled syntax; packages the file itself defines must exist for the check
+to complete (reading cannot substitute placeholders).  When REPORT is true
+(the default), print a one-line verdict to STREAM.  Returns (VALUES VALID-P
 FORM-COUNT MESSAGE VERSION): VALID-P is T when every check passes; FORM-COUNT
 is the number of top-level forms that read cleanly; MESSAGE is a string naming
-the first problem, or NIL; VERSION is the image's format version, or NIL when
-the header is unreadable.  Validation is independent of the session's package
-state: a symbol in a package the image itself would create (a DEFPACKAGE in an
-earlier form, which validation deliberately does not evaluate) reads as an
-uninterned placeholder instead of failing."
-  (multiple-value-bind (valid-p form-count message version)
-      (%cfasl-validate (namestring (pathname path)))
-    (when report
-      (if valid-p
-          (format stream "~&;; ~A: valid cfasl (format v~A, ~A top-level forms).~%"
-                  (namestring (pathname path)) version form-count)
-          (format stream "~&;; ~A: INVALID cfasl: ~A~%"
-                  (namestring (pathname path)) message)))
-    (values valid-p form-count message version)))
+the first problem, or NIL; VERSION is the binary format version (an integer),
+the text fasl's bocl version (a string), or NIL when the file carries neither
+header."
+  (let ((ns (namestring (pathname path)))
+        (kind "cfasl"))
+    (multiple-value-bind (valid-p form-count message version)
+        (%cfasl-validate ns)
+      ;; Not a binary image — recognise COMPILE-FILE's TEXT fasl by its header.
+      (when (and (not valid-p) (stringp message) (search "magic" message))
+        (let ((text-version (%bocl-fasl-version ns)))
+          (when text-version
+            (setq kind "text fasl" version text-version)
+            (multiple-value-setq (valid-p form-count message)
+              (bocl::%validate-text-fasl ns)))))
+      (when report
+        (if valid-p
+            (format stream "~&;; ~A: valid ~A (~A v~A, ~A top-level forms).~%"
+                    ns kind (if (string= kind "cfasl") "format" "BOCL") version form-count)
+            (format stream "~&;; ~A: INVALID ~A: ~A~%" ns kind message)))
+      (values valid-p form-count message version))))
 (export '(bocl::validate-cfasl) "BOCL")
 
 (define-condition bocl::invalid-module-plist (error)

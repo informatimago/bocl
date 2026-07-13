@@ -1634,7 +1634,11 @@ static void kernel_CFASL_LOAD(unused Ref f, Ref arguments, MultipleValues* resul
    memory before the file is opened).  Each form gets a fresh writer context so
    its shared-object ids restart at 0, matching the per-form reader. */
 static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* results){
-    results->count=1; results->values[0]=NIL_Symbol;
+    /* Values: (values wrote-p failed-form-index) — FAILED-FORM-INDEX is the
+       1-based index of the first form the binary writer cannot serialize (or
+       NIL), so COMPILE-FILE can NAME the culprit when it falls back to the
+       text fasl. */
+    results->count=2; results->values[0]=NIL_Symbol; results->values[1]=NIL_Symbol;
     Ref path  = cons_car(arguments);
     Ref forms = cons_car(cons_cdr(arguments));
     if(!stringp(path)){ return; }
@@ -1643,12 +1647,14 @@ static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* resu
     cfasl_put_u8(&b, (uint8_t)CFASL_VERSION);
     cfasl_put_u8(&b, 0);                              /* flags (reserved) */
     int ok = 1;
+    word formi = 0;
     for(Ref l=forms; consp(l); l=cons_cdr(l)){
+        formi++;
         cfasl_wctx* w = cfasl_wctx_new(&b);
         cfasl_write_object(w, cons_car(l));
         int err = cfasl_wctx_error(w);
         cfasl_wctx_free(w);
-        if(err){ ok=0; break; }}
+        if(err){ ok=0; results->values[1]=integer_from_word(formi); break; }}
     cfasl_put_u8(&b, CFASL_TAG_EOF);
     if(ok && !b.error){
         char* p = string_cstring(path);

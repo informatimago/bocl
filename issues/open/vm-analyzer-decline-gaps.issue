@@ -1,0 +1,26 @@
+vm-compiler: two analyzer/codegen decline causes surfaced by the asdf.lisp
+compile (v1.8.38's per-function decline report names them).
+
+Compiling modules/asdf/asdf.lisp byte-compiles 586 functions; 3 decline:
+
+1. "Unbound variable: &REST" (an ERROR escaping the analyzer, not a clean
+   decline message):
+     [218] ASDF/PARSE-DEFSYSTEM:PARSE-COMPONENT-FORM
+     [243] ASDF/SOURCE-REGISTRY::PROCESS-SOURCE-REGISTRY-DIRECTIVE
+   Something in these bodies makes the analyzer EVALUATE the symbol &REST as
+   a variable — likely a DESTRUCTURING-BIND / macro lambda-list form the
+   analyzer walks as ordinary code, or a (lambda (&rest) ...) shape it does
+   not parse.  Repro: byte-compile asdf.lisp with :print t and look at the
+   two functions; reduce from there.
+
+2. "RETURN-FROM UIOP/RUN-PROGRAM::REDIRECT — no lexically visible BLOCK":
+     [112] UIOP/RUN-PROGRAM::%REDIRECTED-SYSTEM-COMMAND
+   A RETURN-FROM whose BLOCK the analyzer does not see — either a genuine
+   macro-expansion artifact (the block is established by a macro the analyzer
+   expanded differently than the interpreter would) or an analyzer scoping
+   gap.  Determine which; if the code is genuinely conforming, fix the
+   analyzer.
+
+All three functions fall back to the interpreter (correct results, slower) —
+these are compiler COVERAGE bugs, not correctness bugs.  The decline report
+(:PRINT/:VERBOSE) is the repro harness.

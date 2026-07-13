@@ -95,3 +95,4 @@ Implementation issues, in global order:
 cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
 clos-condition-report-not-printed.issue (bug) — user conditions print #<TYPE>, not their report
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler
+vm-analyzer-decline-gaps.issue       (bug) — 3 asdf.lisp functions decline byte-compilation (&REST analyzer error x2; a RETURN-FROM/BLOCK visibility case)

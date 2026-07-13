@@ -1019,7 +1019,9 @@
                  (%vm-gen-for-values (car r) cs))))))
     (:let  (%vm-gen-let (cadr node) (caddr node) cs nil #'%vm-gen-for-values))
     (:let* (%vm-gen-let (cadr node) (caddr node) cs t   #'%vm-gen-for-values))
-    (t   ; single-valued leaf (const/lref/gref/lset/gset/function/block/tagbody/...)
+    ((:flet :labels)
+     (%vm-gen-flet (cadr node) (caddr node) cs #'%vm-gen-for-values))
+    (t   ; single-valued leaf (const/lref/gref/lset/gset/function/tagbody/...)
      (%vm-gen node cs)
      (%vm-emit-op cs (%vm-op :values)) (%vm-emit-u8 cs 1))))     ; sync MV buffer = {top}
 
@@ -1122,16 +1124,18 @@
   (declare (ignore read-only-p))
   (%vm-gen-const (funcall (%vm-compile (list 'lambda '() form))) cs))
 
-(defun %vm-gen-flet (fn-irs body-ir cs)
+(defun %vm-gen-flet (fn-irs body-ir cs &optional (body-gen #'%vm-gen))
   "FLET / LABELS: build each local function (a closure over the current frame, or a
    plain template if it captures nothing) and store it in its enclosing-frame slot;
-   then run the body.  Visibility (FLET bodies don't see the locals, LABELS do, and a
+   then run the body — through BODY-GEN, so a caller in multiple-values context
+   passes #'%VM-GEN-FOR-VALUES and the body's values flow out (same pattern as
+   %VM-GEN-LET).  Visibility (FLET bodies don't see the locals, LABELS do, and a
    LABELS fn sees its siblings via the shared frame) was resolved by the analyzer."
   (dolist (f fn-irs)
     (%vm-gen-make-closure (cdr f) cs)                    ; closure/template on stack (+1)
     (%vm-emit-op cs (%vm-op :store-local)) (%vm-emit-uvar cs 0) (%vm-emit-uvar cs (car f))
     (%vm-emit-op cs (%vm-op :pop)) (%vm-cs-sp+ cs -1))   ; store into slot, drop (net 0)
-  (%vm-gen body-ir cs))
+  (funcall body-gen body-ir cs))
 
 (defun %vm-gen-make-closure (lambda-ir cs)
   "A LAMBDA in value position.  Compile it to a template; if it captures outer
@@ -1597,30 +1601,47 @@
 ;;; and LOAD deserializes + installs it with NO re-compilation / macroexpansion.  Any
 ;;; form the VM can't compile is left unchanged (loads interpreted, as before).
 (defun %vm-compile-file-form (form)
-  "Byte-compile a (BOCL:DEFINE-FUNCTION 'NAME doc #'(lambda ...)) top-level form.
-   Returns (values FORM* CONDITION): on success FORM* carries the pre-compiled
-   template in place of the lambda and CONDITION is NIL; when the byte-compiler
-   declines, FORM* is FORM unchanged (the function stays interpreted) and
-   CONDITION is the SERIOUS-CONDITION that made it decline — COMPILE-FILE
-   reports it under :PRINT / :VERBOSE, so a silently-interpreted function is
-   visible and diagnosable.  A form of any other shape returns (values FORM NIL)."
-  (if (and (consp form)
-           (eq (car form) (and (find-package "BOCL")
-                               (find-symbol "DEFINE-FUNCTION" (find-package "BOCL"))))
-           (= (length form) 4)
-           (let ((fn (fourth form)))
-             (and (consp fn) (eq (car fn) 'function)
-                  (consp (cadr fn)) (eq (car (cadr fn)) 'lambda))))
-      (let* ((condition nil)
-             (template (handler-case (%vm-compile (cadr (fourth form)))
-                         ;; SERIOUS-CONDITION, not ERROR: a stack overflow while compiling
-                         ;; one form must leave the rest of the file compilable (this form
-                         ;; simply stays interpreted).  vm-9.
-                         (serious-condition (c) (setq condition c) nil))))
-        (if template
-            (values (list (car form) (second form) (third form) (list 'quote template)) nil)
-            (values form condition)))
-      (values form nil)))
+  "Byte-compile every (BOCL:DEFINE-FUNCTION 'NAME doc #'(lambda ...)) in FORM —
+   the form itself, or, recursively, the body forms of a PROGN or EVAL-WHEN
+   (COMPILE-FILE exposes DEFUNs through those top-level splicing forms, CLHS
+   3.2.3.1 — e.g. ASDF's WITH-UPGRADABILITY wraps its DEFUNs in EVAL-WHEN).
+   Returns (values FORM* REPORTS): FORM* carries a pre-compiled template in
+   place of each successfully compiled lambda; REPORTS is a list, in source
+   order, of (:COMPILED name) and (:DECLINED name condition) entries —
+   COMPILE-FILE prints them under :PRINT / :VERBOSE, so a silently-interpreted
+   function is visible and diagnosable."
+  (let ((def-function (and (find-package "BOCL")
+                           (find-symbol "DEFINE-FUNCTION" (find-package "BOCL"))))
+        (reports '()))
+    (labels ((defun-name (f)
+               (let ((nm (second f)))
+                 (if (and (consp nm) (eq (car nm) 'quote)) (cadr nm) nm)))
+             (process (f)
+               (cond
+                 ((and (consp f) (eq (car f) def-function)
+                       (= (length f) 4)
+                       (let ((fn (fourth f)))
+                         (and (consp fn) (eq (car fn) 'function)
+                              (consp (cadr fn)) (eq (car (cadr fn)) 'lambda))))
+                  (let* ((condition nil)
+                         (template (handler-case (%vm-compile (cadr (fourth f)))
+                                     ;; SERIOUS-CONDITION, not ERROR: a stack overflow
+                                     ;; while compiling one form must leave the rest of
+                                     ;; the file compilable (this form simply stays
+                                     ;; interpreted).  vm-9.
+                                     (serious-condition (c) (setq condition c) nil))))
+                    (if template
+                        (progn (push (list :compiled (defun-name f)) reports)
+                               (list (car f) (second f) (third f) (list 'quote template)))
+                        (progn (push (list :declined (defun-name f) condition) reports)
+                               f))))
+                 ((and (consp f) (eq (car f) 'progn))
+                  (cons 'progn (mapcar #'process (cdr f))))
+                 ((and (consp f) (eq (car f) 'eval-when) (consp (cdr f)))
+                  (list* 'eval-when (second f) (mapcar #'process (cddr f))))
+                 (t f))))
+      (let ((processed (process form)))
+        (values processed (nreverse reports))))))
 
 ;;; ===========================================================================
 ;;; vm-9 — byte-code DISASSEMBLE
