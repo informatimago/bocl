@@ -408,3 +408,27 @@ OPERATE-ing end to end, which is iterative and touches many subsystems):
   branches as each NOT-IMPLEMENTED-ERROR / gap is hit.
 Not put on hold for a dependency (the condition blocker is cleared) — kept open as
 an epic advanced incrementally as ASDF is driven.
+
+--------------------------------------------------------------------------------
+FEATURE-VOID AUDIT (v1.8.39, from the asdf.lisp #+/#- sweep) — the load-bearing
+voids are FIXED in asdf-bocl-port.patch (define-package's early DEFPACKAGE,
+*unspecific-pathname-type* silently taking its DOCSTRING as value, hostname);
+what remains are RUNTIME feature gaps where bocl lands in a clean
+not-implemented-error branch.  To close them, bocl needs primitives for:
+
+- delete-empty-directory / delete-directory-tree: an rmdir primitive (and the
+  tree walk, or run-program below for the rm -rf path).
+- run-program / launch-program / %system: process spawning (fork/exec or
+  posix_spawn + wait, pipes for :input/:output/:error-output).  This is the
+  big one — ASDF itself barely needs it, but user systems do.
+- get-optimization-settings: bocl-side introspection (currently no
+  OPTIMIZE tracking; the void yields empty settings, harmless).
+- combine-fasl-op / fasl concatenation: would need cfasl concatenation
+  support (text fasls concatenate trivially; binary cfasls would need a
+  multi-image reader or a merge tool).
+
+Soft voids reviewed and deliberately left (degrade gracefully): compatfmt
+(plain format strings), simple-condition format-control slot introspection
+(nil), lisp-implementation-directory (nil), *link-initial-dword* Windows
+shortcut parsing (POSIX-irrelevant), stdin/stdout/stderr symbols (portable
+fallback), implementation-type version-string cosmetics.
