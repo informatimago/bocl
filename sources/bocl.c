@@ -24,6 +24,7 @@
 #include <sys/time.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <sys/wait.h>   /* WIFEXITED/WEXITSTATUS for %SYSTEM (system(3)) */
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -740,6 +741,43 @@ static void kernel_CHDIR(unused Ref function, Ref arguments, MultipleValues* res
     else if(typep(pathspec,PHYSICAL_PATHNAME_Class)){ path=string_cstring(namestring(pathspec)); }
     else { TYPE_ERROR(pathspec,STRING_Class); }
     int rc=chdir(path);
+    free(path);
+    results->count=1; results->values[0]=as_boolean(rc==0);
+    close_live_pool(pool);}
+
+/* (%SYSTEM command) -> exit status of the shell command (libc system(3)):
+   the child's exit code, or 128+signal when it died on a signal (the shell
+   convention).  Signals an ERROR when the shell itself cannot be run.
+   The synchronous subprocess primitive UIOP's %system / run-program build on
+   (uiop-bocl-porting Tier 2). */
+static void kernel_SYSTEM(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref cmd=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_type(cmd,STRING_Class);
+    char* c=string_cstring(cmd);
+    int st=system(c);
+    free(c);
+    if(st==-1){ ERROR("%%SYSTEM: cannot run the shell%s",""); }
+    int code=st;
+    if(WIFEXITED(st)){ code=WEXITSTATUS(st); }
+    else if(WIFSIGNALED(st)){ code=128+WTERMSIG(st); }
+    results->count=1; results->values[0]=integer_from_word(code);
+    close_live_pool(pool);}
+
+/* (%RMDIR path) -> T when the (empty) directory was removed, NIL on failure
+   (missing, not empty, permission).  rmdir(2). */
+static void kernel_RMDIR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref pathspec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    char* path;
+    if(typep(pathspec,STRING_Class)){ path=string_cstring(pathspec); }
+    else if(typep(pathspec,PHYSICAL_PATHNAME_Class)){ path=string_cstring(namestring(pathspec)); }
+    else { TYPE_ERROR(pathspec,STRING_Class); }
+    int rc=rmdir(path);
     free(path);
     results->count=1; results->values[0]=as_boolean(rc==0);
     close_live_pool(pool);}
@@ -2169,6 +2207,10 @@ void bocl_register_load(void){
         set_symbol_function(s,built_in_function_new(s,NIL_Symbol,kernel_GETCWD));
         s=symbol_intern_cstring("%CHDIR");
         set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_CHDIR));
+        s=symbol_intern_cstring("%SYSTEM");
+        set_symbol_function(s,built_in_function_new(s,list(symbol_intern_cstring("COMMAND"),NULL),kernel_SYSTEM));
+        s=symbol_intern_cstring("%RMDIR");
+        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_RMDIR));
         s=symbol_intern_cstring("%COMMAND-LINE-ARGUMENTS");
         set_symbol_function(s,built_in_function_new(s,NIL_Symbol,kernel_COMMAND_LINE_ARGUMENTS));
         s=symbol_intern_cstring("%DIRECTORY-P");

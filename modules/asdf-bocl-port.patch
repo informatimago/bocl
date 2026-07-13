@@ -1,32 +1,3 @@
-diff --git a/lisp-action.lisp b/lisp-action.lisp
-index e3048762..954cf9b7 100644
---- a/lisp-action.lisp
-+++ b/lisp-action.lisp
-@@ -209,7 +209,23 @@ an OPERATION and a COMPONENT."
-   (defmethod perform ((o load-op) (c cl-source-file))
-     (perform-lisp-load-fasl o c))
-   (defmethod perform ((o load-op) (c static-file))
--    nil))
-+    nil)
-+  #+bocl
-+  (progn
-+    ;; bocl is an interpreter: there is no separate fast-load file.  Replace the
-+    ;; default compile-then-load-the-fasl dance (which routes through UIOP's
-+    ;; COMPILE-FILE* temporary-file / rename machinery, meaningless without a
-+    ;; real compiler output) with: COMPILE-OP is a no-op, and LOAD-OP loads the
-+    ;; component's SOURCE directly.  bocl's LOAD interprets the forms in order
-+    ;; (IN-PACKAGE / DEFMACRO / EVAL-WHEN are honoured), which is exactly what a
-+    ;; load of the would-be fasl is meant to achieve.
-+    (defmethod perform ((o compile-op) (c cl-source-file))
-+      (declare (ignorable o c))
-+      nil)
-+    (defmethod perform ((o load-op) (c cl-source-file))
-+      (declare (ignorable o))
-+      (let ((*package* (find-package '#:common-lisp-user)))
-+        (load (component-pathname c))))))
- 
- 
- ;;;; prepare-source-op, load-source-op
 diff --git a/uiop/common-lisp.lisp b/uiop/common-lisp.lisp
 index c76cb472..34c04fdb 100644
 --- a/uiop/common-lisp.lisp
@@ -40,6 +11,27 @@ index c76cb472..34c04fdb 100644
  (error "ASDF is not supported on your implementation. Please help us port it.")
  
  ;; (declaim (optimize (speed 1) (debug 3) (safety 3))) ; DON'T: trust implementation defaults.
+diff --git a/uiop/filesystem.lisp b/uiop/filesystem.lisp
+index b0c18453..40853f46 100644
+--- a/uiop/filesystem.lisp
++++ b/uiop/filesystem.lisp
+@@ -613,6 +613,7 @@ in an atomic way if the implementation allows."
+     "Delete an empty directory"
+     #+(or abcl digitool gcl) (delete-file directory-pathname)
+     #+allegro (excl:delete-directory directory-pathname)
++    #+bocl (bocl:rmdir directory-pathname)
+     #+clisp (ext:delete-directory directory-pathname)
+     #+clozure (ccl::delete-empty-directory directory-pathname)
+     #+(or cmucl scl) (multiple-value-bind (ok errno)
+@@ -631,7 +632,7 @@ in an atomic way if the implementation allows."
+                `(,dd directory-pathname) ;; requires SBCL 1.0.44 or later
+                `(progn (require :sb-posix) (symbol-call :sb-posix :rmdir directory-pathname)))
+     #+xcl (symbol-call :uiop :run-program `("rmdir" ,(native-namestring directory-pathname)))
+-    #-(or abcl allegro clasp clisp clozure cmucl cormanlisp digitool ecl gcl genera lispworks mkcl sbcl scl xcl)
++    #-(or abcl allegro bocl clasp clisp clozure cmucl cormanlisp digitool ecl gcl genera lispworks mkcl sbcl scl xcl)
+     (not-implemented-error 'delete-empty-directory "(on your platform)")) ; genera
+ 
+   (defun delete-directory-tree (directory-pathname &key (validate nil validatep) (if-does-not-exist :error))
 diff --git a/uiop/image.lisp b/uiop/image.lisp
 index 9ea0ceca..d886dfad 100644
 --- a/uiop/image.lisp
@@ -131,3 +123,50 @@ index e69f557d..6c9ba009 100644
      "Unspecific type component to use with the underlying implementation's MAKE-PATHNAME")
  
    (defun make-pathname* (&rest keys &key directory host device name type version defaults
+diff --git a/uiop/run-program.lisp b/uiop/run-program.lisp
+index ff0f87dc..54ad2ead 100644
+--- a/uiop/run-program.lisp
++++ b/uiop/run-program.lisp
+@@ -321,7 +321,7 @@ or whether it's already taken care of by the implementation's underlying run-pro
+   (defun %use-launch-program (command &rest keys
+                            &key input output error-output ignore-error-status &allow-other-keys)
+     ;; helper for RUN-PROGRAM when using LAUNCH-PROGRAM
+-    #+(or cormanlisp gcl (and lispworks os-windows) mcl xcl)
++    #+(or bocl cormanlisp gcl (and lispworks os-windows) mcl xcl)
+     (progn
+       command keys input output error-output ignore-error-status ;; ignore
+       (not-implemented-error '%use-launch-program))
+@@ -436,13 +436,14 @@ or whether it's already taken care of by the implementation's underlying run-pro
+        (return-from %system
+          (wait-process
+           (apply 'launch-program (%normalize-system-command command) keys)))))
+-    #+(or abcl clasp clisp cormanlisp ecl gcl genera (and lispworks os-windows) mkcl xcl)
++    #+(or abcl bocl clasp clisp cormanlisp ecl gcl genera (and lispworks os-windows) mkcl xcl)
+     (let ((%command (%redirected-system-command command input output error-output directory)))
+       ;; see comments for these functions
+       (%handle-if-does-not-exist input if-input-does-not-exist)
+       (%handle-if-exists output if-output-exists)
+       (%handle-if-exists error-output if-error-output-exists)
+       #+abcl (ext:run-shell-command %command)
++      #+bocl (bocl:system %command)
+       #+(or clasp ecl) (let ((*standard-input* *stdin*)
+                              (*standard-output* *stdout*)
+                              (*error-output* *stderr*))
+@@ -560,7 +561,7 @@ RUN-PROGRAM returns 3 values:
+ or an indication of failure via the EXIT-CODE of the process"
+     (declare (ignorable input output error-output if-input-does-not-exist if-output-exists
+                         if-error-output-exists element-type external-format ignore-error-status))
+-    #-(or abcl allegro clasp clisp clozure cmucl cormanlisp ecl gcl lispworks mcl mkcl sbcl scl xcl)
++    #-(or abcl allegro bocl clasp clisp clozure cmucl cormanlisp ecl gcl lispworks mcl mkcl sbcl scl xcl)
+     (not-implemented-error 'run-program)
+     (apply (if (or force-shell
+                    ;; Per doc string, set FORCE-SHELL to T if we get command as a string.
+@@ -568,7 +569,7 @@ or an indication of failure via the EXIT-CODE of the process"
+                    (and (stringp command)
+                         (or (not force-shell-suppliedp)
+                             #-(or allegro clisp clozure sbcl) (os-cond ((os-windows-p) t))))
+-                   #+(or clasp clisp cormanlisp gcl (and lispworks os-windows) mcl xcl) t
++                   #+(or bocl clasp clisp cormanlisp gcl (and lispworks os-windows) mcl xcl) t
+                    ;; A race condition in ECL <= 16.0.0 prevents using ext:run-program
+                    #+ecl #.(if-let (ver (parse-version (lisp-implementation-version)))
+                                    (lexicographic<= '< ver '(16 0 0)))

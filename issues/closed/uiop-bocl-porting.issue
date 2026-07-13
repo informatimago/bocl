@@ -432,3 +432,46 @@ Soft voids reviewed and deliberately left (degrade gracefully): compatfmt
 (nil), lisp-implementation-directory (nil), *link-initial-dword* Windows
 shortcut parsing (POSIX-irrelevant), stdin/stdout/stderr symbols (portable
 fallback), implementation-type version-string cosmetics.
+
+======================================================================
+TIER 2 COMPLETE — EPIC CLOSED (v1.8.40).
+======================================================================
+Item 6 (subprocesses): kernel %SYSTEM (libc system(3), exit code / 128+signal)
+and %RMDIR (rmdir(2)), exported as BOCL:SYSTEM and BOCL:RMDIR; the #+bocl UIOP
+port (asdf-bocl-port.patch) routes RUN-PROGRAM through the %use-system
+strategy (%system dispatch -> (bocl:system %command); launch-program cleanly
+not-implemented), DELETE-EMPTY-DIRECTORY -> bocl:rmdir, and
+DELETE-DIRECTORY-TREE's unix branch now works through run-program (rm -rf).
+VERIFIED: (uiop:run-program "echo ..." :output :string) returns the output;
+exit codes propagate; delete-directory-tree and delete-empty-directory work.
+
+Item 7 (COMPILE-FILE* / the real compile path): bocl COMPILE-FILE has produced
+REAL byte-compiled fasls since v1.8.x, so the v1.4.19 #+bocl PERFORM override
+(compile-op no-op + load the source) was REMOVED from the port: ASDF now
+drives the standard perform-lisp-compilation / perform-lisp-load-fasl chain —
+COMPILE-FILE* (3-value return verified), the temporary-file + rename
+machinery, and LOAD of the produced fasl.  VERIFIED end to end: the hello
+system byte-compiles ((:file "pkg") (:file "main")) to VALID binary cfasls
+and (asdf:load-system "hello") -> hello:greet works.
+
+General CL conformance bugs found and fixed on the way (each the real blocker
+behind a UIOP step, all regression-tested in test_misc):
+- EQL SPECIALIZERS implemented in CLOS (CLHS 7.6.2): DEFMETHOD evaluates the
+  (EQL form) in its lexical environment; applicability = (EQL arg value);
+  an EQL specializer outranks every class; the vm-7 class-keyed dispatch
+  cache is BYPASSED for gfs with EQL methods (value-dependent applicability).
+  Blocked: uiop SLURP-INPUT-STREAM's (eql :string)/(eql 'string)... methods —
+  every run-program :output mode dispatched to the t-t fallback.
+- READ-SEQUENCE returned END unconditionally (a stray trailing E discarded
+  the DOTIMES' early-EOF return): now returns the CLHS fill position (0 at
+  EOF).  Blocked: uiop COPY-STREAM-TO-STREAM looped forever slurping.
+- DELETE-FILE signalled SIMPLE-ERROR; now FILE-ERROR per CLHS (prelude wrap,
+  same pattern as the v1.4.19 FILE-WRITE-DATE fix).  Blocked: uiop
+  DELETE-FILE-IF-EXISTS's (handler-case ... (file-error () nil)).
+- WITH-OPEN-FILE / WITH-OPEN-STREAM: leading DECLAREs in the body are hoisted
+  to the binding LET (they landed in a PROGN and were evaluated as calls).
+  Blocked: uiop %HANDLE-IF-EXISTS's declare-only body.
+
+TIER 3 (async launch-program with pipes, DUMP-IMAGE, COMBINE-FASLS,
+get-optimization-settings introspection) remains optional — UIOP signals
+clean not-implemented errors — and is spun off to uiop-tier3-subprocess.issue.

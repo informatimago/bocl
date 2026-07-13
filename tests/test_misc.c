@@ -917,6 +917,39 @@ static void test_vm_nlx(void){
    resolve to the GLOBAL function), and a local function's body is closed over
    its DEFINING environment, not the call site's.  LABELS keeps sibling
    visibility.  Both the tree-walker and the VM must agree. */
+
+/* EQL specializers (CLHS 7.6.2, added for UIOP's slurp-input-stream) + the
+   READ-SEQUENCE fill-position return (CLHS 21.2; it used to return END
+   unconditionally, sending UIOP's COPY-STREAM-TO-STREAM into an infinite
+   loop) — the two conformance fixes behind uiop run-program (v1.8.40). */
+static void test_eql_specializers_and_read_sequence(void){
+    e("(defgeneric %eqs (x))");
+    e("(defmethod %eqs ((x integer)) :int)");
+    e("(defmethod %eqs ((x (eql 42))) :answer)");
+    e("(defmethod %eqs ((x (eql :k))) :kw)");
+    e("(defmethod %eqs ((x t)) :any)");
+    TEST_EQ(equal, e("'(:answer :int :kw :any)"),
+            e("(list (%eqs 42) (%eqs 7) (%eqs :k) (%eqs \"s\"))"));
+    /* eql method sees the class method through call-next-method */
+    e("(defmethod %eqs ((x (eql 0))) (list :zero (call-next-method)))");
+    TEST_EQ(equal, e("'(:zero :int)"), e("(%eqs 0)"));
+    /* redefinition replaces (EQUAL specializer dedup) */
+    e("(defmethod %eqs ((x (eql 42))) :answer2)");
+    TEST_EQ(eql, e(":answer2"), e("(%eqs 42)"));
+    /* read-sequence returns the FILL POSITION, 0 at EOF */
+    TEST_EQ(equal, e("'(3 0)"),
+            e("(progn (with-open-file (o \"/tmp/bocl_rs_test.tmp\" :direction :output"
+              "                          :if-exists :supersede) (princ \"abc\" o))"
+              "  (with-open-file (i \"/tmp/bocl_rs_test.tmp\")"
+              "    (let ((buf (make-string 8)))"
+              "      (list (read-sequence buf i) (read-sequence buf i)))))"));
+    e("(delete-file \"/tmp/bocl_rs_test.tmp\")");
+    /* delete-file on a missing file signals FILE-ERROR (CLHS) */
+    TEST_EQ(eql, e(":fe"),
+            e("(handler-case (delete-file \"/tmp/bocl_no_such_file.tmp\")"
+              "  (file-error () :fe))"));
+}
+
 static void test_flet_scoping(void){
     /* interpreted */
     TEST_EQ(eql, e(":UNDEF"),
@@ -1711,6 +1744,7 @@ TEST_SUITE(test_misc, misc_init, misc_fini)
     TEST_CASE("vm control",          test_vm_control)
     TEST_CASE("vm values",           test_vm_values)
     TEST_CASE("vm nlx",              test_vm_nlx)
+    TEST_CASE("eql spec + read-seq", test_eql_specializers_and_read_sequence)
     TEST_CASE("flet scoping",        test_flet_scoping)
     TEST_CASE("vm closures",         test_vm_closures)
     TEST_CASE("vm fasl",             test_vm_fasl)

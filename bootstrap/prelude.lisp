@@ -620,12 +620,23 @@
 
 (defmacro with-open-file (head &body body)
   ;; (WITH-OPEN-FILE (var filespec &rest open-args) body...)
+  ;; CLHS: declarations may appear at the front of BODY; hoist them to the
+  ;; binding LET (whose body head admits them) — the (PROGN ,@body) below
+  ;; cannot hold a DECLARE (it would be evaluated as a call).
   (let ((var       (first head))
         (filespec  (second head))
         (open-args (cddr head))
-        (abnormal  (gensym "WOF-ABORT-")))
+        (abnormal  (gensym "WOF-ABORT-"))
+        (decls     '()))
+    (tagbody
+     wof-split
+       (when (and (consp (car body)) (eq (car (car body)) 'declare))
+         (setq decls (cons (car body) decls)
+               body  (cdr body))
+         (go wof-split)))
     `(let ((,var (open ,filespec ,@open-args))
            (,abnormal t))
+       ,@(reverse decls)
        (unwind-protect
             (multiple-value-prog1
                 (progn ,@body)
@@ -3452,10 +3463,19 @@ SETQ/INCF/DECF is left in place (sequential)."
 
 (defmacro with-open-stream (head &body body)
   ;; (WITH-OPEN-STREAM (var stream) body...) — execute BODY with VAR
-  ;; bound to STREAM; always close the stream on exit.
+  ;; bound to STREAM; always close the stream on exit.  Leading DECLAREs
+  ;; are hoisted to the binding LET (see WITH-OPEN-FILE).
   (let ((var    (first  head))
-        (stream (second head)))
+        (stream (second head))
+        (decls  '()))
+    (tagbody
+     wos-split
+       (when (and (consp (car body)) (eq (car (car body)) 'declare))
+         (setq decls (cons (car body) decls)
+               body  (cdr body))
+         (go wos-split)))
     `(let ((,var ,stream))
+       ,@(reverse decls)
        (unwind-protect (progn ,@body)
          (when ,var (close ,var))))))
 
@@ -4199,7 +4219,11 @@ SETQ/INCF/DECF is left in place (sequential)."
   lambda-list   ; lambda-list as stored by DEFGENERIC
   methods       ; list of %mth objects
   (cache nil)   ; vm-7 dispatch cache: EQUAL hash-table  arg-class-tuple -> effective-method
-  (cache-gen -1)) ; the *%dispatch-gen* the cache was built under (stale if it differs)
+  (cache-gen -1) ; the *%dispatch-gen* the cache was built under (stale if it differs)
+  (has-eql-methods nil)) ; T when any method carries an (:EQL . value) specializer:
+                         ; applicability then depends on argument VALUES, so the
+                         ; class-keyed vm-7 cache is UNSOUND for this gf and
+                         ; %GF-DISPATCH uses the uncached full dispatch instead.
 
 ;;; ---- 3. Registries -------------------------------------------------------
 
@@ -4679,6 +4703,10 @@ SETQ/INCF/DECF is left in place (sequential)."
   "Return T if ARG matches SPECIALIZER."
   (cond
     ((eq specializer t) t)
+    ;; (EQL . value) specializer (stored by DEFMETHOD from an (EQL form)
+    ;; specialized parameter): applicable iff the ARGUMENT is EQL the value.
+    ((and (consp specializer) (eq (car specializer) :eql))
+     (eql arg (cdr specializer)))
     ;; CLOS class — use %is-cls (kernel typep, no circularity)
     ((%is-cls specializer)
      (and (%is-obj arg)
@@ -4710,6 +4738,7 @@ SETQ/INCF/DECF is left in place (sequential)."
   "Return the CPL position of SPEC for ARG (lower = more specific), or 9999."
   (cond
     ((eq spec t) 9999)
+    ((and (consp spec) (eq (car spec) :eql)) -1)   ; an EQL specializer beats every class
     ((%is-cls spec)
      (if (and (%is-obj arg) (%cls-cpl (%obj-class arg)))
          (let ((pos (position spec (%cls-cpl (%obj-class arg)))))
@@ -4724,6 +4753,11 @@ SETQ/INCF/DECF is left in place (sequential)."
   "Return T if specializer S1 is strictly more specific than S2 for ARG."
   (cond
     ((eq s1 s2) nil)
+    ;; An EQL specializer is more specific than any class specializer.  Two
+    ;; DISTINCT applicable EQL specializers cannot coexist for one argument
+    ;; (both would have to be EQL the same value), so eql-vs-eql needs no order.
+    ((and (consp s1) (eq (car s1) :eql)) (not (and (consp s2) (eq (car s2) :eql))))
+    ((and (consp s2) (eq (car s2) :eql)) nil)
     ((eq s1 t)  nil)                 ; T is least specific
     ((eq s2 t)  t)
     ((and (%is-cls s1) (%is-cls s2))
@@ -4844,8 +4878,10 @@ SETQ/INCF/DECF is left in place (sequential)."
    (the pre-vm-7 path) — for benchmarking / debugging the cache.")
 
 (defun %gf-dispatch (gf name args)
-  "Dispatch a call to GF on ARGS through the per-gf effective-method cache."
-  (if *%dispatch-cache-enable*
+  "Dispatch a call to GF on ARGS through the per-gf effective-method cache.
+   A gf with EQL-specialized methods dispatches UNCACHED: its applicability
+   depends on argument values, which the class-tuple cache key cannot see."
+  (if (and *%dispatch-cache-enable* (not (%gf-has-eql-methods gf)))
       (progn
         (when (or (null (%gf-cache gf)) (/= (%gf-cache-gen gf) *%dispatch-gen*))
           (setf (%gf-cache gf) (make-hash-table :test 'equal)
@@ -4928,6 +4964,11 @@ SETQ/INCF/DECF is left in place (sequential)."
                             (equal (%mth-specializers m) specializers)))
                      (%gf-methods gf)))
     (push method (%gf-methods gf))
+    ;; An (:EQL . value) specializer makes applicability depend on argument
+    ;; VALUES: the class-keyed dispatch cache is unsound for this gf, so flag
+    ;; it and %GF-DISPATCH will use the uncached full dispatch.
+    (when (some (lambda (sp) (and (consp sp) (eq (car sp) :eql))) specializers)
+      (setf (%gf-has-eql-methods gf) t))
     (setf (%gf-cache gf) nil)                 ; vm-7: adding/redefining a method invalidates this gf's cache
     (%install-discriminating-function gf-name gf)
     gf-name))
@@ -4993,7 +5034,17 @@ tation, :method-combination, ...) are ignored."
            (body (cdr rest)))
       (multiple-value-bind (plain-ll spec-names)
           (%parse-spec-ll specialized-ll)
-        `(ensure-method ',name ',qualifiers ',spec-names
+        ;; Build the specializer list as an evaluated LIST expression: a class
+        ;; name / T stays a quoted symbol, while an (EQL form) specializer
+        ;; becomes (CONS :EQL form) so FORM is evaluated in the DEFMETHOD's
+        ;; lexical environment at method-definition time (CLHS 7.6.2).
+        `(ensure-method ',name ',qualifiers
+                         (list ,@(mapcar (lambda (sn)
+                                           (if (and (consp sn) (eq (car sn) 'eql)
+                                                    (consp (cdr sn)))
+                                               `(cons :eql ,(cadr sn))
+                                               `',sn))
+                                         spec-names))
                          (lambda ,(%method-ll-allow-other-keys plain-ll) ,@body))))))
 
 ;;; DEFINE-METHOD-COMBINATION — bocl supports only the standard method
@@ -6116,17 +6167,20 @@ the class object it denotes, so two specializers compare by class identity."
 ;;; ---- Stream utilities ---------------------------------------------------
 
 (defun read-sequence (sequence stream &key (start 0) end)
-  "Read elements from STREAM into SEQUENCE[START..END].
-  Returns the index of the first element not updated."
+  "Read elements from STREAM into SEQUENCE[START..END).  Returns the index of
+   the first element of SEQUENCE not updated (CLHS 21.2): END (or the length)
+   when the stream supplied enough elements, LESS when it hit end-of-file —
+   callers loop until (= result START), so this MUST report the fill position.
+   (It used to return END unconditionally: the DOTIMES result — including the
+   early EOF RETURN — was discarded by a stray trailing E, which made UIOP's
+   COPY-STREAM-TO-STREAM loop forever on any stream.)"
   (let* ((len (length sequence))
          (e   (or end len)))
     (dotimes (i (- e start) e)
       (let ((elem (read-byte stream nil nil)))
-        (when (null elem) (return (+ start i)))
+        (when (null elem) (return-from read-sequence (+ start i)))
         (setf (elt sequence (+ start i))
-              (if (characterp (elt sequence 0))
-                  (code-char elem) elem))))
-    e))
+              (if (stringp sequence) (code-char elem) elem))))))
 
 (defun write-sequence (sequence stream &key (start 0) end)
   "Write SEQUENCE[START..END] to STREAM.  Returns SEQUENCE."
@@ -9056,6 +9110,19 @@ result array; return that array."
         (funcall *%kernel-file-write-date* pathname)
         (error 'file-error :pathname pathname))))
 
+;;; Same conformance wrap for DELETE-FILE: the kernel primitive raises a bare
+;;; SIMPLE-ERROR on failure, but CLHS specifies FILE-ERROR — which callers like
+;;; UIOP's DELETE-FILE-IF-EXISTS rely on catching.
+(defvar *%kernel-delete-file* (symbol-function 'delete-file)
+  "The bare kernel DELETE-FILE (remove(3)s the namestring; simple-errors on failure).")
+
+(defun delete-file (filespec)
+  "DELETE-FILE per CLHS: delete the file named by FILESPEC and return T,
+   signalling FILE-ERROR when it cannot be deleted (e.g. it does not exist)."
+  (let ((pathname (pathname filespec)))
+    (handler-case (funcall *%kernel-delete-file* pathname)
+      (error () (error 'file-error :pathname pathname)))))
+
 (defun load (filespec &key (verbose *load-verbose*) (print *load-print*)
                            (if-does-not-exist t) (external-format :default))
   "Load FILESPEC.  A relative pathname is merged against
@@ -11185,6 +11252,20 @@ the rest take :INITIAL-ELEMENT."
   "Change the current directory to PATH (a string or pathname); T on success."
   (common-lisp::%chdir (if (pathnamep path) (namestring path) (string path))))
 
+(defun bocl::system (command)
+  "Run COMMAND (a string) through the shell, synchronously (libc system(3)).
+   Returns the child's exit status: its exit code, or 128+signal when it died
+   on a signal.  Signals an ERROR when the shell itself cannot be run.  This
+   is the primitive UIOP's RUN-PROGRAM builds on."
+  (common-lisp::%system (string command)))
+
+(defun bocl::rmdir (path)
+  "Remove the EMPTY directory at PATH (a string or pathname).  Signals a
+   FILE-ERROR when it cannot be removed (missing, not empty, permission)."
+  (let ((ns (if (pathnamep path) (namestring path) (string path))))
+    (or (common-lisp::%rmdir ns)
+        (error 'file-error :pathname (pathname ns)))))
+
 (defun bocl::command-line-arguments ()
   "The process command-line arguments (a list of strings; argv[0] first)."
   (common-lisp::%command-line-arguments))
@@ -11192,7 +11273,8 @@ the rest take :INITIAL-ELEMENT."
 (defvar bocl::*command-line-arguments* (common-lisp::%command-line-arguments)
   "The process command-line arguments captured at start-up.")
 
-(export '(bocl::getenv bocl::setenv bocl::unsetenv bocl::getcwd bocl::chdir
+(export '(bocl::system bocl::rmdir
+          bocl::getenv bocl::setenv bocl::unsetenv bocl::getcwd bocl::chdir
           bocl::command-line-arguments bocl::*command-line-arguments*)
         "BOCL")
 

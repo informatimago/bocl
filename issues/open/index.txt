@@ -23,7 +23,7 @@ Rules of Processing Issues
 
 Current list of issues to resolve:
 
-uiop-bocl-porting.issue
+uiop-tier3-subprocess.issue   (epic remainder) — optional async launch-program/dump-image/combine-fasls; run-program & the real ASDF compile path are DONE (uiop-bocl-porting closed v1.8.40)
 
 precise-condition-subclasses.issue
 should-tests-type-errors.issue
