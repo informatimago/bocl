@@ -1,0 +1,21 @@
+tests: fixed /tmp file names collide across CONCURRENT runs on one host and
+mask staleness via residue.
+
+SYMPTOM (both bitten on the poseidon CI runners, 2026-07-14):
+1. Several C suites hardcode /tmp names (grep '"/tmp/' tests/*.c):
+   bocl_test_misc_*.tmp, bocl_cfasl_corpus.*, bocl_cfasl_feat.*, bocl_rs_test,
+   bocl-test-load.lisp, bocl-test-macros.lisp, bocl-et-*, bocl-s25-*.  Three
+   CI shell jobs running the suite CONCURRENTLY on one host (same user, shared
+   /tmp) stomp each other's fixtures -> spurious failures.
+2. Residue masks bugs: test_misc's cfasl-corpus check kept passing against a
+   STALE /tmp/bocl_cfasl_corpus.fasl from July 11 for days after
+   *DEFAULT-COMPILED-FILE-TYPE* changed the real output to .cfasl — the suite
+   was green on the developer host and red in every clean environment (the
+   docker CI images).  That expectation is fixed (v1.8.41); the residue
+   MECHANISM remains for every other fixed name.
+
+FIX SKETCH: a tests/ helper that builds per-process fixture paths
+(snprintf("%s/bocl-%s-%d", getenv("TMPDIR")?:"/tmp", name, getpid())) used by
+all suites, + unlink fixtures in teardown.  Until then CI routes all build
+jobs to the docker executor (isolated /tmp per container), which removes the
+concurrency half of the problem operationally.

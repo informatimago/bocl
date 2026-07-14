@@ -36,7 +36,18 @@ variables:
 # the cached :latest is reused by every build job (the core of "cache the
 # environments as much as possible").
 # ----------------------------------------------------------------------
+.docker:
+  # Every containerised job (an `image:` job) carries the `docker` tag so it is
+  # only picked by a DOCKER-executor runner (poseidon: bocl-linux-docker over
+  # rootless docker).  Without tags, untagged SHELL runners grab these jobs and
+  # fail them: kaniko has no /kaniko on a shell, the toolchain images are
+  # ignored, and concurrent shell jobs share one /tmp.  The runner must have
+  # the `docker` tag (and may keep run-untagged off).
+  tags:
+    - docker
+
 .build-image:
+  extends: .docker
   stage: images
   image:
     name: gcr.io/kaniko-project/executor:v1.23.2-debug
@@ -91,6 +102,7 @@ image:debian-tcc:
 # PATH (CC stays the plain compiler name, keeping dist artifact names clean).
 # ----------------------------------------------------------------------
 .unix-build:
+  extends: .docker
   stage: build
   before_script:
     - export PATH="/usr/lib/ccache:/usr/lib/ccache/bin:$PATH"
@@ -136,6 +148,7 @@ build:alpine-musl:
 # intrinsics. Build + CUnit tests + static/shared linkage proof (via ci/build.sh,
 # CC=tcc from the image); no packaging — tcc output is not a shipping deliverable.
 build:debian-tcc:
+  extends: .docker
   stage: build
   image: "$REGISTRY_NS/debian-tcc:latest"
   script:
@@ -151,6 +164,7 @@ build:debian-tcc:
 # Kept separate (no packaging) so a default failure is distinguishable from a
 # sanitiser hit. Debug profile: -fsanitize=object-size needs >-O0 disabled.
 sanitise:debian-gcc:
+  extends: .docker
   stage: build
   image: "$REGISTRY_NS/debian-gcc:latest"
   script:
@@ -170,6 +184,7 @@ sanitise:debian-gcc:
 # it reports BSD portability status without blocking the deliverable pipeline.
 # Serial console is saved as an artifact for diagnosis.
 build:freebsd:
+  extends: .docker
   stage: build
   image: debian:bookworm-slim
   timeout: 1h30m
@@ -223,6 +238,7 @@ build:macos:
 # v* tag upload the set to the generic Package Registry and cut a Release.
 # ----------------------------------------------------------------------
 collect:
+  extends: .docker
   stage: collect
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:

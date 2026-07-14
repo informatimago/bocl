@@ -462,8 +462,8 @@ static void test_cfasl_corpus(void){
     }
     fclose(f);
     e("(compile-file \"/tmp/bocl_cfasl_corpus.lisp\")");
-    TEST_EQ(eql, T_Symbol, e("(%cfasl-file-p \"/tmp/bocl_cfasl_corpus.fasl\")")); /* binary */
-    e("(load \"/tmp/bocl_cfasl_corpus.fasl\")");
+    TEST_EQ(eql, T_Symbol, e("(%cfasl-file-p \"/tmp/bocl_cfasl_corpus.cfasl\")")); /* binary */
+    e("(load \"/tmp/bocl_cfasl_corpus.cfasl\")");
     TEST_EQ(eql, I(552), e("(cfc::f182 '(1 2 3))"));   /* 183+184+185 — survived GC */
     TEST_EQ(eql, I(6),   e("(cfc::f0 '(1 2 3))"));      /* 1+2+3 */
 
@@ -479,7 +479,7 @@ static void test_cfasl_corpus(void){
     fputs("(in-package :cl-user)\n", g);
     fclose(g);
     e("(compile-file \"/tmp/bocl_cfasl_feat.lisp\")");
-    e("(load \"/tmp/bocl_cfasl_feat.fasl\")");
+    e("(load \"/tmp/bocl_cfasl_feat.cfasl\")");
     TEST_EQ(eql, T_Symbol, e("(if (eq cfg::*lv* :yes) t nil)"));           /* eval-when :load */
     TEST_EQ(eql, I(48),    e("(cfg:area (make-instance 'cfg::shp :r 4))")); /* class + method */
     TEST_EQ(eql, T_Symbol, e("(if (= cfg::*rat* 3/4) t nil)"));            /* ratio */
