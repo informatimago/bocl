@@ -361,9 +361,12 @@ static int current_readtable_case(void){
     Ref rc = rt->slots->readtable.readcase;
     if(symbolp(rc)){
         char* nm = string_cstring(symbol_name(rc));
-        if(strcmp(nm,"DOWNCASE")==0){ return 1; }
-        if(strcmp(nm,"PRESERVE")==0){ return 2; }
-        if(strcmp(nm,"INVERT")==0){ return 3; }
+        int r = 0;
+        if(strcmp(nm,"DOWNCASE")==0){ r = 1; }
+        else if(strcmp(nm,"PRESERVE")==0){ r = 2; }
+        else if(strcmp(nm,"INVERT")==0){ r = 3; }
+        free(nm);
+        return r;
     }
     return 0;
 }
@@ -406,8 +409,11 @@ static int current_print_case(void){
     Ref c = variable_value(S(*PRINT-CASE*));
     if(symbolp(c)){
         char* nm = string_cstring(symbol_name(c));
-        if(strcmp(nm,"DOWNCASE")==0){ return 1; }
-        if(strcmp(nm,"CAPITALIZE")==0){ return 2; }
+        int r = 0;
+        if(strcmp(nm,"DOWNCASE")==0){ r = 1; }
+        else if(strcmp(nm,"CAPITALIZE")==0){ r = 2; }
+        free(nm);
+        return r;
     }
     return 0;
 }

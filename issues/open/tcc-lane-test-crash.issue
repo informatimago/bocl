@@ -1,0 +1,28 @@
+CI tcc lane: test_misc (and test_slice21) CRASH at startup under tcc 0.9.27.
+
+SYMPTOM (first ever runs of build:debian-tcc, poseidon docker runner, and
+reproduced locally in registry.gitlab.com/bocl/bocl/ci/debian-tcc:latest):
+  # Testing test_misc
+  ./test_misc: : Unknown error 86781117
+  status=175
+The binary BUILDS (tcc compiles + links everything, only might-return-no-value
+warnings) but exits abnormally at startup; test_slice21 likewise.  The other
+~40 suites pass under tcc.
+
+Not yet root-caused: could be a tcc 0.9.27 miscompilation (the lane's whole
+purpose is catching gcc/clang-isms), a too-large/too-new construct in these
+two suites' code (big adjacent string literals? setjmp-heavy paths?), or a
+genuine bocl portability bug tcc exposes.  NOTE the lane had NEVER run before
+the poseidon runners took the pipeline, so this is not necessarily a
+regression — bisect by (a) building at older tags in the tcc image, and
+(b) minimising test_misc (link an empty main against libbocl-as-built-by-tcc
+first: the 'Unknown error' at exec smells like a loader/symbol problem with
+the tcc-built shared lib rather than test code).
+
+Repro:
+  docker run --rm -v <checkout>:/w -w /w \
+    registry.gitlab.com/bocl/bocl/ci/debian-tcc:latest sh -c 'sh ci/build.sh'
+
+Until fixed, build:debian-tcc is allow_failure (v1.8.42): the lane reports
+compiler-matrix status without blocking the deliverable pipeline (same policy
+as freebsd/macos).
