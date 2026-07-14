@@ -158,12 +158,11 @@ build:debian-tcc:
       junit: tests/*-Results.xml
     expire_in: 3 days
   rules:
-    # allow_failure while tcc-lane-test-crash.issue is open: test_misc and
-    # test_slice21 crash at startup under tcc 0.9.27 (never ran before the
-    # poseidon runners).  The lane reports compiler-matrix status without
-    # blocking the deliverable pipeline (same policy as freebsd/macos).
+    # Blocking since the error(3) symbol collision was fixed (v1.8.47,
+    # issues/closed/tcc-lane-test-crash.issue): the crashes were libbocl's
+    # exported `error` binding to glibc's error(3) through tcc's NEEDED
+    # order, not a tcc miscompilation.
     - when: on_success
-      allow_failure: true
 
 # Sanitiser build — ASan + the wider -fsanitize=* set (common.mk SANITIZE=yes).
 # Kept separate (no packaging) so a default failure is distinguishable from a

@@ -356,7 +356,7 @@ _Noreturn static void reader_signal(Ref class_symbol, Ref stream){
                      list(class_symbol, keyword_intern_cstring("STREAM"), stream, NULL), &mv);
         close_live_pool(pool);}
     /* No handler matched (or ERROR undefined): hard-fail via the C path. */
-    error("reader","%s on stream %s",
+    bocl_error("reader","%s on stream %s",
           string_cstring(symbol_name(class_symbol)),
           string_cstring(prin1_to_string(stream)));}
 

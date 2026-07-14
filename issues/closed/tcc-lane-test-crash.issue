@@ -26,3 +26,28 @@ Repro:
 Until fixed, build:debian-tcc is allow_failure (v1.8.42): the lane reports
 compiler-matrix status without blocking the deliverable pipeline (same policy
 as freebsd/macos).
+
+RESOLUTION (2026-07-14) — v1.8.47
+---------------------------------
+Root cause: NOT a tcc miscompilation.  libbocl exported a global function
+named `error`, colliding with glibc's error(3) (int status, int errnum,
+fmt, ...).  Dynamic symbol lookup follows the executable's NEEDED order:
+gcc-linked test binaries list libbocl before libc (bocl's error wins by
+luck); tcc-linked binaries list libcunit, libc, THEN libbocl — so every
+bocl error(fname, fmt, ...) call bound to GLIBC's error(3), which printed
+"<argv0>: : Unknown error <garbage errno>" and exit()ed with a garbage
+status (strace: exit_group(-617861505)).  test_misc died in its 14th test
+(the first one whose Lisp path reaches a C error() call), test_slice21
+likewise.
+
+Fix: renamed the function to bocl_error (boerror.h declaration + ERROR/
+READER_ERROR/... macros, boerror.c definition, direct call sites in
+kernel.c and reader.c).  Also removed the strdup.c fallback entirely —
+the other libc-colliding export; strdup is mandatory POSIX.1-2008, which
+the build already requires (-D_POSIX_C_SOURCE=200809L), so every target
+libc provides it.
+
+Validated: full ci/build.sh in the debian-tcc image — build, 42/42
+suites (test_misc and test_slice21 included), linkage proof; suites
+stress-run repeatedly.  gcc/Linux 42/42 unchanged.  allow_failure
+dropped from build:debian-tcc.

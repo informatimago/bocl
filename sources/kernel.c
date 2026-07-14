@@ -2189,7 +2189,7 @@ Ref normalize_encoding(Ref encoding_o,encoding_t* encoding){
         (*encoding)=encoding_us_ascii;
         return encoding_o;}
     else{
-        error("Invalid encoding %s",
+        bocl_error("Invalid encoding %s",
               string_cstring(prin1_to_string(encoding_o)));}}
 
 Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
@@ -2204,7 +2204,7 @@ Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
         (*new_line)=new_line_crlf;
         return K(CRLF);}
     else{
-        error("Invalid new-line format %s",
+        bocl_error("Invalid new-line format %s",
               string_cstring(prin1_to_string(new_line_o)));}}
 
 Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
@@ -2219,7 +2219,7 @@ Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
         (*on_error)=on_error_ignore;
         return on_error_o;}
     else{
-        error("Invalid on-error format %s",
+        bocl_error("Invalid on-error format %s",
               string_cstring(prin1_to_string(on_error_o)));}}
 
 Ref normalize_external_format_internal(Ref external_format,
@@ -2240,7 +2240,7 @@ Ref normalize_external_format_internal(Ref external_format,
         else{
             on_error_o=normalize_on_error(caddr(external_format),on_error);}}
     else{
-        error("Invalid external-format %s",
+        bocl_error("Invalid external-format %s",
               string_cstring(prin1_to_string(external_format)));}
     return cons(encoding_o,cons(new_line_o,cons(on_error_o,NIL_Symbol)));}
 
@@ -2626,7 +2626,7 @@ void check_no_more_arguments(Ref function,Ref arguments){
        crashed with "got SYMBOL, expected STRING".) */
     char* fname=string_cstring(symbol_name(function_name(function)));
     char* args=string_cstring(prin1_to_string(arguments));
-    error(fname,"Too many arguments, unused: %s",args);
+    bocl_error(fname,"Too many arguments, unused: %s",args);
     /* error() is _Noreturn, so the frees below are unreachable. Kept as a
        note that the strdup'd buffers are leaked when we exit on error. */
     free(fname);free(args);}
@@ -2634,7 +2634,7 @@ void check_no_more_arguments(Ref function,Ref arguments){
 Ref pop_mandatory_argument(Ref function,Ref* arguments){
     if(nullp(*arguments)){
         char* fname=string_cstring(symbol_name(function_name(function)));
-        error(fname,"Missing mandatory argument");
+        bocl_error(fname,"Missing mandatory argument");
         free(fname);}
     return pop(arguments);}
 
@@ -2652,7 +2652,7 @@ Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
             char* fname=string_cstring(function_name(function));
             char* args=string_cstring(prin1_to_string(*arguments));
             char* mkey=string_cstring(prin1_to_string(keyword));
-            error(fname,"Odd number of &key arguments %s, missing value for %s",
+            bocl_error(fname,"Odd number of &key arguments %s, missing value for %s",
                   args,mkey);
             /* TODO: clear up this mess, error doesn't return! */
             free(fname);free(args);free(mkey);}}

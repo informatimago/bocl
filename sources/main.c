@@ -14,7 +14,6 @@
 #include "macros.h"
 #include "memory.h"
 #include "boerror.h"
-#include "strdup.h"
 #include "stream.h"
 #include "printer.h"
 #include "reader.h"

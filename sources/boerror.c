@@ -38,7 +38,7 @@ _Noreturn void fatal(const char* fname,const char* message_format,...){
     fprintf(stderr,"\n\n");
     exit(EX_SOFTWARE);}
 
-_Noreturn void error(const char* fname,const char* message_format,...){
+_Noreturn void bocl_error(const char* fname,const char* message_format,...){
     /* Format the message once into a buffer so we can both signal it as a
        catchable condition and, if nobody handles it, print it on the way out. */
     char body[1024];
@@ -77,7 +77,7 @@ _Noreturn void error(const char* fname,const char* message_format,...){
 
 
 _Noreturn void program_error(const char* fname,const char* message_format,...){
-    /* Like error(), but signals a catchable PROGRAM-ERROR — used for malformed
+    /* Like bocl_error(), but signals a catchable PROGRAM-ERROR — used for malformed
        lambda-list / keyword-argument calls (CLHS 3.5.1.x), which the standard
        classifies as program-errors. */
     char body[1024];
@@ -110,7 +110,7 @@ _Noreturn void program_error(const char* fname,const char* message_format,...){
 
 
 _Noreturn void package_error(const char* fname,const char* message_format,...){
-    /* Like error(), but signals a catchable PACKAGE-ERROR (CLHS 11.x): unknown
+    /* Like bocl_error(), but signals a catchable PACKAGE-ERROR (CLHS 11.x): unknown
        package designators, name/use conflicts, etc. */
     char body[1024];
     va_list ap;
@@ -236,49 +236,49 @@ void* check_pointer(const char* fname,void* pointer){
 uword check_size_to_uword(const char* fname,size_t size){
     if(/* (0<=size) && */ (size<UWORD_MAX)){
         return (uword)size;}
-    error(fname,"Size %z too big for an uword (max = %"UWORD_FORMAT")",
+    bocl_error(fname,"Size %z too big for an uword (max = %"UWORD_FORMAT")",
           size,UWORD_MAX);}
 
 halfword check_size_to_halfword(const char* fname,size_t size){
     if(/* (0<=size) && */ (size<HALFWORD_MAX)){
         return (halfword)size;}
-    error(fname,"Size %z too big for a halfword (max = %"HALFWORD_FORMAT")",
+    bocl_error(fname,"Size %z too big for a halfword (max = %"HALFWORD_FORMAT")",
           size,HALFWORD_MAX);}
 
 uword check_long_to_uword(const char* fname,long value){
     if((0<=value) /* && (value<UWORD_MAX) always true */){
         return (uword)value;}
-    error(fname,"Value long %l too big for an uword (max = %"UWORD_FORMAT")",
+    bocl_error(fname,"Value long %l too big for an uword (max = %"UWORD_FORMAT")",
           value,UWORD_MAX);}
 
 uword check_word_to_uword(const char* fname,word value){
     if((0<=value) && (((uword)WORD_MAX<UWORD_MAX) || (value<(word)UWORD_MAX))){
         return (uword)value;}
-    error(fname,"Word %"WORD_FORMAT" too big for a uword (max = %"UWORD_FORMAT")",
+    bocl_error(fname,"Word %"WORD_FORMAT" too big for a uword (max = %"UWORD_FORMAT")",
           value,UWORD_MAX);}
 
 size_t check_word_to_size(const char* fname,word value){
     if((0<=value) && (((size_t)WORD_MAX<SIZE_MAX) || (value<(word)SIZE_MAX))){
         return (size_t)value;}
-    error(fname,"Word %"WORD_FORMAT" too big for a size_t (max = %zu)",
+    bocl_error(fname,"Word %"WORD_FORMAT" too big for a size_t (max = %zu)",
           value,SIZE_MAX);}
 
 word check_uword_to_word(const char* fname,uword value){
    if((value<WORD_MAX)){
         return (word)value;}
-    error(fname,"Unsigned word %"UWORD_FORMAT" too big for a word (max = %"WORD_FORMAT")",
+    bocl_error(fname,"Unsigned word %"UWORD_FORMAT" too big for a word (max = %"WORD_FORMAT")",
           value,WORD_MAX);}
 
 halfword check_uword_to_halfword(const char* fname,uword value){
    if((value<HALFWORD_MAX)){
         return (halfword)value;}
-    error(fname,"Unsigned word %"UWORD_FORMAT" too big for a halfword (max = %"HALFWORD_FORMAT")",
+    bocl_error(fname,"Unsigned word %"UWORD_FORMAT" too big for a halfword (max = %"HALFWORD_FORMAT")",
           value,HALFWORD_MAX);}
 
 int check_halfword_to_int(const char* fname,halfword value){
     if(/* (0<=value) && */ ((HALFWORD_MAX<INT_MAX) || (value<(word)INT_MAX))){
         return (int)value;}
-    error(fname,"Half word %"HALFWORD_FORMAT" too big for a int (max = %zu)",
+    bocl_error(fname,"Half word %"HALFWORD_FORMAT" too big for a int (max = %zu)",
           value,INT_MAX);}
 
 /**** THE END ****/

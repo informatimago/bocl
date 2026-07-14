@@ -19,19 +19,19 @@
    (sanitiser-error-path-leaks).  Long names are truncated to the slot size. */
 const char* string_static_cstr(Ref string);
 
-#define ERROR(message_format,...)                    error(__FUNCTION__,"ERROR: " message_format,__VA_ARGS__)
-#define ARITHMETIC_ERROR(message_format,...)         error(__FUNCTION__,"ARITHMETIC ERROR: " message_format,__VA_ARGS__)
+#define ERROR(message_format,...)                    bocl_error(__FUNCTION__,"ERROR: " message_format,__VA_ARGS__)
+#define ARITHMETIC_ERROR(message_format,...)         bocl_error(__FUNCTION__,"ARITHMETIC ERROR: " message_format,__VA_ARGS__)
 #define TYPE_ERROR(object,class)                     type_error(__FUNCTION__,object,class)
-#define OUT_OF_BOUNDS(vector,length,index)           error(__FUNCTION__,"OUT-OF-BOUNDS ERROR: index %"WORD_FORMAT" is out of bound to index (max %"WORD_FORMAT")",integer_value(index),integer_value(length))
+#define OUT_OF_BOUNDS(vector,length,index)           bocl_error(__FUNCTION__,"OUT-OF-BOUNDS ERROR: index %"WORD_FORMAT" is out of bound to index (max %"WORD_FORMAT")",integer_value(index),integer_value(length))
 
-#define END_OF_FILE(stream)                          error(__FUNCTION__,"END-OF-FILE ERROR: on stream %s",string_cstring(prin1_to_string(stream)))
-#define STREAM_ERROR(stream)                         error(__FUNCTION__,"INPUT-OUTPUT ERROR: on stream %s",string_cstring(prin1_to_string(stream)))
-#define READER_ERROR(stream,message_format,...)      error(__FUNCTION__,"READER ERROR: on stream %s " message_format,string_cstring(prin1_to_string(stream)),__VA_ARGS__)
+#define END_OF_FILE(stream)                          bocl_error(__FUNCTION__,"END-OF-FILE ERROR: on stream %s",string_cstring(prin1_to_string(stream)))
+#define STREAM_ERROR(stream)                         bocl_error(__FUNCTION__,"INPUT-OUTPUT ERROR: on stream %s",string_cstring(prin1_to_string(stream)))
+#define READER_ERROR(stream,message_format,...)      bocl_error(__FUNCTION__,"READER ERROR: on stream %s " message_format,string_cstring(prin1_to_string(stream)),__VA_ARGS__)
 
 #define PROGRAM_ERROR(message_format,...)            program_error(__FUNCTION__,"PROGRAM ERROR: " message_format,__VA_ARGS__)
 #define PACKAGE_ERROR(message_format,...)            package_error(__FUNCTION__,"PACKAGE ERROR: " message_format,__VA_ARGS__)
 
-#define NOT_IMPLEMENTED_YET()                        error(__FUNCTION__,"NOT IMPLEMENTED YET")
+#define NOT_IMPLEMENTED_YET()                        bocl_error(__FUNCTION__,"NOT IMPLEMENTED YET")
 
 #define CHECK_HALFWORD_TO_INT(value)                 check_halfword_to_int(__FUNCTION__,value)
 #define CHECK_LONG_TO_UWORD(value)                   check_long_to_uword(__FUNCTION__,value)
@@ -44,7 +44,13 @@ const char* string_static_cstr(Ref string);
 #define CHECK_WORD_TO_UWORD(value)                   check_word_to_uword(__FUNCTION__,value)
 
 _Noreturn void fatal(const char* fname,const char* message_format,...);
-_Noreturn void error(const char* fname,const char* message_format,...);
+/* Named bocl_error, NOT error: libbocl exports its symbols, and glibc has an
+   error(3) with an incompatible signature (int status, int errnum, fmt, ...).
+   Which definition a dynamic call binds to depends on the executable's NEEDED
+   order — tcc-linked test binaries put libc before libbocl, so every bocl
+   error() call landed in glibc's, printing garbage errno and exit()ing with a
+   garbage status (tcc-lane-test-crash.issue). */
+_Noreturn void bocl_error(const char* fname,const char* message_format,...);
 _Noreturn void program_error(const char* fname,const char* message_format,...);
 _Noreturn void package_error(const char* fname,const char* message_format,...);
 _Noreturn void stack_overflow_error(void);
