@@ -77,7 +77,7 @@ static uword structure_index(Ref structure_instance,Ref index){
     if(symbolp(index)){
         Ref entry=assq(index,structure_class_instance_slots(structure_instance->class));
         if(nullp(entry)){
-            ERROR("Invalid slot name %s",string_cstring(symbol_name(index)));}
+            ERROR("Invalid slot name %s",string_static_cstr(symbol_name(index)));}
         index=cdr(entry);}
     else{
         check_class(index,INTEGER_Class);}

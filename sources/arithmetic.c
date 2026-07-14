@@ -286,7 +286,7 @@ static Ref num_cmp_monotonic(Ref function,Ref arguments,num_pair_pred pairp){
     Ref tail=arguments;
     if(!consp(tail)){
         ERROR("%s needs at least one argument",
-              string_cstring(symbol_name(function_name(function))));}
+              string_static_cstr(symbol_name(function_name(function))));}
     Ref prev=cons_car(tail); check_number(prev); tail=cons_cdr(tail);
     while(consp(tail)){
         Ref curr=cons_car(tail); check_number(curr);
@@ -298,7 +298,7 @@ static Ref num_cmp_monotonic(Ref function,Ref arguments,num_pair_pred pairp){
 static Ref num_neq_all_distinct(Ref function,Ref arguments){
     if(!consp(arguments)){
         ERROR("%s needs at least one argument",
-              string_cstring(symbol_name(function_name(function))));}
+              string_static_cstr(symbol_name(function_name(function))));}
     /* All pairwise comparison: O(n²) is fine for the small n at the REPL. */
     Ref outer=arguments;
     while(consp(outer)){
@@ -762,7 +762,7 @@ void kernel_COERCE(Ref function,Ref arguments,MultipleValues* results){
     } else {
         /* Delegate to the Lisp-level coerce in prelude.lisp */
         ERROR("COERCE: result type %s not supported by the kernel",
-              string_cstring(prin1_to_string(result_type)));}
+              string_static_cstr(prin1_to_string(result_type)));}
     close_live_pool(pool);}
 
 /* -------------------------------------------------------------------- *

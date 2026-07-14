@@ -38,7 +38,7 @@ extern Frame* g_frame_stack;   /* eval.c:44 (non-static; not otherwise declared)
    with no hint of which function was missing. */
 static Ref vm_symbol_function(Ref sym){
     if(!symbol_fboundp(sym)){
-        ERROR("Undefined function: %s", string_cstring(symbol_name(sym))); }
+        ERROR("Undefined function: %s", string_static_cstr(symbol_name(sym))); }
     return symbol_function(sym);}
 
 static void vm_push_frame(Frame* f){
@@ -175,8 +175,10 @@ static Ref make_vm_vector(word n){
     return v;}
 
 static const char* cf_name_cstr(Ref cf){
+    /* STATIC buffer: this name feeds ERROR messages, which longjmp — a
+       malloc'd cstring would leak (sanitiser-error-path-leaks). */
     Ref name = compiled_function_name(cf);
-    return symbolp(name) ? string_cstring(symbol_name(name)) : "anonymous byte-code function";}
+    return symbolp(name) ? string_static_cstr(symbol_name(name)) : "anonymous byte-code function";}
 
 /* Reconstruct the ((param . value) ...) argument alist for a frame_vm_call backtrace frame
    from the activation's LOCALS vector (vm-9 stores that in the marker so fast-apply need not
@@ -196,7 +198,10 @@ Ref vm_call_frame_bindings(Ref cf, Ref locals){
         for(Ref p = ll, a = args; consp(p) && consp(a); p = cons_cdr(p), a = cons_cdr(a)){
             Ref pv = cons_car(p);
             if(!symbolp(pv)){ break; }
-            { const char* nm = string_cstring(symbol_name(pv)); if(nm && nm[0]=='&'){ break; } }
+            {   char* nm = string_cstring(symbol_name(pv));
+                int lambda_list_keyword = (nm && nm[0]=='&');
+                free(nm);
+                if(lambda_list_keyword){ break; } }
             Ref pair = cons(pv, cons_car(a)); add_to_live_pool(pair);
             binds = cons(pair, binds); add_to_live_pool(binds); }
     } else {
@@ -204,7 +209,10 @@ Ref vm_call_frame_bindings(Ref cf, Ref locals){
         for(Ref p = ll; consp(p) && (uword)i < n; p = cons_cdr(p)){
             Ref pv = cons_car(p);
             if(!symbolp(pv)){ break; }
-            { const char* nm = string_cstring(symbol_name(pv)); if(nm && nm[0]=='&'){ break; } }
+            {   char* nm = string_cstring(symbol_name(pv));
+                int lambda_list_keyword = (nm && nm[0]=='&');
+                free(nm);
+                if(lambda_list_keyword){ break; } }
             Ref pair = cons(pv, svref(locals, integer_from_word(i))); add_to_live_pool(pair);
             binds = cons(pair, binds); add_to_live_pool(binds);
             i++; }
@@ -437,7 +445,7 @@ static void bytecode_apply_impl(Ref function, Ref arguments,
                                     svref_set(frame, integer_from_word((word)i), TOP()); }
                              break; }
         case BC_LOAD_GLOBAL:{ uint64_t s = vm_read_uvar(code,&pc); Ref sym = K[s];
-                             if(!symbol_boundp(sym)){ ERROR("Unbound variable: %s", string_cstring(symbol_name(sym))); }
+                             if(!symbol_boundp(sym)){ ERROR("Unbound variable: %s", string_static_cstr(symbol_name(sym))); }
                              PUSH(symbol_value(sym)); break; }
         case BC_STORE_GLOBAL:{ uint64_t s = vm_read_uvar(code,&pc); set_symbol_value(K[s], TOP()); break; }
         case BC_LOAD_FUNCTION:{ uint64_t s = vm_read_uvar(code,&pc); Ref sym = K[s];

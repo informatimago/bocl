@@ -1337,7 +1337,9 @@ static void kernel_PARSE_FLOAT(unused Ref function, Ref arguments, MultipleValue
     char* cstr=string_cstring(str_ref);
     char* endp=NULL; errno=0;
     double val=strtod(cstr,&endp);
-    if(errno!=0||endp==cstr){
+    int bad=(errno!=0||endp==cstr);
+    free(cstr);
+    if(bad){
         ERROR("PARSE-FLOAT: cannot parse ~S as a float",str_ref); }
     results->count=1; results->values[0]=float_from_floating(val);
     close_live_pool(pool);}

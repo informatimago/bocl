@@ -13,6 +13,12 @@
 
 
 #define FATAL(message_format,...)                    fatal(__FUNCTION__,"FATAL ERROR:" message_format,__VA_ARGS__)
+/* NAME of a Lisp STRING as a C string in a static ROTATING buffer (8 slots).
+   For ERROR/TYPE_ERROR/FATAL message arguments and debug prints: those paths
+   longjmp or never free, so a malloc'd string_cstring() argument would leak
+   (sanitiser-error-path-leaks).  Long names are truncated to the slot size. */
+const char* string_static_cstr(Ref string);
+
 #define ERROR(message_format,...)                    error(__FUNCTION__,"ERROR: " message_format,__VA_ARGS__)
 #define ARITHMETIC_ERROR(message_format,...)         error(__FUNCTION__,"ARITHMETIC ERROR: " message_format,__VA_ARGS__)
 #define TYPE_ERROR(object,class)                     type_error(__FUNCTION__,object,class)

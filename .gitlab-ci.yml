@@ -181,11 +181,7 @@ sanitise:debian-gcc:
       junit: tests/*-Results.xml
     expire_in: 3 days
   rules:
-    # allow_failure while sanitiser-error-path-leaks.issue is open: LeakSanitizer
-    # flags small one-shot error-path leaks (string_cstring args to the
-    # longjmp-ing ERROR macros).  The job still runs and reports.
     - when: on_success
-      allow_failure: true
 
 # Phase 4 — FreeBSD via QEMU. The BSDs cannot run in a container, so this boots
 # a FreeBSD cloud image under QEMU (TCG; shared runners have no KVM) and runs the

@@ -141,9 +141,20 @@ _Noreturn void package_error(const char* fname,const char* message_format,...){
     exit(EX_DATAERR);}
 
 
+const char* string_static_cstr(Ref string){
+    static char bufs[8][256];
+    static int k = 0;
+    char* b = bufs[k]; k = (k+1)%8;
+    char* c = string_cstring(string);
+    snprintf(b, sizeof(bufs[0]), "%s", c);
+    free(c);
+    return b;}
+
 _Noreturn void type_error(const char* fname,Ref object,Ref class){
-    char* got=string_cstring(object->class->slots->class.name->slots->symbol.name);
-    char* exp=string_cstring(        class->slots->class.name->slots->symbol.name);
+    /* STATIC name buffers: this function longjmps (signal_condition), so a
+       malloc'd string_cstring here leaked on every signalled type error. */
+    const char* got=string_static_cstr(object->class->slots->class.name->slots->symbol.name);
+    const char* exp=string_static_cstr(        class->slots->class.name->slots->symbol.name);
 
     /* Signal a SIMPLE-TYPE-ERROR through the Lisp handler system so that
        HANDLER-CASE / HANDLER-BIND can catch type errors raised from C built-ins.
@@ -175,8 +186,6 @@ _Noreturn void type_error(const char* fname,Ref object,Ref class){
 
     fprintf(stderr,"\nIn %s:\n",fname);
     fprintf(stderr,"TYPE ERROR: got an object of class %s, expected an object of class %s\n\n",got,exp);
-    free(exp);
-    free(got);
     exit(EX_DATAERR);}
 
 

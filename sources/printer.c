@@ -435,11 +435,13 @@ static unsigned char fold_char(unsigned char c, int pcase, bool word_start){
 static void invert_scan(Ref name, int rcase, bool* up, bool* lo){
     char* s   = string_cstring(name);
     uword len = string_length(name);
-    if(symbol_name_needs_escape(s,len,rcase)){ return; }
-    for(uword i=0;i<len;i++){
-        unsigned char c=(unsigned char)s[i];
-        if(c>='A'&&c<='Z'){ *up=true; } else if(c>='a'&&c<='z'){ *lo=true; }
+    if(!symbol_name_needs_escape(s,len,rcase)){
+        for(uword i=0;i<len;i++){
+            unsigned char c=(unsigned char)s[i];
+            if(c>='A'&&c<='Z'){ *up=true; } else if(c>='a'&&c<='z'){ *lo=true; }
+        }
     }
+    free(s);   /* leaked per printed symbol before (sanitiser-error-path-leaks) */
 }
 
 /* Write a symbol/package name to OUT honouring READTABLE-CASE and *PRINT-CASE*
@@ -460,8 +462,9 @@ static void print_name_escaped(Ref name, FILE* out, bool escape, int inv){
             if(c=='|' || c=='\\'){ fputc('\\',out); }
             fputc(c,out); }
         fputc('|',out);
+        free(s);
         return; }
-    if(rcase==2){ fwrite(s,1,(size_t)len,out); return; }   /* :PRESERVE — verbatim */
+    if(rcase==2){ fwrite(s,1,(size_t)len,out); free(s); return; }   /* :PRESERVE — verbatim */
     if(rcase==3){                                           /* :INVERT — flip a uniform-case token */
         bool uniform;
         if(inv>=0){ uniform=(inv==1); }
@@ -477,6 +480,7 @@ static void print_name_escaped(Ref name, FILE* out, bool escape, int inv){
                 if(c>='A'&&c<='Z'){ c=(unsigned char)(c+32); }
                 else if(c>='a'&&c<='z'){ c=(unsigned char)(c-32); } }
             fputc(c,out); }
+        free(s);
         return; }
     /* :UPCASE / :DOWNCASE — fold the foldable letters (uppercase under :UPCASE,
        lowercase under :DOWNCASE) per *PRINT-CASE*; emit the rest verbatim. */
@@ -489,6 +493,7 @@ static void print_name_escaped(Ref name, FILE* out, bool escape, int inv){
         fputc(foldable ? fold_char(c,pcase,word_start) : c, out);
         word_start = !alnum;
     }
+    free(s);   /* leaked per printed symbol before (sanitiser-error-path-leaks) */
 }
 
 /* --- Radix-aware integer / ratio printing (*PRINT-BASE* / *PRINT-RADIX*) ----

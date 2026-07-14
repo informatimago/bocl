@@ -521,7 +521,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         /* Not lexically bound — try the symbol's global value cell. */
         if(symbol_boundp(form)){
             VALUES1(symbol_value(form));}
-        ERROR("Unbound variable: %s",string_cstring(symbol_name(form)));}
+        ERROR("Unbound variable: %s",string_static_cstr(symbol_name(form)));}
 
     else if(!consp(form)){
         eval_counters.literal++;
@@ -604,13 +604,13 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 kernel_apply(symbol_function(symbol_intern_cstring("%REGISTER-SETF-FUNCTION")),
                              list(sym,fn,(Ref)NULL),&mv);
                 VALUES1(name);}
-            ERROR("DEFUN: %s is not a valid function name",string_cstring(prin1_to_string(name)));}
+            ERROR("DEFUN: %s is not a valid function name",string_static_cstr(prin1_to_string(name)));}
 
         if(operator==S(DEFPARAMETER)){
             check_arg_count(arguments,2,3);  /* name value [doc] */
             Ref name=car(arguments);
             if(!symbolp(name)){
-                ERROR("DEFPARAMETER: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFPARAMETER: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             Ref value=evale(cadr(arguments),environment,results);
             define_parameter(name,value);
             VALUES1(name);}
@@ -619,7 +619,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,1,3);  /* name [value [doc]] */
             Ref name=car(arguments);
             if(!symbolp(name)){
-                ERROR("DEFVAR: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFVAR: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             if(consp(cdr(arguments)) && !symbol_boundp(name)){
                 Ref value=evale(cadr(arguments),environment,results);
                 define_variable(name,value);}
@@ -631,7 +631,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,2,3);  /* name value [doc] */
             Ref name=car(arguments);
             if(!symbolp(name)){
-                ERROR("DEFCONSTANT: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFCONSTANT: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             Ref value=evale(cadr(arguments),environment,results);
             define_constant(name,value);
             VALUES1(name);}
@@ -645,7 +645,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref params=cadr(arguments);
             Ref body=cddr(arguments);
             if(!symbolp(name)){
-                ERROR("DEFMACRO: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFMACRO: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             Ref fn=function_new(name,params,make_block_body(name,body,NULL));
             add_to_live_pool(fn);   /* function_new leaves fn unrooted; putf() below
                 conses (may GC) while fn is not yet on the plist — without this it is
@@ -1172,7 +1172,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                             doit=1;
                             break;}}
                     else{
-                        ERROR("Invalid EVAL-WHEN situation: %s",string_cstring(prin1_to_string(situation)));}}}
+                        ERROR("Invalid EVAL-WHEN situation: %s",string_static_cstr(prin1_to_string(situation)));}}}
              if(doit){
                  {dolist(subform,body){
                          evale(subform,environment,results);}}
@@ -1615,7 +1615,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref result_form=cadr(arguments);
             Frame* target_frame=find_catch_frame(object,environment);
             if(NULL==target_frame){
-                ERROR("No active catch for tag %s",string_cstring(prin1_to_string(object)));}
+                ERROR("No active catch for tag %s",string_static_cstr(prin1_to_string(object)));}
             evale(result_form,environment,target_frame->results);
             NON_LOCAL_EXIT(target_frame);}
 
@@ -1754,7 +1754,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     function=f;}}}
 
         if(nullp(function) && nullp(macro)){
-            ERROR("Undefined function: %s",string_cstring(symbol_name(operator)));}
+            ERROR("Undefined function: %s",string_static_cstr(symbol_name(operator)));}
 
         if(!nullp(macro)){
             /* Macro call: kernel_apply the macro function to the
@@ -1844,7 +1844,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         PASS_VALUES();}
 
     else{
-        ERROR("evale: malformed form %s",string_cstring(prin1_to_string(form)));}
+        ERROR("evale: malformed form %s",string_static_cstr(prin1_to_string(form)));}
 
     close_live_pool(pool);
     return NIL_Symbol;}
@@ -1984,7 +1984,7 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
                     aux_var=car(aux_spec);
                     aux_init=nullp(cdr(aux_spec))?NIL_Symbol:cadr(aux_spec);
                 } else {
-                    ERROR("&AUX: bad spec %s",string_cstring(prin1_to_string(aux_spec)));}
+                    ERROR("&AUX: bad spec %s",string_static_cstr(prin1_to_string(aux_spec)));}
                 MultipleValues aux_res={0};
                 Ref val=(nullp(aux_init)?NIL_Symbol:evale(aux_init,target_env,&aux_res));
                 Ref wrap=env_make_lexical_variable(aux_var,val);

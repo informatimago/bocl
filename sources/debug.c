@@ -14,23 +14,23 @@
 void dump_obarray(Ref obarray){
     if(!consp(obarray)){
         fprintf(stderr,"dump obarray: NOT A CONS CELL, but %s\n",
-                string_cstring(symbol_name(obarray->class->slots->class.name)));
+                string_static_cstr(symbol_name(obarray->class->slots->class.name)));
         abort();}
     fprintf(stderr,"dump obarray: %-16s\n",
-            string_cstring(symbol_name(cons_car(obarray))));
+            string_static_cstr(symbol_name(cons_car(obarray))));
     Ref syms=cons_cdr(obarray);
     long sc=0;
     while(consp(syms)){
         sc++;
-        fprintf(stderr,"    %s\n",string_cstring(symbol_name(cons_car(syms))));
+        fprintf(stderr,"    %s\n",string_static_cstr(symbol_name(cons_car(syms))));
         if(symbol_package(cons_car(syms))!=obarray){
             fprintf(stderr,"wrong package for %s\n",
-                    string_cstring(symbol_name(cons_car(syms))));}
+                    string_static_cstr(symbol_name(cons_car(syms))));}
         syms=cons_cdr(syms);}
     fprintf(stderr," = %3ld symbols\n",sc);
     if(syms!=NIL_Symbol){
         fprintf(stderr," dotted-list obarray, last cdr is a %s\n",
-                string_cstring(symbol_name(syms->class->slots->class.name)));}}
+                string_static_cstr(symbol_name(syms->class->slots->class.name)));}}
 
 void dump_kernel_classes(){
     fprintf(stderr,"Dumping kernel_classes\n");
@@ -55,18 +55,18 @@ void dump_kernel_classes(){
         if(!class_of(class)){
             fprintf(stderr,"%3d: %-34s NULL metaclass!\n",
                     i,
-                    string_cstring(symbol_name(class_name_class)));
+                    string_static_cstr(symbol_name(class_name_class)));
             continue;}
         Ref class_name_metaclass=class_of(class)->slots->class.name;
         if(!class_name_metaclass){
             fprintf(stderr,"%3d: %-34s %p NULL name of metaclass!\n",
                     i,
-                    string_cstring(symbol_name(class_name_class)),
+                    string_static_cstr(symbol_name(class_name_class)),
                     (void*)class_of(class));
             continue;}
         fprintf(stderr,"class-name: %-34s   metaclass: %-26s    direct-superclasses:",
-                string_cstring(symbol_name(class_name_class)),
-                string_cstring(symbol_name(class_name_metaclass)));
+                string_static_cstr(symbol_name(class_name_class)),
+                string_static_cstr(symbol_name(class_name_metaclass)));
 
         Ref ccurrent=class->slots->class.direct_superclasses;
         if(!ccurrent){
@@ -76,7 +76,7 @@ void dump_kernel_classes(){
             Ref super=cons_car(ccurrent);
             current=cons_cdr(ccurrent);
             Ref class_name_super=super->slots->class.name;
-            fprintf(stderr," %s",string_cstring(symbol_name(class_name_super)));}
+            fprintf(stderr," %s",string_static_cstr(symbol_name(class_name_super)));}
         fprintf(stderr,"\n");}}
 
 
@@ -95,8 +95,8 @@ void debug_typep(Ref object,Ref class){
             (void*)symbol_name(object_class->slots->class.name),
             (void*)symbol_name(       class->slots->class.name));
     fprintf(stderr,"Is object of class %s of type %s\n",
-            string_cstring(symbol_name(object_class->slots->class.name)),
-            string_cstring(symbol_name(       class->slots->class.name)));}
+            string_static_cstr(symbol_name(object_class->slots->class.name)),
+            string_static_cstr(symbol_name(       class->slots->class.name)));}
 
 
 void debug(void){

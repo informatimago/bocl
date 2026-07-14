@@ -144,7 +144,7 @@ static Ref build_condition(Ref default_class, Ref arguments){
                 clos_instance_p(mi_res.values[0]))){
                 return mi_res.values[0];}}}
     ERROR("Unsupported datum type to ERROR / SIGNAL / WARN: %s",
-          string_cstring(prin1_to_string(datum)));}
+          string_static_cstr(prin1_to_string(datum)));}
 
 static void kernel_SIGNAL(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
@@ -167,12 +167,13 @@ static void kernel_ERROR(Ref function, Ref arguments, MultipleValues* results){
     /* Render the condition's REPORT (format-control applied to its
        format-arguments) via PRINC, not the raw format-control — otherwise an
        unhandled "LOAD: file ~S does not exist" prints the literal ~S. */
-    char* report = string_cstring(princ_to_string(cond));
+    const char* report = string_static_cstr(princ_to_string(cond));   /* static:
+        the ERROR below longjmps, so a malloc'd cstring would leak */
     /* class_of(cond) is a CLOS %cls for make-condition'd / CLOS-defined
        conditions (e.g. the reader's END-OF-FILE / READER-ERROR); class_name
        would check_type-reject it.  class_designator_name accepts both. */
     ERROR("Unhandled %s: %s",
-          string_cstring(symbol_name(class_designator_name(class_of(cond)))),
+          string_static_cstr(symbol_name(class_designator_name(class_of(cond)))),
           report);
     /* unreachable */
     (void)results;
@@ -324,7 +325,7 @@ static void kernel_FIND_RESTART(Ref function, Ref arguments, MultipleValues* res
     /* Accept either a symbol or a restart object (which is also the symbol). */
     if(!symbolp(name)){
         ERROR("FIND-RESTART: expected a symbol, got %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     if(restart_name_hidden(name, condition)){
         results->count = 1;
         results->values[0] = NIL_Symbol;
@@ -362,7 +363,7 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     Frame* target = find_restart_frame_by_name(name, env);
     if(target == NULL){
         ERROR("INVOKE-RESTART: no active restart named %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     /* RESTART-BIND restart: its spec's 2nd element is a callable — apply it in
        place (in the dynamic context of this INVOKE-RESTART) and return its values,
        rather than unwinding to a RESTART-CASE clause. */
@@ -410,11 +411,11 @@ static void kernel_INVOKE_RESTART_INTERACTIVELY(Ref function, Ref arguments, Mul
     Ref name = pop_mandatory_argument(function, &current);
     if(!symbolp(name)){
         ERROR("INVOKE-RESTART-INTERACTIVELY: expected a symbol, got %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     Frame* target = find_restart_frame_by_name(name, eval_global_environment());
     if(target == NULL){
         ERROR("INVOKE-RESTART-INTERACTIVELY: no active restart named %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     /* Find the restart spec; (name fn interactive-fn) for restart-bind. */
     Ref spec = NIL_Symbol;
     {   Ref rs = target->parameters.restart.restarts;
