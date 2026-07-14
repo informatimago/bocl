@@ -16,6 +16,12 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #  define _DARWIN_C_SOURCE 1
 #  define _BSD_SOURCE 1
+   /* FreeBSD: ANY strict feature macro (the build passes -D_POSIX_C_SOURCE
+      globally) sets __BSD_VISIBLE to 0 and hides funopen — _BSD_SOURCE is a
+      GLIBC name and does nothing here.  Undo the command-line macro for this
+      translation unit only (macOS re-exposes via _DARWIN_C_SOURCE instead). */
+#  undef _POSIX_C_SOURCE
+#  undef _XOPEN_SOURCE
 #  define BOCL_CALLBACK_STREAM_FUNOPEN 1
 #else
 #  define _GNU_SOURCE 1

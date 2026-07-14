@@ -1,4 +1,8 @@
-#define _POSIX_SOURCE
+/* XSI (SUSv4): FreeBSD guards struct sigaction's SA_SIGINFO member
+   sa_sigaction behind __XSI_VISIBLE, which plain _POSIX_C_SOURCE does not
+   set — the crash-handler installation below needs it.  _XOPEN_SOURCE 700
+   is a superset of the _POSIX_C_SOURCE=200809L the build already passes. */
+#define _XOPEN_SOURCE 700
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

@@ -2171,7 +2171,7 @@ void bocl_register_load(void){
     Ref ld=symbol_intern_cstring("%LIST-DIRECTORY");
     set_symbol_function(ld,built_in_function_new(ld,list(S(PATH),NULL),kernel_LIST_DIRECTORY));
     {   Ref md=symbol_intern_cstring("%DEFAULT-MODULES-DIRECTORY");
-        set_symbol_function(md,built_in_function_new(md,list(NULL),kernel_DEFAULT_MODULES_DIRECTORY)); }
+        set_symbol_function(md,built_in_function_new(md,NIL_Symbol,kernel_DEFAULT_MODULES_DIRECTORY)); }
     {   Ref sc=symbol_intern_cstring("%STRING-CONTAINS-CI");
         set_symbol_function(sc,built_in_function_new(sc,list(S(NAME),S(VALUE),NULL),kernel_STRING_CONTAINS_CI)); }
     {   Ref sc=symbol_intern_cstring("%STRING-CMP2");
@@ -2328,7 +2328,7 @@ void bocl_register_load(void){
         set_symbol_function(frf,built_in_function_new(frf,ll_fmt,kernel_FORMAT_RUN));
     }
     /* Slice 25 — environment, PARSE-FLOAT, compiler stubs. */
-    {   Ref ll_0=list(NULL);
+    {   Ref ll_0=NIL_Symbol;
         Ref ll_s=list(symbol_intern_cstring("STRING"),
                       S(&REST),symbol_intern_cstring("KEYS"),NULL);
         Ref ll_n=list(symbol_intern_cstring("NAME"),
@@ -2366,7 +2366,7 @@ void bocl_register_load(void){
                      symbol_intern_cstring("FUNCTION"),NULL),
                 kernel_bocl_DEFINE_FUNCTION));
             package_export(BOCL_Package,dfn); }
-        {   Ref nofn=list(NULL);
+        {   Ref nofn=NIL_Symbol;
             Ref opt_s=list(symbol_intern_cstring("&OPTIONAL"),symbol_intern_cstring("STREAM"),NULL);
             Ref id1=list(symbol_intern_cstring("ID"),NULL);
             set_symbol_function(symbol_intern_cstring("%PROFILE-RESET"),
@@ -2374,7 +2374,7 @@ void bocl_register_load(void){
             set_symbol_function(symbol_intern_cstring("%PROFILE-REPORT"),
                 built_in_function_new(symbol_intern_cstring("%PROFILE-REPORT"),opt_s,kernel_PROFILE_REPORT));
             set_symbol_function(symbol_intern_cstring("%PROFILE-ENABLED-P"),
-                built_in_function_new(symbol_intern_cstring("%PROFILE-ENABLED-P"),list(NULL),kernel_PROFILE_ENABLED_P));
+                built_in_function_new(symbol_intern_cstring("%PROFILE-ENABLED-P"),NIL_Symbol,kernel_PROFILE_ENABLED_P));
             set_symbol_function(symbol_intern_cstring("%PROFILE-PHASE-ENTER"),
                 built_in_function_new(symbol_intern_cstring("%PROFILE-PHASE-ENTER"),id1,kernel_PROFILE_PHASE_ENTER));
             set_symbol_function(symbol_intern_cstring("%PROFILE-PHASE-EXIT"),

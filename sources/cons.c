@@ -158,6 +158,13 @@ Ref bocl_append(Ref lists){
     return result;}
 
 Ref list(Ref first_element,...){
+    if(!first_element){
+        /* list(NULL) is the empty list.  Do NOT touch the varargs: NULL is
+           the terminator, so nothing follows it — va_arg would read past the
+           caller's argument area into stack garbage (on FreeBSD/clang -O2
+           those words look like live Refs, get consed into a reachable list,
+           and the next GC mark through them corrupts block headers). */
+        return NIL_Symbol;}
     uword pool=open_live_pool();
     /* save the arguments to the rootset before allocating anything: */
     add_to_live_pool(first_element);
