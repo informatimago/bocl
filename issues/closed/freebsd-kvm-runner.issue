@@ -42,3 +42,12 @@ ci/freebsd-build.sh auto-detects: KVM when /dev/kvm is writable, TCG
 otherwise.  Everything else (image fetch, nuageinit seed, build, 42
 test suites, linkage proof, prelude byte-compilation) was validated on
 FreeBSD 14.4 under KVM on 2026-07-14.
+
+RESOLUTION (2026-07-14)
+-----------------------
+All three host-side steps done on poseidon (udev rule by pjb; config.toml
+devices entry by pjb, comma typo fixed; runner restarted).  Verified
+in-container: /dev/kvm passed through rwm and world-rw; the very next
+build:freebsd run picked it up (qemu -accel kvm -cpu host) and the job
+SUCCEEDED in 33 min (pipeline 2676205546, commit 56200bb).
+allow_failure dropped from build:freebsd in .gitlab-ci.yml (v1.8.46).

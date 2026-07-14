@@ -184,10 +184,12 @@ sanitise:debian-gcc:
     - when: on_success
 
 # Phase 4 — FreeBSD via QEMU. The BSDs cannot run in a container, so this boots
-# a FreeBSD cloud image under QEMU (TCG; shared runners have no KVM) and runs the
-# normal ci/build.sh over SSH with gmake. allow_failure while it is shaken out:
-# it reports BSD portability status without blocking the deliverable pipeline.
-# Serial console is saved as an artifact for diagnosis.
+# a FreeBSD cloud image under QEMU and runs the normal ci/build.sh over SSH with
+# gmake. On poseidon the runner passes /dev/kvm through (config.toml devices +
+# udev MODE 0666, see issues/closed/freebsd-kvm-runner.issue) so the VM runs
+# under KVM and the whole job takes ~15-20 min; without /dev/kvm the script
+# falls back to TCG, where the FreeBSD 14.4 firstboot alone can exceed the
+# timeout. Serial console is saved as an artifact for diagnosis.
 build:freebsd:
   extends: .docker
   stage: build
@@ -202,7 +204,6 @@ build:freebsd:
     expire_in: 3 days
   rules:
     - when: on_success
-      allow_failure: true
 
 # Phase 4 — native macOS on the thalassa shell runner. macOS cannot run in a
 # container, so jobs that must run on macOS carry the `macos` runner tag and
