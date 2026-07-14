@@ -22,7 +22,7 @@ TEST_SUITE_SETUP(clos_init){
 TEST_SUITE_TEARDOWN(clos_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 /* ---- 1. Basic DEFCLASS -------------------------------------------------- */
 

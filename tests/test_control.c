@@ -23,7 +23,7 @@ TEST_SUITE_SETUP(ctrl_init){
 TEST_SUITE_TEARDOWN(ctrl_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_case_single_keys(void){
     TEST_EQ(eql, K(TWO),  e("(case 2 (1 :one) (2 :two) (3 :three))"));

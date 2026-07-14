@@ -25,7 +25,7 @@ TEST_SUITE_SETUP(misc_init){
 TEST_SUITE_TEARDOWN(misc_fini){
     return CUE_SUCCESS;}
 
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- MAKE-ARRAY -------------------------------------------------------- */
 static void test_make_array(void){
@@ -125,21 +125,21 @@ static void test_file_ops(void){
     /* Create a temp file, probe, rename, probe, delete, probe. */
     TEST_EQ(equal, e("t"),
             e("(progn"
-              "  (with-open-file (f \"/tmp/bocl_test_misc_1.tmp\" :direction :output"
+              "  (with-open-file (f \"{TMP}/test_misc_1.tmp\" :direction :output"
               "                      :if-exists :supersede)"
               "    (write-string \"hello\" f))"
-              "  (if (probe-file \"/tmp/bocl_test_misc_1.tmp\") t nil))"));
+              "  (if (probe-file \"{TMP}/test_misc_1.tmp\") t nil))"));
     TEST_EQ(equal, e("t"),
             e("(progn"
-              "  (rename-file \"/tmp/bocl_test_misc_1.tmp\""
-              "               \"/tmp/bocl_test_misc_2.tmp\")"
-              "  (if (probe-file \"/tmp/bocl_test_misc_2.tmp\") t nil))"));
+              "  (rename-file \"{TMP}/test_misc_1.tmp\""
+              "               \"{TMP}/test_misc_2.tmp\")"
+              "  (if (probe-file \"{TMP}/test_misc_2.tmp\") t nil))"));
     TEST_EQ(equal, e("nil"),
-            e("(probe-file \"/tmp/bocl_test_misc_1.tmp\")"));
+            e("(probe-file \"{TMP}/test_misc_1.tmp\")"));
     /* delete-file returns T; probe-file after deletion returns NIL */
-    TEST_EQ(equal, e("t"), e("(delete-file \"/tmp/bocl_test_misc_2.tmp\")"));
+    TEST_EQ(equal, e("t"), e("(delete-file \"{TMP}/test_misc_2.tmp\")"));
     TEST_EQ(equal, e("nil"),
-            e("(probe-file \"/tmp/bocl_test_misc_2.tmp\")"));}
+            e("(probe-file \"{TMP}/test_misc_2.tmp\")"));}
 
 /* ---- TIMING ----------------------------------------------------------- */
 static void test_timing(void){
@@ -453,7 +453,7 @@ static void test_cfasl_validate(void){
 static void test_cfasl_corpus(void){
     /* (1) GC-rooting guard: a file with enough forms + repeated CL symbols
        (backrefs) that binary load allocates through several GCs. */
-    FILE* f = fopen("/tmp/bocl_cfasl_corpus.lisp", "w");
+    FILE* f = fopen(bocl_test_path("{TMP}/cfasl_corpus.lisp"), "w");
     TEST_EQ(eql, T_Symbol, f ? T_Symbol : NIL_Symbol);
     fputs("(defpackage :cfc (:use :cl))(in-package :cfc)\n", f);
     for(int i=0;i<200;i++){
@@ -461,15 +461,15 @@ static void test_cfasl_corpus(void){
         fprintf(f, "(defun f%d (l) (let ((a 0)) (dolist (e l a) (setq a (+ a (m%d e))))))\n", i, i);
     }
     fclose(f);
-    e("(compile-file \"/tmp/bocl_cfasl_corpus.lisp\")");
-    TEST_EQ(eql, T_Symbol, e("(%cfasl-file-p \"/tmp/bocl_cfasl_corpus.cfasl\")")); /* binary */
-    e("(load \"/tmp/bocl_cfasl_corpus.cfasl\")");
+    e("(compile-file \"{TMP}/cfasl_corpus.lisp\")");
+    TEST_EQ(eql, T_Symbol, e("(%cfasl-file-p \"{TMP}/cfasl_corpus.cfasl\")")); /* binary */
+    e("(load \"{TMP}/cfasl_corpus.cfasl\")");
     TEST_EQ(eql, I(552), e("(cfc::f182 '(1 2 3))"));   /* 183+184+185 — survived GC */
     TEST_EQ(eql, I(6),   e("(cfc::f0 '(1 2 3))"));      /* 1+2+3 */
 
     /* (2) feature coverage: DEFPACKAGE/IN-PACKAGE, EVAL-WHEN, DEFCLASS/DEFMETHOD,
        ratio/float/string/simple-vector literals — binary load == expected. */
-    FILE* g = fopen("/tmp/bocl_cfasl_feat.lisp", "w");
+    FILE* g = fopen(bocl_test_path("{TMP}/cfasl_feat.lisp"), "w");
     TEST_EQ(eql, T_Symbol, g ? T_Symbol : NIL_Symbol);
     fputs("(defpackage :cfg (:use :cl) (:export #:area))\n(in-package :cfg)\n", g);
     fputs("(eval-when (:load-toplevel :execute) (defparameter *lv* :yes))\n", g);
@@ -478,14 +478,19 @@ static void test_cfasl_corpus(void){
     fputs("(defvar *rat* 3/4)(defvar *flo* 2.5d0)(defvar *str* \"hi\")(defvar *vec* #(1 2 3))\n", g);
     fputs("(in-package :cl-user)\n", g);
     fclose(g);
-    e("(compile-file \"/tmp/bocl_cfasl_feat.lisp\")");
-    e("(load \"/tmp/bocl_cfasl_feat.cfasl\")");
+    e("(compile-file \"{TMP}/cfasl_feat.lisp\")");
+    e("(load \"{TMP}/cfasl_feat.cfasl\")");
     TEST_EQ(eql, T_Symbol, e("(if (eq cfg::*lv* :yes) t nil)"));           /* eval-when :load */
     TEST_EQ(eql, I(48),    e("(cfg:area (make-instance 'cfg::shp :r 4))")); /* class + method */
     TEST_EQ(eql, T_Symbol, e("(if (= cfg::*rat* 3/4) t nil)"));            /* ratio */
     TEST_EQ(eql, T_Symbol, e("(if (= cfg::*flo* 2.5d0) t nil)"));          /* double-float */
     TEST_EQ(equal, e("\"hi\""), e("cfg::*str*"));                          /* string */
     TEST_EQ(eql, I(2),     e("(aref cfg::*vec* 1)"));                      /* simple-vector */
+    /* leave no fixtures behind (tests-fixed-tmp-paths) */
+    e("(ignore-errors (delete-file \"{TMP}/cfasl_corpus.lisp\"))");
+    e("(ignore-errors (delete-file \"{TMP}/cfasl_corpus.cfasl\"))");
+    e("(ignore-errors (delete-file \"{TMP}/cfasl_feat.lisp\"))");
+    e("(ignore-errors (delete-file \"{TMP}/cfasl_feat.cfasl\"))");
 }
 
 /* vm-1: the compiled-function object exists, is FUNCTIONP, its accessors round-
@@ -938,15 +943,15 @@ static void test_eql_specializers_and_read_sequence(void){
     TEST_EQ(eql, e(":answer2"), e("(%eqs 42)"));
     /* read-sequence returns the FILL POSITION, 0 at EOF */
     TEST_EQ(equal, e("'(3 0)"),
-            e("(progn (with-open-file (o \"/tmp/bocl_rs_test.tmp\" :direction :output"
+            e("(progn (with-open-file (o \"{TMP}/rs_test.tmp\" :direction :output"
               "                          :if-exists :supersede) (princ \"abc\" o))"
-              "  (with-open-file (i \"/tmp/bocl_rs_test.tmp\")"
+              "  (with-open-file (i \"{TMP}/rs_test.tmp\")"
               "    (let ((buf (make-string 8)))"
               "      (list (read-sequence buf i) (read-sequence buf i)))))"));
-    e("(delete-file \"/tmp/bocl_rs_test.tmp\")");
+    e("(delete-file \"{TMP}/rs_test.tmp\")");
     /* delete-file on a missing file signals FILE-ERROR (CLHS) */
     TEST_EQ(eql, e(":fe"),
-            e("(handler-case (delete-file \"/tmp/bocl_no_such_file.tmp\")"
+            e("(handler-case (delete-file \"{TMP}/no_such_file.tmp\")"
               "  (file-error () :fe))"));
 }
 
@@ -1345,22 +1350,22 @@ static void test_vm_compile_wiring(void){
     TEST_EQ(eql, I(36), e("(funcall (compile nil '(lambda (x) (+ (* x x) (* 2 x) 1))) 5)"));
 
     /* COMPILE-FILE emits a byte-code fasl; LOAD installs the templates (no recompile) */
-    e("(with-open-file (f \"/tmp/bocl_vm8_cf.lisp\" :direction :output :if-exists :supersede)"
+    e("(with-open-file (f \"{TMP}/vm8_cf.lisp\" :direction :output :if-exists :supersede)"
       "  (write-line \"(in-package :common-lisp)\" f)"
       "  (write-line \"(defun vm8cf-sq (x) (* x x))\" f)"
       "  (write-line \"(defun vm8cf-sum (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s i)))))\" f)"
       "  (write-line \"(defun vm8cf-fact (n) (if (< n 2) 1 (* n (vm8cf-fact (- n 1)))))\" f))");
-    Ref fasl = e("(compile-file \"/tmp/bocl_vm8_cf.lisp\")");
+    Ref fasl = e("(compile-file \"{TMP}/vm8_cf.lisp\")");
     add_to_live_pool(fasl);
-    TEST_EQ(eql, T_Symbol, e("(if (%cfasl-file-p (namestring (compile-file-pathname \"/tmp/bocl_vm8_cf.lisp\"))) t nil)"));
-    e("(load (compile-file-pathname \"/tmp/bocl_vm8_cf.lisp\"))");
+    TEST_EQ(eql, T_Symbol, e("(if (%cfasl-file-p (namestring (compile-file-pathname \"{TMP}/vm8_cf.lisp\"))) t nil)"));
+    e("(load (compile-file-pathname \"{TMP}/vm8_cf.lisp\"))");
     /* the loaded functions are byte-code (installed from the fasl) and run */
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (symbol-function 'vm8cf-sq)) t nil)"));
     TEST_EQ(eql, I(49),   e("(vm8cf-sq 7)"));
     TEST_EQ(eql, I(4950), e("(vm8cf-sum 100)"));
     TEST_EQ(eql, I(720),  e("(vm8cf-fact 6)"));
-    e("(ignore-errors (delete-file \"/tmp/bocl_vm8_cf.lisp\"))");
-    e("(ignore-errors (delete-file (compile-file-pathname \"/tmp/bocl_vm8_cf.lisp\")))");
+    e("(ignore-errors (delete-file \"{TMP}/vm8_cf.lisp\"))");
+    e("(ignore-errors (delete-file (compile-file-pathname \"{TMP}/vm8_cf.lisp\")))");
 
     close_live_pool(pool);
 }
@@ -1389,16 +1394,16 @@ static void test_vm_compiled_prelude(void){
        COMPILE-FILE keeps the DEFPARAMETER raw, so LOAD never errors on the
        docstring's (SETF (DOCUMENTATION ...)) — it expands in boot order — and the
        parameter's value is correct; the DEFUN loads byte-compiled. */
-    e("(with-open-file (f \"/tmp/bocl_vm10_cf.lisp\" :direction :output :if-exists :supersede)"
+    e("(with-open-file (f \"{TMP}/vm10_cf.lisp\" :direction :output :if-exists :supersede)"
       "  (write-line \"(in-package :common-lisp)\" f)"
       "  (write-line \"(defparameter *vm10-p* (list 'sentinel) \\\"a doc string\\\")\" f)"
       "  (write-line \"(defun vm10-cube (x) (* x x x))\" f))");
-    e("(load (compile-file \"/tmp/bocl_vm10_cf.lisp\"))");   /* must not error on the docstring */
+    e("(load (compile-file \"{TMP}/vm10_cf.lisp\"))");   /* must not error on the docstring */
     TEST_EQ(eql, T_Symbol, e("(if (compiled-function-p (symbol-function 'vm10-cube)) t nil)"));
     TEST_EQ(eql, I(27),    e("(vm10-cube 3)"));
     TEST_EQ(equal, e("'(sentinel)"), e("*vm10-p*"));
-    e("(ignore-errors (delete-file \"/tmp/bocl_vm10_cf.lisp\"))");
-    e("(ignore-errors (delete-file (compile-file-pathname \"/tmp/bocl_vm10_cf.lisp\")))");
+    e("(ignore-errors (delete-file \"{TMP}/vm10_cf.lisp\"))");
+    e("(ignore-errors (delete-file (compile-file-pathname \"{TMP}/vm10_cf.lisp\")))");
 
     close_live_pool(pool);
 }
@@ -1694,7 +1699,7 @@ static void test_vm_disassemble(void){
 static void test_vm_selfhost(void){
     uword pool = open_live_pool();
 
-    e("(with-open-file (f \"/tmp/bocl_vm9_corpus.lisp\" :direction :output :if-exists :supersede)"
+    e("(with-open-file (f \"{TMP}/vm9_corpus.lisp\" :direction :output :if-exists :supersede)"
       "  (write-line \"(in-package :common-lisp)\" f)"
       "  (write-line \"(defun v9-fact (n) (if (< n 2) 1 (* n (v9-fact (- n 1)))))\" f)"
       "  (write-line \"(defun v9-adder (k) (lambda (x) (+ x k)))\" f)"                 /* closure */
@@ -1702,11 +1707,11 @@ static void test_vm_selfhost(void){
       "  (write-line \"(defun v9-both (a b) (floor a b))\" f)"                          /* multiple values */
       "  (write-line \"(defun v9-safe (x) (handler-case (if (zerop x) (error \\\"zero\\\") (/ 10 x)) (error () :zero)))\" f)"
       "  (write-line \"(defun v9-map (l) (mapcar (v9-adder 100) l))\" f))");
-    Ref fasl = e("(compile-file \"/tmp/bocl_vm9_corpus.lisp\")");
+    Ref fasl = e("(compile-file \"{TMP}/vm9_corpus.lisp\")");
     add_to_live_pool(fasl);
     TEST_EQ(eql, T_Symbol,
-            e("(if (%cfasl-file-p (namestring (compile-file-pathname \"/tmp/bocl_vm9_corpus.lisp\"))) t nil)"));
-    e("(load (compile-file-pathname \"/tmp/bocl_vm9_corpus.lisp\"))");
+            e("(if (%cfasl-file-p (namestring (compile-file-pathname \"{TMP}/vm9_corpus.lisp\"))) t nil)"));
+    e("(load (compile-file-pathname \"{TMP}/vm9_corpus.lisp\"))");
 
     /* the DEFUN bodies loaded as byte-code (self-hosted) ... */
     TEST_EQ(eql, T_Symbol, e("(if (and (compiled-function-p (symbol-function 'v9-fact))"
@@ -1724,8 +1729,8 @@ static void test_vm_selfhost(void){
     TEST_EQ(eql, e("':zero"), e("(v9-safe 0)"));                /* handler-case caught */
     TEST_EQ(equal, e("'(101 102 103)"), e("(v9-map '(1 2 3))"));
 
-    e("(ignore-errors (delete-file \"/tmp/bocl_vm9_corpus.lisp\"))");
-    e("(ignore-errors (delete-file (compile-file-pathname \"/tmp/bocl_vm9_corpus.lisp\")))");
+    e("(ignore-errors (delete-file \"{TMP}/vm9_corpus.lisp\"))");
+    e("(ignore-errors (delete-file (compile-file-pathname \"{TMP}/vm9_corpus.lisp\")))");
     close_live_pool(pool);
 }
 

@@ -21,7 +21,7 @@ TEST_SUITE_SETUP(rc_init){
 TEST_SUITE_TEARDOWN(rc_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 /* restart-case: normal form value returned when no restart invoked. */
 static void test_restart_case_no_invoke(void){

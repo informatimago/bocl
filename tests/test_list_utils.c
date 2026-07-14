@@ -18,7 +18,7 @@ TEST_SUITE_TEARDOWN(list_utils_fini){
     return CUE_SUCCESS;}
 
 /* ---- helpers ---- */
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- ASSOC ---- */
 static void test_assoc(void){

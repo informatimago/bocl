@@ -25,7 +25,7 @@ TEST_SUITE_SETUP(s22_init){
 TEST_SUITE_TEARDOWN(s22_fini){
     return CUE_SUCCESS;}
 
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- TYPE-OF ------------------------------------------------------------- */
 
@@ -79,40 +79,52 @@ static void test_probe_file(void){
     /* /etc/hosts should exist on macOS. */
     TEST_EQ(eql, T_Symbol,
             e("(not (null (probe-file \"/etc/hosts\")))"));
-    /* A bogus path returns NIL. */
-    TEST_EQ(eql, NIL_Symbol,
-            e("(probe-file \"/tmp/bocl-test-file-that-does-not-exist-12345\")")); }
+    /* A bogus path returns NIL (per-process name: it must never exist). */
+    {   char form[600];
+        snprintf(form,sizeof(form),"(probe-file \"%s\")",
+                 bocl_test_tmp("file-that-does-not-exist-12345"));
+        TEST_EQ(eql, NIL_Symbol, e(form)); } }
 
 /* ---- OPEN :ELEMENT-TYPE (issue open-element-type-default) ----------------- */
 
 static void test_open_element_type(void){
+    char form[1024];
     /* :DEFAULT must be accepted as a character stream (CLHS OPEN): write #\x,
        read it back.  Previously signalled "Invalid element-type :DEFAULT". */
-    TEST_EQ(eql, T_Symbol,
-            e("(progn"
-              "  (with-open-file (s \"/tmp/bocl-et-default\" :direction :output"
-              "                     :if-exists :supersede :element-type :default)"
-              "    (write-char #\\x s))"
-              "  (char= #\\x"
-              "         (with-open-file (s \"/tmp/bocl-et-default\" :direction :input"
-              "                            :element-type :default)"
-              "           (read-char s))))"));
+    {   const char* p = bocl_test_tmp("et-default");
+        snprintf(form,sizeof(form),
+            "(progn"
+            "  (with-open-file (s \"%s\" :direction :output"
+            "                     :if-exists :supersede :element-type :default)"
+            "    (write-char #\\x s))"
+            "  (prog1 (char= #\\x"
+            "                (with-open-file (s \"%s\" :direction :input"
+            "                                   :element-type :default)"
+            "                  (read-char s)))"
+            "    (delete-file \"%s\")))", p, p, p);
+        TEST_EQ(eql, T_Symbol, e(form)); }
     /* BASE-CHAR is a character stream too. */
-    TEST_EQ(eql, T_Symbol,
-            e("(progn"
-              "  (with-open-file (s \"/tmp/bocl-et-bchar\" :direction :output"
-              "                     :if-exists :supersede :element-type (quote base-char))"
-              "    (write-char #\\y s))"
-              "  (char= #\\y (with-open-file (s \"/tmp/bocl-et-bchar\") (read-char s))))"));
+    {   const char* p = bocl_test_tmp("et-bchar");
+        snprintf(form,sizeof(form),
+            "(progn"
+            "  (with-open-file (s \"%s\" :direction :output"
+            "                     :if-exists :supersede :element-type (quote base-char))"
+            "    (write-char #\\y s))"
+            "  (prog1 (char= #\\y (with-open-file (s \"%s\") (read-char s)))"
+            "    (delete-file \"%s\")))", p, p, p);
+        TEST_EQ(eql, T_Symbol, e(form)); }
     /* Bare (UNSIGNED-BYTE) and (UNSIGNED-BYTE 8) are octet streams. */
-    TEST_EQ(eql, I(66),
-            e("(progn"
-              "  (with-open-file (s \"/tmp/bocl-et-ub\" :direction :output"
-              "                     :if-exists :supersede :element-type (quote (unsigned-byte)))"
-              "    (write-byte 66 s))"
-              "  (with-open-file (s \"/tmp/bocl-et-ub\" :direction :input"
-              "                     :element-type (quote (unsigned-byte 8)))"
-              "    (read-byte s)))"));}
+    {   const char* p = bocl_test_tmp("et-ub");
+        snprintf(form,sizeof(form),
+            "(progn"
+            "  (with-open-file (s \"%s\" :direction :output"
+            "                     :if-exists :supersede :element-type (quote (unsigned-byte)))"
+            "    (write-byte 66 s))"
+            "  (prog1 (with-open-file (s \"%s\" :direction :input"
+            "                            :element-type (quote (unsigned-byte 8)))"
+            "           (read-byte s))"
+            "    (delete-file \"%s\")))", p, p, p);
+        TEST_EQ(eql, I(66), e(form)); }}
 
 /* ---- ARRAY-DIMENSIONS ----------------------------------------------------- */
 

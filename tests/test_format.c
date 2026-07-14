@@ -18,7 +18,7 @@ TEST_SUITE_SETUP(fmt_init){
 TEST_SUITE_TEARDOWN(fmt_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 /* --- Literal and ~A ------------------------------------------------------ */
 

@@ -23,7 +23,7 @@ TEST_SUITE_SETUP(s28_init){
 TEST_SUITE_TEARDOWN(s28_fini){
     return CUE_SUCCESS;}
 
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- EVERY/SOME with multiple sequences ---------------------------------- */
 

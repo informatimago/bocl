@@ -22,7 +22,7 @@ TEST_SUITE_SETUP(strings_init){
 TEST_SUITE_TEARDOWN(strings_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 /* ---- character predicates / case conversion ---- */
 

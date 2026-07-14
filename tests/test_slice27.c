@@ -24,7 +24,7 @@ TEST_SUITE_SETUP(s27_init){
 TEST_SUITE_TEARDOWN(s27_fini){
     return CUE_SUCCESS;}
 
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- FIND with :start/:end/:from-end ------------------------------------- */
 

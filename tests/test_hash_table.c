@@ -18,7 +18,7 @@ TEST_SUITE_SETUP(ht_init){
 TEST_SUITE_TEARDOWN(ht_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_make_and_p(void){
     e("(defparameter th-h (make-hash-table))");

@@ -13,11 +13,12 @@
    bocl_load_cstring evaluates each form's side effects against the global
    environment. */
 
-static const char* fixture_path = "/tmp/bocl-test-load.lisp";
+static char fixture_path[512];   /* per-process (bocl_test_tmp), set in setup */
 
 TEST_SUITE_SETUP(load_init){
     kernel_initialize();
     bocl_test_load_prelude();   /* uses prelude-level operators (DEFPARAMETER/DEFUN/…) */
+    snprintf(fixture_path,sizeof(fixture_path),"%s",bocl_test_tmp("test-load.lisp"));
     return CUE_SUCCESS;}
 
 TEST_SUITE_TEARDOWN(load_clean){
@@ -30,7 +31,7 @@ static void write_fixture(const char* content){
     fputs(content,f);
     fclose(f);}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_load_empty_file(void){
     write_fixture("");

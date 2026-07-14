@@ -36,6 +36,25 @@ void bocl_test_load_prelude(void);
    COMMON-LISP symbols. */
 void bocl_test_load_cl_exports(void);
 
+/* Per-process fixture paths (issue tests-fixed-tmp-paths).  Test fixture
+   files must be unique per process: concurrent suite runs on one host (CI
+   runners, parallel jobs) must not collide, and stale residue from an
+   earlier run must never satisfy a test ("green by residue").
+
+   bocl_test_tmp("NAME")            -> "$TMPDIR|/tmp"/bocl-<pid>-NAME
+   bocl_test_path("...{TMP}/x...")  -> the same string with every "{TMP}/"
+                                       expanded to "$TMPDIR|/tmp"/bocl-<pid>-
+   bocl_test_eval(FORM)             -> bocl_read_eval_cstring of the expanded
+                                       FORM — every suite's e() goes through
+                                       this, so a Lisp form simply writes
+                                       "{TMP}/fixture.lisp" in its string.
+   The pid sits BEFORE the name so the name's file type survives
+   (compile-file derives its .cfasl sibling from it).  Rotating static
+   buffers (16 path slots / 4 form slots): one expression may use several. */
+const char* bocl_test_tmp(const char* name);
+const char* bocl_test_path(const char* templ);
+Ref         bocl_test_eval(const char* form);
+
 
 #ifdef GITLAB_CI
 

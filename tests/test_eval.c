@@ -28,7 +28,7 @@ TEST_SUITE_TEARDOWN(eval_clean){
 
 
 static Ref eval_cstring(const char* text){
-    return bocl_read_eval_cstring(text);}
+    return bocl_test_eval(text);}
 
 static void test_quote(void){
     TEST_EQ(eql,    I(42),       eval_cstring("(quote 42)"));

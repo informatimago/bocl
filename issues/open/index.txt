@@ -97,5 +97,4 @@ clos-condition-report-not-printed.issue (bug) — user conditions print #<TYPE>,
 division-by-zero-not-caught.issue    (bug) — (/ x 0) not caught by a DIVISION-BY-ZERO handler
 sanitiser-error-path-leaks.issue     (ci) — LeakSanitizer one-shot error-path leaks (string_cstring to longjmp-ing ERROR); sanitise lane allow_failure; printer.c per-call leaks fixed v1.8.42
 tcc-lane-test-crash.issue            (ci) — test_misc/test_slice21 crash at startup under tcc 0.9.27; lane allow_failure until root-caused
-tests-fixed-tmp-paths.issue          (tests) — fixed /tmp fixture names collide across concurrent runs + green-by-residue hazard (cfasl-corpus case fixed v1.8.41)
 vm-analyzer-decline-gaps.issue       (bug) — 3 asdf.lisp functions decline byte-compilation (&REST analyzer error x2; a RETURN-FROM/BLOCK visibility case)

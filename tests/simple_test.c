@@ -106,3 +106,48 @@ void simple_test_assert(const char* file, int line, const char* expression,unuse
 
 
 /**** THE END ****/
+
+/* See simple_test.h. */
+static const char* bocl_test_prefix(void){
+    static char prefix[256];
+    if(!prefix[0]){
+        const char* d = getenv("TMPDIR");
+        if(!d || !*d){ d = "/tmp"; }
+        snprintf(prefix, sizeof(prefix), "%s/bocl-%ld-", d, (long)getpid());}
+    return prefix;}
+
+const char* bocl_test_tmp(const char* name){
+    static char bufs[16][512];
+    static int k = 0;
+    char* b = bufs[k]; k = (k+1)%16;
+    snprintf(b, sizeof(bufs[0]), "%s%s", bocl_test_prefix(), name);
+    return b;}
+
+/* Expand every "{TMP}/" in TEMPL to the per-process prefix. */
+static void bocl_test_expand(const char* templ, char* out, size_t cap){
+    const char* pre = bocl_test_prefix();
+    size_t o = 0;
+    while(*templ){
+        if(templ[0]=='{' && strncmp(templ,"{TMP}/",6)==0){
+            size_t n = strlen(pre);
+            if(o+n>=cap){ fprintf(stderr,"bocl_test_expand: buffer overflow\n"); exit(EX_SOFTWARE); }
+            memcpy(out+o, pre, n); o += n;
+            templ += 6;
+        } else {
+            if(o+1>=cap){ fprintf(stderr,"bocl_test_expand: buffer overflow\n"); exit(EX_SOFTWARE); }
+            out[o++] = *templ++;}}
+    out[o] = '\0';}
+
+const char* bocl_test_path(const char* templ){
+    static char bufs[16][512];
+    static int k = 0;
+    char* b = bufs[k]; k = (k+1)%16;
+    bocl_test_expand(templ, b, sizeof(bufs[0]));
+    return b;}
+
+Ref bocl_test_eval(const char* form){
+    static char bufs[4][16384];
+    static int k = 0;
+    char* b = bufs[k]; k = (k+1)%4;
+    bocl_test_expand(form, b, sizeof(bufs[0]));
+    return bocl_read_eval_cstring(b);}

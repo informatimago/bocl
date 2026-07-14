@@ -26,7 +26,7 @@ TEST_SUITE_SETUP(s26_init){
 TEST_SUITE_TEARDOWN(s26_fini){
     return CUE_SUCCESS;}
 
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- STRING-UPCASE with :start/:end ------------------------------------- */
 
