@@ -85,7 +85,11 @@ cloud-localds seed.img user-data meta-data
 # spend tens of minutes in firstboot freebsd-update's "Inspecting system".
 if [ -w /dev/kvm ]; then
     ACCEL="kvm -cpu host"
-    WAIT_TRIES=90        # 15 min is generous with KVM
+    # 45 min, NOT 15: even under KVM the first boot runs firstboot
+    # freebsd-update (nuageinit applies the rc.conf.local disable too late),
+    # which fetches ~1300 patches — network-bound and slow when other
+    # pipeline jobs compete for the runner's bandwidth/CPU.
+    WAIT_TRIES=270
     echo "== booting FreeBSD VM (KVM) =="
 else
     ACCEL="tcg"
