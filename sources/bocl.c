@@ -840,8 +840,31 @@ static void kernel_WRITE_CHAR(unused Ref function, Ref arguments, MultipleValues
     Ref current=arguments;
     Ref ch=cons_car(current); current=cons_cdr(current);
     Ref stream=consp(current)?cons_car(current):variable_value(S(*STANDARD-OUTPUT*));
+    stream=stream_designator_output(stream);
     results->count=1;
     results->values[0]=bocl_write_char(ch,stream);
+    close_live_pool(pool);}
+
+/* (UNREAD-CHAR character &optional input-stream) — push CHARACTER back onto
+   the stream; the next READ-CHAR/PEEK-CHAR must return it.  CLHS guarantees
+   only ONE unread between reads, which C ungetc() provides.  The reader maps
+   the device newline (LF / CR / CRLF) to the internal #\Newline (NEL) on
+   input, so unreading #\Newline pushes back the device byte '\n', which the
+   next read maps to NEL again. */
+static void kernel_UNREAD_CHAR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref ch=cons_car(current); current=cons_cdr(current);
+    Ref stream=consp(current)?cons_car(current):variable_value(S(*STANDARD-INPUT*));
+    stream=stream_designator_input(stream);
+    if(!characterp(ch)){ TYPE_ERROR(ch,CHARACTER_Class); }
+    FILE* in=stream_cstream(stream);
+    int code=(int)integer_value(character_code(ch));
+    if(code==0x85){ code='\n'; }   /* internal NEL -> device newline */
+    ungetc(code,in);
+    results->count=1;
+    results->values[0]=NIL_Symbol;
     close_live_pool(pool);}
 
 /* (%STREAM-LINE-START-P stream) -> T if STREAM is at the start of a line (used by
@@ -851,7 +874,7 @@ static void kernel_STREAM_LINE_START_P(unused Ref function, Ref arguments, Multi
     uword pool=open_live_pool();
     add_to_live_pool(arguments);
     Ref current=arguments;
-    Ref stream=cons_car(current);
+    Ref stream=stream_designator_output(cons_car(current));
     results->count=1;
     results->values[0]=stream_line_start_p(stream);
     close_live_pool(pool);}
@@ -1230,7 +1253,7 @@ static void kernel_WRITE_STRING(unused Ref function, Ref arguments, MultipleValu
                 /* Positional: start then end. */
                 start=x; current=cons_cdr(current);
                 if(consp(current)){ end=cons_car(current);}}}}
-    if(nullp(stream)) stream=variable_value(S(*STANDARD-OUTPUT*));
+    stream=stream_designator_output(stream);
     results->count=1;
     results->values[0]=bocl_write_string(str,stream,start,end);
     close_live_pool(pool);}
@@ -2246,6 +2269,11 @@ void bocl_register_load(void){
         Ref wc_ll = list(symbol_intern_cstring("CHARACTER"),
                          S(&OPTIONAL), symbol_intern_cstring("STREAM"), NULL);
         set_symbol_function(wc_fn,built_in_function_new(wc_fn,wc_ll,kernel_WRITE_CHAR));}
+    /* UNREAD-CHAR — one-character pushback (CLHS). */
+    {   Ref uc_fn = symbol_intern_cstring("UNREAD-CHAR");
+        Ref uc_ll = list(symbol_intern_cstring("CHARACTER"),
+                         S(&OPTIONAL), symbol_intern_cstring("INPUT-STREAM"), NULL);
+        set_symbol_function(uc_fn,built_in_function_new(uc_fn,uc_ll,kernel_UNREAD_CHAR));}
     {   Ref sls = symbol_intern_cstring("%STREAM-LINE-START-P");
         set_symbol_function(sls,built_in_function_new(sls,list(S(STREAM),NULL),kernel_STREAM_LINE_START_P));}
     /* Slice 22 — I/O, pathnames, type-of, array, stream predicates. */

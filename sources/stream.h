@@ -9,6 +9,8 @@ void stream_initialize(void);
 
 FILE* stream_output_cstream(Ref stream);
 FILE* stream_input_cstream(Ref stream);
+Ref stream_designator_output(Ref stream);   /* NIL/T stream designators -> stream */
+Ref stream_designator_input(Ref stream);
 Ref   stream_close(Ref stream);
 Ref   stream_close_any(Ref stream);
 bool  stream_input_stream_p(Ref stream);

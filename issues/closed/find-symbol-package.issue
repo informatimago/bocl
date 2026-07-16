@@ -92,3 +92,45 @@ and (find-symbol "MOO" *package*) searches for moo in the current package.
 2- for all functions in CL, lookup in clhs the definitions of its
    arguments types, and verify if the function accepts all the specified
    types (special care for designator types!).
+
+RESOLUTION (2026-07-15) — v1.8.49
+---------------------------------
+1. FIND-SYMBOL (and INTERN, UNINTERN, EXPORT, ...) already accept the full
+   package designator — package object, string, symbol, character — on the
+   current vm head: packages.c resolves every package argument through
+   package_find() / string_designator_name(), and the original repro
+   (loading modules/asdf/asdf.lisp) passes since the uiop-bocl-porting work
+   (v1.8.40 predates it).  Note (find-symbol "T" #\T) correctly errors:
+   #\T designates the package NAME "T", and no such package exists.
+
+2. Designator audit across the CL functions (CLHS argument types):
+   probed string / package / function / stream / pathname / character /
+   condition / restart designators over ~120 call shapes.  Findings, all
+   fixed:
+   - STREAM DESIGNATORS: the C stream built-ins used the stream argument
+     raw, so an explicit NIL (standard stream of the direction) or T
+     (*TERMINAL-IO*) type-errored in PRINT/PRIN1/PRINC/TERPRI/READ-CHAR/
+     PEEK-CHAR/READ/READ-PRESERVING-WHITESPACE/READ-DELIMITED-LIST/
+     FINISH-OUTPUT/FORCE-OUTPUT/WRITE-CHAR/%STREAM-LINE-START-P — and
+     through them in the prelude wrappers (READ-LINE, LISTEN, FRESH-LINE,
+     WRITE-LINE, READ-CHAR-NO-HANG...).  Added stream_designator_input/
+     output() resolvers in stream.c (NIL -> *STANDARD-INPUT*/-OUTPUT*,
+     T -> *TERMINAL-IO*, falling back to the standard stream while
+     *TERMINAL-IO* is NIL), used by stream_input/output_cstream() and by
+     every stream built-in at argument-pop time; printer.c's private
+     resolver now delegates to it.
+   - UNREAD-CHAR did not exist.  Implemented in C (one-character ungetc
+     pushback per CLHS, unreading #\Newline pushes the device newline
+     byte so the reader's NEL mapping round-trips).
+   - Everything else conformed: string functions take string designators,
+     package functions take package designators, sequence/apply functions
+     take 'symbol function designators, ERROR/SIGNAL/WARN/CERROR take
+     condition designators, INVOKE-RESTART/FIND-RESTART take restart
+     designators, pathname functions take namestrings.
+   New CUnit suite tests/test_designators.c (43rd suite) locks all of it.
+
+3. Found while auditing, tracked separately:
+   issues/open/gc-repl-handler-case-heap-corruption.issue — the audit
+   probe stream crashes the REPL under GC (BOCL_NOGC=1 passes 121/121);
+   the audit itself was validated GC-off and the committed test suite
+   (which uses bocl_test_eval, not the REPL path) passes GC-on.

@@ -21,12 +21,9 @@
    back to NEL.  (issue "newline and I/O".) */
 #define BOCL_NEL 0x85
 
-/* Resolve an output stream designator (T -> *STANDARD-OUTPUT*) to a stream. */
+/* Resolve an output stream designator (NIL/T) to a stream (see stream.c). */
 static Ref resolve_output_stream(Ref stream){
-    if(eql(stream,T_Symbol)){
-        Ref so=S(*STANDARD-OUTPUT*);
-        if(symbol_boundp(so)){ return variable_value(so); }}
-    return stream;}
+    return stream_designator_output(stream);}
 
 /* True for a real device/file stream (translate NEL); false for an in-memory
    string stream (keep the internal NEL). */
