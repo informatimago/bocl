@@ -1,0 +1,94 @@
+09:59[pjb@thalassa org.xquartz:0 bocl 22Gi]$ bocl
+
+Welcome to BOCL Version 1.8.40
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+
+May the Cons be with you!
+
+
+Have fun!
+
+
+COMMON-LISP-USER> (time (load "/opt/local/libexec/bocl/modules/asdf/asdf.lisp" :verbose t :print t))
+
+
+Debugger invoked on condition of type SIMPLE-TYPE-ERROR:
+  The value (#<COMMON-LISP::BUILT-IN-FUNCTION TYPEP 0x4fbff2f38> #<PACKAGE 0x4fc048600> PACKAGE) is not of type STRING.
+
+Backtrace (innermost frame first):
+   0: (NIL COMMON-LISP::C)
+   1: restart STORE-VALUE
+   2: tagbody
+   3: block NIL
+   4: block UIOP/PACKAGE::ENSURE-SYMBOL
+   5: (UIOP/PACKAGE::ENSURE-SYMBOL UIOP/PACKAGE::NAME PACKAGE INTERN UIOP/PACKAGE::RECYCLE UIOP/PACKAGE::SHADOWED UIOP/PACKAGE::IMPORTED UIOP/PACKAGE::INHERITED UIOP/PACKAGE::EXPORTED)
+   6: tagbody
+   7: block NIL
+   8: block ENSURE-PACKAGE
+   9: (ENSURE-PACKAGE UIOP/PACKAGE::NAME UIOP/PACKAGE::NICKNAMES DOCUMENTATION UIOP/PACKAGE::USE SHADOW UIOP/PACKAGE::SHADOWING-IMPORT-FROM UIOP/PACKAGE::IMPORT-FROM EXPORT INTERN UIOP/PACKAGE::RECYCLE UIOP/PACKAGE::MIX UIOP/PACKAGE::REEXPORT UNINTERN UIOP/PACKAGE::LOCAL-NICKNAMES)
+  10: (NIL COMMON-LISP::PATH)
+  11: dynamic-binding
+  12: dynamic-binding
+  13: (LOAD)
+  14: handler-bind
+  15: restart ABORT
+  16: catch (NIL)
+  17: catch (COMMON-LISP::DONE . :%VM-NLX-BLOCK)
+  18: (COMMON-LISP::%REPL-EVAL COMMON-LISP::FORM)
+  19: catch BOCL::%QUIT-CATCH-TAG
+
+Available restarts:
+   0: [STORE-VALUE]
+   1: [ABORT]
+
+debug>
+
+  (defun ensure-symbol (name package intern recycle shadowed imported inherited exported)
+    (check-type name string)
+    (check-type package package)
+    (check-type intern (member nil t)) ; no cl:boolean on Genera
+    (check-type shadowed hash-table)
+    (check-type imported hash-table)
+    (check-type inherited hash-table)
+    (unless (or (gethash name shadowed)
+                (gethash name imported)
+                (gethash name inherited))
+      (multiple-value-bind (existing status)
+          (find-symbol name package)
+        (multiple-value-bind (recycled previous) (recycle-symbol name recycle exported)
+          (cond
+            ((and status (eq existing recycled) (eq previous package)))
+            (previous
+             (rehome-symbol recycled package))
+            ((and status (eq package (symbol-package existing))))
+            (t
+             (when status
+               (note-package-fishiness
+                :ensure-symbol name
+                (reify-package (symbol-package existing) package)
+                status intern)
+               (unintern existing))
+             (when intern
+               (intern* name package))))))))
+
+It looks like find-symbol is too picky with its package argument.  It
+is a package-designator, which is a string-designator for a package
+name or a package itself.
+
+Since string-designators are (or string symbol character)
+package-designator is (or pacakge string symbol character)
+(find-symbol "foo" #\A) searches for A::|foo|
+(find-symbol "BAR" :poo) searches for poo::bar
+(find-symbol "Quux" "Muux") searches for |Muux|::|Quux|
+and (find-symbol "MOO" *package*) searches for moo in the current package.
+
+1- correct find-symbol (assuming my diagnostic of the cause of the
+   above error is correct).
+
+2- for all functions in CL, lookup in clhs the definitions of its
+   arguments types, and verify if the function accepts all the specified
+   types (special care for designator types!).
