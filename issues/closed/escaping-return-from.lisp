@@ -80,3 +80,30 @@
 
 ;; 3- Similarly for GO.
 
+
+;;; RESOLUTION (2026-07-17) — verified on vm head (v1.8.49)
+;;; ------------------------------------------------------
+;;; All the scenarios above now behave as specified, interpreted AND
+;;; byte-compiled (COMPILE):
+;;;
+;;; - Both LOOP examples (mutually-escaping closures across two blocks;
+;;;   two same-named nested blocks resolved lexically) return
+;;;   ((BLOCK-ODD (BLOCK-EVEN 42)) (BLOCK-ODD 43)).
+;;;
+;;; 1- RETURN-FROM on an exited block signals the descriptive condition
+;;;    BOCL:RETURN-FROM-EXITED-BLOCK-ERROR, a subclass of PROGRAM-ERROR,
+;;;    with the reader BOCL:RETURN-FROM-EXITED-BLOCK-ERROR-BLOCK-NAME
+;;;    giving the block name.
+;;;
+;;; 2- It is signaled in the dynamic context of the RETURN-FROM, before
+;;;    any unwinding: a HANDLER-BIND handler can perform an alternative
+;;;    non-local exit (verified: returning from a live outer block from
+;;;    inside the handler works).
+;;;
+;;; 3- GO to an exited TAGBODY likewise signals
+;;;    BOCL:GO-EXITED-TAGBODY-ERROR (interpreted and compiled).
+;;;
+;;; Covered by the test suite: tests/test_misc.c "vm escaping blocks" and
+;;; "vm exited extent".  Remaining nit — (format nil "~A" condition)
+;;; prints #<RETURN-FROM-EXITED-BLOCK-ERROR 0x...> instead of the report
+;;; string; that is the separate issues/open/printing-conditions.issue.
