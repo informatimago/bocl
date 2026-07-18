@@ -58,3 +58,15 @@ SUCCESS
 Bytecode fasl loads and runs materially faster than the tree-walker on the ASDF
 corpus; prelude self-hosts to bytecode; full suite green; still one-command C17
 build in POSIX with no extensions required.
+
+RESOLUTION (2026-07-18)
+-----------------------
+Planning issue, fully delivered: vm-1..vm-10 + vm-6b + hot-1..hot-6 are
+all implemented and closed (see issues/closed/vm-*.issue, hot-*.issue).
+COMPILE/COMPILE-FILE emit byte-code, the whole language compiles
+(top-level def-forms fall back by design), boot runs from byte-compiled
+images (~3x), tight loops ~10x, CLOS dispatch ~31x.  The living handoff
+document remains issues/open/vm-COMPILER-PLAN.md; the remaining
+off-critical-path leads are tracked by their own issues
+(vm-analyzer-decline-gaps, cfasl-6-literal-coverage, frame pooling
+noted in vm-COMPILER-PLAN.md §0).
