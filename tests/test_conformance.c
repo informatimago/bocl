@@ -109,6 +109,31 @@ static void test_division_by_zero(void){
     TEST_EQ(eql, e(":ok"),
             e("(progn (/ 10 2) :ok)"));}
 
+/* ---- CLOS condition report printing (printing-conditions +
+        clos-condition-report-not-printed) ---------------------------------- */
+static void test_clos_condition_printing(void){
+    e("(define-condition conf-err (simple-error) ())");
+    /* :FORMAT-CONTROL reaches the inherited CLOS simple-condition slot. */
+    TEST_EQ(equal, e("\"boom 5\""),
+            e("(let ((c (make-condition 'conf-err :format-control \"boom ~S\""
+              "                         :format-arguments '(5))))"
+              "  (with-output-to-string (s) (princ c s)))"));
+    /* PRIN1 keeps the escaped #<...> form. */
+    TEST_EQ(eql, I(0),
+            e("(let ((c (make-condition 'conf-err :format-control \"x\""
+              "                         :format-arguments nil)))"
+              "  (search \"#<CONF-ERR\" (with-output-to-string (s) (prin1 c s))))"));
+    /* DEFINE-CONDITION :REPORT is used under PRINC. */
+    TEST_EQ(equal, e("\"custom report\""),
+            e("(progn (define-condition conf-rep () ()"
+              "         (:report (lambda (c s) (declare (ignore c))"
+              "                    (write-string \"custom report\" s))))"
+              "  (with-output-to-string (s) (princ (make-condition 'conf-rep) s)))"));
+    /* SIMPLE-CONDITION-FORMAT-CONTROL works on CLOS condition instances. */
+    TEST_EQ(equal, e("\"fc\""),
+            e("(simple-condition-format-control"
+              "  (make-condition 'conf-err :format-control \"fc\" :format-arguments nil))"));}
+
 /* ---- DEFPACKAGE: shadowing imports before :use -------------------------- */
 static void test_defpackage_shadowing_order(void){
     /* Using a package that exports a CL-colliding name works when the
@@ -131,4 +156,5 @@ TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("method combinations",        test_method_combinations)
     TEST_CASE("defpackage shadowing order", test_defpackage_shadowing_order)
     TEST_CASE("division-by-zero class",     test_division_by_zero)
+    TEST_CASE("clos condition printing",    test_clos_condition_printing)
     TEST_FINALIZE()

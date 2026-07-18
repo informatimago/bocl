@@ -5890,6 +5890,40 @@ the class object it denotes, so two specializers compare by class identity."
   ((object :initarg :object :accessor print-not-readable-object)))
 (defclass storage-condition        (serious-condition) ())
 (defclass style-warning            (warning) ())
+;; The CLOS side of the SIMPLE family carries the format slots, so
+;; DEFINE-CONDITION subclasses of SIMPLE-ERROR &co inherit them and
+;; MAKE-INSTANCE :FORMAT-CONTROL/:FORMAT-ARGUMENTS fill them
+;; (clos-condition-report-not-printed).
+(defclass simple-condition (condition)
+  ((format-control   :initarg :format-control   :initform nil)
+   (format-arguments :initarg :format-arguments :initform nil)))
+(defclass simple-error      (error simple-condition) ())
+(defclass simple-warning    (warning simple-condition) ())
+(defclass simple-type-error (type-error simple-condition) ())
+
+;; SIMPLE-CONDITION-FORMAT-CONTROL/-ARGUMENTS read the kernel slot for kernel
+;; conditions and the CLOS slot for DEFINE-CONDITION instances.
+(let ((kfc (symbol-function 'simple-condition-format-control))
+      (kfa (symbol-function 'simple-condition-format-arguments)))
+  (set-symbol-function
+   (lambda (c) (if (%is-obj c) (slot-value c 'format-control) (funcall kfc c)))
+   'simple-condition-format-control)
+  (set-symbol-function
+   (lambda (c) (if (%is-obj c) (slot-value c 'format-arguments) (funcall kfa c)))
+   'simple-condition-format-arguments))
+
+;; CLOS simple conditions report like kernel ones: the formatted message under
+;; PRINC (*PRINT-ESCAPE* nil), #<TYPE message> under PRIN1.
+(defmethod print-object ((c simple-condition) stream)
+  (let ((fc (slot-value c 'format-control))
+        (fa (slot-value c 'format-arguments)))
+    (if *print-escape*
+        (if fc
+            (format stream "#<~A ~?>" (type-of c) fc fa)
+            (format stream "#<~A>" (type-of c)))
+        (if fc
+            (format stream "~?" fc fa)
+            (format stream "~A" (type-of c))))))
 
 (defmacro define-condition (name superclasses slots &rest options)
   "Define a condition class NAME inheriting from SUPERCLASSES.
@@ -5911,10 +5945,14 @@ the class object it denotes, so two specializers compare by class identity."
     `(progn
        (defclass ,name ,actual-supers ,slot-specs ,@defclass-options)
        ,@(when report-fn
+           ;; CLHS 9.1.3: the report is used when *PRINT-ESCAPE* is NIL
+           ;; (PRINC, ~A); under PRIN1 the condition keeps the #<...> form.
            `((defmethod print-object ((condition ,name) stream)
-               (cond ((functionp ,report-fn) (funcall ,report-fn condition stream))
-                     ((stringp ,report-fn)   (write-string ,report-fn stream))
-                     (t (call-next-method))))))
+               (if *print-escape*
+                   (call-next-method)
+                   (cond ((functionp ,report-fn) (funcall ,report-fn condition stream))
+                         ((stringp ,report-fn)   (write-string ,report-fn stream))
+                         (t (call-next-method)))))))
        ',name)))
 
 ;;; ---- Condition utilities --------------------------------------------------

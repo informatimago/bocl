@@ -126,7 +126,12 @@ static bool g_in_print_object = false;
    symbols, characters, vectors, pathnames — have already been handled.) */
 static bool print_via_print_object(Ref object,Ref stream,bool escape){
     if(g_in_print_object){ return false; }
-    if(clos_instance_p(object)){ return false; }   /* handled by the CLOS path below */
+    /* CLOS instances dispatch here too (clos-condition-report-not-printed):
+       the prelude's PRINT-OBJECT generic has a (standard-object t) default,
+       per-condition report methods, and the CLOS simple-condition reporter,
+       so user DEFINE-CONDITION classes print their report under PRINC and
+       #<...> under PRIN1.  The #<Name addr> branch below remains the
+       pre-prelude fallback. */
     Ref po=S(PRINT-OBJECT);
     if(!symbol_fboundp(po)){ return false; }   /* before the prelude defines it */
     g_in_print_object=true;

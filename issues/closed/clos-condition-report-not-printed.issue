@@ -23,3 +23,25 @@ FIX (either)
       and make the :FORMAT-CONTROL initarg bind the inherited slot; OR
   (b) Route the C condition printer through the full PRINT-OBJECT generic dispatch so a
       DEFINE-CONDITION :REPORT / user print-object method wins.
+
+RESOLUTION (2026-07-18) — v1.8.56 (with printing-conditions.issue)
+------------------------------------------------------------------
+Four coordinated fixes:
+1. printer.c print_via_print_object no longer excludes CLOS instances:
+   user DEFINE-CONDITION objects dispatch the Lisp PRINT-OBJECT generic
+   (with *PRINT-ESCAPE* bound per PRINC/PRIN1); the #<Name addr> branch
+   remains the pre-prelude fallback.
+2. The CLOS side of the SIMPLE family now carries the format slots
+   (defclass simple-condition with format-control/format-arguments +
+   simple-error/-warning/-type-error re-registered on it), so
+   MAKE-CONDITION/MAKE-INSTANCE :FORMAT-CONTROL fills the inherited slot.
+3. SIMPLE-CONDITION-FORMAT-CONTROL/-ARGUMENTS read the CLOS slot for
+   %obj instances and the kernel slot otherwise; a print-object method
+   on the CLOS simple-condition reports "~?" under PRINC and
+   "#<TYPE message>" under PRIN1 — same convention as kernel conditions.
+4. DEFINE-CONDITION's :REPORT method is now escape-aware (CLHS 9.1.3):
+   the report prints when *PRINT-ESCAPE* is NIL; PRIN1 keeps #<...> via
+   call-next-method.  This also resolves printing-conditions.issue's
+   princ/prin1 inversion (OUT-OF-STACK-MEMORY-ERROR: princ = "Control
+   stack exhausted (recursion too deep)...", prin1 = #<OUT-OF-STACK-...>).
+Locked by "clos condition printing" in tests/test_conformance.c; 44/44.

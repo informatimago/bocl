@@ -28,3 +28,12 @@ CL-USER> (loop with e = (make-condition 'bocl:OUT-OF-STACK-MEMORY-ERROR :format-
                do (princ p) (princ " --> ") (funcall p e) (terpri))
 PRIN1 --> Control stack exhausted (recursion too deep)
 PRINC --> #<OUT-OF-STACK-MEMORY-ERROR 0x5097f7e48>
+
+RESOLUTION (2026-07-18) — v1.8.56
+---------------------------------
+Fixed together with clos-condition-report-not-printed.issue (see its
+RESOLUTION for the four changes).  The inversion came from DEFINE-
+CONDITION's :REPORT print-object method reporting unconditionally
+(so PRIN1 showed the message) while PRINC never reached PRINT-OBJECT
+for CLOS instances (so it showed #<...>).  Now: princ/~A = the report,
+prin1/~S = #<TYPE ...>, for kernel AND CLOS conditions alike.
