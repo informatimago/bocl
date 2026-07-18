@@ -4477,10 +4477,14 @@ SETQ/INCF/DECF is left in place (sequential)."
   (let* ((cls (%obj-class object))
          (eslot (%find-eslot cls slot-name)))
     (unless eslot
-      (error "SLOT-VALUE: class ~S has no slot named ~S" (%cls-name cls) slot-name))
+      (if (fboundp 'slot-missing)
+          (slot-missing cls object slot-name 'slot-value)
+          (error "SLOT-VALUE: class ~S has no slot named ~S" (%cls-name cls) slot-name)))
     (let ((val (%eslot-ref object eslot)))
       (if (eq val *%unbound*)
-          (error "Unbound slot ~S in object of class ~S" slot-name (%cls-name cls))
+          (if (fboundp 'slot-unbound)
+              (slot-unbound cls object slot-name)
+              (error "Unbound slot ~S in object of class ~S" slot-name (%cls-name cls)))
           val))))
 
 (defun %set-slot-value (new-value object slot-name)
@@ -4784,7 +4788,9 @@ SETQ/INCF/DECF is left in place (sequential)."
     (error "CALL-NEXT-METHOD: called outside a method body"))
   (let ((next (car *%cnm-nexts*)))
     (unless next
-      (error "CALL-NEXT-METHOD: no next method"))
+      (if (fboundp 'no-next-method)
+          (no-next-method nil nil)
+          (error "CALL-NEXT-METHOD: no next method")))
     (let ((actual-args (if explicit-args explicit-args *%cnm-args*)))
       (%cnm-call t (cdr *%cnm-nexts*) actual-args
                  (lambda () (apply next actual-args))))))
@@ -4934,7 +4940,9 @@ SETQ/INCF/DECF is left in place (sequential)."
     (let ((primary-fns (mapcar #'%mth-function primaries)))
       (lambda (args)
         (unless primaries
-          (error "No applicable primary method for args ~S" args))
+          (if (fboundp 'no-applicable-method)
+              (apply #'no-applicable-method nil args)
+              (error "No applicable primary method for args ~S" args)))
         ;; Build the primary chain: most-specific primary calls less specific via
         ;; *%cnm-nexts*.  Use %cnm-call (setq-based) since bocl LET = lexical only.
         (let ((core-thunk
@@ -5017,16 +5025,20 @@ SETQ/INCF/DECF is left in place (sequential)."
           (unless em
             (let ((sorted (%sort-methods (%applicable-methods gf args) args)))
               (when (null sorted)
-                (error "No applicable method for generic function ~S with arguments ~S"
-                       name args))
+                (if (fboundp 'no-applicable-method)
+                    (apply #'no-applicable-method name args)
+                    (error "No applicable method for generic function ~S with arguments ~S"
+                           name args)))
               (setq em (%compute-effective-method sorted))
               (setf (gethash key (%gf-cache gf)) em)))
           (funcall em args)))
       ;; uncached: full dispatch every call
       (let ((sorted (%sort-methods (%applicable-methods gf args) args)))
         (when (null sorted)
-          (error "No applicable method for generic function ~S with arguments ~S"
-                 name args))
+          (if (fboundp 'no-applicable-method)
+              (return-from %gf-dispatch (apply #'no-applicable-method name args))
+              (error "No applicable method for generic function ~S with arguments ~S"
+                     name args)))
         (%invoke-effective-method sorted args))))
 
 ;;; ---- 19. Generic function installation ----------------------------------
@@ -9773,10 +9785,21 @@ result array; return that array."
 ;;; bocl stores a global macro's expander on the symbol plist ($MACRO); the
 ;;; expander takes the macro call's arguments (the cdr of the form).
 (defun macroexpand-1 (form &optional environment)
-  "Expand FORM once if it is a macro call; returns (values expansion expanded-p)."
-  (declare (ignore environment))
+  "Expand FORM once if it is a macro call; returns (values expansion expanded-p).
+   Honors *MACROEXPAND-HOOK* (CLHS): the hook is called with a standard
+   (expander form env) protocol; the adapter closes over bocl's internal
+   apply-to-arguments macro-function convention."
   (if (and (consp form) (symbolp (car form)) (macro-function (car form)))
-      (values (apply (macro-function (car form)) (rest form)) t)
+      (let ((mf (macro-function (car form))))
+        (values
+         (if (and (boundp '*macroexpand-hook*)
+                  *macroexpand-hook*
+                  (not (eq *macroexpand-hook* #'funcall)))
+             (funcall *macroexpand-hook*
+                      (lambda (f e) (declare (ignore e)) (apply mf (rest f)))
+                      form environment)
+             (apply mf (rest form)))
+         t))
       (values form nil)))
 
 (defun macroexpand (form &optional environment)
@@ -11969,6 +11992,287 @@ header."
         (load (concatenate 'string dir "socket"))))))   ; type-less: prefer socket.cfasl
 
 ;;; ---- BYTE-CODE COMPILER (plan-2) ------------------------------------------
+
+;;;; ======================================================================
+;;;; CLHS coverage — remaining standard symbols (missing-functions.issue)
+;;;; ======================================================================
+
+(defvar *macroexpand-hook* #'funcall
+  "Hook called by MACROEXPAND-1 as (funcall hook expander form env).")
+
+(defvar *break-on-signals* nil
+  "When a condition being signalled is of this type, enter the debugger first
+   (CLHS).  bocl honors it in WARN; ERROR/SIGNAL go through the kernel
+   signalling path which does not consult it yet.")
+
+;;; ---- MOP-adjacent generic functions and helpers -------------------------
+
+(defun %resolve-gf (gf)
+  "The %gf struct for GF (a %gf, a generic-function name, or #'gf)."
+  (cond ((%gf-p gf)   gf)
+        ((symbolp gf) (gethash gf *%gfs*))
+        (t            (gethash gf *%gf-by-fn*))))
+
+(defun method-qualifiers (method)
+  "The list of qualifiers of METHOD (CLHS)."
+  (%mth-qualifiers method))
+
+(defun function-keywords (method)
+  "Values: the &KEY keyword names of METHOD's lambda list, and whether it
+   has &ALLOW-OTHER-KEYS (CLHS)."
+  (let* ((fn  (%mth-function method))
+         (fle (function-lambda-expression fn))
+         (ll  (and (consp fle) (cadr fle)))
+         (keys '()) (aok nil) (state nil))
+    (dolist (item ll)
+      (cond ((eq item '&key) (setf state :key))
+            ((eq item '&allow-other-keys) (setf aok t) (setf state nil))
+            ((member item lambda-list-keywords) (setf state nil))
+            ((eq state :key)
+             (push (cond ((symbolp item) (intern (symbol-name item) "KEYWORD"))
+                         ((consp (car item)) (caar item))
+                         (t (intern (symbol-name (car item)) "KEYWORD")))
+                   keys))))
+    (values (nreverse keys) aok)))
+
+(defun compute-applicable-methods (gf args)
+  "The applicable methods of GF for ARGS, most specific first (CLHS)."
+  (let ((g (%resolve-gf gf)))
+    (unless g (error "COMPUTE-APPLICABLE-METHODS: ~S is not a generic function" gf))
+    (%sort-methods (%applicable-methods g args) args)))
+
+(defun add-method (gf method)
+  "Add METHOD to GF (replacing any method with the same qualifiers and
+   specializers) and return GF (CLHS)."
+  (let ((g (%resolve-gf gf)))
+    (unless g (error "ADD-METHOD: ~S is not a generic function" gf))
+    (setf (%gf-methods g)
+          (cons method
+                (remove-if (lambda (m)
+                             (and (equal (%mth-qualifiers m) (%mth-qualifiers method))
+                                  (equal (%mth-specializers m) (%mth-specializers method))))
+                           (%gf-methods g))))
+    (when (some (lambda (sp) (and (consp sp) (eq (car sp) :eql)))
+                (%mth-specializers method))
+      (setf (%gf-has-eql-methods g) t))
+    (setf (%gf-cache g) nil)
+    (%install-discriminating-function (%gf-name g) g)
+    gf))
+
+(defun remove-method (gf method)
+  "Remove METHOD from GF and return GF (CLHS)."
+  (let ((g (%resolve-gf gf)))
+    (unless g (error "REMOVE-METHOD: ~S is not a generic function" gf))
+    (setf (%gf-methods g) (remove method (%gf-methods g))
+          (%gf-cache g)   nil)
+    gf))
+
+(defun allocate-instance (class &rest initargs)
+  "A new uninitialized instance of CLASS (CLHS; initargs are ignored here,
+   INITIALIZE-INSTANCE is NOT called)."
+  (declare (ignore initargs))
+  (let ((cls (cond ((%is-cls class) class)
+                   ((symbolp class) (or (gethash class *%classes*)
+                                        (error "ALLOCATE-INSTANCE: no class ~S" class)))
+                   (t (error "ALLOCATE-INSTANCE: ~S is not a class" class)))))
+    (%alloc-instance cls)))
+
+(defgeneric no-applicable-method (gf &rest args))
+(ensure-method 'no-applicable-method nil '(t)
+               (lambda (gf &rest args)
+                 (error "No applicable method for generic function ~S with arguments ~S"
+                        gf args)))
+
+(defgeneric no-next-method (gf method &rest args))
+(ensure-method 'no-next-method nil '(t t)
+               (lambda (gf method &rest args)
+                 (declare (ignore gf method args))
+                 (error "CALL-NEXT-METHOD: no next method")))
+
+(defgeneric slot-missing (class object slot-name operation &optional new-value))
+(ensure-method 'slot-missing nil '(t t t t)
+               (lambda (class object slot-name operation &optional new-value)
+                 (declare (ignore object operation new-value))
+                 (error "SLOT-VALUE: class ~S has no slot named ~S"
+                        (if (%is-cls class) (%cls-name class) class) slot-name)))
+
+(defgeneric slot-unbound (class instance slot-name))
+(ensure-method 'slot-unbound nil '(t t t)
+               (lambda (class instance slot-name)
+                 (declare (ignore instance))
+                 (error "Unbound slot ~S in object of class ~S"
+                        slot-name (if (%is-cls class) (%cls-name class) class))))
+
+(defun invalid-method-error (method format-control &rest args)
+  "Signal an error about METHOD being invalid for its method combination (CLHS)."
+  (error "Invalid method ~S: ~?" method format-control args))
+
+(defun method-combination-error (format-control &rest args)
+  "Signal a method-combination error (CLHS)."
+  (error "Method combination error: ~?" format-control args))
+
+(defun make-instances-obsolete (class)
+  "CLHS hook for class redefinition; bocl does not lazily update instances,
+   so this records nothing and returns the class."
+  class)
+
+(defgeneric update-instance-for-redefined-class
+    (instance added-slots discarded-slots property-list &rest initargs))
+(ensure-method 'update-instance-for-redefined-class nil '(t t t t)
+               (lambda (instance added discarded plist &rest initargs)
+                 (declare (ignore added discarded plist initargs))
+                 instance))
+
+;;; ---- Structures ----------------------------------------------------------
+
+(defun copy-structure (structure)
+  "A fresh shallow copy of STRUCTURE (CLHS): same class, slots COPIED by
+   reference — the same generic walk DEFSTRUCT's :COPIER performs."
+  (let* ((cls (class-of structure))
+         (new (make-structure-instance cls)))
+    (dolist (e (structure-class-instance-slots cls) new)
+      (structure-set (structure-get structure (car e)) new (car e)))))
+
+;;; ---- Conditions -----------------------------------------------------------
+
+(defun package-error-package (condition)
+  "The offending package of a PACKAGE-ERROR (CLHS).  Kernel package errors
+   carry no package object; they return NIL."
+  (if (%is-obj condition)
+      (slot-value condition 'package)
+      nil))
+
+;;; ---- Streams / files -------------------------------------------------------
+
+(defun file-string-length (stream object)
+  "Octets OBJECT (a character or string) would add to file STREAM (CLHS).
+   Exact for bocl: strings are one octet per character on every stream."
+  (declare (ignore stream))
+  (if (characterp object) 1 (length (string object))))
+
+;;; ---- FORMAT ---------------------------------------------------------------
+
+(defmacro formatter (control-string)
+  "A function of (stream &rest args) applying CONTROL-STRING (CLHS).
+   Returns NIL as the unconsumed-arguments value (bocl's FORMAT consumes
+   its whole argument list)."
+  (let ((cs control-string))
+    `(lambda (stream &rest args)
+       (apply #'format stream ,cs args)
+       nil)))
+
+;;; ---- Pretty printer (degraded: bocl has no layout engine) ------------------
+
+(defvar *%pprint-block-list* nil)
+
+(defmacro pprint-logical-block ((stream-symbol object
+                                 &key (prefix "") per-line-prefix (suffix ""))
+                                &body body)
+  "Degraded CLHS pretty-printing block: prints PREFIX, runs BODY with
+   PPRINT-POP / PPRINT-EXIT-IF-LIST-EXHAUSTED operating on OBJECT, prints
+   SUFFIX.  No line-fill layout is performed."
+  `(let ((,stream-symbol ,stream-symbol))
+     (write-string (or ,per-line-prefix ,prefix) ,stream-symbol)
+     (let ((*%pprint-block-list* ,object))
+       (block %pprint-logical-block ,@body))
+     (write-string ,suffix ,stream-symbol)
+     nil))
+
+(defmacro pprint-exit-if-list-exhausted ()
+  `(when (null *%pprint-block-list*)
+     (return-from %pprint-logical-block nil)))
+
+(defmacro pprint-pop ()
+  `(pop *%pprint-block-list*))
+
+(defun pprint-tab (kind colnum colinc &optional stream)
+  "Degraded: bocl performs no column tracking; a single space stands in."
+  (declare (ignore kind colnum colinc))
+  (write-char #\Space (or stream *standard-output*))
+  nil)
+
+(defun %pprint-sequence (stream list)
+  (let ((first t))
+    (dolist (x list)
+      (if first (setf first nil) (write-char #\Space stream))
+      (write x :stream stream))))
+
+(defun pprint-fill (stream object &optional (colon-p t) at-sign-p)
+  "Degraded CLHS pprint-fill: elements separated by spaces, parens per COLON-P."
+  (declare (ignore at-sign-p))
+  (cond ((not (listp object)) (write object :stream stream))
+        (t (when colon-p (write-char #\( stream))
+           (%pprint-sequence stream object)
+           (when colon-p (write-char #\) stream))))
+  nil)
+
+(defun pprint-linear (stream object &optional (colon-p t) at-sign-p)
+  (pprint-fill stream object colon-p at-sign-p))
+
+(defun pprint-tabular (stream object &optional (colon-p t) at-sign-p tabsize)
+  (declare (ignore tabsize))
+  (pprint-fill stream object colon-p at-sign-p))
+
+(defun pprint-dispatch (object &optional table)
+  "Degraded: the standard WRITE printer for every object; second value NIL
+   (no matching entry) per CLHS."
+  (declare (ignore object table))
+  (values (lambda (stream object) (write object :stream stream)) nil))
+
+;;; ---- Development tools -----------------------------------------------------
+
+(defmacro step (form)
+  "CLHS STEP: stepping is implementation-dependent; bocl evaluates FORM
+   without interaction."
+  `(progn ,form))
+
+(defun inspect (object)
+  "Interactive inspection (degraded to DESCRIBE)."
+  (describe object)
+  (values))
+
+(defvar *%traced* (make-hash-table :test 'eq)
+  "name -> original function, for TRACE/UNTRACE.")
+(defvar *%trace-depth* 0)
+
+(defun %trace-1 (name)
+  (unless (gethash name *%traced*)
+    (let ((original (symbol-function name)))
+      (setf (gethash name *%traced*) original)
+      (set-symbol-function
+       (lambda (&rest args)
+         (let ((out *trace-output*)
+               (depth *%trace-depth*))
+           (format out "~&~V@T~D: (~S~{ ~S~})~%" depth (1+ depth) name args)
+           (let ((values (multiple-value-list
+                          (let ((*%trace-depth* (1+ depth)))
+                            (apply original args)))))
+             (format out "~&~V@T~D: ~S returned~{ ~S~}~%"
+                     depth (1+ depth) name values)
+             (values-list values))))
+       name)))
+  name)
+
+(defun %untrace-1 (name)
+  (let ((original (gethash name *%traced*)))
+    (when original
+      (set-symbol-function original name)
+      (remhash name *%traced*)))
+  name)
+
+(defmacro trace (&rest names)
+  "Trace calls to NAMES on *TRACE-OUTPUT*; with no names, the traced list."
+  (if names
+      `(list ,@(mapcar (lambda (n) `(%trace-1 ',n)) names))
+      `(let ((all '())) (maphash (lambda (k v) v (push k all)) *%traced*) all)))
+
+(defmacro untrace (&rest names)
+  "Stop tracing NAMES; with no names, untrace everything."
+  (if names
+      `(list ,@(mapcar (lambda (n) `(%untrace-1 ',n)) names))
+      `(let ((all '())) (maphash (lambda (k v) v (push k all)) *%traced*)
+         (mapcar #'%untrace-1 all))))
+
 ;;; Load the plan-2 byte-code compiler's Lisp front-end (bootstrap/vm-compiler.lisp),
 ;;; a sibling of this prelude.  Gated on the %GLOBALLY-SPECIAL-P kernel primitive
 ;;; (the analyzer's special-variable predicate) so a kernel built without it still

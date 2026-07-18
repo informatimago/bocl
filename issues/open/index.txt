@@ -26,35 +26,19 @@ Current list of issues to resolve, in order.
 (Re-triaged 2026-07-18 at v1.8.53; states verified against the
 implementation.  Effort: S < 1/2 day, M ~ 1-2 days, L = campaign.)
 
---- TIER 1 — quick-win bugs (small, verified live, high value) -----
+--- TIER 1 — quick-win bugs: ALL DONE (v1.8.54-57, 2026-07-18) -----
+    values (REPL echoes every value), division-by-zero (proper
+    condition class via the new bocl_error_class), printing-conditions +
+    clos-condition-report (CLOS conditions report under princ, #<> under
+    prin1, :REPORT honored), missing-functions (audit of all 978 CL
+    symbols; 33 gaps implemented — MOP defaults wired, TRACE/UNTRACE,
+    FILE-POSITION, degraded pprint family...).
 
-values.issue                          (bug, S)
-    The REPL prints only the primary value; (values 1 2 3) echoes "1".
-    bocl_repl (sources/bocl.c) ALREADY collects the full value list for
-    the / history — only the final print ignores it.  A few lines.
-
-division-by-zero-not-caught.issue     (bug, S)
-    (/ 10 0) still signals a plain SIMPLE-ERROR (verified at v1.8.53),
-    so DIVISION-BY-ZERO / ARITHMETIC-ERROR handlers miss it.  Fix =
-    give boerror.c an arithmetic-error signalling path (mirror
-    type_error()'s make_simple_condition pattern with the right class).
-    This is the first concrete slice of precise-condition-subclasses.
-
-printing-conditions.issue             (bug, M)  } one work item:
-clos-condition-report-not-printed.issue (bug, M) } same root area
-    Kernel conditions print correctly (princ = report, prin1 = #<...>,
-    verified); the inversion and the ignored :REPORT only affect
-    DEFINE-CONDITION/CLOS conditions — the C condition printer routes
-    them to the generic path instead of the most-specific PRINT-OBJECT
-    method and the report function.  Fix both tickets together in the
-    condition-printing path; every debugger message benefits.
-
-missing-functions.issue               (audit S, fixes ?)
-    The FILE-LENGTH example is STALE — implemented and verified at
-    v1.8.53.  What remains: run the systematic audit (loop the 978 CL
-    external symbols: fboundp / macro-function / special-operator-p /
-    boundp), file the gap list, then implement.  The audit script is an
-    hour; the fixes are sized by its output.
+missing-functions.issue               (residual, M, blocked items)
+    11 symbols remain, documented in the ticket: 6 composite-stream
+    accessors (blocked on real echo/two-way/concatenated/synonym stream
+    objects — the constructors are stubs) and 5 special forms without
+    MACRO-FUNCTION visibility (functional; Phase-2 def-forms work).
 
 --- TIER 2 — well-scoped correctness work ------------------------
 

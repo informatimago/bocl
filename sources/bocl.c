@@ -1016,6 +1016,33 @@ static void kernel_FILE_LENGTH(unused Ref function, Ref arguments, MultipleValue
     results->values[0]=integer_from_word((word)st.st_size);
     close_live_pool(pool);}
 
+/* (FILE-POSITION stream &optional position) — CLHS: with no POSITION, the
+   current file position (ftell) or NIL; with POSITION (an integer, :START or
+   :END), reposition the stream (fseek) and return T (NIL on failure). */
+static void kernel_FILE_POSITION(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref stream=cons_car(current); current=cons_cdr(current);
+    stream=stream_designator_input(stream);
+    check_type(stream,FILE_STREAM_Class);
+    FILE* f=stream->slots->file_stream.stream;
+    results->count=1;
+    if(f==NULL){
+        results->values[0]=NIL_Symbol;
+        close_live_pool(pool);
+        return;}
+    if(consp(current)){
+        Ref pos=cons_car(current);
+        int rc;
+        if(pos==K(START))      { rc=fseek(f,0L,SEEK_SET); }
+        else if(pos==K(END))   { rc=fseek(f,0L,SEEK_END); }
+        else                   { rc=fseek(f,(long)integer_value(pos),SEEK_SET); }
+        results->values[0]=(rc==0)?T_Symbol:NIL_Symbol;
+    } else {
+        long at=ftell(f);
+        results->values[0]=(at<0)?NIL_Symbol:integer_from_word((word)at);}
+    close_live_pool(pool);}
+
 /* (%COPY-FILE source destination) — byte-for-byte copy of SOURCE to
    DESTINATION.  Used by COMPILE-FILE, which on bocl (an interpreter) "compiles"
    a source file by copying it to the fasl pathname so that LOAD can read it
@@ -2315,6 +2342,9 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("FILE-WRITE-DATE"),ll_f,kernel_FILE_WRITE_DATE));
         set_symbol_function(symbol_intern_cstring("FILE-LENGTH"),
             built_in_function_new(symbol_intern_cstring("FILE-LENGTH"),ll_s,kernel_FILE_LENGTH));
+        {   Ref fp=symbol_intern_cstring("FILE-POSITION");
+            Ref fp_ll=list(S(STREAM),S(&OPTIONAL),symbol_intern_cstring("POSITION"),NULL);
+            set_symbol_function(fp,built_in_function_new(fp,fp_ll,kernel_FILE_POSITION));}
         set_symbol_function(symbol_intern_cstring("%COPY-FILE"),
             built_in_function_new(symbol_intern_cstring("%COPY-FILE"),ll_f2,kernel_COPY_FILE));
         set_symbol_function(symbol_intern_cstring("WILD-PATHNAME-P"),
