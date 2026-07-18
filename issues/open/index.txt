@@ -41,20 +41,14 @@ missing-functions.issue               (residual, M, blocked items)
     MACRO-FUNCTION visibility (functional; Phase-2 def-forms work).
 
 --- TIER 2 — well-scoped correctness work ------------------------
+    (live-pool-reroot-audit: DONE v1.8.58 — 72 sites classified, 3
+    fresh-object returns fixed, gate green under BOCL_GCSTRESS.)
 
 vm-analyzer-decline-gaps.issue        (bug, M)
     3 of asdf.lisp's 586 functions decline byte-compilation: an
     analyzer bug evaluating &REST as a variable (x2) and a
     RETURN-FROM/BLOCK visibility case.  Repro recipe in the ticket
     (compile asdf.lisp with the per-function decline report).
-
-live-pool-reroot-audit.issue          (hardening, M)
-    Sweep the ~35 close_live_pool-without-re-root sites (the
-    v1.8.52 REPL corruption's pattern): classify fresh-allocation vs
-    reachable-via-argument, fix the fresh ones; the
-    kernel_structure_functions.c sites are GENERATED — fix
-    generate-structures.lisp via the regenerate patch mechanism.
-    A %GC-STRESS=1 suite run afterwards validates mechanically.
 
 minor-gc-doomed-under-gcminorstress.issue (bug?, re-verify S, fix ?)
     Filed against the WIP new-gc branch; the generational collector has
