@@ -2377,6 +2377,7 @@ Ref stream_input_string(Ref string,Ref start,Ref end){
     stream->slots->file_stream.buffer=(octet*)buffer;
     stream->slots->file_stream.buffer_size=size;
     close_live_pool(pool);
+    add_to_live_pool(stream);   /* re-root: fresh stream, trimmed by the close */
     return stream;}
 
 Ref stream_output_string(unused Ref element_type){
@@ -2397,6 +2398,11 @@ Ref stream_output_string(unused Ref element_type){
     stream->slots->file_stream.buffer=(octet*)buffer;
     string->slots->octet_array.dimensions[0]=CHECK_SIZE_TO_UWORD(size);
     close_live_pool(pool);
+    /* Re-root: fresh stream, trimmed by the close.  prin1_to_string holds this
+       stream only in a C local WHILE PRINTING INTO IT (which allocates), so
+       without this a GC mid-print could collect the very stream being written
+       (same class of bug as the v1.8.52 KERNEL-READ one). */
+    add_to_live_pool(stream);
     return stream;}
 
 Ref string_output_stream_get_string(Ref string_output_stream){

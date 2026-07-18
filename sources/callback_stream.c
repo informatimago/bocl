@@ -110,6 +110,7 @@ Ref make_output_callback_stream(Ref write_function){
     stream->slots->file_stream.stream = file;
     stream->slots->file_stream.is_open = true;
     close_live_pool(pool);
+    add_to_live_pool(stream);   /* re-root: fresh stream, trimmed by the close */
     return stream;}
 
 void kernel_MAKE_OUTPUT_CALLBACK_STREAM(Ref function,Ref arguments,MultipleValues* results){
