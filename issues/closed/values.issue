@@ -1,0 +1,35 @@
+Values should return multiple values.
+the REPL should collect multiple values and display them:
+
+    (setq /// // // / / (multiple-value-list (eval expr)))
+    (format t "~&--> ~{~S~^ ;~%    ~}~%" /)
+
+bocl repl:
+
+    CL-USER> (values (type-of *standard-output*) (eq *standard-output* *trace-output*))
+    
+    FILE-STREAM
+    CL-USER>
+
+expected:
+
+    CL-USER> (values (type-of *standard-output*) (eq *standard-output* *trace-output*))
+    --> FILE-STREAM ;
+        T
+    CL-USER>
+
+
+RESOLUTION (2026-07-18) — v1.8.54
+---------------------------------
+bocl_repl now echoes EVERY returned value, one per line (the value list
+was already collected for the / history; only the echo ignored it):
+
+    CL-USER> (values (type-of *standard-output*) (eq *standard-output* *trace-output*))
+    FILE-STREAM
+    NIL
+
+Residual nit, pre-existing and out of scope here: a 0-values form —
+(values) — echoes NIL instead of nothing, because a count=0 result is
+normalized to one NIL somewhere in the evale call epilogue (multiple-
+value propagation itself is correct: (multiple-value-list (values))
+=> ()).  Cosmetic only.

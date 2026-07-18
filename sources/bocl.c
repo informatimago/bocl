@@ -162,7 +162,11 @@ Ref bocl_repl(Ref inp,Ref out){
            OUT) so a DRIBBLE in effect tees the result echo to the dribble file;
            the prompt stays on OUT so it is not recorded. */
         {   Ref cur_out=variable_value(S(*STANDARD-OUTPUT*));
-            print(primary,cur_out);
+            /* Echo EVERY value, one per line (values.issue): the value list is
+               already rooted via the / history variable set above.  Zero
+               values — (values) — print nothing, like other CL REPLs. */
+            for(uword i=0;i<results.count;i++){
+                print(results.values[i],cur_out);}
             terpri(cur_out);}}}
 
 Ref bocl_read_eval_loop_cstring(const char* text){
