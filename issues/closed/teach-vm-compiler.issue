@@ -1,0 +1,38 @@
+We would want to implement a bytecode compiler and vm in another lisp
+implementation (an autolisp, which is lisp-1, with pure dynamic
+binding).
+
+For this purpose, write down a memory/skill file for another agent
+instance, with all your knowledge and know-how about planning,
+designing, implementing, integrating and debugging the vm and the
+byte-code compiler.  Include references.
+
+
+RESOLUTION (2026-07-18) — v1.8.51
+---------------------------------
+Written: design/skill-bytecode-vm-and-compiler.md — a self-contained
+skill/memory file for another agent instance, in Claude skill format
+(drop it into the target repo as
+.claude/skills/bytecode-vm-and-compiler/SKILL.md, or read it in place).
+
+Contents: the three governing rules (interpreter-as-oracle,
+decline-and-fallback, staged plan with per-stage acceptance + full-suite
+gate); how to write the plan as a handoff document; ISA design as built
+(stack machine, LEB128 operands, append-only versioned opcodes, the
+compiled-function object, host value representation unchanged); the
+analyzer/IR/emitter pipeline with flat locals and two-pass labels;
+NLX through the interpreter's own frame machinery (with the frame_top_live
+and exited-extent-condition lessons); fasl + compiled-boot-image rules
+(EOF tag, text fallback, the expand-only-DEFUNs bootstrap rule and its
+two-timeline rationale); a dedicated section deriving the LISP-1 /
+PURE-DYNAMIC-BINDING adaptation for AutoLISP (shallow binding with
+BIND/UNBIND ops, no closure machinery at all, unbind-on-every-exit
+including tail calls and NLX, setq-invalidated call-site caches, dialect
+parity); the debugging toolkit (parity harness, disassembler from day
+one, fasl tracer, keep-alive workflow, XFAIL quarantine,
+moving-failure = memory bug); measured performance truths; and
+references (bocl files/issues; PAIP ch. 23, Queinnec, SICP ch. 5,
+Baker 1978 shallow binding, Gabriel & Pitman lisp-1/lisp-2, Ertl).
+
+A memory pointer was also recorded on poseidon so future clautolisp
+sessions find the skill file when VM work starts there.

@@ -1,9 +1,0 @@
-We would want to implement a bytecode compiler and vm in another lisp
-implementation (an autolisp, which is lisp-1, with pure dynamic
-binding).
-
-For this purpose, write down a memory/skill file for another agent
-instance, with all your knowledge and know-how about planning,
-designing, implementing, integrating and debugging the vm and the
-byte-code compiler.  Include references.
-
