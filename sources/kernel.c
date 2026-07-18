@@ -2189,8 +2189,8 @@ Ref normalize_encoding(Ref encoding_o,encoding_t* encoding){
         (*encoding)=encoding_us_ascii;
         return encoding_o;}
     else{
-        bocl_error("Invalid encoding %s",
-              string_cstring(prin1_to_string(encoding_o)));}}
+        bocl_error(__FUNCTION__,"Invalid encoding %s",
+              string_static_cstr(prin1_to_string(encoding_o)));}}
 
 Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
     if((new_line_o==K(LF))||(new_line_o==K(UNIX))
@@ -2204,8 +2204,8 @@ Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
         (*new_line)=new_line_crlf;
         return K(CRLF);}
     else{
-        bocl_error("Invalid new-line format %s",
-              string_cstring(prin1_to_string(new_line_o)));}}
+        bocl_error(__FUNCTION__,"Invalid new-line format %s",
+              string_static_cstr(prin1_to_string(new_line_o)));}}
 
 Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
     if(characterp(on_error_o)){
@@ -2219,8 +2219,8 @@ Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
         (*on_error)=on_error_ignore;
         return on_error_o;}
     else{
-        bocl_error("Invalid on-error format %s",
-              string_cstring(prin1_to_string(on_error_o)));}}
+        bocl_error(__FUNCTION__,"Invalid on-error format %s",
+              string_static_cstr(prin1_to_string(on_error_o)));}}
 
 Ref normalize_external_format_internal(Ref external_format,
                                   encoding_t* encoding,
@@ -2240,8 +2240,8 @@ Ref normalize_external_format_internal(Ref external_format,
         else{
             on_error_o=normalize_on_error(caddr(external_format),on_error);}}
     else{
-        bocl_error("Invalid external-format %s",
-              string_cstring(prin1_to_string(external_format)));}
+        bocl_error(__FUNCTION__,"Invalid external-format %s",
+              string_static_cstr(prin1_to_string(external_format)));}
     return cons(encoding_o,cons(new_line_o,cons(on_error_o,NIL_Symbol)));}
 
 Ref normalize_external_format(Ref external_format){

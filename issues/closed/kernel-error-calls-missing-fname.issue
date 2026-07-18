@@ -15,3 +15,19 @@ Fix: bocl_error(__FUNCTION__, "Invalid encoding %s", ...) — same for the
 other three.  Found while renaming error->bocl_error (tcc-lane ticket);
 behavior-preserving rename kept as-is, so this pre-existing quirk is
 tracked here instead.
+
+RESOLUTION (2026-07-18) — v1.8.53
+---------------------------------
+All four calls fixed: bocl_error(__FUNCTION__, "Invalid ... %s",
+string_static_cstr(prin1_to_string(obj))) — the message is now the
+format string (no more format-string injection through symbol names
+containing % directives; verified with a |%n%n%n| external-format
+probe), and the printed-object cstring uses the static rotating buffer
+instead of leaking a malloc on the longjmp error path.
+
+Bonus, same theme: boerror.h defined __FUNCTION__ as the literal string
+"some function" in strict ISO modes, so EVERY kernel error said
+"In some function:".  C99/C11 guarantee __func__, so __FUNCTION__ now
+aliases it and every ERROR/TYPE_ERROR names the real C function
+(e.g. "In normalize_encoding: Invalid encoding :NO-SUCH-ENC").
+44/44 suites green.

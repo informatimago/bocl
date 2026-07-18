@@ -4,11 +4,13 @@
 #include <stdbool.h>
 #include "kernel_types.h"
 
-#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
-/* TODO: we could also remove the fname parameter altogether */
+/* In strict ISO modes __FUNCTION__ is not a preprocessor macro (on GNU
+   compilers it is a builtin identifier, so #ifndef fires even there and the
+   definition below is a harmless alias).  C99/C11 guarantee __func__, so use
+   it: every ERROR/TYPE_ERROR message names the real function instead of the
+   old "some function" placeholder. */
 #ifndef __FUNCTION__
-#define __FUNCTION__ "some function"
-#endif
+#define __FUNCTION__ __func__
 #endif
 
 
