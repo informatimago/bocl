@@ -2398,11 +2398,12 @@ Ref stream_output_string(unused Ref element_type){
     stream->slots->file_stream.buffer=(octet*)buffer;
     string->slots->octet_array.dimensions[0]=CHECK_SIZE_TO_UWORD(size);
     close_live_pool(pool);
-    /* Re-root: fresh stream, trimmed by the close.  prin1_to_string holds this
-       stream only in a C local WHILE PRINTING INTO IT (which allocates), so
-       without this a GC mid-print could collect the very stream being written
-       (same class of bug as the v1.8.52 KERNEL-READ one). */
-    add_to_live_pool(stream);
+    /* NOT re-rooted here: the C callers root the stream themselves for the
+       print duration (prin1_to_string / princ_to_string / format ~/ below),
+       and the Lisp callers bind it to a variable.  A global re-root here was
+       tried (v1.8.58) and backed out: it perturbed live-pool growth enough to
+       expose the flaky FreeBSD corruption tracked in
+       issues/open/freebsd-latent-heap-corruption.issue. */
     return stream;}
 
 Ref string_output_stream_get_string(Ref string_output_stream){

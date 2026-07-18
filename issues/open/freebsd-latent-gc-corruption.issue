@@ -1,0 +1,82 @@
+FreeBSD: latent, layout-sensitive GC corruption — mark bit stamped into a
+neighbouring block's SIZE field.
+
+STATUS: root MECHANISM fully established with a reproducible lldb protocol;
+the final step (identifying which object holds the bogus reference) is one
+session away.  build:freebsd temporarily allow_failure again, referencing
+this ticket (v1.8.59).
+
+== Symptom ==
+Suites fail on FreeBSD only (test_loop, test_slice15, ...; the set varies
+per binary/ASLR layout) with
+    In allocate_from_list|sweep_zone:
+    Size <octal ~2^63+small> big for a halfword
+i.e. a heap block whose size field contains GC_MARK_BIT|true_size.  Any
+source change moves or hides the failures (layout-sensitive); v1.8.57
+was green by luck, v1.8.58's live-pool changes exposed it.
+
+== Established mechanism (lldb-proven) ==
+1. HEAPCHECK identifies the corrupt block: always a CONS (size 0x28,
+   objcount 3) whose SIZE became 0x8000000000000028.
+2. A hardware watchpoint on that address catches the write: it happens
+   INSIDE minor_collect's drain (mark loop) — mark_block() called on a
+   FAKE block pointer equal to cons-8.  On the FreeBSD 64-bit-header
+   branch, fake->objcount == cons->size, so marking the fake stamps the
+   mark bit into the real cons's SIZE.  (On Linux's 32-bit-header branch
+   the same fake would corrupt differently — this is not FreeBSD-specific
+   in nature, only in expression.)
+3. valid_block_start_p(fake) passes because the word before the cons
+   (the previous block's last payload word) happens to hold a small
+   plausible size (0x3939 observed).
+4. So a TRACED SLOT somewhere contains the address cons-8: a dangling or
+   interior reference.  A heap scan at the corrupting GC finds the value
+   held at two stable zone offsets; the surrounding bytes show a
+   STRING-STREAM FileStream block and cons cells (one cons's CAR held a
+   raw libbocl.so C pointer — worth investigating on its own).  The
+   holder identification is the remaining step.
+
+== Reproducible protocol (VM, ~/bocl on the freetest qcow2) ==
+Build: gmake CC=clang BUILD=release DEBUG_FLAGS="-O2 -DNDEBUG -g".
+All addresses are stable per-binary MODULO the zone mmap base; work
+zone-relative via the Zones global.  Known-good offsets for the
+test_slice15 binary at v1.8.58+varray-unified: corrupt cons at
+Zones+0x1982630, fake holders at Zones+0x19821A0 and Zones+0x1982448.
+lldb script pattern (see /tmp/m*.cmds in the VM, reproduced here):
+
+    settings set target.disable-aslr true
+    env BOCL_HEAPCHECK=500
+    breakpoint set -n minor_collect --ignore-count 20
+    run
+    breakpoint disable 1
+    watchpoint set expression -s 8 -- *(char**)&Zones + 0x1982630
+    continue   # hit 1: legit allocation write (size=0x28)
+    continue   # hit 2: THE corrupting mark (0x28 -> 0x8000000000000028),
+               # frame: minor_collect+673 (inlined drain mark_block)
+    # inspect holders:
+    memory find -e "(unsigned long)(*(char**)&Zones + 0x1982630 - 8)" \
+        -c 6 -- `*(char**)&Zones + 0x50` `*(char**)&Zones + 0x4000000`
+    # then memory read around the found locations to identify the
+    # holding object (class slot / neighbours), and grep the source for
+    # the constructor that stores that slot.
+
+== Next steps ==
+1. At the corrupting GC, dump the full mark_wstack (not just top) to get
+   the parent that pushed the fake — mark_wstack entries below top are
+   still intact: read (*(void***)&mark_wstack)[0..top+8].
+2. Or: breakpoint minor_push_if_young conditioned on the fake value
+   (compute it first from Zones) — its caller frame IS the holder scan.
+3. Once the holder is known, the fix is that constructor's missing
+   root/barrier — plus consider hardening valid_block_start_p (e.g.
+   require the candidate's objcount <= physical capacity too, which the
+   fake usually fails) to make the whole class of stray refs harmless.
+
+== Leads / oddities noted on the way ==
+- A cons whose CAR held a raw C pointer into libbocl.so (dump at
+  Zones+0x1982448-0x40 region) — find who conses C pointers.
+- stream_input_string stores buffer = an INTERIOR pointer into the
+  string's payload in the untraced buffer field (harmless for tracing,
+  but if the string moves logically the buffer dangles — worth an audit).
+- The VARRAY [0]-branch (fixed in v1.8.59, unified to [1]) meant FreeBSD
+  ran with one-slot-smaller varray structs than every Linux-tested
+  layout; unifying did not fix THIS bug but removes a whole family of
+  never-tested layout divergence.

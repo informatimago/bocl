@@ -66,14 +66,29 @@ Ref stream_line_start_p(Ref stream){
     return stream_at_line_start(stream) ? T_Symbol : NIL_Symbol;}
 
 Ref prin1_to_string(Ref object){
+    /* Root the fresh stream for the print's duration: printing allocates, and
+       an unrooted stream could be collected while being written (the v1.8.52
+       bug class).  Pool-balanced locally; the result string is re-rooted. */
+    uword pool=open_live_pool();
+    add_to_live_pool(object);
     Ref stream=stream_output_string(S(CHARACTER));
+    add_to_live_pool(stream);
     prin1(object,stream);
-    return string_output_stream_get_string(stream);}
+    Ref result=string_output_stream_get_string(stream);
+    close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: trimmed by the close */
+    return result;}
 
 Ref princ_to_string(Ref object){
+    uword pool=open_live_pool();
+    add_to_live_pool(object);
     Ref stream=stream_output_string(S(CHARACTER));
+    add_to_live_pool(stream);
     princ(object,stream);
-    return string_output_stream_get_string(stream);}
+    Ref result=string_output_stream_get_string(stream);
+    close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: trimmed by the close */
+    return result;}
 
 Ref print(Ref object,Ref stream){
     terpri(stream);
@@ -1343,8 +1358,10 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               uword close_pos=fmt_find_close_paren(ctrl,i,end);
               uword sub_end  =(close_pos!=(uword)-1) ? close_pos : end;
               Ref buf=stream_output_string(S(CHARACTER));
+              add_to_live_pool(buf);   /* fresh stream, written to across allocations */
               bocl_format_run(buf,ctrl_string,i,sub_end,args_ptr);
               Ref s=string_output_stream_get_string(buf);
+              add_to_live_pool(s);
               octet* b=string_octets(s);
               uword  n=string_length(s);
               bool at_word_start=true;   /* start of string is a word start */

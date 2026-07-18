@@ -80,15 +80,17 @@ typedef struct FuncallableFunctionClass FuncallableFunctionClass;
 #define FREE_BLOCK     UWORD_MAX
 #endif
 
-#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
+/* Variable-length trailing arrays: ALWAYS the C89-portable one-element form.
+   This used to pick the GNU zero-length form (field[0]) when the glibc
+   feature macros (__STDC_ISO_10646__/__USE_ISOC11) were absent — i.e. on
+   FreeBSD — which shrank sizeof(Block) & friends by one slot relative to
+   every Linux-tested layout and caused layout-dependent heap corruption
+   there (mark bit stamped into a neighbouring block's SIZE field via an
+   off-by-one-slot reference; see freebsd-varray-heap-corruption.issue).
+   One uniform layout on every platform; the phantom slot costs 8 bytes per
+   varray STRUCT TYPE, not per object. */
 #define VARRAY(field)      field[1]
 #define VARRAY_MIN(count)  (((count)<=0)?1:(count))
-#else
-#define VARRAY(field)      field[0]
-#define VARRAY_MIN(count)  (count)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wzero-length-array"
-#endif
 
 typedef struct Block{
     BLOCK_HEADER;
@@ -271,11 +273,7 @@ typedef struct OctetArray {
     uword VARRAY(dimensions);
 } OctetArray;
 
-#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
-/* --- */
-#else
-#pragma GCC diagnostic pop
-#endif
+
 
 
 typedef struct Cons {
