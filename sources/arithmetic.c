@@ -91,7 +91,7 @@ Ref num_combine(char op, Ref a, Ref b){
           case '-': r = av - bv; break;
           case '*': r = av * bv; break;
           case '/':
-              if(bv==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+              if(bv==0.0){ DIVISION_BY_ZERO("Division by zero%s",""); }
               r = av / bv; break;
           default: FATAL("num_combine: unknown op %c",op);}
         return float_from_floating(r);
@@ -128,7 +128,7 @@ Ref num_combine(char op, Ref a, Ref b){
           case '/': /* a/b / c/d = (a*d)/(b*c) */
               if((integerp(bn) && integer_value(bn)==0) ||
                  (integerp(an) && integer_value(an)==0 && ratiop(b))){
-                  ARITHMETIC_ERROR("Division by zero%s",""); }
+                  DIVISION_BY_ZERO("Division by zero%s",""); }
               rn = num_combine('*', an, bd);
               rd = num_combine('*', ad, bn);
               break;
@@ -173,7 +173,7 @@ Ref num_combine(char op, Ref a, Ref b){
               if(bocl_mul_overflow(av,bv,&r)){ return bignum_combine('*',a,b); }
               break;
           case '/':
-              if(bv==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+              if(bv==0){ DIVISION_BY_ZERO("Division by zero%s",""); }
               if(av%bv != 0){
                   /* Exact integer division → ratio */
                   return ratio_new(integer_from_word(av), integer_from_word(bv));}
@@ -517,7 +517,7 @@ static void int_round(word num, word den, word* q, word* r){
         if(either_float(num,den)){                                             \
             floating n=as_floating(num);                                       \
             floating d=as_floating(den);                                       \
-            if(d==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }           \
+            if(d==0.0){ DIVISION_BY_ZERO("Division by zero%s",""); }           \
             floating q=floatop(n/d);                                           \
             results->count=2;                                                  \
             results->values[0]=integer_from_word((word)q);                     \
@@ -529,7 +529,7 @@ static void int_round(word num, word den, word* q, word* r){
             results->values[1]=r;                                              \
         } else {                                                               \
             word n=integer_value(num); word d=integer_value(den);              \
-            if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }             \
+            if(d==0){ DIVISION_BY_ZERO("Division by zero%s",""); }             \
             if(n==WORD_MIN && d==-1){                                          \
                 ARITHMETIC_ERROR("Integer overflow in division by -1%s",""); } \
             word rq,rr; intop(n,d,&rq,&rr);                                    \
@@ -555,7 +555,7 @@ void kernel_MOD(Ref function,Ref arguments,MultipleValues* results){
     results->count=1;
     if(either_float(num,den)){
         floating n=as_floating(num), d=as_floating(den);
-        if(d==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+        if(d==0.0){ DIVISION_BY_ZERO("Division by zero%s",""); }
         floating q=floor(n/d);
         results->values[0]=float_from_floating(n - q*d);
     } else if(bignump(num)||bignump(den)){
@@ -563,7 +563,7 @@ void kernel_MOD(Ref function,Ref arguments,MultipleValues* results){
         results->values[0]=r;
     } else {
         word n=integer_value(num), d=integer_value(den);
-        if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+        if(d==0){ DIVISION_BY_ZERO("Division by zero%s",""); }
         word rq,rr; int_floor(n,d,&rq,&rr); (void)rq;
         results->values[0]=integer_from_word(rr);}
     close_live_pool(pool);}
@@ -580,7 +580,7 @@ void kernel_REM(Ref function,Ref arguments,MultipleValues* results){
     results->count=1;
     if(either_float(num,den)){
         floating n=as_floating(num), d=as_floating(den);
-        if(d==0.0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+        if(d==0.0){ DIVISION_BY_ZERO("Division by zero%s",""); }
         floating q=trunc(n/d);
         results->values[0]=float_from_floating(n - q*d);
     } else if(bignump(num)||bignump(den)){
@@ -588,7 +588,7 @@ void kernel_REM(Ref function,Ref arguments,MultipleValues* results){
         results->values[0]=r;
     } else {
         word n=integer_value(num), d=integer_value(den);
-        if(d==0){ ARITHMETIC_ERROR("Division by zero%s",""); }
+        if(d==0){ DIVISION_BY_ZERO("Division by zero%s",""); }
         word rq,rr; int_truncate(n,d,&rq,&rr); (void)rq;
         results->values[0]=integer_from_word(rr);}
     close_live_pool(pool);}

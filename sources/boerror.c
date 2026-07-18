@@ -38,7 +38,14 @@ _Noreturn void fatal(const char* fname,const char* message_format,...){
     fprintf(stderr,"\n\n");
     exit(EX_SOFTWARE);}
 
-_Noreturn void bocl_error(const char* fname,const char* message_format,...){
+/* Signal a catchable condition of CONDITION_CLASS built like a SIMPLE-ERROR
+   (format-control = "In <fname>: <message>").  The general entry point behind
+   bocl_error() and the class-specific ERROR macros (ARITHMETIC_ERROR /
+   DIVISION_BY_ZERO — issue precise-condition-subclasses): handlers can then
+   discriminate on the precise class.  Bootstrap guard: while the class is
+   still uninitialised (metaclass NULL), fall through to the fatal report. */
+_Noreturn void bocl_error_class(Ref condition_class,
+                                const char* fname,const char* message_format,...){
     /* Format the message once into a buffer so we can both signal it as a
        catchable condition and, if nobody handles it, print it on the way out. */
     char body[1024];
@@ -50,13 +57,7 @@ _Noreturn void bocl_error(const char* fname,const char* message_format,...){
 #pragma GCC diagnostic pop
     va_end(ap);
 
-    /* Signal a catchable SIMPLE-ERROR so that HANDLER-CASE / HANDLER-BIND —
-       in particular the ANSI test runner's per-test handlers — can recover
-       from errors raised inside C built-ins (undefined function, bad args,
-       unsupported operations, …) instead of the whole process dying.  This
-       mirrors type_error().  Bootstrap guard: skip while the condition class
-       is still being initialised (its metaclass slot is NULL then). */
-    if(SIMPLE_ERROR_Class->class != NULL){
+    if(condition_class->class != NULL){
         uword pool = open_live_pool();
         char msg[1100];
 #pragma GCC diagnostic push
@@ -65,7 +66,7 @@ _Noreturn void bocl_error(const char* fname,const char* message_format,...){
 #pragma GCC diagnostic pop
         Ref fmt  = string_new_cstring(msg);
         add_to_live_pool(fmt);
-        Ref cond = make_simple_condition(SIMPLE_ERROR_Class, fmt, NIL_Symbol);
+        Ref cond = make_simple_condition(condition_class, fmt, NIL_Symbol);
         add_to_live_pool(cond);
         signal_condition(cond, eval_global_environment());
         /* signal_condition returned — no handler matched; fall through. */
@@ -74,6 +75,19 @@ _Noreturn void bocl_error(const char* fname,const char* message_format,...){
     fprintf(stderr,"\nIn %s:\n",fname);
     fprintf(stderr,"%s\n\n",body);
     exit(EX_DATAERR);}
+
+_Noreturn void bocl_error(const char* fname,const char* message_format,...){
+    /* Delegate to the class-general path with SIMPLE-ERROR, re-formatting here
+       (varargs cannot be forwarded portably). */
+    char body[1024];
+    va_list ap;
+    va_start(ap,message_format);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+    vsnprintf(body,sizeof(body),message_format,ap);
+#pragma GCC diagnostic pop
+    va_end(ap);
+    bocl_error_class(SIMPLE_ERROR_Class,fname,"%s",body);}
 
 
 _Noreturn void program_error(const char* fname,const char* message_format,...){

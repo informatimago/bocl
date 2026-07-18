@@ -98,6 +98,17 @@ static void test_method_combinations(void){
     e("(defmethod conf-std :around ((o conf-b)) (list :around (call-next-method)))");
     TEST_EQ(equal, e("'(:around :base)"), e("(conf-std (make-instance 'conf-b))"));}
 
+/* ---- DIVISION-BY-ZERO condition class (division-by-zero-not-caught) ------ */
+static void test_division_by_zero(void){
+    TEST_EQ(eql, e(":dbz"),
+            e("(handler-case (/ 10 0) (division-by-zero () :dbz))"));
+    TEST_EQ(eql, e(":ae"),
+            e("(handler-case (/ 10.5 0.0) (arithmetic-error () :ae))"));
+    TEST_EQ(eql, e(":mod"),
+            e("(handler-case (mod 5 0) (division-by-zero () :mod))"));
+    TEST_EQ(eql, e(":ok"),
+            e("(progn (/ 10 2) :ok)"));}
+
 /* ---- DEFPACKAGE: shadowing imports before :use -------------------------- */
 static void test_defpackage_shadowing_order(void){
     /* Using a package that exports a CL-colliding name works when the
@@ -119,4 +130,5 @@ TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("compile-file-pathname",      test_compile_file_pathname_bound)
     TEST_CASE("method combinations",        test_method_combinations)
     TEST_CASE("defpackage shadowing order", test_defpackage_shadowing_order)
+    TEST_CASE("division-by-zero class",     test_division_by_zero)
     TEST_FINALIZE()

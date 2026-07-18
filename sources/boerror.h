@@ -22,7 +22,8 @@
 const char* string_static_cstr(Ref string);
 
 #define ERROR(message_format,...)                    bocl_error(__FUNCTION__,"ERROR: " message_format,__VA_ARGS__)
-#define ARITHMETIC_ERROR(message_format,...)         bocl_error(__FUNCTION__,"ARITHMETIC ERROR: " message_format,__VA_ARGS__)
+#define ARITHMETIC_ERROR(message_format,...)         bocl_error_class(ARITHMETIC_ERROR_Class,__FUNCTION__,"ARITHMETIC ERROR: " message_format,__VA_ARGS__)
+#define DIVISION_BY_ZERO(message_format,...)          bocl_error_class(DIVISION_BY_ZERO_Class,__FUNCTION__,"ARITHMETIC ERROR: " message_format,__VA_ARGS__)
 #define TYPE_ERROR(object,class)                     type_error(__FUNCTION__,object,class)
 #define OUT_OF_BOUNDS(vector,length,index)           bocl_error(__FUNCTION__,"OUT-OF-BOUNDS ERROR: index %"WORD_FORMAT" is out of bound to index (max %"WORD_FORMAT")",integer_value(index),integer_value(length))
 
@@ -52,6 +53,8 @@ _Noreturn void fatal(const char* fname,const char* message_format,...);
    order — tcc-linked test binaries put libc before libbocl, so every bocl
    error() call landed in glibc's, printing garbage errno and exit()ing with a
    garbage status (tcc-lane-test-crash.issue). */
+_Noreturn void bocl_error_class(Ref condition_class,
+                                const char* fname,const char* message_format,...);
 _Noreturn void bocl_error(const char* fname,const char* message_format,...);
 _Noreturn void program_error(const char* fname,const char* message_format,...);
 _Noreturn void package_error(const char* fname,const char* message_format,...);
