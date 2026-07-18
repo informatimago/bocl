@@ -1,0 +1,34 @@
+Audit: close_live_pool without re-rooting a freshly-allocated result
+
+The gc-repl-handler-case-heap-corruption root cause (v1.8.52) was
+read_impl closing its live pool and returning the freshly-read form
+UNROOTED — the project convention is
+
+    close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root */
+    return result;
+
+A mechanical scan (close_live_pool immediately followed by `return
+<var>;`) finds ~35 more sites.  Most are SAFE: the returned value is an
+existing object reachable from a caller-rooted argument (slot reads,
+car/cdr, registry lookups).  The UNSAFE class is a function returning a
+FRESHLY ALLOCATED object/graph: any GC between the return and the
+caller's first rooting store frees it.  The window is usually a few
+instructions — these latent bugs surface as unreproducible one-in-N
+corruptions exactly like the REPL one did.
+
+Fixed so far: reader.c read_impl (v1.8.52, the actual crasher),
+packages.c make_package, structure.c structure_class_instance_size.
+
+TO AUDIT (classify each: fresh allocation vs reachable-via-argument):
+- kernel_structure_functions.c: ~28 sites — GENERATED code
+  (sources/generate-structures.lisp): if any are fresh-allocation
+  returns, fix the GENERATOR (and regenerate via the patch-file
+  mechanism), not the output.
+- cons.c bocl_append (single-list early return: safe, returns arg car),
+  copy_list (nil case: safe).
+- packages.c:175/185 region, and any site the scan pattern misses
+  (close followed by an expression return, multiple returns).
+- Consider a debug-build assert: a %GC-STRESS=1 run of the full suite
+  would catch every unsafe site mechanically — do that once the suite
+  runtime under stress is acceptable, or stress per-suite.

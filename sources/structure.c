@@ -10,6 +10,7 @@ Ref structure_class_instance_size(Ref structure_class){
     check_class(structure_class,STRUCTURE_CLASS_Class);
     Ref result=integer_from_uword(structure_class->slots->structure_class.nslots);
     close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: fresh integer, unrooted after close */
     return result;}
 
 

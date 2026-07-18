@@ -51,3 +51,42 @@ Suspects to audit first: frame parameters (handler.clauses/condition)
 reachability during GC, %REPL-EVAL's live-pool discipline around
 signal_condition's longjmp (pools opened by the erring builtin are
 never closed), and printer echo allocations between forms.
+
+RESOLUTION (2026-07-18) — v1.8.52
+---------------------------------
+Root cause found and fixed: reader.c read_impl() closed its live pool
+and returned the freshly-read form WITHOUT re-rooting it — the entire
+object graph of every form returned by KERNEL-READ was unrooted in the
+caller.  In the REPL loop (bocl_repl), prin1_to_string(sexp) for the
+dribble note allocates a 32 KB string-stream buffer BEFORE the form is
+stored anywhere reachable (`-` / %REPL-EVAL); whenever the minor-GC
+allocation-count trigger landed inside that window, the just-read form
+was swept, and evaluation then walked freed blocks reused as free-list
+links — explaining every observed symptom: handler-case frames "not
+found" (clauses freed), functions misbehaving mid-run, exit(65)s, and
+the failure point drifting with any change to file content or binary
+layout (the trigger is GC-counter alignment, ~ once per 15-70 forms).
+
+Hunt (the recipe that worked, for next time):
+1. GCCHECK=1: no survivor->doomed edges => the lost object had no heap
+   parent — a C-local/frame Ref.
+2. gdb break on type_error at the deterministic death: the object being
+   PRIN1ed had objcount FREE_BLOCK and its "class" was a free-list
+   next-pointer => use-after-GC of a Lisp-visible object.
+3. gdb runs are ASLR-stable => hardware watchpoint on that block's
+   header: the fatal transition's backtrace showed sweep <- minor GC <-
+   32 KB alloc <- prin1_to_string <- bocl_repl, and the block's LAST
+   LIVE incarnation was allocated by parse_list's push while READING
+   the next REPL form.  reader.c read_impl's missing re-root closed the
+   case.
+
+Fix: read_impl re-roots its result after close_live_pool (one line +
+comment).  Also hardened two sibling constructors found by a mechanical
+scan (packages.c make_package, structure.c
+structure_class_instance_size); the full-codebase sweep is tracked in
+issues/open/live-pool-reroot-audit.issue.
+
+Validated: the 121-probe REPL repro passes 3/3 runs GC-on (was dying at
+form 15-70), survives %GC-STRESS 64; 44/44 suites green; the cesarum
+ASDF load — whose residual wandering errors were THIS bug reached
+through LOAD's kernel_read — now completes with zero debugger entries.

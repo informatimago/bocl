@@ -1244,6 +1244,13 @@ static Ref read_impl(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursiv
     add_to_live_pool(input_stream);
     Ref result=read_impl_unrooted(input_stream,eof_error_p,eof_value,recursive_p,preserve);
     close_live_pool(pool);
+    /* Re-root: close_live_pool trimmed the freshly-read form out of the live
+       pool, so without this the ENTIRE returned object graph is unrooted in
+       the caller.  The REPL (bocl_repl) allocates a 32 KB print buffer for the
+       dribble note BEFORE storing the form anywhere reachable — a minor GC
+       landing in that window collected the just-read form and corrupted every
+       later evaluation (gc-repl-handler-case-heap-corruption). */
+    add_to_live_pool(result);
     return result;}
 
 Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p){
