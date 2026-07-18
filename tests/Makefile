@@ -5,7 +5,7 @@ include ../sources/common.mk
 BOCL        = ../sources/bocl
 LIBBOCL     = ../sources/libbocl.$(SO)
 # PROGRAMS    = test_ci test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions
-PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring test_structures test_handler_bind test_restarts test_format test_loop test_list_utils test_misc test_slice15 test_slice16 test_slice17 test_slice18 test_clos test_slice20 test_slice21 test_slice22 test_slice23 test_slice24 test_slice25 test_slice26 test_slice27 test_slice28 test_slice29 test_slice30 test_slice31 test_slice32 test_slice33 test_designators
+PROGRAMS    = test_reader test_eval test_arithmetic test_load test_packages test_hash_table test_conditions test_reader_macros test_macros test_sequences test_setf test_control test_seq_lib test_strings test_numeric_extras test_destructuring test_structures test_handler_bind test_restarts test_format test_loop test_list_utils test_misc test_slice15 test_slice16 test_slice17 test_slice18 test_clos test_slice20 test_slice21 test_slice22 test_slice23 test_slice24 test_slice25 test_slice26 test_slice27 test_slice28 test_slice29 test_slice30 test_slice31 test_slice32 test_slice33 test_designators test_conformance
 RUN_TARGETS = $(PROGRAMS:%=run_%)
 
 # Suites with a KNOWN, tracked failure: they still build, run and report, but a
@@ -583,4 +583,16 @@ test_designators: $(test_designators_SRCS:%.c=%.d) $(test_designators_SRCS:%.c=%
 run_test_designators:test_designators
 	@ printf "# Testing %s\n" "$^"
 	$(VERBOSE) $(RUN) ./test_designators; rc=$$?; echo status=$$rc; case " $(XFAIL_TESTS) " in *" $^ "*) [ $$rc -eq 0 ] || echo "  ^ quarantined known failure (see issues/open/)" ;; *) [ $$rc -eq 0 ] ;; esac
+
+test_conformance_SRCS = test_conformance.c simple_test.c
+test_conformance_LIBS = -L../sources -lbocl
+
+test_conformance: $(test_conformance_SRCS:%.c=%.d) $(test_conformance_SRCS:%.c=%.o) $(LIBBOCL)
+	@ printf "# Linking %-20s   from %s\n" "$@" "$(test_conformance_SRCS:%.c=%.o)"
+	$(VERBOSE) $(LINKBIN) -o $@ $(test_conformance_SRCS:%.c=%.o) $(test_conformance_LIBS)
+
+run_test_conformance:test_conformance
+	@ printf "# Testing %s\n" "$^"
+	$(VERBOSE) $(RUN) ./test_conformance; rc=$$?; echo status=$$rc; case " $(XFAIL_TESTS) " in *" $^ "*) [ $$rc -eq 0 ] || echo "  ^ quarantined known failure (see issues/open/)" ;; *) [ $$rc -eq 0 ] ;; esac
+
 

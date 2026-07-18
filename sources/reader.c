@@ -437,13 +437,23 @@ static Ref parse_list(parser_state* parser){
             bool eof2=false,err2=false;
             octet next=peek_octet(parser->input_stream,&eof2,&err2);
             if(eof2 || !constituentp(next)){
-                /* Consume the dot, skip whitespace, read the cdr object. */
+                /* Consume the dot, then read the cdr object.  A suppressed
+                   #+/#- form is NOT an object (CLHS 2.3.3, 2.4.8.17): keep
+                   reading until a real object follows the dot, and consume
+                   (discarding) any suppressed forms between that object and
+                   the closing paren.  asdf.asd relies on this, ending its
+                   DEFSYSTEM with `. #-asdf3 () #+asdf3 (...)`. */
                 advance_character(parser);
                 skip_spaces(parser);
-                if(!parser->eof){
-                    dotted_cdr=parse_object(parser);
+                while(!parser->eof && parser->ch!=')'){
+                    Ref cdr_obj=parse_object(parser);
+                    skip_spaces(parser);
+                    if(cdr_obj==reader_skip_marker){ continue; }
+                    if(is_dotted){
+                        READER_ERROR(parser->input_stream,
+                                     "more than one object follows . in list%s","");}
+                    dotted_cdr=cdr_obj;
                     is_dotted=true;}
-                skip_spaces(parser);
                 break;}}
         Ref element=parse_object(parser);
         if(element != reader_skip_marker){

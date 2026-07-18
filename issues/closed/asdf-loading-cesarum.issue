@@ -131,3 +131,50 @@ debug>
 
 
 
+
+RESOLUTION (2026-07-18) — v1.8.50
+---------------------------------
+(asdf/operate:load-system :com.informatimago.common-lisp.cesarum) now
+loads completely — 49 CESARUM packages, zero errors (validated against
+the com-informatimago checkout, asdf compiled to cfasl per component).
+The original DOWNWARD-OPERATION unbound-slot was a downstream casualty;
+peeling the onion exposed and fixed EIGHT conformance defects:
+
+1. READER: a suppressed #+/#- form in a DOTTED TAIL was taken as the
+   cdr object (leaking the reader's skip-marker cons into user data).
+   asdf.asd ends its DEFSYSTEM with `. #-asdf3 () #+asdf3 (...)` —
+   this corrupted asdf's own registration ("odd-length keyword list").
+   reader.c parse_list now skips suppressed forms around the dot.
+2. PROBE-FILE / TRUENAME returned namestrings; CLHS requires physical
+   pathnames (ASDF check-types (or null pathname system) on them).
+   kernel PROBE-FILE now returns a realpath()-resolved PATHNAME.
+3. DEFINE-MODIFY-MACRO spliced the raw lambda list into the call
+   (evaluating &REST as a variable!) and its SETF wrote to a gensym
+   instead of the place; rewritten with required/&optional/&rest
+   parsing and GET-SETF-EXPANSION single-evaluation of place subforms
+   (cesarum list.lisp's PUSH* on (aref v (incf i)) asserts this).
+4. DEFSTRUCT rejected a leading documentation string (cache.lisp).
+5. COMPILE-FILE did not bind *COMPILE-FILE-PATHNAME*/*TRUENAME*.
+6. DEFMETHOD accepted only KEYWORD qualifiers; CLHS allows any
+   non-list atom — (defmethod slots-for-print APPEND (...)).
+7. Short-form method combinations (APPEND PROGN + LIST NCONC AND OR
+   MAX MIN) are now emulated: methods carrying such a qualifier are
+   combined by the operator, most-specific first (utility.lisp's
+   SLOTS-FOR-PRINT / CALL-PRINT-PARSEABLE-OBJECT).
+8. DEFPACKAGE passed :USE to MAKE-PACKAGE, establishing inheritance
+   BEFORE the :SHADOWING-IMPORT-FROM options that exist to resolve its
+   conflicts (index-set.lisp shadowing CL's UNION &co); USE-PACKAGE now
+   runs in CLHS order, after shadows and shadowing imports.
+9. DEFSETF was broken in BOTH forms since its introduction: it fed a
+   CLHS-style expander through bocl's 3-part DEFINE-SETF-EXPANDER
+   signature, splicing the body into the expander's lambda list.
+   Rewritten against bocl's *SETF-EXPANDERS* convention.
+10. DEFSTRUCT (:TYPE LIST) / (:TYPE VECTOR) implemented (positional
+    slots on plain lists/vectors, :NAMED + predicate, BOA constructors,
+    :INITIAL-OFFSET, setf-able accessors) — iso4217's currency data
+    ARE quoted lists exercising exactly this.
+
+New CUnit suite tests/test_conformance.c (44th) locks 1-8; typed
+defstructs are exercised through the cesarum load itself.
+Note: a fresh full compile of cesarum takes ~1 h of byte-compiling on
+poseidon (interpreter-speed compiler) — see compilation-fasl-speed.issue.

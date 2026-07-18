@@ -23,6 +23,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
+#include <limits.h>   /* PATH_MAX (PROBE-FILE realpath) */
 #include <unistd.h>
 #include <sys/wait.h>   /* WIFEXITED/WEXITSTATUS for %SYSTEM (system(3)) */
 #include <errno.h>
@@ -969,9 +970,16 @@ static void kernel_PROBE_FILE(unused Ref function, Ref arguments, MultipleValues
     char* path=string_cstring(name_ref);
     struct stat st;
     bool exists=(stat(path,&st)==0);
+    /* CLHS: PROBE-FILE returns the TRUENAME — a physical PATHNAME with any
+       symlinks/relative components resolved — not a namestring.  (ASDF's
+       system-source-file check-types (or null pathname system) on it.) */
+    Ref result=NIL_Symbol;
+    if(exists){
+        char resolved[PATH_MAX];
+        result=physical_pathname_new_cstring(realpath(path,resolved)?resolved:path);}
     free(path);
     results->count=1;
-    results->values[0]=exists?name_ref:NIL_Symbol;
+    results->values[0]=result;
     close_live_pool(pool);}
 
 /* (FILE-WRITE-DATE filespec) — return the file's modification time as a

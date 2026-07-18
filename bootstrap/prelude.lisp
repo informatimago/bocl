@@ -1970,6 +1970,89 @@ identity."
             ((consp item) (push (if (consp (car item)) (cadr (car item)) (car item)) vars))
             (t (push item vars))))))
 
+(defun %typed-defstruct-expansion (name-and-options struct-type slot-specs)
+  "Expansion of DEFSTRUCT with a (:type list|vector) option: the instances are
+   plain lists/vectors, slots are positional, and no structure class exists.
+   Supports :conc-name, :constructor (default and BOA), :copier, :named (the
+   structure name is stored as the first element, enabling the :predicate),
+   :initial-offset.  :include of typed structures is not supported."
+  (let* ((name     (car name-and-options))
+         (all-opts (cdr name-and-options))
+         (options  (remove-if-not #'consp all-opts))   ; bare :NAMED is an atom
+         (vectorp  (or (eq struct-type 'vector)
+                       (and (consp struct-type) (eq (car struct-type) 'vector))))
+         (namedp   (member :named all-opts))
+         (offset   (let ((o (assq :initial-offset options))) (if o (cadr o) 0)))
+         (conc-str (let ((o (assq :conc-name options)))
+                     (cond ((null o)  (%string-append (symbol-name name) "-"))
+                           ((cadr o)  (symbol-name (cadr o)))
+                           (t ""))))
+         (struct-pkg (or (symbol-package name) *package*))
+         (ctor-opt (assq :constructor options))
+         (ctor-sym (if ctor-opt (cadr ctor-opt)
+                       (intern (%string-append "MAKE-" (symbol-name name)) struct-pkg)))
+         (ctor-boa   (and ctor-opt (cddr ctor-opt) (caddr ctor-opt)))
+         (pred-opt (assq :predicate options))
+         (pred-sym (cond (pred-opt (cadr pred-opt))
+                         (namedp (intern (%string-append (symbol-name name) "-P")
+                                         struct-pkg))
+                         (t nil)))
+         (copier-sym (let ((o (assq :copier options)))
+                       (if o (cadr o)
+                           (intern (%string-append "COPY-" (symbol-name name))
+                                   struct-pkg))))
+         (specs (mapcar #'%parse-defstruct-slot slot-specs))
+         (base  (+ offset (if namedp 1 0)))
+         (forms '()))
+    (when (assq :include options)
+      (error "DEFSTRUCT ~S: :INCLUDE of a :TYPEd structure is not supported."
+             name))
+    ;; Constructor: build the list/vector, name first when :named.
+    (let* ((slot-names (mapcar #'car specs))
+           (inits      (mapcar #'cadr specs))
+           (prefix     (append (make-list offset :initial-element nil)
+                               (if namedp (list `',name) '())))
+           (elements   `(,@prefix ,@slot-names)))
+      (when ctor-sym
+        (push (if ctor-boa
+                  `(defun ,ctor-sym ,ctor-boa
+                     (,(if vectorp 'vector 'list) ,@elements))
+                  `(defun ,ctor-sym (&key ,@(mapcar #'list slot-names inits))
+                     (,(if vectorp 'vector 'list) ,@elements)))
+              forms)))
+    ;; Accessors: positional readers plus a SETF expansion.
+    (let ((i base))
+      (dolist (spec specs)
+        (let* ((slot (car spec))
+               (acc  (intern (%string-append conc-str (symbol-name slot))
+                             struct-pkg))
+               (idx  i))
+          (push (if vectorp
+                    `(defun ,acc (s) (aref s ,idx))
+                    `(defun ,acc (s) (nth ,idx s)))
+                forms)
+          (unless (caddr spec)          ; :read-only
+            (let ((setter (intern (%string-append "%SET-" (symbol-name acc))
+                                  struct-pkg)))
+              (push (if vectorp
+                        `(defun ,setter (s v) (setf (aref s ,idx) v) v)
+                        `(defun ,setter (s v) (setf (nth ,idx s) v) v))
+                    forms)
+              (push `(defsetf ,acc ,setter) forms)))
+          (incf i))))
+    (when pred-sym
+      (push (if vectorp
+                `(defun ,pred-sym (x)
+                   (and (vectorp x) (> (length x) ,offset)
+                        (eq (aref x ,offset) ',name)))
+                `(defun ,pred-sym (x)
+                   (and (listp x) (> (length x) ,offset)
+                        (eq (nth ,offset x) ',name))))
+            forms))
+    (when copier-sym
+      (push `(defun ,copier-sym (x) (copy-seq x)) forms))
+    `(progn ,@(nreverse forms) ',name)))
+
 (defmacro defstruct (name-and-options &rest slot-specs)
   ;; Supported structure options: :conc-name, :constructor, :copier,
   ;;   :predicate, :include.
@@ -1978,6 +2061,19 @@ identity."
   ;; (defun name ...) so that the generated functions close over the
   ;; lexically-bound class object.  (bocl DEFUN does not capture the
   ;; lexical env; LAMBDA + SET-SYMBOL-FUNCTION does.)
+  ;; CLHS: an optional documentation string may precede the slot descriptions.
+  (when (and (stringp (car slot-specs)) (cdr slot-specs))
+    (setf slot-specs (cdr slot-specs)))
+  (when (stringp (car slot-specs))   ; lone docstring, no slots
+    (setf slot-specs nil))
+  ;; Typed structures — (:type list) / (:type vector): no class, no #S
+  ;; representation; instances are plain lists/vectors with positional slots
+  ;; (CLHS 3.4.4 / iso4217's (defstruct (currency (:type list)) ...)).
+  (let ((type-opt (and (consp name-and-options)
+                       (assq :type (cdr name-and-options)))))
+    (when type-opt
+      (return-from defstruct
+        (%typed-defstruct-expansion name-and-options (cadr type-opt) slot-specs))))
   (let* ((name     (if (consp name-and-options) (car name-and-options) name-and-options))
          (options  (if (consp name-and-options) (cdr name-and-options) nil))
          ;; :conc-name — default "<NAME>-"; nil means no prefix
@@ -4804,7 +4900,37 @@ SETQ/INCF/DECF is left in place (sequential)."
                     (lambda (m) (%mth-qualifiers m)) sorted-methods))
         (afters   (nreverse
                    (remove-if-not
-                    (lambda (m) (equal (%mth-qualifiers m) '(:after))) sorted-methods))))
+                    (lambda (m) (equal (%mth-qualifiers m) '(:after))) sorted-methods)))
+        ;; Short-form (operator) method combination, inferred from the methods:
+        ;; methods whose single qualifier is an operator symbol (APPEND, PROGN,
+        ;; +, LIST, NCONC, AND, OR, MAX, MIN) act as the primaries of that
+        ;; combination: the operator combines every applicable one,
+        ;; most-specific first (CLHS 7.6.6.4).  bocl records no per-gf
+        ;; combination object, so the qualifier itself selects the operator.
+        (op-methods (remove-if-not
+                     (lambda (m)
+                       (let ((q (%mth-qualifiers m)))
+                         (and (consp q) (null (cdr q))
+                              (member (car q) '(append progn + list nconc
+                                                and or max min)))))
+                     sorted-methods)))
+    (when (and op-methods (null primaries))
+      (let ((op  (car (%mth-qualifiers (car op-methods))))
+            (fns (mapcar #'%mth-function op-methods)))
+        (return-from %compute-effective-method
+          (lambda (args)
+            (case op
+              ((progn) (let (r) (dolist (f fns r) (setf r (apply f args)))))
+              ((and)   (let ((r t))
+                         (dolist (f fns r)
+                           (setf r (apply f args))
+                           (unless r (return nil)))))
+              ((or)    (dolist (f fns nil)
+                         (let ((r (apply f args)))
+                           (when r (return r)))))
+              (otherwise
+               (apply (symbol-function op)
+                      (mapcar (lambda (f) (apply f args)) fns))))))))
     (let ((primary-fns (mapcar #'%mth-function primaries)))
       (lambda (args)
         (unless primaries
@@ -5024,10 +5150,12 @@ tation, :method-combination, ...) are ignored."
 (defmacro defmethod (name &rest args)
   "Define a method for generic function NAME.
   Syntax: (defmethod name [qualifier*] (specialised-lambda-list) body...)"
-  ;; Collect qualifiers (keywords before the lambda list)
+  ;; Collect qualifiers: every non-list object before the lambda list (CLHS
+  ;; 7.6.2 — qualifiers need not be keywords: short-form method combinations
+  ;; use APPEND, PROGN, +, ... as in (defmethod slots-for-print append (...)).
   (let ((qualifiers nil)
         (rest args))
-    (loop while (and (consp rest) (keywordp (car rest)))
+    (loop while (and (consp rest) (not (listp (car rest))))
           do (push (pop rest) qualifiers))
     (setq qualifiers (nreverse qualifiers))
     (let* ((specialized-ll (car rest))
@@ -6570,16 +6698,35 @@ SUBTYPEP round-trips)."
 
 ;;; ---- DEFINE-MODIFY-MACRO ------------------------------------------------
 (defmacro define-modify-macro (name lambda-list function &optional documentation)
-  "Define a modify macro that applies FUNCTION to a place and stores the result."
+  "Define a modify macro that applies FUNCTION to a place and stores the result.
+   LAMBDA-LIST may contain required parameters, &OPTIONAL (with defaults) and
+   &REST (CLHS): the call is built with LIST*, so the &REST parameter's forms
+   are spread as the trailing arguments — splicing the raw lambda list into
+   the call would evaluate the &REST symbol itself (asdf-loading-cesarum)."
   documentation  ; ignored
   (let ((place (gensym "PLACE-"))
-        (env   (gensym "ENV-")))
-    `(defmacro ,name (,place ,@lambda-list &environment ,env)
-       ,env  ; ignored
-       (let ((g (gensym "DM-")))
-         `(let ((,g ,(list ',function ,place ,@lambda-list)))
-            (setf ,,`(quote ,place) ,g)
-            ,g)))))
+        (env   (gensym "ENV-"))
+        (required '()) (optionals '()) (restvar nil) (state :required))
+    (dolist (item lambda-list)
+      (case item
+        ((&optional) (setf state :optional))
+        ((&rest)     (setf state :rest))
+        (otherwise
+         (case state
+           ((:required) (push item required))
+           ((:optional) (push (if (consp item) (car item) item) optionals))
+           ((:rest)     (setf restvar item))))))
+    (let ((args (append (nreverse required) (nreverse optionals))))
+      ;; CLHS: the place's subforms are evaluated exactly ONCE — go through
+      ;; GET-SETF-EXPANSION.  (assert in cesarum list.lisp: PUSH* on the place
+      ;; (aref v (incf i)) must not incf twice.)
+      `(defmacro ,name (,place ,@lambda-list &environment ,env)
+         (multiple-value-bind (%vars %vals %stores %setter %getter)
+             (get-setf-expansion ,place ,env)
+           `(let* (,@(mapcar #'list %vars %vals)
+                   (,(car %stores)
+                    ,(list* ',function %getter ,@args ,(or restvar ''nil))))
+              ,%setter))))))
 
 ;;; ---- INCF / DECF for generic delta --------------------------------------
 ;;; Already defined; no change.
@@ -6736,30 +6883,33 @@ SUBTYPEP round-trips)."
 
 (defmacro defsetf (access-fn &rest rest)
   "Define a setf expansion for ACCESS-FN.
-  Short form: (defsetf acc update-fn &optional doc)
-  Long form:  (defsetf acc (params) (store-var) body...)"
+  Short form: (defsetf acc update-fn &optional doc) — (setf (acc a...) v)
+  expands into (update-fn a... v).
+  Long form:  (defsetf acc (params) (store-var) body...) — BODY builds the
+  store form from PARAMS and STORE-VAR.
+  Both register a *SETF-EXPANDERS* entry in bocl's convention: a function of
+  the place's subform temporaries plus the value temporary, returning the
+  store form (see the SETF macro).  The previous version registered a
+  CLHS-style expander through DEFINE-SETF-EXPANDER's bocl-specific signature,
+  which spliced the body into the expander's lambda list — every DEFSETF was
+  broken at its first SETF use (asdf-loading-cesarum)."
   (cond
     ;; Short form: second arg is a symbol (the update function name)
-    ((symbolp (car rest))
+    ((or (null rest) (symbolp (car rest)))
      (let ((update-fn (car rest)))
-       `(define-setf-expander ,access-fn (&rest %args%)
-          (let ((%store% (gensym "STORE-")))
-            (values nil %args% (list %store%)
-                    (list* ',update-fn (append %args% (list %store%)))
-                    (cons ',access-fn %args%))))))
+       `(progn
+          (sethash ',access-fn *setf-expanders*
+                   (lambda (&rest %all%) (cons ',update-fn %all%)))
+          ',access-fn)))
     ;; Long form: second arg is a lambda-list
     (t
      (let* ((lambda-list (car rest))
             (store-vars  (cadr rest))
             (body        (cddr rest)))
-       `(define-setf-expander ,access-fn ,lambda-list
-          (let ,(mapcar (lambda (v) `(,v (gensym ,(string v)))) store-vars)
-            (values nil
-                    (list ,@(remove-if (lambda (s) (member s lambda-list-keywords)) lambda-list))
-                    (list ,@store-vars)
-                    (progn ,@body)
-                    (list ',access-fn
-                          ,@(remove-if (lambda (s) (member s lambda-list-keywords)) lambda-list)))))))))
+       `(progn
+          (sethash ',access-fn *setf-expanders*
+                   (lambda (,@lambda-list ,@store-vars) ,@body))
+          ',access-fn)))))
 
 ;;; ---- WITH-HASH-TABLE-ITERATOR -----------------------------------------------
 
@@ -9421,13 +9571,18 @@ result array; return that array."
     (dolist (spec import-froms)
       (let ((from (car spec)))
         (dolist (n (cdr spec)) (push `(import (intern ,n ',from) pkg) body))))
-    (dolist (u use) (push `(use-package ',u pkg) body))
+    ;; USE-PACKAGE must run in the body, AFTER the shadows and shadowing
+    ;; imports above (CLHS defpackage order): passing :USE to MAKE-PACKAGE
+    ;; would establish the inheritance first and signal the very name
+    ;; conflicts the :SHADOWING-IMPORT-FROM options exist to resolve
+    ;; (cesarum index-set: uses CESARUM.SET shadowing CL's UNION &co).
+    (dolist (u (if use-given use '("COMMON-LISP")))
+      (push `(use-package ',u pkg) body))
     (dolist (n interns) (push `(intern ,n pkg) body))
     (dolist (n exports) (push `(export (intern ,n pkg) pkg) body))
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        (let ((pkg (or (find-package ,sname)
-                      (make-package ,sname :nicknames ',nicknames
-                                          :use ',(if use-given use '("COMMON-LISP"))))))
+                      (make-package ,sname :nicknames ',nicknames :use '()))))
          ,@(nreverse body)
          pkg))))
 
@@ -10064,6 +10219,10 @@ result array; return that array."
          (out-ns  (namestring out))
          (*package*   *package*)                ; contain a compile-time IN-PACKAGE
          (*readtable* *readtable*)              ; the SOURCE is read with this readtable
+         ;; CLHS: COMPILE-FILE binds *COMPILE-FILE-PATHNAME* (the merged input
+         ;; pathname) and *COMPILE-FILE-TRUENAME* during processing.
+         (*compile-file-pathname* (pathname merged))
+         (*compile-file-truename* (truename actual))
          (std-rt   (copy-readtable nil))        ; the TEXT fasl is written with the standard one
          (failure nil)
          (entries '()))                         ; (package . expanded-form), reverse order
