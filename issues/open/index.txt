@@ -50,6 +50,9 @@ vm-analyzer-decline-gaps.issue        (bug, M)
     RETURN-FROM/BLOCK visibility case.  Repro recipe in the ticket
     (compile asdf.lisp with the per-function decline report).
 
+    (freebsd-latent-gc-corruption: FIXED v1.8.60 — valid_block_start_p now
+    rejects non-word-aligned block sizes; freebsd lane blocking again.)
+
 minor-gc-doomed-under-gcminorstress.issue (bug?, re-verify S, fix ?)
     Filed against the WIP new-gc branch; the generational collector has
     since been integrated and reworked on `vm` (remset, rebuild passes).
