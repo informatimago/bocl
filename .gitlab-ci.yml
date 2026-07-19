@@ -290,6 +290,15 @@ collect:
         done
         printf '[%s]\n' "$links" > assets-links.json
         echo "release asset links:"; cat assets-links.json
+        # release-cli create returns 409 "Release already exists" if a release for
+        # this tag was made by a previous pipeline (a re-run, or re-cutting the
+        # same tag), which fails collect.  Make it idempotent: delete any existing
+        # release first (this removes only the Release object; the git tag and the
+        # uploaded Package-Registry files are kept), then create it fresh with the
+        # current asset links.  DELETE 404s harmlessly the first time.
+        curl --silent --show-error --request DELETE \
+             --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+             "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/$CI_COMMIT_TAG" >/dev/null 2>&1 || true
         release-cli create \
           --name "bocl $CI_COMMIT_TAG" \
           --tag-name "$CI_COMMIT_TAG" \
