@@ -120,17 +120,42 @@ Ref stream_close_any(Ref stream){
     if(typep(stream,FILE_STREAM_Class)){ return stream_close(stream); }
     return T_Symbol;}
 
-/* Retrieve the readable FILE* for an input stream, resolving *STANDARD-INPUT*
-   when the argument is T. */
-FILE* stream_input_cstream(Ref stream){
-    if(eql(stream,T_Symbol)){
+/* CLHS stream designators: NIL designates *STANDARD-INPUT* / *STANDARD-OUTPUT*
+   (by direction), T designates *TERMINAL-IO*, a stream designates itself.
+   bocl has no two-way terminal stream yet (*TERMINAL-IO* is NIL), so while it
+   is NIL, T falls back to the standard stream of the right direction. */
+Ref stream_designator_input(Ref stream){
+    if(nullp(stream)){
         Ref si=S(*STANDARD-INPUT*);
-        if(symbol_boundp(si)){
-            return stream_cstream(variable_value(si));}
-        else{
-            return stdin;}}
-    else{
-        return stream_cstream(stream);}}
+        if(symbol_boundp(si)){ return variable_value(si); }
+        return stream;}
+    if(eql(stream,T_Symbol)){
+        Ref tio=S(*TERMINAL-IO*);
+        if(symbol_boundp(tio) && !nullp(variable_value(tio))){
+            return variable_value(tio);}
+        Ref si=S(*STANDARD-INPUT*);
+        if(symbol_boundp(si)){ return variable_value(si); }}
+    return stream;}
+
+Ref stream_designator_output(Ref stream){
+    if(nullp(stream)){
+        Ref so=S(*STANDARD-OUTPUT*);
+        if(symbol_boundp(so)){ return variable_value(so); }
+        return stream;}
+    if(eql(stream,T_Symbol)){
+        Ref tio=S(*TERMINAL-IO*);
+        if(symbol_boundp(tio) && !nullp(variable_value(tio))){
+            return variable_value(tio);}
+        Ref so=S(*STANDARD-OUTPUT*);
+        if(symbol_boundp(so)){ return variable_value(so); }}
+    return stream;}
+
+/* Retrieve the readable FILE* for an input stream, resolving the NIL / T
+   stream designators. */
+FILE* stream_input_cstream(Ref stream){
+    stream = stream_designator_input(stream);
+    if(eql(stream,T_Symbol) || nullp(stream)){ return stdin; }  /* unbound var fallback */
+    return stream_cstream(stream);}
 
 bool stream_input_stream_p(Ref stream){
     if(!typep(stream,FILE_STREAM_Class)) return false;
@@ -175,14 +200,9 @@ void stream_initialize(void){
 
 
 FILE* stream_output_cstream(Ref stream){
-    if(eql(stream,T_Symbol)){
-        Ref so=S(*STANDARD-OUTPUT*);
-        if(symbol_boundp(so)){
-            return stream_cstream(variable_value(so));}
-        else{
-            return stdout;}}
-    else{
-        return stream_cstream(stream);}}
+    stream = stream_designator_output(stream);
+    if(eql(stream,T_Symbol) || nullp(stream)){ return stdout; }  /* unbound var fallback */
+    return stream_cstream(stream);}
 
 
 Ref stream_finish_output(Ref stream){

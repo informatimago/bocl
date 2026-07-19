@@ -38,7 +38,14 @@ _Noreturn void fatal(const char* fname,const char* message_format,...){
     fprintf(stderr,"\n\n");
     exit(EX_SOFTWARE);}
 
-_Noreturn void error(const char* fname,const char* message_format,...){
+/* Signal a catchable condition of CONDITION_CLASS built like a SIMPLE-ERROR
+   (format-control = "In <fname>: <message>").  The general entry point behind
+   bocl_error() and the class-specific ERROR macros (ARITHMETIC_ERROR /
+   DIVISION_BY_ZERO — issue precise-condition-subclasses): handlers can then
+   discriminate on the precise class.  Bootstrap guard: while the class is
+   still uninitialised (metaclass NULL), fall through to the fatal report. */
+_Noreturn void bocl_error_class(Ref condition_class,
+                                const char* fname,const char* message_format,...){
     /* Format the message once into a buffer so we can both signal it as a
        catchable condition and, if nobody handles it, print it on the way out. */
     char body[1024];
@@ -50,13 +57,7 @@ _Noreturn void error(const char* fname,const char* message_format,...){
 #pragma GCC diagnostic pop
     va_end(ap);
 
-    /* Signal a catchable SIMPLE-ERROR so that HANDLER-CASE / HANDLER-BIND —
-       in particular the ANSI test runner's per-test handlers — can recover
-       from errors raised inside C built-ins (undefined function, bad args,
-       unsupported operations, …) instead of the whole process dying.  This
-       mirrors type_error().  Bootstrap guard: skip while the condition class
-       is still being initialised (its metaclass slot is NULL then). */
-    if(SIMPLE_ERROR_Class->class != NULL){
+    if(condition_class->class != NULL){
         uword pool = open_live_pool();
         char msg[1100];
 #pragma GCC diagnostic push
@@ -65,7 +66,7 @@ _Noreturn void error(const char* fname,const char* message_format,...){
 #pragma GCC diagnostic pop
         Ref fmt  = string_new_cstring(msg);
         add_to_live_pool(fmt);
-        Ref cond = make_simple_condition(SIMPLE_ERROR_Class, fmt, NIL_Symbol);
+        Ref cond = make_simple_condition(condition_class, fmt, NIL_Symbol);
         add_to_live_pool(cond);
         signal_condition(cond, eval_global_environment());
         /* signal_condition returned — no handler matched; fall through. */
@@ -75,9 +76,22 @@ _Noreturn void error(const char* fname,const char* message_format,...){
     fprintf(stderr,"%s\n\n",body);
     exit(EX_DATAERR);}
 
+_Noreturn void bocl_error(const char* fname,const char* message_format,...){
+    /* Delegate to the class-general path with SIMPLE-ERROR, re-formatting here
+       (varargs cannot be forwarded portably). */
+    char body[1024];
+    va_list ap;
+    va_start(ap,message_format);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+    vsnprintf(body,sizeof(body),message_format,ap);
+#pragma GCC diagnostic pop
+    va_end(ap);
+    bocl_error_class(SIMPLE_ERROR_Class,fname,"%s",body);}
+
 
 _Noreturn void program_error(const char* fname,const char* message_format,...){
-    /* Like error(), but signals a catchable PROGRAM-ERROR — used for malformed
+    /* Like bocl_error(), but signals a catchable PROGRAM-ERROR — used for malformed
        lambda-list / keyword-argument calls (CLHS 3.5.1.x), which the standard
        classifies as program-errors. */
     char body[1024];
@@ -110,7 +124,7 @@ _Noreturn void program_error(const char* fname,const char* message_format,...){
 
 
 _Noreturn void package_error(const char* fname,const char* message_format,...){
-    /* Like error(), but signals a catchable PACKAGE-ERROR (CLHS 11.x): unknown
+    /* Like bocl_error(), but signals a catchable PACKAGE-ERROR (CLHS 11.x): unknown
        package designators, name/use conflicts, etc. */
     char body[1024];
     va_list ap;
@@ -141,9 +155,20 @@ _Noreturn void package_error(const char* fname,const char* message_format,...){
     exit(EX_DATAERR);}
 
 
+const char* string_static_cstr(Ref string){
+    static char bufs[8][256];
+    static int k = 0;
+    char* b = bufs[k]; k = (k+1)%8;
+    char* c = string_cstring(string);
+    snprintf(b, sizeof(bufs[0]), "%s", c);
+    free(c);
+    return b;}
+
 _Noreturn void type_error(const char* fname,Ref object,Ref class){
-    char* got=string_cstring(object->class->slots->class.name->slots->symbol.name);
-    char* exp=string_cstring(        class->slots->class.name->slots->symbol.name);
+    /* STATIC name buffers: this function longjmps (signal_condition), so a
+       malloc'd string_cstring here leaked on every signalled type error. */
+    const char* got=string_static_cstr(object->class->slots->class.name->slots->symbol.name);
+    const char* exp=string_static_cstr(        class->slots->class.name->slots->symbol.name);
 
     /* Signal a SIMPLE-TYPE-ERROR through the Lisp handler system so that
        HANDLER-CASE / HANDLER-BIND can catch type errors raised from C built-ins.
@@ -175,8 +200,6 @@ _Noreturn void type_error(const char* fname,Ref object,Ref class){
 
     fprintf(stderr,"\nIn %s:\n",fname);
     fprintf(stderr,"TYPE ERROR: got an object of class %s, expected an object of class %s\n\n",got,exp);
-    free(exp);
-    free(got);
     exit(EX_DATAERR);}
 
 
@@ -227,49 +250,49 @@ void* check_pointer(const char* fname,void* pointer){
 uword check_size_to_uword(const char* fname,size_t size){
     if(/* (0<=size) && */ (size<UWORD_MAX)){
         return (uword)size;}
-    error(fname,"Size %z too big for an uword (max = %"UWORD_FORMAT")",
+    bocl_error(fname,"Size %z too big for an uword (max = %"UWORD_FORMAT")",
           size,UWORD_MAX);}
 
 halfword check_size_to_halfword(const char* fname,size_t size){
     if(/* (0<=size) && */ (size<HALFWORD_MAX)){
         return (halfword)size;}
-    error(fname,"Size %z too big for a halfword (max = %"HALFWORD_FORMAT")",
+    bocl_error(fname,"Size %z too big for a halfword (max = %"HALFWORD_FORMAT")",
           size,HALFWORD_MAX);}
 
 uword check_long_to_uword(const char* fname,long value){
     if((0<=value) /* && (value<UWORD_MAX) always true */){
         return (uword)value;}
-    error(fname,"Value long %l too big for an uword (max = %"UWORD_FORMAT")",
+    bocl_error(fname,"Value long %l too big for an uword (max = %"UWORD_FORMAT")",
           value,UWORD_MAX);}
 
 uword check_word_to_uword(const char* fname,word value){
     if((0<=value) && (((uword)WORD_MAX<UWORD_MAX) || (value<(word)UWORD_MAX))){
         return (uword)value;}
-    error(fname,"Word %"WORD_FORMAT" too big for a uword (max = %"UWORD_FORMAT")",
+    bocl_error(fname,"Word %"WORD_FORMAT" too big for a uword (max = %"UWORD_FORMAT")",
           value,UWORD_MAX);}
 
 size_t check_word_to_size(const char* fname,word value){
     if((0<=value) && (((size_t)WORD_MAX<SIZE_MAX) || (value<(word)SIZE_MAX))){
         return (size_t)value;}
-    error(fname,"Word %"WORD_FORMAT" too big for a size_t (max = %zu)",
+    bocl_error(fname,"Word %"WORD_FORMAT" too big for a size_t (max = %zu)",
           value,SIZE_MAX);}
 
 word check_uword_to_word(const char* fname,uword value){
    if((value<WORD_MAX)){
         return (word)value;}
-    error(fname,"Unsigned word %"UWORD_FORMAT" too big for a word (max = %"WORD_FORMAT")",
+    bocl_error(fname,"Unsigned word %"UWORD_FORMAT" too big for a word (max = %"WORD_FORMAT")",
           value,WORD_MAX);}
 
 halfword check_uword_to_halfword(const char* fname,uword value){
    if((value<HALFWORD_MAX)){
         return (halfword)value;}
-    error(fname,"Unsigned word %"UWORD_FORMAT" too big for a halfword (max = %"HALFWORD_FORMAT")",
+    bocl_error(fname,"Unsigned word %"UWORD_FORMAT" too big for a halfword (max = %"HALFWORD_FORMAT")",
           value,HALFWORD_MAX);}
 
 int check_halfword_to_int(const char* fname,halfword value){
     if(/* (0<=value) && */ ((HALFWORD_MAX<INT_MAX) || (value<(word)INT_MAX))){
         return (int)value;}
-    error(fname,"Half word %"HALFWORD_FORMAT" too big for a int (max = %zu)",
+    bocl_error(fname,"Half word %"HALFWORD_FORMAT" too big for a int (max = %zu)",
           value,INT_MAX);}
 
 /**** THE END ****/

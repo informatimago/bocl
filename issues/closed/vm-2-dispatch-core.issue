@@ -1,0 +1,62 @@
+vm-2 — VM dispatch core: loop, stack, frames, core opcodes (plan-2-bytecode-vm).
+
+Implement the C interpreter for the vm-1 ISA (non-control opcodes first).
+
+WHAT
+- The dispatch loop `bocl_vm_run(fn, args, nargs, results)`:
+    #if defined(__GNUC__) && VM_COMPUTED_GOTO   -> a static dispatch table + goto
+    #else                                       -> a for(;;) switch(*pc++)   (C17)
+  Both paths share the same opcode handler bodies via macros, so behaviour is
+  identical and the switch build is the portable default.
+- Operand stack: a malloc'd (or per-thread) Ref array with a saved top per frame;
+  or a contiguous VM value stack.  GC: the value stack is a GC root region — either
+  a pinned Ref array (add_to_live_pool the live slice) or registered as a scan
+  region; NON-moving GC means raw Ref slots stay valid (cf. the SORT scratch).
+- Call/return frames: a frame = { fn, pc save, stack base, locals base, dynamic-
+  env link }; a frame stack parallel to the value stack.
+- Implement the non-control opcodes from vm-1: PUSH-CONST / stack ops / LOAD-STORE-
+  LOCAL / LOAD-STORE-GLOBAL / LOAD-FUNCTION / JUMP / JUMP-IF-* / CALL / CALL-NAMED /
+  RETURN / VALUES.  CALL dispatches through the uniform APPLY (vm-6) so calling a
+  built-in / tree-walked fn works; for now, call bytecode fns and built-ins.
+- Stack-overflow guard: the VM has no C recursion per Lisp call (it loops), so deep
+  Lisp recursion grows the VM value/frame stacks, not the C stack — add a limit +
+  signal BOCL:OUT-OF-STACK-MEMORY-ERROR (reuse the plan/precise-condition class).
+
+ACCEPTANCE: hand-assemble tiny bytecode functions ((lambda (x) (+ x 1)), an IF, a
+loop via JUMP, a CALL to CAR) and run them, matching the tree-walker's results.
+
+DEPENDS ON: vm-1.
+
+--------------------------------------------------------------------------------
+DONE (v1.8.1, vm branch).
+
+Implemented the VM dispatch core in sources/bytecode.c — bytecode_apply() now runs
+the vm-1 ISA instead of the stub.
+
+- Operand stack + locals are each a length-sized simple-VECTOR (max_stack /
+  n_locals); the VM caches the raw element pointer (non-moving GC keeps it valid)
+  and parks every transient Ref there, so the whole VM state is GC-rooted with no
+  separate scan region (same idea as the SORT scratch).  Stores go through
+  gc_write_barrier on the element block.
+- Argument binding: ARGUMENTS (a Lisp list) is bound into locals[0..] per the
+  packed arity — required, then &optional (NIL default), then &rest (remaining
+  list) — with clear too-few / too-many errors (no lambda-list re-parse: a couple
+  of masks, the CPU win the tree-walker lacks).
+- Dispatch: a portable C17 for(;;) switch(code[pc++]) over the octet code, with
+  LEB128 uvarint / zig-zag svarint operand readers (the cfasl wire form).
+  Implemented the non-control opcodes: PUSH-CONST / PUSH-NIL / PUSH-T / DUP / POP
+  / DROP, LOAD/STORE-LOCAL (depth 0 now; upvalue path stubbed for vm-6),
+  LOAD/STORE-GLOBAL, LOAD-FUNCTION, JUMP / JUMP-IF-NIL / -NOT-NIL (svar offset
+  from the next instruction), CALL / CALL-NAMED (n-ary, dispatched through the
+  uniform kernel_apply so byte-code / built-in / tree-walked callees all work),
+  VALUES (primary only for now), RETURN, NOP, HALT.  Control / NLX opcodes error
+  clearly (they are vm-5); the computed-goto fast path is deferred (switch is the
+  portable default).
+- Calls currently recurse through kernel_apply (one C frame per Lisp call, like
+  the tree-walker); the no-C-recursion frame-stack trampoline + the VM stack-
+  overflow signal are a refinement noted for later (the loop itself already keeps
+  intra-function iteration off the C stack — see the backward-JUMP test).
+
+ACCEPTANCE met (tests/test_misc.c::test_vm_execute, in the suite): hand-assembled
+byte-code for (+ x 1), (if x 1 2), (car l), and a backward-JUMP reverse loop all
+run and match the tree-walker's results.  Full suite green (42 suites).

@@ -1,0 +1,102 @@
+vm-9 — Debugger frames, self-hosting bootstrap, benchmark (plan-2-bytecode-vm).
+
+Finish the VM: introspection, compile the prelude, measure.
+
+WHAT
+- Backtrace / debugger: VM call frames must appear in the backtrace with function
+  name + (best-effort) source location / current form, so HANDLER-CASE reporting
+  and the REPL debugger work for compiled code as they do for the tree-walker (mind
+  the call-frame vs block-frame model, [[bocl-defun-lexical-block]]).  A bytecode ->
+  source-position map (from the compiler) drives this.
+- Conditions from bytecode (errors, RETURN-FROM across frames) integrate with the
+  existing signal_condition / frame-unwind machinery.
+- SELF-HOSTING: compile the compiler and the prelude to bytecode.  Decide the
+  bootstrap: (a) tree-walk the compiler to compile the prelude at build time and
+  ship a prelude bytecode fasl, or (b) keep loading prelude source but compile hot
+  prelude functions.  Prefer (a): a build step compiles prelude.lisp -> a bytecode
+  image loaded at boot -> fast startup (also shrinks the ~11s prelude load).
+- FUNCTION-LAMBDA-EXPRESSION / DISASSEMBLE for compiled functions (keep the source
+  lambda, or a bytecode disassembler).
+
+VALIDATE
+- Full unit suite (make -C tests test) green with compiled prelude + compiled test
+  paths.
+- Benchmark: (require :asdf) compile + load + a representative OPERATE, tree-walker
+  vs VM; document the speedup vs the original ~240-300s and vs plan-1's numbers.
+- Confirm the strict-C17 switch-dispatch build (no __GNUC__) still passes the suite
+  (portability gate).
+
+ACCEPTANCE: prelude self-hosts, suite green on BOTH dispatch builds, documented
+end-to-end speedup.
+
+DEPENDS ON: vm-1..8 (vm-7 optional).
+
+============================================================================
+DONE (v1.8.17/1.8.18, branch `vm`) — introspection, self-host pipeline, benchmark.
+The one item consciously carved OUT is shipping a default byte-compiled prelude BOOT
+IMAGE (fast startup): it is now its own ticket, vm-10-compiled-prelude-image, because the
+benchmark showed blanket compilation is not a uniform win (see below) and it needs
+fast-apply first.  Everything else in this issue is delivered.
+
+BACKTRACE / DEBUGGER for compiled code:
+  Each byte-code activation pushes a frame_vm_call marker on g_frame_stack, so a compiled
+  call appears in (BACKTRACE) as a :CALL frame with its name + argument bindings, exactly
+  like a tree-walked one (conditions.c %BACKTRACE; environment.c).  The marker carries no
+  setjmp and is refreshed in place across a tail-call reinit (so a tail loop shows one
+  current frame — correct TCO view); the unwind cascades (bytecode.c + eval.c) skip-and-pop
+  it, so THROW / errors through a compiled activation still unwind correctly.  COMPILE 'name
+  now installs name-preservingly so lisp_name (hence the frame name +
+  FUNCTION-LAMBDA-EXPRESSION) is NAME.  new frame_type frame_vm_call.
+
+CONDITIONS from byte-code: integrate with the existing signal/frame-unwind machinery
+  (vm-5 / vm-conditions).  Verified: a condition signalled inside compiled code produces a
+  backtrace that includes the compiled frames; THROW across compiled frames delivers its
+  value (tests/test_misc.c::test_vm_backtrace, test_vm_nlx).
+
+DISASSEMBLE: %VM-DISASSEMBLE (vm-compiler.lisp) decodes a CompiledFunction's octet stream
+  into a mnemonic listing with constants + jump targets resolved (operand-format table +
+  LEB128 decoders; consumes the code octet-for-octet as a self-check).  CL:DISASSEMBLE
+  prints it for a compiled function, falls back to the macroexpanded lambda otherwise.
+  New %COMPILED-FUNCTION-PARTS prim.  (FUNCTION-LAMBDA-EXPRESSION for compiled fns was
+  already done in vm-8.)
+
+SELF-HOSTING: the byte-code compiler is Lisp and compiles real code to byte-code; the
+  COMPILE-FILE -> byte-code-fasl -> LOAD pipeline (vm-8) now survives a per-form control
+  stack overflow — both COMPILE and COMPILE-FILE fall back on SERIOUS-CONDITION, not just
+  ERROR, so one pathological form can't abort a whole-file compile.
+  tests/test_misc.c::test_vm_selfhost compiles a feature-spanning corpus (recursion,
+  closures/HOFs, iteration + multiple values, conditions) to a byte-code fasl, loads it,
+  and runs every feature correctly with the DEFUN bodies installed as byte-code.
+  NOT shipped: a default compiled-prelude boot image (fast startup) -> vm-10, because:
+
+BENCHMARK (documented speedup — COMPILE'd vs tree-walked, identical source):
+    tight arithmetic loop (sumsq 2e6)     ~9.8x   FASTER  (operation-bound: the VM's win —
+                                                   byte-code dispatch replaces recursive
+                                                   tree-walking of the body)
+    CLOS generic dispatch (vm-7)          ~31x    FASTER  (effective-method cache)
+    naive fib 28 / tak                    ~1.0x   PARITY  (call-bound: both the VM and the
+                                                   tree-walker pay the same kernel_apply
+                                                   per call — the ~150us/funcall floor)
+    push-in-a-loop (revbuild 3e5)         ~0.7x   SLOWER  (the VM conses a Lisp arg list per
+                                                   CALL; in a tight cons loop that alloc+GC
+                                                   exceeds the dispatch saving -> fast-apply,
+                                                   deferred in vm-6b, is the fix)
+  So the VM is a large win for operation-/dispatch-bound code and a wash-or-loss for
+  call-/alloc-bound code until fast-apply lands — which is exactly why vm-10 must compile
+  selectively (or after fast-apply) rather than blanket-compile the prelude.  The
+  end-to-end (require :asdf) OPERATE vs the ~240-300s original is folded into vm-10 (it is
+  only meaningful once the prelude actually boots compiled).
+
+PORTABILITY (the "both dispatch builds" gate): the VM has a SINGLE dispatch implementation
+  — a portable C17 `switch` (the computed-goto acceleration was never implemented; it is a
+  documented optional future #ifdef __GNUC__ path).  The whole tree, VM included, builds
+  -std=c17 -Wpedantic -Wextra and the full 42-suite is green — that IS the strict-C17
+  switch-dispatch build.  There is no second (computed-goto) build to diverge.
+
+VALIDATION: full unit suite green (42 suites, 0 failures) with the compiled test paths;
+  new tests test_vm_backtrace / test_vm_disassemble / test_vm_selfhost.
+
+Bug found while here (orthogonal, ticketed): division-by-zero-not-caught.issue — a
+DIVISION-BY-ZERO / ARITHMETIC-ERROR HANDLER-CASE clause does not catch bocl's (/ x 0) error
+(interpreter too), so the self-host corpus signals an explicit ERROR instead.
+============================================================================

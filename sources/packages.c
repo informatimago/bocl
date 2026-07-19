@@ -41,6 +41,7 @@ static Ref make_package(Ref name, Ref nicknames){
     add_to_live_pool(name); add_to_live_pool(nicknames);
     Ref r = Object_new(PACKAGE_Class, (Slots*)Package_slots(name, nicknames));
     close_live_pool(pool);
+    add_to_live_pool(r);   /* re-root: close_live_pool trimmed the result */
     return r;}
 
 /* Prepend a (name . pkg) entry to the package registry.  all_packages is a

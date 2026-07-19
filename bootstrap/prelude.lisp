@@ -620,12 +620,23 @@
 
 (defmacro with-open-file (head &body body)
   ;; (WITH-OPEN-FILE (var filespec &rest open-args) body...)
+  ;; CLHS: declarations may appear at the front of BODY; hoist them to the
+  ;; binding LET (whose body head admits them) — the (PROGN ,@body) below
+  ;; cannot hold a DECLARE (it would be evaluated as a call).
   (let ((var       (first head))
         (filespec  (second head))
         (open-args (cddr head))
-        (abnormal  (gensym "WOF-ABORT-")))
+        (abnormal  (gensym "WOF-ABORT-"))
+        (decls     '()))
+    (tagbody
+     wof-split
+       (when (and (consp (car body)) (eq (car (car body)) 'declare))
+         (setq decls (cons (car body) decls)
+               body  (cdr body))
+         (go wof-split)))
     `(let ((,var (open ,filespec ,@open-args))
            (,abnormal t))
+       ,@(reverse decls)
        (unwind-protect
             (multiple-value-prog1
                 (progn ,@body)
@@ -1959,6 +1970,89 @@ identity."
             ((consp item) (push (if (consp (car item)) (cadr (car item)) (car item)) vars))
             (t (push item vars))))))
 
+(defun %typed-defstruct-expansion (name-and-options struct-type slot-specs)
+  "Expansion of DEFSTRUCT with a (:type list|vector) option: the instances are
+   plain lists/vectors, slots are positional, and no structure class exists.
+   Supports :conc-name, :constructor (default and BOA), :copier, :named (the
+   structure name is stored as the first element, enabling the :predicate),
+   :initial-offset.  :include of typed structures is not supported."
+  (let* ((name     (car name-and-options))
+         (all-opts (cdr name-and-options))
+         (options  (remove-if-not #'consp all-opts))   ; bare :NAMED is an atom
+         (vectorp  (or (eq struct-type 'vector)
+                       (and (consp struct-type) (eq (car struct-type) 'vector))))
+         (namedp   (member :named all-opts))
+         (offset   (let ((o (assq :initial-offset options))) (if o (cadr o) 0)))
+         (conc-str (let ((o (assq :conc-name options)))
+                     (cond ((null o)  (%string-append (symbol-name name) "-"))
+                           ((cadr o)  (symbol-name (cadr o)))
+                           (t ""))))
+         (struct-pkg (or (symbol-package name) *package*))
+         (ctor-opt (assq :constructor options))
+         (ctor-sym (if ctor-opt (cadr ctor-opt)
+                       (intern (%string-append "MAKE-" (symbol-name name)) struct-pkg)))
+         (ctor-boa   (and ctor-opt (cddr ctor-opt) (caddr ctor-opt)))
+         (pred-opt (assq :predicate options))
+         (pred-sym (cond (pred-opt (cadr pred-opt))
+                         (namedp (intern (%string-append (symbol-name name) "-P")
+                                         struct-pkg))
+                         (t nil)))
+         (copier-sym (let ((o (assq :copier options)))
+                       (if o (cadr o)
+                           (intern (%string-append "COPY-" (symbol-name name))
+                                   struct-pkg))))
+         (specs (mapcar #'%parse-defstruct-slot slot-specs))
+         (base  (+ offset (if namedp 1 0)))
+         (forms '()))
+    (when (assq :include options)
+      (error "DEFSTRUCT ~S: :INCLUDE of a :TYPEd structure is not supported."
+             name))
+    ;; Constructor: build the list/vector, name first when :named.
+    (let* ((slot-names (mapcar #'car specs))
+           (inits      (mapcar #'cadr specs))
+           (prefix     (append (make-list offset :initial-element nil)
+                               (if namedp (list `',name) '())))
+           (elements   `(,@prefix ,@slot-names)))
+      (when ctor-sym
+        (push (if ctor-boa
+                  `(defun ,ctor-sym ,ctor-boa
+                     (,(if vectorp 'vector 'list) ,@elements))
+                  `(defun ,ctor-sym (&key ,@(mapcar #'list slot-names inits))
+                     (,(if vectorp 'vector 'list) ,@elements)))
+              forms)))
+    ;; Accessors: positional readers plus a SETF expansion.
+    (let ((i base))
+      (dolist (spec specs)
+        (let* ((slot (car spec))
+               (acc  (intern (%string-append conc-str (symbol-name slot))
+                             struct-pkg))
+               (idx  i))
+          (push (if vectorp
+                    `(defun ,acc (s) (aref s ,idx))
+                    `(defun ,acc (s) (nth ,idx s)))
+                forms)
+          (unless (caddr spec)          ; :read-only
+            (let ((setter (intern (%string-append "%SET-" (symbol-name acc))
+                                  struct-pkg)))
+              (push (if vectorp
+                        `(defun ,setter (s v) (setf (aref s ,idx) v) v)
+                        `(defun ,setter (s v) (setf (nth ,idx s) v) v))
+                    forms)
+              (push `(defsetf ,acc ,setter) forms)))
+          (incf i))))
+    (when pred-sym
+      (push (if vectorp
+                `(defun ,pred-sym (x)
+                   (and (vectorp x) (> (length x) ,offset)
+                        (eq (aref x ,offset) ',name)))
+                `(defun ,pred-sym (x)
+                   (and (listp x) (> (length x) ,offset)
+                        (eq (nth ,offset x) ',name))))
+            forms))
+    (when copier-sym
+      (push `(defun ,copier-sym (x) (copy-seq x)) forms))
+    `(progn ,@(nreverse forms) ',name)))
+
 (defmacro defstruct (name-and-options &rest slot-specs)
   ;; Supported structure options: :conc-name, :constructor, :copier,
   ;;   :predicate, :include.
@@ -1967,6 +2061,19 @@ identity."
   ;; (defun name ...) so that the generated functions close over the
   ;; lexically-bound class object.  (bocl DEFUN does not capture the
   ;; lexical env; LAMBDA + SET-SYMBOL-FUNCTION does.)
+  ;; CLHS: an optional documentation string may precede the slot descriptions.
+  (when (and (stringp (car slot-specs)) (cdr slot-specs))
+    (setf slot-specs (cdr slot-specs)))
+  (when (stringp (car slot-specs))   ; lone docstring, no slots
+    (setf slot-specs nil))
+  ;; Typed structures — (:type list) / (:type vector): no class, no #S
+  ;; representation; instances are plain lists/vectors with positional slots
+  ;; (CLHS 3.4.4 / iso4217's (defstruct (currency (:type list)) ...)).
+  (let ((type-opt (and (consp name-and-options)
+                       (assq :type (cdr name-and-options)))))
+    (when type-opt
+      (return-from defstruct
+        (%typed-defstruct-expansion name-and-options (cadr type-opt) slot-specs))))
   (let* ((name     (if (consp name-and-options) (car name-and-options) name-and-options))
          (options  (if (consp name-and-options) (cdr name-and-options) nil))
          ;; :conc-name — default "<NAME>-"; nil means no prefix
@@ -2692,48 +2799,48 @@ SETQ/INCF/DECF is left in place (sequential)."
         (return-f  nil)
         (return-set nil)
         (end-tag   (gensym "END-")))  ; created here so WHILE/UNTIL can target it
-    (flet ((pk  ()     (car rest))
-           (pop! ()    (prog1 (car rest) (setq rest (cdr rest))))
-           (try! (nm)  (when (%lkw (car rest) nm) (pop!) t))
-           (take-body ()
-             (let ((acc nil))
-               (do () ((or (null rest) (%loop-kw-p (pk))))
-                 (push (pop!) acc))
-               (nreverse acc)))
-           (skip-type-spec ()
-             ;; Consume an optional LOOP type specifier after a variable: either
-             ;; "OF-TYPE <type>" or a bare type spec (FIXNUM, FLOAT, T, a cons
-             ;; like (INTEGER 0 9)).  bocl ignores the declaration.  Stop before
-             ;; the keywords that legitimately follow the variable.
-             (when (%lkw (pk) "OF-TYPE") (pop!) (pop!))
-             (when (and rest
-                        (not (%lkw (pk) "IN" "ON" "ACROSS" "FROM" "UPFROM"
-                                     "DOWNFROM" "BEING" "=" "TO" "UPTO" "BELOW"
-                                     "DOWNTO" "ABOVE" "BY" "THEN" "AND"))
-                        (not (%loop-kw-p (pk))))
-               (pop!)))
-           (add-accum (kind var e)
-             ;; Emit the per-iteration accumulation update in the loop BODY at
-             ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
-             ;; CLHS 6.1.1.4), and register the result variable (as its -body
-             ;; kind) for binding + the final result form — but only ONCE per var,
-             ;; so several clauses sharing a var (anonymous or same INTO) bind and
-             ;; reverse it a single time.
-             (setq body (append body (list (%loop-accum-step kind var e))))
-             (unless (dolist (a accums nil) (when (eq (second a) var) (return t)))
-               (push (list (%loop-accum-body-kind kind) var e) accums)))
-           (anon-var (kind)
-             ;; The shared accumulation variable for an anonymous clause of KIND's
-             ;; category, created on first use: like-typed anonymous accumulations
-             ;; all merge into one place (CLHS 6.1.3).
-             (cond ((member kind '(:collect :append :nconc))
-                    (or anon-list (setq anon-list (gensym "ACC-L-"))))
-                   ((member kind '(:sum :count))
-                    (or anon-sum (setq anon-sum (gensym "ACC-N-"))))
-                   ((eq kind :maximize)
-                    (or anon-max (setq anon-max (gensym "ACC-MX-"))))
-                   ((eq kind :minimize)
-                    (or anon-min (setq anon-min (gensym "ACC-MN-")))))))
+    (labels ((pk  ()     (car rest))
+             (pop! ()    (prog1 (car rest) (setq rest (cdr rest))))
+             (try! (nm)  (when (%lkw (car rest) nm) (pop!) t))
+             (take-body ()
+               (let ((acc nil))
+                 (do () ((or (null rest) (%loop-kw-p (pk))))
+                   (push (pop!) acc))
+                 (nreverse acc)))
+             (skip-type-spec ()
+               ;; Consume an optional LOOP type specifier after a variable: either
+               ;; "OF-TYPE <type>" or a bare type spec (FIXNUM, FLOAT, T, a cons
+               ;; like (INTEGER 0 9)).  bocl ignores the declaration.  Stop before
+               ;; the keywords that legitimately follow the variable.
+               (when (%lkw (pk) "OF-TYPE") (pop!) (pop!))
+               (when (and rest
+                          (not (%lkw (pk) "IN" "ON" "ACROSS" "FROM" "UPFROM"
+                                       "DOWNFROM" "BEING" "=" "TO" "UPTO" "BELOW"
+                                       "DOWNTO" "ABOVE" "BY" "THEN" "AND"))
+                          (not (%loop-kw-p (pk))))
+                 (pop!)))
+             (add-accum (kind var e)
+               ;; Emit the per-iteration accumulation update in the loop BODY at
+               ;; this textual position (so it interleaves with DO/WHILE/UNTIL per
+               ;; CLHS 6.1.1.4), and register the result variable (as its -body
+               ;; kind) for binding + the final result form — but only ONCE per var,
+               ;; so several clauses sharing a var (anonymous or same INTO) bind and
+               ;; reverse it a single time.
+               (setq body (append body (list (%loop-accum-step kind var e))))
+               (unless (dolist (a accums nil) (when (eq (second a) var) (return t)))
+                 (push (list (%loop-accum-body-kind kind) var e) accums)))
+             (anon-var (kind)
+               ;; The shared accumulation variable for an anonymous clause of KIND's
+               ;; category, created on first use: like-typed anonymous accumulations
+               ;; all merge into one place (CLHS 6.1.3).
+               (cond ((member kind '(:collect :append :nconc))
+                      (or anon-list (setq anon-list (gensym "ACC-L-"))))
+                     ((member kind '(:sum :count))
+                      (or anon-sum (setq anon-sum (gensym "ACC-N-"))))
+                     ((eq kind :maximize)
+                      (or anon-max (setq anon-max (gensym "ACC-MX-"))))
+                     ((eq kind :minimize)
+                      (or anon-min (setq anon-min (gensym "ACC-MN-")))))))
       (do () ((null rest))
         (let ((kw (pop!)))
           (cond
@@ -2747,19 +2854,19 @@ SETQ/INCF/DECF is left in place (sequential)."
             ;; bound, so `with a = 1 and b = (+ a 2)` sees the outer A, not 1.
             ((%lkw kw "WITH")
              (let ((pairs nil))
-               (flet ((grab-type ()
-                        ;; OF-TYPE <type>, or a bare type spec; NIL if neither.
-                        (cond ((%lkw (pk) "OF-TYPE") (pop!) (pop!))
-                              ((and rest (not (%lkw (pk) "=")) (not (%loop-kw-p (pk))))
-                               (pop!))
-                              (t nil)))
-                      (one ()
-                        (let* ((v    (pop!))
-                               (type (grab-type))
-                               (eq?  (try! "="))
-                               (init (if (and eq? rest (not (%loop-kw-p (pk))))
-                                         (pop!) nil)))
-                          (push (list v init eq? type) pairs))))   ; (var init had-init type)
+               (labels ((grab-type ()
+                          ;; OF-TYPE <type>, or a bare type spec; NIL if neither.
+                          (cond ((%lkw (pk) "OF-TYPE") (pop!) (pop!))
+                                ((and rest (not (%lkw (pk) "=")) (not (%loop-kw-p (pk))))
+                                 (pop!))
+                                (t nil)))
+                        (one ()
+                          (let* ((v    (pop!))
+                                 (type (grab-type))
+                                 (eq?  (try! "="))
+                                 (init (if (and eq? rest (not (%loop-kw-p (pk))))
+                                           (pop!) nil)))
+                            (push (list v init eq? type) pairs))))   ; (var init had-init type)
                  (one)
                  (do () ((not (try! "AND"))) (one)))
                (let ((temps (mapcar (lambda (p) (cons (gensym "WITH-") p))
@@ -3452,10 +3559,19 @@ SETQ/INCF/DECF is left in place (sequential)."
 
 (defmacro with-open-stream (head &body body)
   ;; (WITH-OPEN-STREAM (var stream) body...) — execute BODY with VAR
-  ;; bound to STREAM; always close the stream on exit.
+  ;; bound to STREAM; always close the stream on exit.  Leading DECLAREs
+  ;; are hoisted to the binding LET (see WITH-OPEN-FILE).
   (let ((var    (first  head))
-        (stream (second head)))
+        (stream (second head))
+        (decls  '()))
+    (tagbody
+     wos-split
+       (when (and (consp (car body)) (eq (car (car body)) 'declare))
+         (setq decls (cons (car body) decls)
+               body  (cdr body))
+         (go wos-split)))
     `(let ((,var ,stream))
+       ,@(reverse decls)
        (unwind-protect (progn ,@body)
          (when ,var (close ,var))))))
 
@@ -4197,11 +4313,22 @@ SETQ/INCF/DECF is left in place (sequential)."
 (defstruct (%gf (:predicate %gf-p) (:copier nil))
   name          ; symbol
   lambda-list   ; lambda-list as stored by DEFGENERIC
-  methods)      ; list of %mth objects
+  methods       ; list of %mth objects
+  (cache nil)   ; vm-7 dispatch cache: EQUAL hash-table  arg-class-tuple -> effective-method
+  (cache-gen -1) ; the *%dispatch-gen* the cache was built under (stale if it differs)
+  (has-eql-methods nil)) ; T when any method carries an (:EQL . value) specializer:
+                         ; applicability then depends on argument VALUES, so the
+                         ; class-keyed vm-7 cache is UNSOUND for this gf and
+                         ; %GF-DISPATCH uses the uncached full dispatch instead.
 
 ;;; ---- 3. Registries -------------------------------------------------------
 
 (defparameter *%classes* (make-hash-table))  ; symbol -> %cls
+
+(defparameter *%dispatch-gen* 0)  ; vm-7: global dispatch-cache generation (bumped on
+                                  ; class (re)definition to invalidate all effective-method
+                                  ; caches at once).  Defined here — before ENSURE-CLOS-CLASS,
+                                  ; which bumps it during boot.
 
 (defparameter *%gfs* (make-hash-table :test 'equal))  ; name -> %gf
 ;; EQUAL (not EQL) so a (SETF FOO) cons function-name keys consistently across
@@ -4350,10 +4477,14 @@ SETQ/INCF/DECF is left in place (sequential)."
   (let* ((cls (%obj-class object))
          (eslot (%find-eslot cls slot-name)))
     (unless eslot
-      (error "SLOT-VALUE: class ~S has no slot named ~S" (%cls-name cls) slot-name))
+      (if (fboundp 'slot-missing)
+          (slot-missing cls object slot-name 'slot-value)
+          (error "SLOT-VALUE: class ~S has no slot named ~S" (%cls-name cls) slot-name)))
     (let ((val (%eslot-ref object eslot)))
       (if (eq val *%unbound*)
-          (error "Unbound slot ~S in object of class ~S" slot-name (%cls-name cls))
+          (if (fboundp 'slot-unbound)
+              (slot-unbound cls object slot-name)
+              (error "Unbound slot ~S in object of class ~S" slot-name (%cls-name cls)))
           val))))
 
 (defun %set-slot-value (new-value object slot-name)
@@ -4558,6 +4689,9 @@ SETQ/INCF/DECF is left in place (sequential)."
     (dolist (super supers)
       (when (%is-cls super)
         (pushnew cls (%cls-dsubs super))))
+    ;; vm-7: a class (re)definition changes CPLs, so any dispatch cache keyed on this
+    ;; class or a subclass may be stale — invalidate every gf's cache at once.
+    (setq *%dispatch-gen* (+ *%dispatch-gen* 1))
     cls))
 
 ;;; ---- 14. DEFCLASS macro --------------------------------------------------
@@ -4654,7 +4788,9 @@ SETQ/INCF/DECF is left in place (sequential)."
     (error "CALL-NEXT-METHOD: called outside a method body"))
   (let ((next (car *%cnm-nexts*)))
     (unless next
-      (error "CALL-NEXT-METHOD: no next method"))
+      (if (fboundp 'no-next-method)
+          (no-next-method nil nil)
+          (error "CALL-NEXT-METHOD: no next method")))
     (let ((actual-args (if explicit-args explicit-args *%cnm-args*)))
       (%cnm-call t (cdr *%cnm-nexts*) actual-args
                  (lambda () (apply next actual-args))))))
@@ -4669,6 +4805,10 @@ SETQ/INCF/DECF is left in place (sequential)."
   "Return T if ARG matches SPECIALIZER."
   (cond
     ((eq specializer t) t)
+    ;; (EQL . value) specializer (stored by DEFMETHOD from an (EQL form)
+    ;; specialized parameter): applicable iff the ARGUMENT is EQL the value.
+    ((and (consp specializer) (eq (car specializer) :eql))
+     (eql arg (cdr specializer)))
     ;; CLOS class — use %is-cls (kernel typep, no circularity)
     ((%is-cls specializer)
      (and (%is-obj arg)
@@ -4700,6 +4840,7 @@ SETQ/INCF/DECF is left in place (sequential)."
   "Return the CPL position of SPEC for ARG (lower = more specific), or 9999."
   (cond
     ((eq spec t) 9999)
+    ((and (consp spec) (eq (car spec) :eql)) -1)   ; an EQL specializer beats every class
     ((%is-cls spec)
      (if (and (%is-obj arg) (%cls-cpl (%obj-class arg)))
          (let ((pos (position spec (%cls-cpl (%obj-class arg)))))
@@ -4714,6 +4855,11 @@ SETQ/INCF/DECF is left in place (sequential)."
   "Return T if specializer S1 is strictly more specific than S2 for ARG."
   (cond
     ((eq s1 s2) nil)
+    ;; An EQL specializer is more specific than any class specializer.  Two
+    ;; DISTINCT applicable EQL specializers cannot coexist for one argument
+    ;; (both would have to be EQL the same value), so eql-vs-eql needs no order.
+    ((and (consp s1) (eq (car s1) :eql)) (not (and (consp s2) (eq (car s2) :eql))))
+    ((and (consp s2) (eq (car s2) :eql)) nil)
     ((eq s1 t)  nil)                 ; T is least specific
     ((eq s2 t)  t)
     ((and (%is-cls s1) (%is-cls s2))
@@ -4746,8 +4892,12 @@ SETQ/INCF/DECF is left in place (sequential)."
 
 ;;; ---- 18. Standard method combination / dispatch -------------------------
 
-(defun %invoke-effective-method (sorted-methods args)
-  "Implement standard method combination for SORTED-METHODS and ARGS."
+(defun %compute-effective-method (sorted-methods)
+  "Return a function of (ARGS) that runs standard method combination for
+   SORTED-METHODS.  The around/before/primary/after partition depends only on the
+   sorted applicable methods — which are fixed for a given argument-class tuple — so
+   this closure is CACHED per generic function per class-tuple (vm-7); the runtime ARGS
+   are passed to the returned closure, not captured here."
   (let ((arounds  (remove-if-not
                    (lambda (m) (equal (%mth-qualifiers m) '(:around))) sorted-methods))
         (befores  (remove-if-not
@@ -4756,50 +4906,140 @@ SETQ/INCF/DECF is left in place (sequential)."
                     (lambda (m) (%mth-qualifiers m)) sorted-methods))
         (afters   (nreverse
                    (remove-if-not
-                    (lambda (m) (equal (%mth-qualifiers m) '(:after))) sorted-methods))))
+                    (lambda (m) (equal (%mth-qualifiers m) '(:after))) sorted-methods)))
+        ;; Short-form (operator) method combination, inferred from the methods:
+        ;; methods whose single qualifier is an operator symbol (APPEND, PROGN,
+        ;; +, LIST, NCONC, AND, OR, MAX, MIN) act as the primaries of that
+        ;; combination: the operator combines every applicable one,
+        ;; most-specific first (CLHS 7.6.6.4).  bocl records no per-gf
+        ;; combination object, so the qualifier itself selects the operator.
+        (op-methods (remove-if-not
+                     (lambda (m)
+                       (let ((q (%mth-qualifiers m)))
+                         (and (consp q) (null (cdr q))
+                              (member (car q) '(append progn + list nconc
+                                                and or max min)))))
+                     sorted-methods)))
+    (when (and op-methods (null primaries))
+      (let ((op  (car (%mth-qualifiers (car op-methods))))
+            (fns (mapcar #'%mth-function op-methods)))
+        (return-from %compute-effective-method
+          (lambda (args)
+            (case op
+              ((progn) (let (r) (dolist (f fns r) (setf r (apply f args)))))
+              ((and)   (let ((r t))
+                         (dolist (f fns r)
+                           (setf r (apply f args))
+                           (unless r (return nil)))))
+              ((or)    (dolist (f fns nil)
+                         (let ((r (apply f args)))
+                           (when r (return r)))))
+              (otherwise
+               (apply (symbol-function op)
+                      (mapcar (lambda (f) (apply f args)) fns))))))))
+    (let ((primary-fns (mapcar #'%mth-function primaries)))
+      (lambda (args)
+        (unless primaries
+          (if (fboundp 'no-applicable-method)
+              (apply #'no-applicable-method nil args)
+              (error "No applicable primary method for args ~S" args)))
+        ;; Build the primary chain: most-specific primary calls less specific via
+        ;; *%cnm-nexts*.  Use %cnm-call (setq-based) since bocl LET = lexical only.
+        (let ((core-thunk
+                (lambda (&rest core-args)
+                  (let ((actual (if core-args core-args args)))
+                    (dolist (m befores)                          ; befores (no cnm)
+                      (%cnm-call t nil actual
+                                  (let ((mf (%mth-function m)))
+                                    (lambda () (apply mf actual)))))
+                    ;; Primary chain, preserving ALL its values (CLHS 7.6.6); the afters
+                    ;; run for effect, then the primary values are returned.
+                    (multiple-value-prog1
+                        (%cnm-call t (cdr primary-fns) actual
+                                   (let ((fn (car primary-fns)))
+                                     (lambda () (apply fn actual))))
+                      (dolist (m afters)                         ; afters (reversed; no cnm)
+                        (%cnm-call t nil actual
+                                    (let ((mf (%mth-function m)))
+                                      (lambda () (apply mf actual))))))))))
+          ;; Wrap with arounds: each around's next is the following around or core.
+          (if (null arounds)
+              (apply core-thunk args)
+              (labels ((make-chain (around-fns)
+                         (if (null around-fns)
+                             core-thunk
+                             (let* ((next    (make-chain (cdr around-fns)))
+                                    (this-fn (%mth-function (car around-fns))))
+                               (lambda (&rest a)
+                                 (let ((actual (if a a args)))
+                                   (%cnm-call t (list next) actual
+                                               (lambda () (apply this-fn actual)))))))))
+                (apply (make-chain arounds) args))))))))
 
-    (unless primaries
-      (error "No applicable primary method for args ~S" args))
+(defun %invoke-effective-method (sorted-methods args)
+  "Run standard method combination for SORTED-METHODS and ARGS (uncached path)."
+  (funcall (%compute-effective-method sorted-methods) args))
 
-    ;; Build the primary chain: most-specific primary calls less specific via
-    ;; *%cnm-nexts*.  Use %cnm-call (setq-based) since bocl LET = lexical only.
-    (let* ((primary-fns (mapcar #'%mth-function primaries))
+;;; ---- Dispatch cache (vm-7) ----------------------------------------------
+;;; Every generic call recomputes applicability + specificity sort + the effective
+;;; method — the dominant cost in method-heavy code.  Cache the effective method per
+;;; generic function keyed on the tuple of the specialized (required) arguments'
+;;; CLASSES: a repeat call with the same argument classes skips straight to the cached
+;;; effective method.  Sound because (for the specializer kinds bocl supports — a CLOS
+;;; class, a built-in/condition type name, or T) both applicability and specificity
+;;; depend only on the arguments' classes, not their values (no EQL specializers).
+;;; A miss falls back to full dispatch and fills the cache.  Invalidated by bumping the
+;;; global generation on any class (re)definition, and by clearing a gf's cache when a
+;;; method is added/removed on it.
 
-           ;; Core thunk: runs before*, primary chain, after*
-           (core-thunk
-             (lambda (&rest core-args)
-               (let ((actual (if core-args core-args args)))
-                 ;; Run befores (no cnm)
-                 (dolist (m befores)
-                   (%cnm-call t nil actual
-                               (let ((mf (%mth-function m)))
-                                 (lambda () (apply mf actual)))))
-                 ;; Run primary chain, preserving ALL its values (CLHS 7.6.6); the
-                 ;; afters run for effect afterwards, then the primary values are
-                 ;; returned — MULTIPLE-VALUE-PROG1 captures them across the afters.
-                 (multiple-value-prog1
-                     (%cnm-call t (cdr primary-fns) actual
-                                (let ((fn (car primary-fns)))
-                                  (lambda () (apply fn actual))))
-                   ;; Run afters (reversed; no cnm)
-                   (dolist (m afters)
-                     (%cnm-call t nil actual
-                                 (let ((mf (%mth-function m)))
-                                   (lambda () (apply mf actual))))))))))
+(defun %dispatch-invalidate ()
+  "Invalidate ALL dispatch caches (call after a class redefinition changes CPLs)."
+  (setq *%dispatch-gen* (+ *%dispatch-gen* 1)))
 
-      ;; Wrap with arounds: each around's next is the following around or core
-      (if (null arounds)
-          (apply core-thunk args)
-          (labels ((make-chain (around-fns)
-                     (if (null around-fns)
-                         core-thunk
-                         (let* ((next    (make-chain (cdr around-fns)))
-                                (this-fn (%mth-function (car around-fns))))
-                           (lambda (&rest a)
-                             (let ((actual (if a a args)))
-                               (%cnm-call t (list next) actual
-                                           (lambda () (apply this-fn actual)))))))))
-            (apply (make-chain arounds) args))))))
+(defun %gf-key (gf args)
+  "The dispatch-cache key for a call: the list of CLASSES of the specialized (required)
+   arguments — as many as the methods specialize on."
+  (let* ((methods (%gf-methods gf))
+         (k (if methods (length (%mth-specializers (car methods))) 0))
+         (key '()) (a args) (i 0))
+    (loop
+      (when (or (>= i k) (null a)) (return (nreverse key)))
+      (push (class-of (car a)) key)
+      (setq a (cdr a) i (+ i 1)))))
+
+(defparameter *%dispatch-cache-enable* t
+  "When NIL, generic-function dispatch recomputes the effective method every call
+   (the pre-vm-7 path) — for benchmarking / debugging the cache.")
+
+(defun %gf-dispatch (gf name args)
+  "Dispatch a call to GF on ARGS through the per-gf effective-method cache.
+   A gf with EQL-specialized methods dispatches UNCACHED: its applicability
+   depends on argument values, which the class-tuple cache key cannot see."
+  (if (and *%dispatch-cache-enable* (not (%gf-has-eql-methods gf)))
+      (progn
+        (when (or (null (%gf-cache gf)) (/= (%gf-cache-gen gf) *%dispatch-gen*))
+          (setf (%gf-cache gf) (make-hash-table :test 'equal)
+                (%gf-cache-gen gf) *%dispatch-gen*))
+        (let* ((key (%gf-key gf args))
+               (em  (gethash key (%gf-cache gf))))
+          (unless em
+            (let ((sorted (%sort-methods (%applicable-methods gf args) args)))
+              (when (null sorted)
+                (if (fboundp 'no-applicable-method)
+                    (apply #'no-applicable-method name args)
+                    (error "No applicable method for generic function ~S with arguments ~S"
+                           name args)))
+              (setq em (%compute-effective-method sorted))
+              (setf (gethash key (%gf-cache gf)) em)))
+          (funcall em args)))
+      ;; uncached: full dispatch every call
+      (let ((sorted (%sort-methods (%applicable-methods gf args) args)))
+        (when (null sorted)
+          (if (fboundp 'no-applicable-method)
+              (return-from %gf-dispatch (apply #'no-applicable-method name args))
+              (error "No applicable method for generic function ~S with arguments ~S"
+                     name args)))
+        (%invoke-effective-method sorted args))))
 
 ;;; ---- 19. Generic function installation ----------------------------------
 
@@ -4808,12 +5048,8 @@ SETQ/INCF/DECF is left in place (sequential)."
 (defun %install-discriminating-function (name gf)
   "Install a discriminating function for GF as the global function binding of NAME."
   (let ((df (lambda (&rest args)
-              (let* ((applicable (%applicable-methods gf args))
-                     (sorted     (%sort-methods applicable args)))
-                (when (null sorted)
-                  (error "No applicable method for generic function ~S with arguments ~S"
-                         name args))
-                (%invoke-effective-method sorted args)))))
+              ;; vm-7: dispatch through the per-gf effective-method cache.
+              (%gf-dispatch gf name args))))
     (sethash df *%gf-by-fn* gf)   ; so FIND-METHOD can map #'gf back to its %gf
     ;; A (SETF accessor) generic function is installed as ACCESSOR's setf-function
     ;; (consulted by the SETF macro), not as a symbol-function.
@@ -4866,6 +5102,12 @@ SETQ/INCF/DECF is left in place (sequential)."
                             (equal (%mth-specializers m) specializers)))
                      (%gf-methods gf)))
     (push method (%gf-methods gf))
+    ;; An (:EQL . value) specializer makes applicability depend on argument
+    ;; VALUES: the class-keyed dispatch cache is unsound for this gf, so flag
+    ;; it and %GF-DISPATCH will use the uncached full dispatch.
+    (when (some (lambda (sp) (and (consp sp) (eq (car sp) :eql))) specializers)
+      (setf (%gf-has-eql-methods gf) t))
+    (setf (%gf-cache gf) nil)                 ; vm-7: adding/redefining a method invalidates this gf's cache
     (%install-discriminating-function gf-name gf)
     gf-name))
 
@@ -4920,17 +5162,29 @@ tation, :method-combination, ...) are ignored."
 (defmacro defmethod (name &rest args)
   "Define a method for generic function NAME.
   Syntax: (defmethod name [qualifier*] (specialised-lambda-list) body...)"
-  ;; Collect qualifiers (keywords before the lambda list)
+  ;; Collect qualifiers: every non-list object before the lambda list (CLHS
+  ;; 7.6.2 — qualifiers need not be keywords: short-form method combinations
+  ;; use APPEND, PROGN, +, ... as in (defmethod slots-for-print append (...)).
   (let ((qualifiers nil)
         (rest args))
-    (loop while (and (consp rest) (keywordp (car rest)))
+    (loop while (and (consp rest) (not (listp (car rest))))
           do (push (pop rest) qualifiers))
     (setq qualifiers (nreverse qualifiers))
     (let* ((specialized-ll (car rest))
            (body (cdr rest)))
       (multiple-value-bind (plain-ll spec-names)
           (%parse-spec-ll specialized-ll)
-        `(ensure-method ',name ',qualifiers ',spec-names
+        ;; Build the specializer list as an evaluated LIST expression: a class
+        ;; name / T stays a quoted symbol, while an (EQL form) specializer
+        ;; becomes (CONS :EQL form) so FORM is evaluated in the DEFMETHOD's
+        ;; lexical environment at method-definition time (CLHS 7.6.2).
+        `(ensure-method ',name ',qualifiers
+                         (list ,@(mapcar (lambda (sn)
+                                           (if (and (consp sn) (eq (car sn) 'eql)
+                                                    (consp (cdr sn)))
+                                               `(cons :eql ,(cadr sn))
+                                               `',sn))
+                                         spec-names))
                          (lambda ,(%method-ll-allow-other-keys plain-ll) ,@body))))))
 
 ;;; DEFINE-METHOD-COMBINATION — bocl supports only the standard method
@@ -5648,6 +5902,40 @@ the class object it denotes, so two specializers compare by class identity."
   ((object :initarg :object :accessor print-not-readable-object)))
 (defclass storage-condition        (serious-condition) ())
 (defclass style-warning            (warning) ())
+;; The CLOS side of the SIMPLE family carries the format slots, so
+;; DEFINE-CONDITION subclasses of SIMPLE-ERROR &co inherit them and
+;; MAKE-INSTANCE :FORMAT-CONTROL/:FORMAT-ARGUMENTS fill them
+;; (clos-condition-report-not-printed).
+(defclass simple-condition (condition)
+  ((format-control   :initarg :format-control   :initform nil)
+   (format-arguments :initarg :format-arguments :initform nil)))
+(defclass simple-error      (error simple-condition) ())
+(defclass simple-warning    (warning simple-condition) ())
+(defclass simple-type-error (type-error simple-condition) ())
+
+;; SIMPLE-CONDITION-FORMAT-CONTROL/-ARGUMENTS read the kernel slot for kernel
+;; conditions and the CLOS slot for DEFINE-CONDITION instances.
+(let ((kfc (symbol-function 'simple-condition-format-control))
+      (kfa (symbol-function 'simple-condition-format-arguments)))
+  (set-symbol-function
+   (lambda (c) (if (%is-obj c) (slot-value c 'format-control) (funcall kfc c)))
+   'simple-condition-format-control)
+  (set-symbol-function
+   (lambda (c) (if (%is-obj c) (slot-value c 'format-arguments) (funcall kfa c)))
+   'simple-condition-format-arguments))
+
+;; CLOS simple conditions report like kernel ones: the formatted message under
+;; PRINC (*PRINT-ESCAPE* nil), #<TYPE message> under PRIN1.
+(defmethod print-object ((c simple-condition) stream)
+  (let ((fc (slot-value c 'format-control))
+        (fa (slot-value c 'format-arguments)))
+    (if *print-escape*
+        (if fc
+            (format stream "#<~A ~?>" (type-of c) fc fa)
+            (format stream "#<~A>" (type-of c)))
+        (if fc
+            (format stream "~?" fc fa)
+            (format stream "~A" (type-of c))))))
 
 (defmacro define-condition (name superclasses slots &rest options)
   "Define a condition class NAME inheriting from SUPERCLASSES.
@@ -5669,10 +5957,14 @@ the class object it denotes, so two specializers compare by class identity."
     `(progn
        (defclass ,name ,actual-supers ,slot-specs ,@defclass-options)
        ,@(when report-fn
+           ;; CLHS 9.1.3: the report is used when *PRINT-ESCAPE* is NIL
+           ;; (PRINC, ~A); under PRIN1 the condition keeps the #<...> form.
            `((defmethod print-object ((condition ,name) stream)
-               (cond ((functionp ,report-fn) (funcall ,report-fn condition stream))
-                     ((stringp ,report-fn)   (write-string ,report-fn stream))
-                     (t (call-next-method))))))
+               (if *print-escape*
+                   (call-next-method)
+                   (cond ((functionp ,report-fn) (funcall ,report-fn condition stream))
+                         ((stringp ,report-fn)   (write-string ,report-fn stream))
+                         (t (call-next-method)))))))
        ',name)))
 
 ;;; ---- Condition utilities --------------------------------------------------
@@ -6053,17 +6345,20 @@ the class object it denotes, so two specializers compare by class identity."
 ;;; ---- Stream utilities ---------------------------------------------------
 
 (defun read-sequence (sequence stream &key (start 0) end)
-  "Read elements from STREAM into SEQUENCE[START..END].
-  Returns the index of the first element not updated."
+  "Read elements from STREAM into SEQUENCE[START..END).  Returns the index of
+   the first element of SEQUENCE not updated (CLHS 21.2): END (or the length)
+   when the stream supplied enough elements, LESS when it hit end-of-file —
+   callers loop until (= result START), so this MUST report the fill position.
+   (It used to return END unconditionally: the DOTIMES result — including the
+   early EOF RETURN — was discarded by a stray trailing E, which made UIOP's
+   COPY-STREAM-TO-STREAM loop forever on any stream.)"
   (let* ((len (length sequence))
          (e   (or end len)))
     (dotimes (i (- e start) e)
       (let ((elem (read-byte stream nil nil)))
-        (when (null elem) (return (+ start i)))
+        (when (null elem) (return-from read-sequence (+ start i)))
         (setf (elt sequence (+ start i))
-              (if (characterp (elt sequence 0))
-                  (code-char elem) elem))))
-    e))
+              (if (stringp sequence) (code-char elem) elem))))))
 
 (defun write-sequence (sequence stream &key (start 0) end)
   "Write SEQUENCE[START..END] to STREAM.  Returns SEQUENCE."
@@ -6453,16 +6748,35 @@ SUBTYPEP round-trips)."
 
 ;;; ---- DEFINE-MODIFY-MACRO ------------------------------------------------
 (defmacro define-modify-macro (name lambda-list function &optional documentation)
-  "Define a modify macro that applies FUNCTION to a place and stores the result."
+  "Define a modify macro that applies FUNCTION to a place and stores the result.
+   LAMBDA-LIST may contain required parameters, &OPTIONAL (with defaults) and
+   &REST (CLHS): the call is built with LIST*, so the &REST parameter's forms
+   are spread as the trailing arguments — splicing the raw lambda list into
+   the call would evaluate the &REST symbol itself (asdf-loading-cesarum)."
   documentation  ; ignored
   (let ((place (gensym "PLACE-"))
-        (env   (gensym "ENV-")))
-    `(defmacro ,name (,place ,@lambda-list &environment ,env)
-       ,env  ; ignored
-       (let ((g (gensym "DM-")))
-         `(let ((,g ,(list ',function ,place ,@lambda-list)))
-            (setf ,,`(quote ,place) ,g)
-            ,g)))))
+        (env   (gensym "ENV-"))
+        (required '()) (optionals '()) (restvar nil) (state :required))
+    (dolist (item lambda-list)
+      (case item
+        ((&optional) (setf state :optional))
+        ((&rest)     (setf state :rest))
+        (otherwise
+         (case state
+           ((:required) (push item required))
+           ((:optional) (push (if (consp item) (car item) item) optionals))
+           ((:rest)     (setf restvar item))))))
+    (let ((args (append (nreverse required) (nreverse optionals))))
+      ;; CLHS: the place's subforms are evaluated exactly ONCE — go through
+      ;; GET-SETF-EXPANSION.  (assert in cesarum list.lisp: PUSH* on the place
+      ;; (aref v (incf i)) must not incf twice.)
+      `(defmacro ,name (,place ,@lambda-list &environment ,env)
+         (multiple-value-bind (%vars %vals %stores %setter %getter)
+             (get-setf-expansion ,place ,env)
+           `(let* (,@(mapcar #'list %vars %vals)
+                   (,(car %stores)
+                    ,(list* ',function %getter ,@args ,(or restvar ''nil))))
+              ,%setter))))))
 
 ;;; ---- INCF / DECF for generic delta --------------------------------------
 ;;; Already defined; no change.
@@ -6619,30 +6933,33 @@ SUBTYPEP round-trips)."
 
 (defmacro defsetf (access-fn &rest rest)
   "Define a setf expansion for ACCESS-FN.
-  Short form: (defsetf acc update-fn &optional doc)
-  Long form:  (defsetf acc (params) (store-var) body...)"
+  Short form: (defsetf acc update-fn &optional doc) — (setf (acc a...) v)
+  expands into (update-fn a... v).
+  Long form:  (defsetf acc (params) (store-var) body...) — BODY builds the
+  store form from PARAMS and STORE-VAR.
+  Both register a *SETF-EXPANDERS* entry in bocl's convention: a function of
+  the place's subform temporaries plus the value temporary, returning the
+  store form (see the SETF macro).  The previous version registered a
+  CLHS-style expander through DEFINE-SETF-EXPANDER's bocl-specific signature,
+  which spliced the body into the expander's lambda list — every DEFSETF was
+  broken at its first SETF use (asdf-loading-cesarum)."
   (cond
     ;; Short form: second arg is a symbol (the update function name)
-    ((symbolp (car rest))
+    ((or (null rest) (symbolp (car rest)))
      (let ((update-fn (car rest)))
-       `(define-setf-expander ,access-fn (&rest %args%)
-          (let ((%store% (gensym "STORE-")))
-            (values nil %args% (list %store%)
-                    (list* ',update-fn (append %args% (list %store%)))
-                    (cons ',access-fn %args%))))))
+       `(progn
+          (sethash ',access-fn *setf-expanders*
+                   (lambda (&rest %all%) (cons ',update-fn %all%)))
+          ',access-fn)))
     ;; Long form: second arg is a lambda-list
     (t
      (let* ((lambda-list (car rest))
             (store-vars  (cadr rest))
             (body        (cddr rest)))
-       `(define-setf-expander ,access-fn ,lambda-list
-          (let ,(mapcar (lambda (v) `(,v (gensym ,(string v)))) store-vars)
-            (values nil
-                    (list ,@(remove-if (lambda (s) (member s lambda-list-keywords)) lambda-list))
-                    (list ,@store-vars)
-                    (progn ,@body)
-                    (list ',access-fn
-                          ,@(remove-if (lambda (s) (member s lambda-list-keywords)) lambda-list)))))))))
+       `(progn
+          (sethash ',access-fn *setf-expanders*
+                   (lambda (,@lambda-list ,@store-vars) ,@body))
+          ',access-fn)))))
 
 ;;; ---- WITH-HASH-TABLE-ITERATOR -----------------------------------------------
 
@@ -8993,6 +9310,19 @@ result array; return that array."
         (funcall *%kernel-file-write-date* pathname)
         (error 'file-error :pathname pathname))))
 
+;;; Same conformance wrap for DELETE-FILE: the kernel primitive raises a bare
+;;; SIMPLE-ERROR on failure, but CLHS specifies FILE-ERROR — which callers like
+;;; UIOP's DELETE-FILE-IF-EXISTS rely on catching.
+(defvar *%kernel-delete-file* (symbol-function 'delete-file)
+  "The bare kernel DELETE-FILE (remove(3)s the namestring; simple-errors on failure).")
+
+(defun delete-file (filespec)
+  "DELETE-FILE per CLHS: delete the file named by FILESPEC and return T,
+   signalling FILE-ERROR when it cannot be deleted (e.g. it does not exist)."
+  (let ((pathname (pathname filespec)))
+    (handler-case (funcall *%kernel-delete-file* pathname)
+      (error () (error 'file-error :pathname pathname)))))
+
 (defun load (filespec &key (verbose *load-verbose*) (print *load-print*)
                            (if-does-not-exist t) (external-format :default))
   "Load FILESPEC.  A relative pathname is merged against
@@ -9291,13 +9621,18 @@ result array; return that array."
     (dolist (spec import-froms)
       (let ((from (car spec)))
         (dolist (n (cdr spec)) (push `(import (intern ,n ',from) pkg) body))))
-    (dolist (u use) (push `(use-package ',u pkg) body))
+    ;; USE-PACKAGE must run in the body, AFTER the shadows and shadowing
+    ;; imports above (CLHS defpackage order): passing :USE to MAKE-PACKAGE
+    ;; would establish the inheritance first and signal the very name
+    ;; conflicts the :SHADOWING-IMPORT-FROM options exist to resolve
+    ;; (cesarum index-set: uses CESARUM.SET shadowing CL's UNION &co).
+    (dolist (u (if use-given use '("COMMON-LISP")))
+      (push `(use-package ',u pkg) body))
     (dolist (n interns) (push `(intern ,n pkg) body))
     (dolist (n exports) (push `(export (intern ,n pkg) pkg) body))
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        (let ((pkg (or (find-package ,sname)
-                      (make-package ,sname :nicknames ',nicknames
-                                          :use ',(if use-given use '("COMMON-LISP"))))))
+                      (make-package ,sname :nicknames ',nicknames :use '()))))
          ,@(nreverse body)
          pkg))))
 
@@ -9351,10 +9686,10 @@ result array; return that array."
            ;; CLHS: result-form evaluated INSIDE var's scope, with var = count.
            ,result)))))
 
-;;; ---- Per-form LOAD recovery (used under -on-error appease) ----------------
+;;; ---- Per-form LOAD recovery (used under --on-error appease) ----------------
 ;;; LOAD normally aborts the whole file on the first error.  When the kernel
 ;;; enables recovery (only for user files, never the bootstrap, and only under
-;;; -on-error appease), each top-level form is evaluated through this wrapper so
+;;; --on-error appease), each top-level form is evaluated through this wrapper so
 ;;; that one bad form is reported and skipped instead of killing the load.  This
 ;;; lets large suites — e.g. the ANSI tests — load every file they can and still
 ;;; reach their final report, rather than dying on the first unsupported form.
@@ -9389,12 +9724,21 @@ result array; return that array."
   "File types tried (in order) to find a source file given a typeless pathname.")
 
 (defparameter *accepted-compiled-file-types*
-  '("fasl" "FASL" (:case-insensitive "fasl")
+  '((:case-insensitive "cfasl")
+    "fasl" "FASL" (:case-insensitive "fasl")
     (:case-insensitive "fas") (:case-insensitive "obj") (:case-insensitive "o"))
-  "File types tried (in order) to find a compiled file given a typeless pathname.")
+  "File types tried (in order) to find a compiled file given a typeless pathname.
+   CFASL (the byte-compiled binary fast-load file) is tried FIRST so a type-less
+   LOAD prefers the byte-compiled image over a text fasl when both are present.")
 
-(defparameter *default-compiled-file-type* "fasl"
-  "The file type COMPILE-FILE gives its output file when none is specified.")
+(defparameter *default-compiled-file-type* "cfasl"
+  "The file type COMPILE-FILE gives its BINARY (byte-compiled cfasl) output file
+   when none is specified.  The readable TEXT-fasl fallback uses
+   *DEFAULT-TEXT-FASL-TYPE* instead.")
+
+(defparameter *default-text-fasl-type* "fasl"
+  "The file type COMPILE-FILE gives its output when it writes the readable TEXT
+   fasl (i.e. when *COMPILE-FILE-BINARY* is NIL, or the binary writer falls back).")
 
 (defun %ftype-string (ft) (if (consp ft) (second ft) ft))
 
@@ -9441,10 +9785,21 @@ result array; return that array."
 ;;; bocl stores a global macro's expander on the symbol plist ($MACRO); the
 ;;; expander takes the macro call's arguments (the cdr of the form).
 (defun macroexpand-1 (form &optional environment)
-  "Expand FORM once if it is a macro call; returns (values expansion expanded-p)."
-  (declare (ignore environment))
+  "Expand FORM once if it is a macro call; returns (values expansion expanded-p).
+   Honors *MACROEXPAND-HOOK* (CLHS): the hook is called with a standard
+   (expander form env) protocol; the adapter closes over bocl's internal
+   apply-to-arguments macro-function convention."
   (if (and (consp form) (symbolp (car form)) (macro-function (car form)))
-      (values (apply (macro-function (car form)) (rest form)) t)
+      (let ((mf (macro-function (car form))))
+        (values
+         (if (and (boundp '*macroexpand-hook*)
+                  *macroexpand-hook*
+                  (not (eq *macroexpand-hook* #'funcall)))
+             (funcall *macroexpand-hook*
+                      (lambda (f e) (declare (ignore e)) (apply mf (rest f)))
+                      form environment)
+             (apply mf (rest form)))
+         t))
       (values form nil)))
 
 (defun macroexpand (form &optional environment)
@@ -9559,7 +9914,15 @@ result array; return that array."
              name)
             ((symbolp name)
              (let ((fn (%compile-definition definition)))
-               (when (functionp fn) (setf (symbol-function name) fn))
+               (cond
+                 ;; A byte-compiled function: install it NAME-PRESERVINGLY so its
+                 ;; lisp_name is NAME (BACKTRACE / FUNCTION-LAMBDA-EXPRESSION report it),
+                 ;; keeping any existing documentation.  DEFINE-FUNCTION does the stamping.
+                 ((and (compiled-function-p fn) (find-package "BOCL")
+                       (find-symbol "DEFINE-FUNCTION" "BOCL"))
+                  (funcall (find-symbol "DEFINE-FUNCTION" "BOCL")
+                           name (documentation name 'function) fn))
+                 ((functionp fn) (setf (symbol-function name) fn)))
                name))
             (t (error "COMPILE: NAME must be NIL or a symbol, got ~S" name)))))
     (values result nil nil)))
@@ -9739,13 +10102,19 @@ result array; return that array."
 
 ;;; --- compile-file-pathname now honours *default-compiled-file-type* --
 (defun compile-file-pathname (input-file &key output-file &allow-other-keys)
-  "Pathname COMPILE-FILE writes to: the source pathname with its type changed to
-   *DEFAULT-COMPILED-FILE-TYPE* (default \"fasl\"), unless OUTPUT-FILE is given."
+  "Pathname COMPILE-FILE writes to, unless OUTPUT-FILE is given: the source
+   pathname with its type changed to *DEFAULT-COMPILED-FILE-TYPE* (\"cfasl\") when
+   COMPILE-FILE will write the byte-compiled binary (the default,
+   *COMPILE-FILE-BINARY* true), or *DEFAULT-TEXT-FASL-TYPE* (\"fasl\") when it will
+   write the readable text fasl."
   (or output-file
-      (let* ((in  (pathname input-file))
-             (dir (directory-namestring in))
-             (nm  (or (pathname-name in) "")))
-        (pathname (concatenate 'string dir nm "." *default-compiled-file-type*)))))
+      (let* ((in   (pathname input-file))
+             (dir  (directory-namestring in))
+             (nm   (or (pathname-name in) ""))
+             (type (if (and (boundp '*compile-file-binary*) *compile-file-binary*)
+                       *default-compiled-file-type*
+                       *default-text-fasl-type*)))
+        (pathname (concatenate 'string dir nm "." type)))))
 
 ;;;; THE END OF SLICE 44
 
@@ -9768,6 +10137,26 @@ result array; return that array."
    source loader skips it; file(1) and LOAD use it to recognise a text fasl and
    check version compatibility (see %BOCL-FASL-VERSION).  A BINARY (cfasl) fasl
    instead starts with the \"BOCLFASL\" magic (see cfasl.h / %CFASL-FILE-P).")
+
+(defvar *compile-verbose* t
+  "Default for COMPILE-FILE's :VERBOSE (CLHS 25.1.1): when true it prints a note
+   naming the file it is compiling.  Byte-compiling a whole file is slow, so this
+   is on by default to show the compile started.")
+
+(defvar *compile-print* nil
+  "Default for COMPILE-FILE's :PRINT (CLHS 25.1.1): when true it prints one line
+   per top-level form as it is byte-compiled — essential live progress for a
+   multi-minute whole-prelude compile.")
+
+(defvar *compile-file-splice-toplevel* t
+  "When true (the default), COMPILE-FILE exposes DEFUNs to the byte-compile hook
+   THROUGH the top-level splicing forms of CLHS 3.2.3.1 (the bodies of a
+   top-level PROGN, and of a top-level EVAL-WHEN with :LOAD-TOPLEVEL) — e.g.
+   ASDF wraps nearly every DEFUN in WITH-UPGRADABILITY = EVAL-WHEN.  Bind to
+   NIL for the PRELUDE/system bootstrap self-compile (sources/Makefile does):
+   there the vm-10 rule applies — expand only BARE top-level DEFUNs, keep every
+   other form raw — because a spliced form bakes the fully-booted expansion into
+   an image position the partially-built boot has not reached yet.")
 
 (defvar *compile-file-binary* t
   "When true (the default), COMPILE-FILE writes a compact BINARY (cfasl) fast-load
@@ -9826,20 +10215,58 @@ result array; return that array."
           (terpri dst)))))
   t)
 
-(defun compile-file (input-file &key output-file &allow-other-keys)
+(defun %text-fasl-readable-p (path readtable)
+  "T if every form of the just-written TEXT fasl at PATH reads back without error
+   under the same controlled syntax LOAD uses.  A text fasl PRIN1s its forms, so a
+   form holding an object PRIN1 cannot round-trip (a #<FUNCTION ...> from a
+   #.(function ...) literal, a #<STRUCTURE ...>, ...) prints an unreadable #<...>
+   token; reading it back then signals, and this returns NIL — COMPILE-FILE uses
+   that to reject the broken fasl and load from source instead."
+  (ignore-errors
+    (with-open-file (s path :direction :input :if-does-not-exist nil)
+      (and s
+           (let ((*readtable*                 readtable)
+                 (*read-eval*                  nil)
+                 (*read-default-float-format*  'double-float)
+                 (*read-base*                  10)
+                 (eof                          '#:eof))
+             ;; READ skips the ';;'-comment header lines automatically.
+             (loop (when (eq (read s nil eof) eof) (return t))))))))
+
+(defun %compile-file-defun-name (form)
+  "If FORM is a (BOCL:DEFINE-FUNCTION 'NAME ...) — the macroexpansion of a DEFUN —
+   return NAME, else NIL.  Used for COMPILE-FILE's :PRINT progress line."
+  (and (consp form) (>= (length form) 2)
+       (let ((nm (second form)))
+         (if (and (consp nm) (eq (car nm) 'quote)) (cadr nm) nm))))
+
+(defun compile-file (input-file &key output-file
+                                     (verbose *compile-verbose*)
+                                     (print *compile-print*)
+                                &allow-other-keys)
   "Minimal-compile INPUT-FILE to a fast-load file and return its truename.  Each
    top-level form is read; its compile-time effects fire (%COMPILE-FILE-TOPLEVEL —
-   EVAL-WHEN :COMPILE-TOPLEVEL, IN-PACKAGE, DEFMACRO, ...), then it is
-   MACROEXPAND-ALL'd and collected together with the package in effect for it.
-   The collected macro-free forms are written to OUTPUT-FILE (default: source with
-   type *DEFAULT-COMPILED-FILE-TYPE*), preceded by an IN-PACKAGE pinning the load
+   EVAL-WHEN :COMPILE-TOPLEVEL, IN-PACKAGE, DEFMACRO, ...), then only its TOP-LEVEL
+   macro is expanded (DEFUN -> BOCL:DEFINE-FUNCTION, so the byte-compile hook sees
+   it) and it is collected with the package in effect for it — NOT a whole-form
+   MACROEXPAND-ALL, which is slow and can exhaust the stack on a deeply nested body.
+   In the BINARY (cfasl) path each DEFUN body is then byte-compiled per-function
+   (%VM-COMPILE-FILE-FORM; the compiler macroexpands the body itself, one bounded
+   function at a time); every other form is stored shallowly expanded and LOAD
+   evaluates it, re-macroexpanding exactly as a source boot would.
+   The result is written to OUTPUT-FILE (default: source with type
+   *DEFAULT-COMPILED-FILE-TYPE*), preceded by an IN-PACKAGE pinning the load
    package, as a compact BINARY cfasl (the default; see *COMPILE-FILE-BINARY*) or,
    when binary is disabled or a form holds a literal the binary writer cannot
    serialize, as the readable TEXT fasl.  A compile-time IN-PACKAGE is contained
-   by the *PACKAGE* rebinding.  Returns (values output-truename warnings-p
-   failure-p): warnings-p is always NIL; failure-p is T if some form could not be
-   macroexpanded (it was collected verbatim)."
-  (let* ((merged (merge-pathnames input-file *default-pathname-defaults*))
+   by the *PACKAGE* rebinding.  VERBOSE (default *COMPILE-VERBOSE*) notes the file
+   being compiled; PRINT (default *COMPILE-PRINT*) prints a line per byte-compiled
+   DEFUN — live progress for the multi-minute whole-prelude compile.  Returns
+   (values output-truename warnings-p failure-p): warnings-p is always NIL;
+   failure-p is T if some form's top-level macro could not be expanded (it was
+   collected verbatim)."
+  (let* ((%verbose verbose) (%print print)
+         (merged (merge-pathnames input-file *default-pathname-defaults*))
          ;; Select the actual source file (issue lisp-file-types pseudocode):
          ;; an explicit type or an existing file is used as is; otherwise search
          ;; the accepted source file types.
@@ -9853,9 +10280,16 @@ result array; return that array."
          (out-ns  (namestring out))
          (*package*   *package*)                ; contain a compile-time IN-PACKAGE
          (*readtable* *readtable*)              ; the SOURCE is read with this readtable
+         ;; CLHS: COMPILE-FILE binds *COMPILE-FILE-PATHNAME* (the merged input
+         ;; pathname) and *COMPILE-FILE-TRUENAME* during processing.
+         (*compile-file-pathname* (pathname merged))
+         (*compile-file-truename* (truename actual))
          (std-rt   (copy-readtable nil))        ; the TEXT fasl is written with the standard one
          (failure nil)
          (entries '()))                         ; (package . expanded-form), reverse order
+    (when %verbose
+      (format t "~&; compiling file ~S (to ~S)~%" actual out-ns)
+      (finish-output))
     ;; Pin the load package to the compile-time package, in case the source
     ;; carries no IN-PACKAGE of its own.
     (push (cons *package* (list 'in-package (package-name *package*))) entries)
@@ -9867,21 +10301,132 @@ result array; return that array."
           (let ((form (read src nil eof)))
             (when (eq form eof) (return))
             (%compile-file-toplevel form)                 ; compile-time effects
-            (multiple-value-bind (expanded ok)
-                (handler-case (values (macroexpand-all form) t)
-                  (error () (values form nil)))
-              (unless ok (setq failure t))
-              ;; Capture *PACKAGE* per form so a multi-package file's symbols
-              ;; qualify correctly should we fall back to the text writer.
-              (push (cons *package* expanded) entries))))))
+            ;; Expand the top-level macro ONLY to expose a DEFUN as
+            ;; BOCL:DEFINE-FUNCTION for the byte-compile hook below; KEEP every
+            ;; other form RAW.  Two reasons not to store the expansion of a
+            ;; non-DEFUN form:
+            ;;   * a whole-form MACROEXPAND-ALL is slow and can exhaust the control
+            ;;     stack on a deeply nested body;
+            ;;   * more importantly, COMPILE-FILE expands with the FULLY-BOOTED
+            ;;     compiler's macros, but the fasl is LOADed into a partially-built
+            ;;     image — an expansion can bake in a macro / setf-expander the boot
+            ;;     has not reached yet (e.g. a DEFPARAMETER docstring expands to
+            ;;     (SETF (DOCUMENTATION ...) ...) before that setf-expander is
+            ;;     registered).  Storing the form raw lets LOAD expand it with the
+            ;;     macros defined SO FAR, exactly as a source boot does.
+            ;; DEFUN bodies are still byte-compiled below (the compiler macroexpands
+            ;; each body internally, one bounded function at a time).
+            (let ((def-function (and (find-package "BOCL")
+                                     (find-symbol "DEFINE-FUNCTION"
+                                                  (find-package "BOCL")))))
+              (labels ((process (f)
+                         ;; Expose DEFUNs to the byte-compile hook THROUGH the
+                         ;; top-level splicing forms of CLHS 3.2.3.1: the body
+                         ;; forms of a top-level PROGN, and of a top-level
+                         ;; EVAL-WHEN whose situations include :LOAD-TOPLEVEL,
+                         ;; are themselves top-level forms (ASDF wraps nearly
+                         ;; every DEFUN in WITH-UPGRADABILITY = EVAL-WHEN, so
+                         ;; without this only bare top-level DEFUNs compiled).
+                         ;; A subform that is neither is kept RAW (unexpanded),
+                         ;; same policy as a whole non-DEFUN top-level form.
+                         ;; DEFPACKAGE and IN-PACKAGE are ALWAYS kept raw, even
+                         ;; though their expansions are EVAL-WHENs this recursion
+                         ;; would otherwise rebuild: splicing them exposes no
+                         ;; DEFUN, and their textual identity is what lets
+                         ;; tooling that READS a fasl without loading it
+                         ;; (BOCL:VALIDATE-CFASL) track the packages the file
+                         ;; defines and switches to.
+                         (when (and (consp f) (member (car f) '(defpackage in-package)))
+                           (return-from process f))
+                         (let ((expanded (handler-case (macroexpand f)
+                                           (error () (setq failure t) f))))
+                           (cond
+                             ((and (consp expanded) (eq (car expanded) def-function))
+                              expanded)                   ; a DEFUN — byte-compile it
+                             ((and *compile-file-splice-toplevel*
+                                   (consp expanded) (eq (car expanded) 'progn))
+                              (cons 'progn (mapcar #'process (cdr expanded))))
+                             ((and *compile-file-splice-toplevel*
+                                   (consp expanded) (eq (car expanded) 'eval-when)
+                                   (consp (cdr expanded)) (listp (second expanded))
+                                   (or (member :load-toplevel (second expanded))
+                                       (member 'load (second expanded))))
+                              (list* 'eval-when (second expanded)
+                                     (mapcar #'process (cddr expanded))))
+                             (t f)))))                    ; everything else stays raw
+                ;; Capture *PACKAGE* per form so a multi-package file's symbols
+                ;; qualify correctly should we fall back to the text writer.
+                (push (cons *package* (process form)) entries)))))))
     (setq entries (nreverse entries))
     ;; Binary by default; fall back to text when disabled or when a form holds an
     ;; object the binary writer cannot serialize (%WRITE-CFASL then returns NIL,
-    ;; having written nothing).
-    (or (and *compile-file-binary*
-             (%write-cfasl out-ns (mapcar #'cdr entries)))
-        (%write-text-fasl out-ns actual entries std-rt))
-    (values (truename out) nil failure)))
+    ;; having written nothing).  When the byte-code compiler is present (vm-8), DEFUN
+    ;; bodies are byte-compiled into the binary fasl (%VM-COMPILE-FILE-FORM installs a
+    ;; pre-compiled template); the text path always uses the plain macroexpanded forms.
+    (let ((bin-forms (if (fboundp '%vm-compile-file-form)
+                         (let ((i 0))
+                           (mapcar (lambda (e)
+                                     (incf i)
+                                     (multiple-value-bind (bf reports)
+                                         (%vm-compile-file-form (cdr e))
+                                       ;; :PRINT — one line per byte-compiled DEFUN
+                                       ;; (including DEFUNs nested in a top-level
+                                       ;; PROGN / EVAL-WHEN); a DEFUN the compiler
+                                       ;; DECLINED stays interpreted in the fasl —
+                                       ;; say so (and WHY) under :PRINT or :VERBOSE,
+                                       ;; else the only symptom is a silently slower
+                                       ;; function.
+                                       (dolist (r reports)
+                                         (case (first r)
+                                           (:compiled
+                                            (when %print
+                                              (format t "~&;   [~D] byte-compiled ~S~%"
+                                                      i (second r))
+                                              (finish-output)))
+                                           (:declined
+                                            (when (or %print %verbose)
+                                              (format t "~&;   [~D] left interpreted ~S (byte-compilation declined: ~A)~%"
+                                                      i (second r) (third r))
+                                              (finish-output)))))
+                                       bf))
+                                   entries))
+                         (mapcar #'cdr entries))))
+      ;; Write the binary cfasl (default).  It returns NIL when a form holds an
+      ;; object it cannot serialize (a function/closure embedded via #., a bignum,
+      ;; a structure — see cfasl-6); then fall back to the readable TEXT fasl.  The
+      ;; text fasl PRIN1s the forms, so a form holding an object PRIN1 cannot round-
+      ;; trip (e.g. #<FUNCTION ...> from a #.(function ...) literal in quoted data)
+      ;; would write an UNLOADABLE file.  Guard against that: after the text write,
+      ;; verify it reads back; if not, remove it and leave NO fasl so LOAD falls
+      ;; back to the source (never a broken image) — a file that genuinely cannot
+      ;; be externalised thus simply loads from source.
+      (let ((wrote
+              (cond
+                ((and *compile-file-binary*
+                      (multiple-value-bind (ok bad-i) (%write-cfasl out-ns bin-forms)
+                        ;; Name the culprit when binary falls back to text: the
+                        ;; 1-based index of the first form holding a literal the
+                        ;; binary writer cannot serialize (see cfasl-6).
+                        (when (and (not ok) bad-i (or %print %verbose))
+                          (format t "~&; binary fasl: form [~D] holds a literal the binary writer cannot serialize (cfasl-6) — writing the text fasl~%"
+                                  bad-i)
+                          (finish-output))
+                        ok))
+                 :binary)
+                ((and (%write-text-fasl out-ns actual entries std-rt)
+                      (%text-fasl-readable-p out-ns std-rt))               :text)
+                (t (ignore-errors (delete-file out-ns))
+                   (setq failure t)
+                   nil))))
+        (when %verbose
+          (if wrote
+              (format t "~&; wrote ~S (~(~A~))~%" out-ns wrote)
+              (format t "~&; ~S holds an un-externalisable object; no fasl written ~
+                          (loads from source)~%" actual))
+          (finish-output))
+        ;; TRUENAME needs an existing file; when we wrote none, return the
+        ;; conventional output pathname unresolved (CLHS allows this).
+        (values (if wrote (truename out) out) nil failure)))))
 
 (defun %bocl-fasl-version (path)
   "If the file at PATH begins with a bocl fasl header
@@ -10616,7 +11161,41 @@ the rest take :INITIAL-ELEMENT."
       (otherwise       (format stream "~(~A~)" kind))))
   frame)
 
-(export '(*init-hook* *abort-hook* *quit-hook* *stop-hook* *cont-hook*
+;;; ---- non-local exit to an EXITED extent (per pjb) -------------------------------
+;;; RETURN-FROM a BLOCK / GO to a TAGBODY whose dynamic extent has already exited (a closure
+;;; captured the exit and is called after the block/tagbody returned) signals a DESCRIPTIVE,
+;;; TYPED error — IN THE LEXICAL+DYNAMIC CONTEXT of the RETURN-FROM/GO, i.e. BEFORE any stack
+;;; unwinding, so an active HANDLER-BIND may provide an alternative non-local exit.  The
+;;; tree-walker (eval.c) and the byte-code VM (bytecode.c THROW) call the BOCL::%...-error
+;;; signaler AFTER failing to find the target frame — having searched first and NOT unwound.
+;;; These conditions are bocl EXTENSIONS (not CL), so they live in and are exported from the
+;;; BOCL package (like BACKTRACE / FRAME-KIND above).  (The :REPORT sentence does not yet
+;;; render — user CLOS conditions print #<TYPE>; see clos-condition-report-not-printed.issue —
+;;; but the type + block/tag are what handlers use.)
+(define-condition return-from-exited-block-error (program-error simple-error)
+  ((block-name :initarg :name :reader return-from-exited-block-error-block-name))
+  (:report (lambda (c s)
+             (format s "Cannot RETURN-FROM the block ~S, it has already exited."
+                     (return-from-exited-block-error-block-name c)))))
+(define-condition go-exited-tagbody-error (program-error simple-error)
+  ((tag :initarg :tag :reader go-exited-tagbody-error-tag))
+  (:report (lambda (c s)
+             (format s "Cannot GO to the tag ~S, its TAGBODY has already exited."
+                     (go-exited-tagbody-error-tag c)))))
+(defun %return-from-exited-block-error (name)
+  "Signal that a RETURN-FROM named the block NAME whose dynamic extent has already exited."
+  (error 'return-from-exited-block-error :name name
+         :format-control "Cannot RETURN-FROM the block ~S, it has already exited."
+         :format-arguments (list name)))
+(defun %go-exited-tagbody-error (tag)
+  "Signal that a GO named the tag TAG whose TAGBODY's dynamic extent has already exited."
+  (error 'go-exited-tagbody-error :tag tag
+         :format-control "Cannot GO to the tag ~S, its TAGBODY has already exited."
+         :format-arguments (list tag)))
+
+(export '(return-from-exited-block-error return-from-exited-block-error-block-name
+          go-exited-tagbody-error go-exited-tagbody-error-tag
+          *init-hook* *abort-hook* *quit-hook* *stop-hook* *cont-hook*
           *prompt-function* quit
           *on-error* backtrace frame-kind frame-name frame-bindings print-frame
           *debugger-print-array* *debugger-print-base* *debugger-print-case*
@@ -10893,6 +11472,20 @@ the rest take :INITIAL-ELEMENT."
   "Change the current directory to PATH (a string or pathname); T on success."
   (common-lisp::%chdir (if (pathnamep path) (namestring path) (string path))))
 
+(defun bocl::system (command)
+  "Run COMMAND (a string) through the shell, synchronously (libc system(3)).
+   Returns the child's exit status: its exit code, or 128+signal when it died
+   on a signal.  Signals an ERROR when the shell itself cannot be run.  This
+   is the primitive UIOP's RUN-PROGRAM builds on."
+  (common-lisp::%system (string command)))
+
+(defun bocl::rmdir (path)
+  "Remove the EMPTY directory at PATH (a string or pathname).  Signals a
+   FILE-ERROR when it cannot be removed (missing, not empty, permission)."
+  (let ((ns (if (pathnamep path) (namestring path) (string path))))
+    (or (common-lisp::%rmdir ns)
+        (error 'file-error :pathname (pathname ns)))))
+
 (defun bocl::command-line-arguments ()
   "The process command-line arguments (a list of strings; argv[0] first)."
   (common-lisp::%command-line-arguments))
@@ -10900,7 +11493,8 @@ the rest take :INITIAL-ELEMENT."
 (defvar bocl::*command-line-arguments* (common-lisp::%command-line-arguments)
   "The process command-line arguments captured at start-up.")
 
-(export '(bocl::getenv bocl::setenv bocl::unsetenv bocl::getcwd bocl::chdir
+(export '(bocl::system bocl::rmdir
+          bocl::getenv bocl::setenv bocl::unsetenv bocl::getcwd bocl::chdir
           bocl::command-line-arguments bocl::*command-line-arguments*)
         "BOCL")
 
@@ -11161,6 +11755,114 @@ the rest take :INITIAL-ELEMENT."
           bocl::with-profile-phase)
         "BOCL")
 
+;;; ---- Compiled fasl validation ----------------------------------------------
+;;; A truncated or corrupted .cfasl boot image is rejected by LOAD/the boot with
+;;; a warning and a fallback to the source (v1.8.32); BOCL:VALIDATE-CFASL is the
+;;; companion inspection tool — it checks an image explicitly and says WHAT is
+;;; wrong, without evaluating (loading) anything from it.
+(defun bocl::%validate-scan-defpackages (form make-missing)
+  "Walk FORM (through PROGN / EVAL-WHEN nesting) for DEFPACKAGE forms and call
+   MAKE-MISSING with (name . nicknames) for each.  Used by text-fasl validation:
+   a fasl that DEFINES its own packages must have them exist for the READER to
+   accept later package-qualified tokens."
+  (when (consp form)
+    (cond
+      ((and (eq (car form) 'defpackage) (consp (cdr form)))
+       (let ((name (second form))
+             (nicknames '()))
+         (dolist (clause (cddr form))
+           (when (and (consp clause) (eq (car clause) :nicknames))
+             (setq nicknames (append nicknames (cdr clause)))))
+         (funcall make-missing (cons name nicknames))))
+      ((eq (car form) 'progn)
+       (dolist (f (cdr form)) (bocl::%validate-scan-defpackages f make-missing)))
+      ((and (eq (car form) 'eval-when) (consp (cdr form)))
+       (dolist (f (cddr form)) (bocl::%validate-scan-defpackages f make-missing))))))
+
+(defun bocl::%validate-text-fasl (path)
+  "Read-validate a TEXT fasl at PATH: every top-level form must READ under the
+   controlled syntax LOAD uses; nothing is evaluated.  IN-PACKAGE forms naming
+   an EXISTING package retarget *PACKAGE* for the following reads, and packages
+   the fasl itself defines (DEFPACKAGE forms, also inside PROGN / EVAL-WHEN)
+   are created EMPTY so later package-qualified tokens read — then deleted
+   again on the way out, so validation leaves no packages behind.
+   Returns (values valid-p form-count message)."
+  (let ((created '()))
+    (unwind-protect
+        (with-open-file (s path :direction :input)
+          (let ((*readtable*                 (copy-readtable nil))
+                (*read-eval*                 nil)
+                (*read-default-float-format* 'double-float)
+                (*read-base*                 10)
+                (*package*                   *package*)
+                (eof                         '#:eof)
+                (n                           0))
+            (loop
+              (let ((form (handler-case (read s nil eof)
+                            (error (c)
+                              (return (values nil n
+                                              (format nil "form ~D does not read: ~A"
+                                                      (+ n 1) c)))))))
+                (when (eq form eof) (return (values t n nil)))
+                (setq n (+ n 1))
+                ;; Track IN-PACKAGE (without evaluating anything else) so the
+                ;; following forms' unqualified symbols read in the right package.
+                (when (and (consp form) (eq (car form) 'in-package) (consp (cdr form)))
+                  (let ((p (find-package (second form))))
+                    (when p (setq *package* p))))
+                ;; Create (empty) any package this fasl defines, so the reader
+                ;; accepts the qualified symbols of the forms that follow.
+                (bocl::%validate-scan-defpackages
+                 form
+                 (lambda (name+nicks)
+                   (let ((name (string (car name+nicks))))
+                     (unless (find-package name)
+                       (push (make-package name
+                                           :nicknames (remove-if #'find-package
+                                                                 (mapcar #'string
+                                                                         (cdr name+nicks))))
+                             created)))))))))
+      ;; Leave no trace: delete the packages validation had to create.
+      (dolist (p created)
+        (ignore-errors (delete-package p))))))
+
+(defun bocl::validate-cfasl (path &key (report t) (stream *standard-output*))
+  "Structurally validate the fast-load file at PATH without evaluating anything
+from it.  A BINARY cfasl (BOCLFASL magic) is checked completely: the format
+version, that every top-level form reads back through the cfasl reader, and
+that the image ends with the end-of-image tag as its final byte; validation is
+independent of the session's package state (a symbol in a package the image
+itself would create reads as an uninterned placeholder).  A TEXT fasl
+(\";; BOCL <version> FASL\" header — COMPILE-FILE's fallback when a literal
+cannot be serialized in binary) is checked by READing every form under LOAD's
+controlled syntax; packages the fasl itself DEFINES are created empty for the
+read and deleted afterwards, so it too validates independently of the session
+(packages the fasl merely uses from elsewhere must exist).  When REPORT is true
+(the default), print a one-line verdict to STREAM.  Returns (VALUES VALID-P
+FORM-COUNT MESSAGE VERSION): VALID-P is T when every check passes; FORM-COUNT
+is the number of top-level forms that read cleanly; MESSAGE is a string naming
+the first problem, or NIL; VERSION is the binary format version (an integer),
+the text fasl's bocl version (a string), or NIL when the file carries neither
+header."
+  (let ((ns (namestring (pathname path)))
+        (kind "cfasl"))
+    (multiple-value-bind (valid-p form-count message version)
+        (%cfasl-validate ns)
+      ;; Not a binary image — recognise COMPILE-FILE's TEXT fasl by its header.
+      (when (and (not valid-p) (stringp message) (search "magic" message))
+        (let ((text-version (%bocl-fasl-version ns)))
+          (when text-version
+            (setq kind "text fasl" version text-version)
+            (multiple-value-setq (valid-p form-count message)
+              (bocl::%validate-text-fasl ns)))))
+      (when report
+        (if valid-p
+            (format stream "~&;; ~A: valid ~A (~A v~A, ~A top-level forms).~%"
+                    ns kind (if (string= kind "cfasl") "format" "BOCL") version form-count)
+            (format stream "~&;; ~A: INVALID ~A: ~A~%" ns kind message)))
+      (values valid-p form-count message version))))
+(export '(bocl::validate-cfasl) "BOCL")
+
 (define-condition bocl::invalid-module-plist (error)
   ((object :initarg :object :reader bocl::invalid-module-plist-object)
    (reason :initarg :reason :reader bocl::invalid-module-plist-reason)))
@@ -11264,10 +11966,15 @@ the rest take :INITIAL-ELEMENT."
   (let ((here (or *load-truename* *load-pathname*)))
     (when here
       (let* ((ns  (if (stringp here) here (namestring here)))
-             (pos (search "prelude.lisp" ns :from-end t))
-             (dir (if pos (subseq ns 0 pos) "")))
-        (load (concatenate 'string dir "bignum.lisp"))
-        (load (concatenate 'string dir "bignum-integration.lisp"))))))
+             ;; Take everything up to and including the last "/" — this file may
+             ;; be loaded as prelude.lisp OR as the compiled prelude.cfasl boot
+             ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
+             (pos (position #\/ ns :from-end t))
+             (dir (if pos (subseq ns 0 (1+ pos)) "")))
+        ;; Type-less LOAD: prefer a byte-compiled sibling (bignum.cfasl) over the
+        ;; source when it is present and newer (see *ACCEPTED-COMPILED-FILE-TYPES*).
+        (load (concatenate 'string dir "bignum"))
+        (load (concatenate 'string dir "bignum-integration"))))))
 
 ;;; ---- SOCKET support -------------------------------------------------------
 ;;; When the kernel was built with BSD-socket support (the %SOCKET primitive is
@@ -11277,6 +11984,306 @@ the rest take :INITIAL-ELEMENT."
   (let ((here (or *load-truename* *load-pathname*)))
     (when here
       (let* ((ns  (if (stringp here) here (namestring here)))
-             (pos (search "prelude.lisp" ns :from-end t))
-             (dir (if pos (subseq ns 0 pos) "")))
-        (load (concatenate 'string dir "socket.lisp"))))))
+             ;; Take everything up to and including the last "/" — this file may
+             ;; be loaded as prelude.lisp OR as the compiled prelude.cfasl boot
+             ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
+             (pos (position #\/ ns :from-end t))
+             (dir (if pos (subseq ns 0 (1+ pos)) "")))
+        (load (concatenate 'string dir "socket"))))))   ; type-less: prefer socket.cfasl
+
+;;; ---- BYTE-CODE COMPILER (plan-2) ------------------------------------------
+
+;;;; ======================================================================
+;;;; CLHS coverage — remaining standard symbols (missing-functions.issue)
+;;;; ======================================================================
+
+(defvar *macroexpand-hook* #'funcall
+  "Hook called by MACROEXPAND-1 as (funcall hook expander form env).")
+
+(defvar *break-on-signals* nil
+  "When a condition being signalled is of this type, enter the debugger first
+   (CLHS).  bocl honors it in WARN; ERROR/SIGNAL go through the kernel
+   signalling path which does not consult it yet.")
+
+;;; ---- MOP-adjacent generic functions and helpers -------------------------
+
+(defun %resolve-gf (gf)
+  "The %gf struct for GF (a %gf, a generic-function name, or #'gf)."
+  (cond ((%gf-p gf)   gf)
+        ((symbolp gf) (gethash gf *%gfs*))
+        (t            (gethash gf *%gf-by-fn*))))
+
+(defun method-qualifiers (method)
+  "The list of qualifiers of METHOD (CLHS)."
+  (%mth-qualifiers method))
+
+(defun function-keywords (method)
+  "Values: the &KEY keyword names of METHOD's lambda list, and whether it
+   has &ALLOW-OTHER-KEYS (CLHS)."
+  (let* ((fn  (%mth-function method))
+         (fle (function-lambda-expression fn))
+         (ll  (and (consp fle) (cadr fle)))
+         (keys '()) (aok nil) (state nil))
+    (dolist (item ll)
+      (cond ((eq item '&key) (setf state :key))
+            ((eq item '&allow-other-keys) (setf aok t) (setf state nil))
+            ((member item lambda-list-keywords) (setf state nil))
+            ((eq state :key)
+             (push (cond ((symbolp item) (intern (symbol-name item) "KEYWORD"))
+                         ((consp (car item)) (caar item))
+                         (t (intern (symbol-name (car item)) "KEYWORD")))
+                   keys))))
+    (values (nreverse keys) aok)))
+
+(defun compute-applicable-methods (gf args)
+  "The applicable methods of GF for ARGS, most specific first (CLHS)."
+  (let ((g (%resolve-gf gf)))
+    (unless g (error "COMPUTE-APPLICABLE-METHODS: ~S is not a generic function" gf))
+    (%sort-methods (%applicable-methods g args) args)))
+
+(defun add-method (gf method)
+  "Add METHOD to GF (replacing any method with the same qualifiers and
+   specializers) and return GF (CLHS)."
+  (let ((g (%resolve-gf gf)))
+    (unless g (error "ADD-METHOD: ~S is not a generic function" gf))
+    (setf (%gf-methods g)
+          (cons method
+                (remove-if (lambda (m)
+                             (and (equal (%mth-qualifiers m) (%mth-qualifiers method))
+                                  (equal (%mth-specializers m) (%mth-specializers method))))
+                           (%gf-methods g))))
+    (when (some (lambda (sp) (and (consp sp) (eq (car sp) :eql)))
+                (%mth-specializers method))
+      (setf (%gf-has-eql-methods g) t))
+    (setf (%gf-cache g) nil)
+    (%install-discriminating-function (%gf-name g) g)
+    gf))
+
+(defun remove-method (gf method)
+  "Remove METHOD from GF and return GF (CLHS)."
+  (let ((g (%resolve-gf gf)))
+    (unless g (error "REMOVE-METHOD: ~S is not a generic function" gf))
+    (setf (%gf-methods g) (remove method (%gf-methods g))
+          (%gf-cache g)   nil)
+    gf))
+
+(defun allocate-instance (class &rest initargs)
+  "A new uninitialized instance of CLASS (CLHS; initargs are ignored here,
+   INITIALIZE-INSTANCE is NOT called)."
+  (declare (ignore initargs))
+  (let ((cls (cond ((%is-cls class) class)
+                   ((symbolp class) (or (gethash class *%classes*)
+                                        (error "ALLOCATE-INSTANCE: no class ~S" class)))
+                   (t (error "ALLOCATE-INSTANCE: ~S is not a class" class)))))
+    (%alloc-instance cls)))
+
+(defgeneric no-applicable-method (gf &rest args))
+(ensure-method 'no-applicable-method nil '(t)
+               (lambda (gf &rest args)
+                 (error "No applicable method for generic function ~S with arguments ~S"
+                        gf args)))
+
+(defgeneric no-next-method (gf method &rest args))
+(ensure-method 'no-next-method nil '(t t)
+               (lambda (gf method &rest args)
+                 (declare (ignore gf method args))
+                 (error "CALL-NEXT-METHOD: no next method")))
+
+(defgeneric slot-missing (class object slot-name operation &optional new-value))
+(ensure-method 'slot-missing nil '(t t t t)
+               (lambda (class object slot-name operation &optional new-value)
+                 (declare (ignore object operation new-value))
+                 (error "SLOT-VALUE: class ~S has no slot named ~S"
+                        (if (%is-cls class) (%cls-name class) class) slot-name)))
+
+(defgeneric slot-unbound (class instance slot-name))
+(ensure-method 'slot-unbound nil '(t t t)
+               (lambda (class instance slot-name)
+                 (declare (ignore instance))
+                 (error "Unbound slot ~S in object of class ~S"
+                        slot-name (if (%is-cls class) (%cls-name class) class))))
+
+(defun invalid-method-error (method format-control &rest args)
+  "Signal an error about METHOD being invalid for its method combination (CLHS)."
+  (error "Invalid method ~S: ~?" method format-control args))
+
+(defun method-combination-error (format-control &rest args)
+  "Signal a method-combination error (CLHS)."
+  (error "Method combination error: ~?" format-control args))
+
+(defun make-instances-obsolete (class)
+  "CLHS hook for class redefinition; bocl does not lazily update instances,
+   so this records nothing and returns the class."
+  class)
+
+(defgeneric update-instance-for-redefined-class
+    (instance added-slots discarded-slots property-list &rest initargs))
+(ensure-method 'update-instance-for-redefined-class nil '(t t t t)
+               (lambda (instance added discarded plist &rest initargs)
+                 (declare (ignore added discarded plist initargs))
+                 instance))
+
+;;; ---- Structures ----------------------------------------------------------
+
+(defun copy-structure (structure)
+  "A fresh shallow copy of STRUCTURE (CLHS): same class, slots COPIED by
+   reference — the same generic walk DEFSTRUCT's :COPIER performs."
+  (let* ((cls (class-of structure))
+         (new (make-structure-instance cls)))
+    (dolist (e (structure-class-instance-slots cls) new)
+      (structure-set (structure-get structure (car e)) new (car e)))))
+
+;;; ---- Conditions -----------------------------------------------------------
+
+(defun package-error-package (condition)
+  "The offending package of a PACKAGE-ERROR (CLHS).  Kernel package errors
+   carry no package object; they return NIL."
+  (if (%is-obj condition)
+      (slot-value condition 'package)
+      nil))
+
+;;; ---- Streams / files -------------------------------------------------------
+
+(defun file-string-length (stream object)
+  "Octets OBJECT (a character or string) would add to file STREAM (CLHS).
+   Exact for bocl: strings are one octet per character on every stream."
+  (declare (ignore stream))
+  (if (characterp object) 1 (length (string object))))
+
+;;; ---- FORMAT ---------------------------------------------------------------
+
+(defmacro formatter (control-string)
+  "A function of (stream &rest args) applying CONTROL-STRING (CLHS).
+   Returns NIL as the unconsumed-arguments value (bocl's FORMAT consumes
+   its whole argument list)."
+  (let ((cs control-string))
+    `(lambda (stream &rest args)
+       (apply #'format stream ,cs args)
+       nil)))
+
+;;; ---- Pretty printer (degraded: bocl has no layout engine) ------------------
+
+(defvar *%pprint-block-list* nil)
+
+(defmacro pprint-logical-block ((stream-symbol object
+                                 &key (prefix "") per-line-prefix (suffix ""))
+                                &body body)
+  "Degraded CLHS pretty-printing block: prints PREFIX, runs BODY with
+   PPRINT-POP / PPRINT-EXIT-IF-LIST-EXHAUSTED operating on OBJECT, prints
+   SUFFIX.  No line-fill layout is performed."
+  `(let ((,stream-symbol ,stream-symbol))
+     (write-string (or ,per-line-prefix ,prefix) ,stream-symbol)
+     (let ((*%pprint-block-list* ,object))
+       (block %pprint-logical-block ,@body))
+     (write-string ,suffix ,stream-symbol)
+     nil))
+
+(defmacro pprint-exit-if-list-exhausted ()
+  `(when (null *%pprint-block-list*)
+     (return-from %pprint-logical-block nil)))
+
+(defmacro pprint-pop ()
+  `(pop *%pprint-block-list*))
+
+(defun pprint-tab (kind colnum colinc &optional stream)
+  "Degraded: bocl performs no column tracking; a single space stands in."
+  (declare (ignore kind colnum colinc))
+  (write-char #\Space (or stream *standard-output*))
+  nil)
+
+(defun %pprint-sequence (stream list)
+  (let ((first t))
+    (dolist (x list)
+      (if first (setf first nil) (write-char #\Space stream))
+      (write x :stream stream))))
+
+(defun pprint-fill (stream object &optional (colon-p t) at-sign-p)
+  "Degraded CLHS pprint-fill: elements separated by spaces, parens per COLON-P."
+  (declare (ignore at-sign-p))
+  (cond ((not (listp object)) (write object :stream stream))
+        (t (when colon-p (write-char #\( stream))
+           (%pprint-sequence stream object)
+           (when colon-p (write-char #\) stream))))
+  nil)
+
+(defun pprint-linear (stream object &optional (colon-p t) at-sign-p)
+  (pprint-fill stream object colon-p at-sign-p))
+
+(defun pprint-tabular (stream object &optional (colon-p t) at-sign-p tabsize)
+  (declare (ignore tabsize))
+  (pprint-fill stream object colon-p at-sign-p))
+
+(defun pprint-dispatch (object &optional table)
+  "Degraded: the standard WRITE printer for every object; second value NIL
+   (no matching entry) per CLHS."
+  (declare (ignore object table))
+  (values (lambda (stream object) (write object :stream stream)) nil))
+
+;;; ---- Development tools -----------------------------------------------------
+
+(defmacro step (form)
+  "CLHS STEP: stepping is implementation-dependent; bocl evaluates FORM
+   without interaction."
+  `(progn ,form))
+
+(defun inspect (object)
+  "Interactive inspection (degraded to DESCRIBE)."
+  (describe object)
+  (values))
+
+(defvar *%traced* (make-hash-table :test 'eq)
+  "name -> original function, for TRACE/UNTRACE.")
+(defvar *%trace-depth* 0)
+
+(defun %trace-1 (name)
+  (unless (gethash name *%traced*)
+    (let ((original (symbol-function name)))
+      (setf (gethash name *%traced*) original)
+      (set-symbol-function
+       (lambda (&rest args)
+         (let ((out *trace-output*)
+               (depth *%trace-depth*))
+           (format out "~&~V@T~D: (~S~{ ~S~})~%" depth (1+ depth) name args)
+           (let ((values (multiple-value-list
+                          (let ((*%trace-depth* (1+ depth)))
+                            (apply original args)))))
+             (format out "~&~V@T~D: ~S returned~{ ~S~}~%"
+                     depth (1+ depth) name values)
+             (values-list values))))
+       name)))
+  name)
+
+(defun %untrace-1 (name)
+  (let ((original (gethash name *%traced*)))
+    (when original
+      (set-symbol-function original name)
+      (remhash name *%traced*)))
+  name)
+
+(defmacro trace (&rest names)
+  "Trace calls to NAMES on *TRACE-OUTPUT*; with no names, the traced list."
+  (if names
+      `(list ,@(mapcar (lambda (n) `(%trace-1 ',n)) names))
+      `(let ((all '())) (maphash (lambda (k v) v (push k all)) *%traced*) all)))
+
+(defmacro untrace (&rest names)
+  "Stop tracing NAMES; with no names, untrace everything."
+  (if names
+      `(list ,@(mapcar (lambda (n) `(%untrace-1 ',n)) names))
+      `(let ((all '())) (maphash (lambda (k v) v (push k all)) *%traced*)
+         (mapcar #'%untrace-1 all))))
+
+;;; Load the plan-2 byte-code compiler's Lisp front-end (bootstrap/vm-compiler.lisp),
+;;; a sibling of this prelude.  Gated on the %GLOBALLY-SPECIAL-P kernel primitive
+;;; (the analyzer's special-variable predicate) so a kernel built without it still
+;;; boots.  *LOAD-TRUENAME* is bound to this file by the loader.
+(when (fboundp '%globally-special-p)
+  (let ((here (or *load-truename* *load-pathname*)))
+    (when here
+      (let* ((ns  (if (stringp here) here (namestring here)))
+             ;; Take everything up to and including the last "/" — this file may
+             ;; be loaded as prelude.lisp OR as the compiled prelude.cfasl boot
+             ;; image (vm-10), so do NOT key on the literal "prelude.lisp".
+             (pos (position #\/ ns :from-end t))
+             (dir (if pos (subseq ns 0 (1+ pos)) "")))
+        (load (concatenate 'string dir "vm-compiler"))))))  ; type-less: prefer vm-compiler.cfasl

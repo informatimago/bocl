@@ -6,6 +6,8 @@
 #include "variable.h"
 #include "stream.h"
 #include "printer.h"
+#include "bytecode.h"    /* vm_call_frame_bindings — for frame_vm_call backtrace frames */
+#include "eval.h"        /* frame_top_live — skip byte-code VM markers when unwinding */
 
 extern Ref Object_new(Ref class, Slots* slots);
 
@@ -81,7 +83,7 @@ Ref signal_condition(Ref cond, unused Ref environment){
                     /* Unwind toward this handler through every intervening
                        frame (running their cleanups) via the UNWIND machinery:
                        longjmp into the current top frame, chaining to target. */
-                    Frame* top = g_frame_stack;
+                    Frame* top = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
                     if(top == NULL){
                         FATAL("signal_condition: %s",
                               "no frames yet a handler matched");}
@@ -104,7 +106,7 @@ Ref signal_condition(Ref cond, unused Ref environment){
 /*  initargs) wait for the macro system.                                */
 /* ------------------------------------------------------------------ */
 
-extern Ref eval_global_environment(void);
+/* eval_global_environment / frame_top_live are declared in eval.h (included above). */
 
 static Ref build_condition(Ref default_class, Ref arguments){
     if(!consp(arguments)){
@@ -142,7 +144,7 @@ static Ref build_condition(Ref default_class, Ref arguments){
                 clos_instance_p(mi_res.values[0]))){
                 return mi_res.values[0];}}}
     ERROR("Unsupported datum type to ERROR / SIGNAL / WARN: %s",
-          string_cstring(prin1_to_string(datum)));}
+          string_static_cstr(prin1_to_string(datum)));}
 
 static void kernel_SIGNAL(Ref function, Ref arguments, MultipleValues* results){
     uword pool = open_live_pool();
@@ -165,12 +167,13 @@ static void kernel_ERROR(Ref function, Ref arguments, MultipleValues* results){
     /* Render the condition's REPORT (format-control applied to its
        format-arguments) via PRINC, not the raw format-control — otherwise an
        unhandled "LOAD: file ~S does not exist" prints the literal ~S. */
-    char* report = string_cstring(princ_to_string(cond));
+    const char* report = string_static_cstr(princ_to_string(cond));   /* static:
+        the ERROR below longjmps, so a malloc'd cstring would leak */
     /* class_of(cond) is a CLOS %cls for make-condition'd / CLOS-defined
        conditions (e.g. the reader's END-OF-FILE / READER-ERROR); class_name
        would check_type-reject it.  class_designator_name accepts both. */
     ERROR("Unhandled %s: %s",
-          string_cstring(symbol_name(class_designator_name(class_of(cond)))),
+          string_static_cstr(symbol_name(class_designator_name(class_of(cond)))),
           report);
     /* unreachable */
     (void)results;
@@ -322,7 +325,7 @@ static void kernel_FIND_RESTART(Ref function, Ref arguments, MultipleValues* res
     /* Accept either a symbol or a restart object (which is also the symbol). */
     if(!symbolp(name)){
         ERROR("FIND-RESTART: expected a symbol, got %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     if(restart_name_hidden(name, condition)){
         results->count = 1;
         results->values[0] = NIL_Symbol;
@@ -360,7 +363,7 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     Frame* target = find_restart_frame_by_name(name, env);
     if(target == NULL){
         ERROR("INVOKE-RESTART: no active restart named %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     /* RESTART-BIND restart: its spec's 2nd element is a callable — apply it in
        place (in the dynamic context of this INVOKE-RESTART) and return its values,
        rather than unwinding to a RESTART-CASE clause. */
@@ -369,7 +372,14 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
             Ref spec = car(rs);
             if(consp(spec) && car(spec)==name){
                 Ref fn = consp(cdr(spec)) ? cadr(spec) : NIL_Symbol;
-                if(functionp(fn) || closurep(fn) || built_in_function_p(fn)){
+                /* A RESTART-BIND restart's 2nd element is a FUNCTION (apply it in place); a
+                   RESTART-CASE restart's is a lambda-LIST (fall through to the unwind).  The
+                   function may be a byte-code CompiledFunction / CompiledClosure, which are
+                   NOT FUNCTION_Class — include them or a compiled restart-bind fn (e.g. a
+                   RESTART-CASE clause's throwing closure) is mistaken for a RESTART-CASE and
+                   wrongly longjmp'd into its non-target frame. */
+                if(functionp(fn) || closurep(fn) || built_in_function_p(fn)
+                   || compiled_function_p(fn) || compiled_closure_p(fn)){
                     kernel_apply(fn, restart_args, results);
                     close_live_pool(pool);
                     return;}
@@ -380,7 +390,7 @@ static void kernel_INVOKE_RESTART(Ref function, Ref arguments, MultipleValues* r
     target->parameters.restart.matched_args = restart_args;
     /* Trigger a non-local exit toward `target`: longjmp into the current top
        frame, letting the UNWIND chain propagate through intermediates. */
-    Frame* top = g_frame_stack;
+    Frame* top = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
     if(top == NULL){
         FATAL("INVOKE-RESTART: %s","no active frame");}
     top->target = target;
@@ -401,11 +411,11 @@ static void kernel_INVOKE_RESTART_INTERACTIVELY(Ref function, Ref arguments, Mul
     Ref name = pop_mandatory_argument(function, &current);
     if(!symbolp(name)){
         ERROR("INVOKE-RESTART-INTERACTIVELY: expected a symbol, got %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     Frame* target = find_restart_frame_by_name(name, eval_global_environment());
     if(target == NULL){
         ERROR("INVOKE-RESTART-INTERACTIVELY: no active restart named %s",
-              string_cstring(prin1_to_string(name)));}
+              string_static_cstr(prin1_to_string(name)));}
     /* Find the restart spec; (name fn interactive-fn) for restart-bind. */
     Ref spec = NIL_Symbol;
     {   Ref rs = target->parameters.restart.restarts;
@@ -476,7 +486,7 @@ static void kernel_ABORT(Ref function, Ref arguments, MultipleValues* results){
         ERROR("ABORT: no active ABORT restart%s", "");}
     target->parameters.restart.matched_name = S(ABORT);
     target->parameters.restart.matched_args = NIL_Symbol;
-    Frame* top = g_frame_stack;
+    Frame* top = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
     if(top == NULL){ FATAL("ABORT: %s","no active frame"); }
     top->target = target;
     int code = (top == target) ? (int)non_local_exit_target : (int)non_local_exit_unwind;
@@ -517,6 +527,17 @@ static void kernel_BACKTRACE(unused Ref function, unused Ref arguments, Multiple
                 desc = list(keyword_intern_cstring("BLOCK"), f->parameters.block.name, NULL);
             }
             break;
+          case frame_vm_call: {
+            /* A byte-code VM activation (vm-9): report it as a :CALL frame exactly like a
+               tree-walked one — (:CALL name (param . value) ...).  block.function is the
+               CompiledFunction and block.environment is the activation's LOCALS vector;
+               vm_call_frame_bindings (bytecode.c) reconstructs the parameter alist from it
+               (so fast-apply need not cons an arg list per call just for a maybe-backtrace). */
+            Ref binds = vm_call_frame_bindings(f->parameters.block.function,
+                                               f->parameters.block.environment);
+            add_to_live_pool(binds);
+            desc = cons(keyword_intern_cstring("CALL"), cons(f->parameters.block.name, binds));
+            break; }
           case frame_catch:
             desc = list(keyword_intern_cstring("CATCH"), f->parameters.catch.object, NULL); break;
           case frame_tagbody:

@@ -1,0 +1,39 @@
+division-by-zero condition is not caught by a DIVISION-BY-ZERO / ARITHMETIC-ERROR handler.
+
+SYMPTOM
+  (handler-case (/ 10 0) (division-by-zero () :zero))   => signals, NOT :zero
+  (handler-case (/ 10 0) (arithmetic-error () :ae))     => signals, NOT :ae
+  (ignore-errors (handler-case (/ 10 0) (division-by-zero () :zero))) => NIL (fell through)
+The signalled error prints "ARITHMETIC ERROR: Division by zero" but is NOT of a class that
+a DIVISION-BY-ZERO (or its parent ARITHMETIC-ERROR) HANDLER-CASE clause matches.  A bare
+(error () ...) clause DOES catch it, so it is an ERROR but sits outside the
+ARITHMETIC-ERROR / DIVISION-BY-ZERO subtree of the condition hierarchy.
+
+REPRO (interpreter — nothing to do with the byte-code VM; the tree-walker shows it too):
+  echo '(print (handler-case (/ 10 0) (division-by-zero () :zero)))' | bocl -norc -b -quit
+  => an unhandled ARITHMETIC ERROR instead of :ZERO
+
+LIKELY CAUSE
+  The kernel arithmetic code (sources/arithmetic.c / integer.c) signals division by zero via
+  a generic ERROR / SIMPLE-ERROR (or an ARITHMETIC-ERROR condition object whose CLASS is not
+  actually DIVISION-BY-ZERO / not on the ARITHMETIC-ERROR CPL), so TYPEP against
+  DIVISION-BY-ZERO fails in the handler match.  Fix: signal a real DIVISION-BY-ZERO
+  condition (subclass of ARITHMETIC-ERROR, with OPERATION / OPERANDS slots per CLHS) from the
+  integer/ratio/float division paths.
+
+FOUND-WHILE
+  Writing tests/test_misc.c::test_vm_selfhost for vm-9 (a self-hosting corpus).  The corpus
+  used (handler-case (/ 10 x) (division-by-zero () :zero)); it was rewritten to signal an
+  explicit ERROR instead, since this pre-existing gap is orthogonal to the VM work.
+
+RESOLUTION (2026-07-18) — v1.8.55
+---------------------------------
+boerror.c gained bocl_error_class(condition_class, fname, fmt, ...) — the
+class-general signalling path (bocl_error delegates to it with
+SIMPLE-ERROR).  The ARITHMETIC_ERROR macro now signals the kernel
+ARITHMETIC_ERROR_Class, and the 9 division-by-zero sites in arithmetic.c
+use a new DIVISION_BY_ZERO macro signalling DIVISION_BY_ZERO_Class.
+(handler-case (/ 10 0) (division-by-zero ...)) and (arithmetic-error ...)
+both catch, for integer /, float /, and MOD; locked by the
+"division-by-zero class" case in tests/test_conformance.c.  44/44 green.
+bocl_error_class is the reusable lever for precise-condition-subclasses.

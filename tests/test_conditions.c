@@ -21,7 +21,7 @@ TEST_SUITE_SETUP(cond_init){
 TEST_SUITE_TEARDOWN(cond_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_handler_case_catches_error(void){
     /* (handler-case (error "boom") (error (c) :got-error))

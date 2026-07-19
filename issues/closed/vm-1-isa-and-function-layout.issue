@@ -1,0 +1,79 @@
+vm-1 — Bytecode ISA + compiled-function object layout (plan-2-bytecode-vm).
+
+Design (no execution yet) the instruction set and the runtime object.
+
+WHAT
+- A STACK VM (simplest to compile to and port).  Opcode = 1 byte + inline operands
+  (varint indices / signed jump offsets).  Draft set:
+    stack:   PUSH-CONST i, PUSH-NIL, PUSH-T, DUP, POP, DROP n
+    locals:  LOAD-LOCAL depth idx, STORE-LOCAL depth idx  (lexical addresses)
+    globals: LOAD-GLOBAL sym-i, STORE-GLOBAL sym-i, LOAD-FUNCTION sym-i
+    control: JUMP off, JUMP-IF-NIL off, JUMP-IF-NOT-NIL off
+    calls:   CALL n, CALL-NAMED sym-i n, TAIL-CALL n, RETURN
+    values:  VALUES n, MV-CALL, MV-BIND ...
+    nlx:     make-block/return-from, catch/throw, unwind-protect enter/leave
+             (design the frame markers; details in vm-5)
+    closure: MAKE-CLOSURE tmpl-i, LOAD-UPVAL i (design in vm-6)
+- Compiled-function object (extend the kernel object zoo): { name/lisp_name,
+  lambda_list (for FLE/arglist), code: octet-vector, constants: simple-vector,
+  n-args / &optional / &rest / &key descriptor, max-stack, n-locals, source (opt) }.
+  It must be a FUNCTION subtype so FUNCTIONP / the APPLY path accept it alongside
+  the tree-walked FUNCTION and BUILT-IN-FUNCTION (mind the built_in_function_p-first
+  ordering, see the %FUNCTION-LAMBDA-BODY note).
+- Value representation: reuse the existing tagged Ref (no new NaN-boxing) so the VM
+  and the tree-walker share values with zero conversion.
+- FLE / DISASSEMBLE: keep the source lambda expression (or a decompiler) so
+  FUNCTION-LAMBDA-EXPRESSION still returns something useful for a bytecode function.
+
+ACCEPTANCE: a documented ISA + object layout that vm-2 (VM) and vm-4/5 (codegen) can
+target; agreed opcode list and operand encodings; a written stack-effect table.
+
+DEPENDS ON: none (first of plan-2).  Reuse decisions from [[bocl-defun-lexical-block]]
+(lexical blocks already live in bodies -> BLOCK is a normal compilable special op).
+
+--------------------------------------------------------------------------------
+DONE (v1.8.0, vm branch).
+
+Design + runtime object delivered (no execution — that is vm-2).
+
+sources/bytecode.h — THE ISA SPEC:
+- bytecode_op_t: the full opcode enum (31 ops) — stack/const, lexical locals
+  (LOAD/STORE-LOCAL depth idx), globals/function cells, control (JUMP /
+  JUMP-IF-NIL / -NOT-NIL), calls (CALL / CALL-NAMED / TAIL-CALL / RETURN),
+  multiple values, NLX frame markers (BLOCK/RETURN-FROM, CATCH/THROW, UNWIND-
+  PROTECT), closures (MAKE-CLOSURE / LOAD-UPVAL), NOP/HALT.  Opcodes are append-
+  only (BC_OPCODE_COUNT sentinel) so a byte-code fasl (vm-8) stays loadable.
+- Operand encodings documented: u8 / LEB128 uvarint (indices, depths, reusing the
+  cfasl varint wire form) / zig-zag svarint (relative jump displacements measured
+  from the next instruction).
+- A full stack-effect table (before -- after) for every opcode, in the header
+  comment, for vm-4/5 codegen to target.
+- Value representation decision: the VM reuses the tagged Ref unchanged, so VM and
+  tree-walker share values with zero conversion (documented).
+- BC_ARITY_PACK / BC_ARITY_* : the argument shape packed in a fixnum (req:8,
+  opt:8, rest, key, aok) so the VM entry is a couple of masks, not a lambda-list
+  re-parse — the CPU win the tree-walker lacks (see the hot-2/hot-3 findings).
+- BYTECODE_VERSION for vm-8's fasl compatibility check.
+
+Runtime object (kernel_types.h + sources/bytecode.c):
+- CompiledFunction (immutable TEMPLATE): { lisp_name, lambda_list, code:(u8-vector),
+  constants:(simple-vector), arity:(packed fixnum), max_stack, n_locals, source }
+  — all Refs, objcount=8, GC-traced generically.
+- CompiledClosure: { function(template), upvalues:(simple-vector display) } for
+  vm-6 capture.
+- compiled_function_new / compiled_closure_new + checked accessors + the
+  compiled_function_p / compiled_closure_p predicates.  The classes
+  COMPILED_FUNCTION_Class / COMPILED_CLOSURE_Class already existed in the object
+  zoo; they are now populated.
+- Integration: CL FUNCTIONP accepts both (built_in_functions.c); kernel_apply gains
+  a branch dispatching them to bytecode_apply() — a stub that signals a clear error
+  until vm-2 supplies the VM loop (never a mis-dispatch as a Function).
+
+Test: tests/test_misc.c::test_vm_compiled_function creates a template, checks the
+predicates, that every accessor round-trips, that the arity descriptor packs and
+unpacks (2 req / 1 opt / no rest / no key), that a closure wraps it, and that CL
+FUNCTIONP returns T for both.  Full suite green (42 suites).
+
+ACCEPTANCE met: documented ISA (opcodes + operand encodings + stack-effect table)
+and the compiled-function object layout that vm-2 (VM loop) and vm-4/5 (codegen)
+can target.

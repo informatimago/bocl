@@ -1,0 +1,83 @@
+vm-8 — Bytecode fasl: serialize compiled functions (plan-2-bytecode-vm).
+
+Turn plan-1's compact fasl into a BYTECODE fasl — the load-speed payoff.
+
+WHAT
+- Extend the cfasl object serializer (cfasl-2) with a COMPILED-FUNCTION tag encoding
+  { name, lambda-list, code octet-vector, constant pool (recursively serialized;
+  may contain nested compiled functions for FLET/LABELS/closures templates),
+  arity/&opt/&rest/&key descriptor, max-stack, n-locals }.  Closures' captured cells
+  are NOT serialized (they are created at load when the top-level form runs); only
+  function TEMPLATES are.
+- COMPILE-FILE: after %COMPILE-FILE-TOPLEVEL (compile-time effects) and
+  MACROEXPAND-ALL, COMPILE each top-level form (or wrap it so its lambdas compile)
+  to bytecode, and serialise the bytecode form via cfasl.  DEFUN/DEFMETHOD bodies
+  become compiled functions.  Top-level effectful forms compile to a thunk that is
+  called at load.
+- LOAD (cfasl-3): deserialize compiled-function objects and install them (no
+  re-compilation, no macroexpansion) — this is the big win: ASDF load stops being
+  eval-of-trees and becomes install-of-bytecode.
+- COMPILE (in-memory): produce a compiled function directly (already the plan for
+  the interactive path).
+- LOAD-TIME-VALUE: evaluate at load, patch into the constant pool.
+
+ACCEPTANCE: compile a multi-file system to bytecode fasls, load them, and run —
+faster load AND faster run than the tree-walker; round-trip a corpus; suite green.
+Benchmark ASDF (require :asdf) with bytecode fasls vs the numbers from cfasl-5.
+
+DEPENDS ON: cfasl-1..4 (plan-1), vm-1..6 (compiler emits functions).
+
+====================================================================
+PROGRESS (v1.8.10, branch vm) — PART 1: byte-code fasl SERIALIZATION done.
+
+The cfasl object serializer now round-trips a byte-code CompiledFunction TEMPLATE.
+
+- New tag CFASL_TAG_COMPILED_FUNCTION (sources/cfasl.{h,c}; CFASL_VERSION -> 2).  The
+  writer records the template's id BEFORE its fields (sharing-safe), writes the
+  BYTECODE_VERSION, then the 8 slots: name, lambda-list, code (the octet STRING),
+  constants (the pool — recursively serialized, so NESTED templates for FLET / closures
+  round-trip), arity, max-stack, n-locals, source.  The reader reserves the id, checks
+  BYTECODE_VERSION (refuses a mismatch), reads the fields, and rebuilds via
+  compiled_function_new (reserve-id + patch, like SYMBOL/KEYWORD).  Closures' captured
+  cells are NOT serialized (only templates), per the design.
+- Verified: tests/test_misc.c::test_vm_fasl — a plain fn, a closure-making fn (nested
+  template in the pool), and an extended-lambda-list fn (&key) each round-trip through
+  cfasl and run identically.  Full suite green.
+
+REMAINING for this issue (PART 2): wire the pipeline —
+- COMPILE (in-memory): make (COMPILE nil '(lambda ...)) / (COMPILE 'name) produce a
+  byte-code function via %VM-COMPILE, with a SAFE fallback to the current minimal
+  compilation for forms the VM can't yet handle.
+- COMPILE-FILE: compile top-level DEFUN/DEFMETHOD bodies (and effectful forms as load
+  thunks) to byte-code and serialise via cfasl; LOAD then installs templates with no
+  re-compilation (the ASDF load-speed payoff).
+- LOAD-TIME-VALUE patched into the pool at load.
+BLOCKER for the global COMPILE wiring: the CONDITION SYSTEM.  HANDLER-BIND is a kernel
+special operator (eval.c) but is NOT in SPECIAL-OPERATOR-P's list, so the analyzer
+treats (handler-bind ...) / (handler-case ...) / (ignore-errors ...) as ordinary calls
+and the handler is never established — a function using them would COMPILE but misbehave
+at runtime.  Wiring COMPILE globally must wait until either the VM implements the
+condition-system special operators (analyzer + handler-frame opcodes, building on
+vm-5's NLX) OR COMPILE detects those forms and falls back.  (See the vm-5 closing note.)
+
+====================================================================
+DONE (v1.8.12/1.8.13, branch vm) — vm-8 COMPLETE (closing).
+
+Part 2 landed on top of part 1 (serialization):
+- COMPILE (in-memory) byte-compiles via %VM-COMPILE with a SAFE FALLBACK to the
+  interpreted minimal compilation (the analyzer errors on RESTART-*/def-forms so they
+  fall back rather than miscompile).  *VM-COMPILE-ENABLE* gates it.  CL:COMPILED-
+  FUNCTION-P recognises VM functions; FUNCTION-LAMBDA-EXPRESSION reconstructs from the
+  MACROEXPAND-ALL'd source slot with conservative CLOSURE-P.  Fixed two bugs the wiring
+  surfaced (symbol-macrolet/let shadowing order; function-lambda-expression on a
+  compiled fn).  Full suite green WITH COMPILE emitting byte-code.
+- COMPILE-FILE emits BYTE-CODE fasls: %VM-COMPILE-FILE-FORM turns the macroexpanded
+  DEFUN (BOCL:DEFINE-FUNCTION 'name doc (function (lambda ...))) into an install of the
+  pre-compiled template; cfasl serializes it; LOAD deserializes + installs with no
+  recompile (BOCL:DEFINE-FUNCTION now installs a byte-code fn name-preserving).  The
+  text-fasl fallback keeps the plain forms.  Verified end-to-end
+  (test_misc.c::test_vm_compile_wiring) + full suite green.
+
+Deferred nicety: LOAD-TIME-VALUE embedded in a file fasl (in-memory %VM-COMPILE already
+evaluates load-time-value at compile time).  Remaining plan-2: vm-9 (self-host +
+validate), vm-conditions RESTART, vm-7 (CLOS cache, speed), vm-6b (TCO).

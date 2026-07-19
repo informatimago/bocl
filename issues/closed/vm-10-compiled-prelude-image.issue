@@ -1,0 +1,73 @@
+vm-10 — ship a byte-compiled prelude boot image (fast startup)  [plan-2, follow-up to vm-9]
+
+WHAT
+  A build step compiles bootstrap/prelude.lisp -> a byte-code fasl loaded at boot instead of
+  re-reading + re-macroexpanding the ~11k-line source every start.  The MECHANISM already
+  exists after vm-8/vm-9: COMPILE-FILE emits a byte-code fasl (DEFUN bodies pre-compiled),
+  LOAD installs the templates with no recompilation, and the COMPILE-FILE fallback now
+  survives a per-form control-stack overflow (falls back to interpreted for that form).
+  What remains is the BUILD + BOOT wiring and the validation.
+
+WHY IT WAS DEFERRED OUT OF vm-9 (measured, not assumed)
+  1. Uniform compilation is NOT a uniform win.  vm-9 microbenchmarks (COMPILE'd vs
+     tree-walked, same source):
+        tight arithmetic loop (sumsq 2e6)   ~9.8x   FASTER   <- the VM sweet spot
+        naive fib 28 / tak                  ~1.0x   (call-bound; hot calls are to BUILT-INS)
+        push-in-a-loop (revbuild 3e5)       ~0.7x   SLOWER   <- a tight cons loop; cons is a
+                                                     BUILT-IN, so each call builds an arg list
+                                                     + kernel_apply.
+     So compiling the WHOLE prelude could SLOW DOWN call-bound prelude paths.  UPDATE
+     (v1.8.19): fast-apply is now implemented, but it did NOT fix these — it only skips the
+     arg list for COMPILED callees, and the hot calls here are to BUILT-INS (`+ - < ` /
+     `cons`), which still build an arg list.  The actual fix is vm-inline-primitives.issue
+     (execute the hot arithmetic/cons/car/cdr/compare primitives as byte-code ops).  vm-10
+     should land ON TOP of inline-primitives, or compile SELECTIVELY (hot arithmetic/loop
+     functions only), not blanket-compile.
+  2. Cost/robustness of a build-time whole-prelude compile: compiling all ~972 prelude
+     functions in one process took >10 min and can overflow on individual deeply-nested
+     forms (now survived by the SERIOUS-CONDITION fallback, but each fallback loses the win).
+  3. Whole-file compilation SEMANTICS: the prelude relies on compile-time side effects
+     (defmacro / eval-when / in-package ordering).  Booting from a compiled image must
+     reproduce them exactly; needs its own validation pass against the full 42-suite.
+
+PLAN
+  - Prereq (or concurrent): vm-inline-primitives so compiled call-/alloc-bound code is >=
+    the tree-walker, removing the revbuild-style regression.  (fast-apply, v1.8.19, is done
+    but insufficient on its own — see above.)
+  - Add a `make` target: boot a stage-0 bocl, (compile-file "prelude.lisp") -> prelude.cfasl.
+  - main.c: prefer prelude.cfasl over prelude.lisp when present + version-compatible
+    (BYTECODE_VERSION / CFASL_VERSION check); --no-compiled-prelude to force source.
+  - VALIDATE: full 42-suite green booted from the compiled image; measure startup delta and
+    an end-to-end (require :asdf) compile+load+OPERATE vs the ~240-300s original + plan-1.
+
+STATUS OF THE UNDERLYING PIECES (all DONE, on branch vm): COMPILE / COMPILE-FILE emit
+byte-code with a safe SERIOUS-CONDITION fallback; LOAD installs templates name-preservingly;
+tests/test_misc.c::test_vm_selfhost compiles a feature-spanning corpus (recursion, closures,
+iteration+multiple-values, conditions) to a byte-code fasl and runs it green.  This ticket is
+only the fast-startup packaging + selective/fast-apply strategy + boot wiring.
+
+DEPENDS ON: vm-9 (done), fast-apply (vm-6b deferred).
+
+CLOSE-OUT (v1.8.27, branch vm)
+  DONE — byte-compiled prelude boot image shipped.
+  - make target: `make -C sources prelude-image` -> bootstrap/prelude.cfasl
+    (778 fns byte-compiled; ~10 min build; gitignored generated artifact).
+  - main.c prefers a sibling prelude.cfasl when present + cfasl/byte-code
+    version-compatible (bocl_fasl_load returns NIL on mismatch -> source
+    fallback, never a half-image); --no-compiled-prelude and $BOCL_PRELUDE_IMAGE
+    override.
+  - COMPILE-FILE reworked for the bootstrap semantics concern (#3 above): the
+    whole-file MACROEXPAND-ALL is dropped (it was slow, stack-overflowed, and
+    baked the fully-booted compiler's macros into forms the boot had not reached
+    — e.g. a doc'd DEFPARAMETER's (SETF (DOCUMENTATION ...)) before that
+    setf-expander exists).  Now only DEFUNs are expanded (to BOCL:DEFINE-FUNCTION
+    for the byte-compile hook); every other form is kept RAW so LOAD expands it
+    in boot order, exactly like a source boot.  Blanket-compile (not selective)
+    turned out fine once this was fixed.
+  - Two boot-order defects fixed: SET-SYMBOL-FUNCTION now accepts a
+    COMPILED-CLOSURE (DEFGENERIC installs one); the prelude sibling loader keys
+    on the last "/" not the literal "prelude.lisp".
+  VALIDATION: full 42-suite green (source boot, shared kernel/prelude changes);
+  image boot behaviourally identical to source boot across a broad feature
+  exercise; startup ~3.17s -> ~1.07s (~3x).  New regression: test_misc
+  "vm compiled prelude".

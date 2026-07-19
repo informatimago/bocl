@@ -1,0 +1,72 @@
+Audit: close_live_pool without re-rooting a freshly-allocated result
+
+The gc-repl-handler-case-heap-corruption root cause (v1.8.52) was
+read_impl closing its live pool and returning the freshly-read form
+UNROOTED — the project convention is
+
+    close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root */
+    return result;
+
+A mechanical scan (close_live_pool immediately followed by `return
+<var>;`) finds ~35 more sites.  Most are SAFE: the returned value is an
+existing object reachable from a caller-rooted argument (slot reads,
+car/cdr, registry lookups).  The UNSAFE class is a function returning a
+FRESHLY ALLOCATED object/graph: any GC between the return and the
+caller's first rooting store frees it.  The window is usually a few
+instructions — these latent bugs surface as unreproducible one-in-N
+corruptions exactly like the REPL one did.
+
+Fixed so far: reader.c read_impl (v1.8.52, the actual crasher),
+packages.c make_package, structure.c structure_class_instance_size.
+
+TO AUDIT (classify each: fresh allocation vs reachable-via-argument):
+- kernel_structure_functions.c: ~28 sites — GENERATED code
+  (sources/generate-structures.lisp): if any are fresh-allocation
+  returns, fix the GENERATOR (and regenerate via the patch-file
+  mechanism), not the output.
+- cons.c bocl_append (single-list early return: safe, returns arg car),
+  copy_list (nil case: safe).
+- packages.c:175/185 region, and any site the scan pattern misses
+  (close followed by an expression return, multiple returns).
+- Consider a debug-build assert: a %GC-STRESS=1 run of the full suite
+  would catch every unsafe site mechanically — do that once the suite
+  runtime under stress is acceptable, or stress per-suite.
+
+RESOLUTION (2026-07-18) — v1.8.58
+---------------------------------
+Full sweep done.  The mechanical scan (close_live_pool followed by a
+return, including expression returns) finds 72 sites; classification:
+
+SAFE — returns a constant or NIL (bocl.c load, eval.c, cons.c reverse
+  nil-case): nothing to root.
+SAFE — returns a caller argument or a value reachable through one
+  (cons.c bocl_append single-list car, copy_list nil, putf existing-key
+  plist; environment.c x5 return the environment argument; structure.c
+  structure_get / structure_set; packages.c find_external lookup).
+SAFE — result stored into a rooted structure before the close
+  (kernel.c symbol interning: linked into the obarray; packages.c
+  pkg_intern: interned; structure.c instance-slots: memoized into the
+  class's cached_slots, the comment even says so).
+SAFE — already re-rooted (bytecode.c binds; the v1.8.52/55 fixes).
+SAFE — kernel_structure_functions.c, all 48 generated sites: getters
+  return a slot value reachable via the caller-rooted instance, setters
+  return the caller's own new-value argument.  generate-structures.lisp
+  needs NO change.
+
+UNSAFE — fresh object returned unrooted, FIXED (re-root after close):
+  1. kernel.c stream_output_string — THE sharpest one: prin1_to_string
+     holds the fresh string-stream only in a C local WHILE PRINTING
+     INTO IT (which allocates); a GC mid-print could collect the very
+     stream being written.  Same family as the v1.8.52 REPL corruption.
+  2. kernel.c stream_input_string — fresh input string-stream
+     (with-input-from-string's underlying constructor).
+  3. callback_stream.c callback stream constructor — fresh stream.
+
+Validation: full 44-suite gate under BOCL_GCSTRESS=8192 (a full GC
+every 8192 allocations) — 44/44; reader/eval/clos/strings/conformance/
+designators suites under BOCL_GCSTRESS=1024 — 6/6; 100 prin1-to-string
+calls under %GC-STRESS 1 (a full GC at EVERY allocation) — clean.
+Previously fixed under this pattern: reader.c read_impl (v1.8.52),
+packages.c make_package + structure.c instance-size (v1.8.52),
+cons.c list()/putf (historical).

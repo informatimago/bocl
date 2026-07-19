@@ -1,0 +1,54 @@
+interp: RETURN-FROM to one of two SAME-named nested BLOCKs resolves dynamically, not lexically.
+
+SYMPTOM (tree-walker / interpreter)
+  Two lexically-nested BLOCKs share a name; a closure defined in the OUTER block's scope
+  RETURN-FROMs that name.  It should target the OUTER block (lexical), but the interpreter
+  targets the INNER (dynamically nearest) one when the closure is later called from inside
+  the inner block.
+
+REPRO
+  (loop for x from 42 to 43
+        collect (let (o e)
+                  (list 'block-odd
+                        (block operation
+                          (setf o (lambda (x e) (if (oddp x) (return-from operation x)
+                                                    (funcall e x o))))
+                          (list 'block-even
+                                (block operation
+                                  (setf e (lambda (x o) (if (evenp x) (return-from operation x)
+                                                           (funcall o x e))))
+                                  (funcall o x e)))))))
+  CORRECT (lexical):  ((BLOCK-ODD (BLOCK-EVEN 42)) (BLOCK-ODD 43))
+  Interpreter gives:  ((BLOCK-ODD (BLOCK-EVEN 42)) (BLOCK-ODD (BLOCK-EVEN 43)))
+  For x=43, o (defined in the OUTER `operation` scope) does (return-from operation 43): it
+  must exit the OUTER block -> (block-odd 43).  The interpreter instead exits the inner one.
+
+  The byte-code VM (v1.8.22, escaping RETURN-FROM) gives the CORRECT lexical answer, because
+  it resolves the block to a UNIQUE per-activation identity captured lexically by the
+  closure — so the two same-named blocks are distinct.  So this is an interpreter-only bug;
+  it is also a VM-vs-interpreter divergence (the VM is right).
+
+LIKELY CAUSE
+  eval.c find_block_frame(name, environment) walks the establishing environment's lexical
+  frame list — but a closure's captured environment, or the block-frame's env linkage, must
+  be letting the search see the inner same-named block frame that is only DYNAMICALLY (not
+  lexically) in scope when o is called from within the inner block.  find_block_frame must
+  match the specific block frame established in the CLOSURE'S lexical environment, not the
+  nearest same-named frame reachable at call time.
+
+FOUND-WHILE
+  Implementing vm-escaping-return-from (the user's own example highlighted this exact
+  same-name case).  Low priority: same-named nested escaping blocks are exotic.
+
+====================================================================
+FIXED (v1.8.23, branch vm) — per pjb's suggestion (rename block labels / a gensym in the
+lexical scope), realised as: the BLOCK special operator (eval.c) now evaluates its body in
+its OWN CHILD ENVIRONMENT and pushes the block frame there.  Two lexically-nested BLOCKs with
+the same name thus land in DIFFERENT environments, so find_block_frame — which walks a
+CLOSURE'S captured lexical env chain — finds the frame in the env the closure captured (the
+lexically-correct one) instead of the innermost same-named frame.  Same effect as
+alpha-renaming each block to a fresh gensym, without a rename pass.  The reproducer now
+gives ((BLOCK-ODD (BLOCK-EVEN 42)) (BLOCK-ODD 43)) in the interpreter, matching the VM.
+Full 42-suite green.  (eval_body_in_block — the function-body implicit block — is a separate,
+rarer collision source and is left as-is.)  Test: test_vm_escaping_blocks (interpreted arm).
+====================================================================

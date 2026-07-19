@@ -2,6 +2,7 @@
 #include "kernel_functions.h"
 #include "kernel_structure_functions.h"
 #include "kernel.h"
+#include "bytecode.h"
 #include "cons.h"
 #include "variable.h"
 #include "stream.h"
@@ -808,6 +809,8 @@ void kernel_FUNCTIONP(Ref function,Ref arguments,MultipleValues* results){
     results->values[0] = as_boolean(
         functionp(par_object)         /* Function (interpreted) */
         || closurep(par_object)       /* Closure (lambda/let capture) */
+        || compiled_function_p(par_object)   /* byte-code function (vm-1) */
+        || compiled_closure_p(par_object)    /* byte-code closure */
         || built_in_function_p(par_object)); /* C built-in */
     close_live_pool(pool);
 }
@@ -1896,7 +1899,8 @@ void kernel_PRINT(Ref function,Ref arguments,MultipleValues* results){
     Ref current=arguments;
     Ref par_object = pop_mandatory_argument(function,&current);
     Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
-    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    Ref par_stream = stream_designator_output(
+        pop_optional_argument(function,&current,def_stream));
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = print(par_object, par_stream);
@@ -1910,7 +1914,8 @@ void kernel_PRIN1(Ref function,Ref arguments,MultipleValues* results){
     Ref current=arguments;
     Ref par_object = pop_mandatory_argument(function,&current);
     Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
-    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    Ref par_stream = stream_designator_output(
+        pop_optional_argument(function,&current,def_stream));
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = prin1(par_object, par_stream);
@@ -1924,7 +1929,8 @@ void kernel_PRINC(Ref function,Ref arguments,MultipleValues* results){
     Ref current=arguments;
     Ref par_object = pop_mandatory_argument(function,&current);
     Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
-    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    Ref par_stream = stream_designator_output(
+        pop_optional_argument(function,&current,def_stream));
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = princ(par_object, par_stream);
@@ -1937,7 +1943,8 @@ void kernel_TERPRI(Ref function,Ref arguments,MultipleValues* results){
     add_to_live_pool(arguments);
     Ref current=arguments;
     Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
-    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    Ref par_stream = stream_designator_output(
+        pop_optional_argument(function,&current,def_stream));
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = terpri(par_stream);
@@ -1950,7 +1957,8 @@ void kernel_KERNEL_READ_CHAR(Ref function,Ref arguments,MultipleValues* results)
     add_to_live_pool(arguments);
     Ref current=arguments;
     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
-    Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+    Ref par_input_stream = stream_designator_input(
+        pop_optional_argument(function,&current,def_input_stream));
     Ref def_eof_error_p = T_Symbol;
     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
     Ref def_eof_value = NIL_Symbol;
@@ -1970,7 +1978,8 @@ void kernel_KERNEL_PEEK_CHAR(Ref function,Ref arguments,MultipleValues* results)
     Ref current=arguments;
     Ref par_peek_type = pop_mandatory_argument(function,&current);
     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
-    Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+    Ref par_input_stream = stream_designator_input(
+        pop_optional_argument(function,&current,def_input_stream));
     Ref def_eof_error_p = T_Symbol;
     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
     Ref def_eof_value = NIL_Symbol;
@@ -1989,7 +1998,8 @@ void kernel_KERNEL_READ(Ref function,Ref arguments,MultipleValues* results){
     add_to_live_pool(arguments);
     Ref current=arguments;
     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
-    Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+    Ref par_input_stream = stream_designator_input(
+        pop_optional_argument(function,&current,def_input_stream));
     Ref def_eof_error_p = T_Symbol;
     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
     Ref def_eof_value = NIL_Symbol;
@@ -2008,7 +2018,8 @@ void kernel_KERNEL_READ_PRESERVING_WHITESPACE(Ref function,Ref arguments,Multipl
     add_to_live_pool(arguments);
     Ref current=arguments;
     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
-    Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+    Ref par_input_stream = stream_designator_input(
+        pop_optional_argument(function,&current,def_input_stream));
     Ref def_eof_error_p = T_Symbol;
     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
     Ref def_eof_value = NIL_Symbol;
@@ -2028,7 +2039,8 @@ void kernel_KERNEL_READ_DELIMITED_LIST(Ref function,Ref arguments,MultipleValues
     Ref current=arguments;
     Ref par_character = pop_mandatory_argument(function,&current);
     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
-    Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+    Ref par_input_stream = stream_designator_input(
+        pop_optional_argument(function,&current,def_input_stream));
     Ref def_recursive_p = NIL_Symbol;
     Ref par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
     check_no_more_arguments(function,current);
@@ -2130,7 +2142,8 @@ void kernel_FINISH_OUTPUT(Ref function,Ref arguments,MultipleValues* results){
     add_to_live_pool(arguments);
     Ref current=arguments;
     Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
-    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    Ref par_stream = stream_designator_output(
+        pop_optional_argument(function,&current,def_stream));
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = stream_finish_output(par_stream);
@@ -2143,7 +2156,8 @@ void kernel_FORCE_OUTPUT(Ref function,Ref arguments,MultipleValues* results){
     add_to_live_pool(arguments);
     Ref current=arguments;
     Ref def_stream = variable_value(S(*STANDARD-OUTPUT*));
-    Ref par_stream = pop_optional_argument(function,&current,def_stream);
+    Ref par_stream = stream_designator_output(
+        pop_optional_argument(function,&current,def_stream));
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = stream_finish_output(par_stream);

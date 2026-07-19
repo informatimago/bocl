@@ -21,54 +21,115 @@ Rules of Processing Issues
   current issue. (can be separate commit).
 
 
-Current list of issues to resolve:
+====================================================================
+Current list of issues to resolve, in order.
+(Re-triaged 2026-07-18 at v1.8.53; states verified against the
+implementation.  Effort: S < 1/2 day, M ~ 1-2 days, L = campaign.)
 
-uiop-bocl-porting.issue
+--- TIER 1 — quick-win bugs: ALL DONE (v1.8.54-57, 2026-07-18) -----
+    values (REPL echoes every value), division-by-zero (proper
+    condition class via the new bocl_error_class), printing-conditions +
+    clos-condition-report (CLOS conditions report under princ, #<> under
+    prin1, :REPORT honored), missing-functions (audit of all 978 CL
+    symbols; 33 gaps implemented — MOP defaults wired, TRACE/UNTRACE,
+    FILE-POSITION, degraded pprint family...).
 
-precise-condition-subclasses.issue
-should-tests-type-errors.issue
+missing-functions.issue               (residual, M, blocked items)
+    11 symbols remain, documented in the ticket: 6 composite-stream
+    accessors (blocked on real echo/two-way/concatenated/synonym stream
+    objects — the constructors are stubs) and 5 special forms without
+    MACRO-FUNCTION visibility (functional; Phase-2 def-forms work).
 
-deferred-bignum-ops.issue
-deferred-cons-paged-heap.issue
-deferred-sacla-logic-bugs.tissue
-deferred-signal-hooks.issue
+--- TIER 2 — well-scoped correctness work ------------------------
+    (live-pool-reroot-audit: DONE v1.8.58 — 72 sites classified, 3
+    fresh-object returns fixed, gate green under BOCL_GCSTRESS.)
 
-missing-functions.issue
-generational-gc.issue
+vm-analyzer-decline-gaps.issue        (bug, M)
+    3 of asdf.lisp's 586 functions decline byte-compilation: an
+    analyzer bug evaluating &REST as a variable (x2) and a
+    RETURN-FROM/BLOCK visibility case.  Repro recipe in the ticket
+    (compile asdf.lisp with the per-function decline report).
 
-ansi-test.issue
+    (freebsd-latent-gc-corruption: FIXED v1.8.60 — valid_block_start_p now
+    rejects non-word-aligned block sizes; freebsd lane blocking again.)
 
-minor-gc-doomed-under-gcminorstress.issue
+minor-gc-doomed-under-gcminorstress.issue (bug?, re-verify S, fix ?)
+    Filed against the WIP new-gc branch; the generational collector has
+    since been integrated and reworked on `vm` (remset, rebuild passes).
+    FIRST re-verify under the current collector (BOCL_GCCHECK=1
+    BOCL_GCMINORSTRESS=1 on a workload); close if it no longer fires,
+    else it is a remembered-set gap to chase with the v1.8.52 recipe
+    (watchpoint hunt, see gc-repl-handler-case-heap-corruption RESOLUTION).
 
+precise-condition-subclasses.issue    (umbrella, incremental)
+    The systematic audit behind division-by-zero above: ~134 kernel
+    ERROR() + ~90 prelude (error "...") sites to reclassify onto precise
+    condition classes with slots.  Do it incrementally, driven by
+    handlers that actually need to discriminate (should-tests below).
+
+should-tests-type-errors.issue        (conformance, M-L)
+    ~45 SACLA should-* failures, almost all "wrong-type argument should
+    signal TYPE-ERROR".  Mechanical once the pattern per function family
+    is set; pairs naturally with precise-condition-subclasses.
+
+cfasl-6-literal-coverage.issue        (feature, M)
+    Bignum / structure / bit-vector literals in the binary fasl writer
+    (files containing them currently keep the text-fasl slow path).
+    Well-specified in the ticket; extends cfasl tags (bump version).
+
+--- TIER 3 — larger campaigns (schedule deliberately) -------------
+
+ansi-test.issue                       (campaign, L)
+    Run the upstream ANSI suite; will feed precise-condition-subclasses,
+    should-tests and missing-functions with concrete cases.
+
+uiop-tier3-subprocess.issue           (feature, L, optional)
+    Async LAUNCH-PROGRAM (fork/exec + pipes), DUMP-IMAGE/COMBINE-FASLS.
+    UIOP tolerates NOT-IMPLEMENTED-ERROR for all of it; nothing blocks.
+
+generational-gc.issue                 (epic, reconcile M)
+    Much of this branch's content has been delivered on `vm` (minor
+    collections, remembered set, pinning).  Needs a status
+    reconciliation pass: mark what landed, keep only the remaining
+    ideas (or close in favour of deferred-cons-paged-heap).
+
+--- DEFERRED (by design; revisit when their trigger appears) ------
+
+deferred-bignum-ops.issue             — remaining bignum-aware ops
+deferred-cons-paged-heap.issue        — 16-byte cons via paged cons heap
+deferred-sacla-logic-bugs.issue       — SACLA crash triage notes (mine
+                                        for repros when touching eval/GC)
+deferred-signal-hooks.issue           — *STOP-HOOK*/*CONT-HOOK* design
+                                        (study other CLs first)
+
+--- NOT READY (marked so by their author; do not process) ---------
+
+compilation-fasl-speed.issue          — perf ledger; keep updating the
+                                        measurement table per release
+minimal-compilation-optimization.issue
+
+--- REFERENCE DOCUMENTS (not issues; do not close) ----------------
+
+vm-COMPILER-PLAN.md                   — plan-2 handoff document (READ
+                                        FIRST for any VM/compiler work)
+plan-1-compact-fasl.issue             — plan doc; cfasl-1..5 delivered,
+                                        stays open until cfasl-6 lands
 
 ====================================================================
-PERFORMANCE PROGRAM — speed up loading/running (ASDF: load ~240s,
-compile ~300s, on M3).  Portability gate: strict C17 / POSIX, no native
-codegen (a byte-code VM is the ceiling).  Three planification issues
-(plan-1 compact fasl, plan-2 byte-code VM, plan-3 interpreter hot-path)
-describe the plans; the implementation issues below are listed IN GLOBAL
-IMPLEMENTATION ORDER (cross-dependencies resolved: hot-1 first; plan-1 is
-plan-2's serialization layer; hot-2 is plan-2's compiler front-end).
+HISTORY (condensed; details in issues/closed/)
 
-Planification issues (read first, not implemented directly):
-  plan-1-compact-fasl.issue
-  plan-2-bytecode-vm.issue
-  plan-3-interpreter-hotpath.issue
-
-Implementation issues, in global order:
-
-cfasl-6-literal-coverage.issue       (plan-1) — bignum/struct/bit-vector (from cfasl-2)
-hot-2-lexical-addressing.issue       (plan-3) — reused as plan-2 vm-3 front-end
-hot-3-frame-representation.issue     (plan-3)
-hot-4-arglist-avoidance.issue        (plan-3)
-hot-5-dispatch-caches.issue          (plan-3) — cache design shared with vm-7
-hot-6-benchmark-validate.issue       (plan-3)
-vm-1-isa-and-function-layout.issue   (plan-2)
-vm-2-dispatch-core.issue             (plan-2)
-vm-3-compiler-frontend.issue         (plan-2) — builds on hot-2
-vm-4-codegen-core.issue              (plan-2)
-vm-5-codegen-control.issue           (plan-2)
-vm-6-closures-and-interop.issue      (plan-2)
-vm-7-clos-inline-cache.issue         (plan-2)
-vm-8-bytecode-fasl.issue             (plan-2) — builds on cfasl-1..4
-vm-9-debug-bootstrap-validate.issue  (plan-2)
+The performance program is DONE and closed: plan-2 byte-code VM+compiler
+(vm-1..vm-10, vm-6b: whole language compiles, ~10x tight loops, ~31x
+CLOS dispatch, ~3x boot from byte-compiled images) and plan-3
+interpreter hot-path (hot-1..hot-6).  plan-2-bytecode-vm.issue closed
+2026-07-18 with pointers.  Recent notable closures: uiop-bocl-porting
+(v1.8.40), tests-fixed-tmp-paths (v1.8.43), sanitize leaks (v1.8.44),
+freebsd + tcc CI lanes fixed and made blocking (v1.8.45-48,
+freebsd-kvm-runner, tcc-lane-test-crash: the error(3) symbol collision),
+find-symbol-package (v1.8.49 designator audit), asdf-loading-cesarum
+(v1.8.50: eight conformance fixes incl. DEFSETF rewrite and typed
+defstructs), teach-vm-compiler (v1.8.51 skill file),
+gc-repl-handler-case-heap-corruption (v1.8.52: KERNEL-READ returned an
+unrooted form — the wandering REPL/LOAD corruptions),
+kernel-error-calls-missing-fname (v1.8.53: format-string injection +
+__func__ in every kernel error message).

@@ -80,15 +80,17 @@ typedef struct FuncallableFunctionClass FuncallableFunctionClass;
 #define FREE_BLOCK     UWORD_MAX
 #endif
 
-#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
+/* Variable-length trailing arrays: ALWAYS the C89-portable one-element form.
+   This used to pick the GNU zero-length form (field[0]) when the glibc
+   feature macros (__STDC_ISO_10646__/__USE_ISOC11) were absent — i.e. on
+   FreeBSD — which shrank sizeof(Block) & friends by one slot relative to
+   every Linux-tested layout and caused layout-dependent heap corruption
+   there (mark bit stamped into a neighbouring block's SIZE field via an
+   off-by-one-slot reference; see freebsd-varray-heap-corruption.issue).
+   One uniform layout on every platform; the phantom slot costs 8 bytes per
+   varray STRUCT TYPE, not per object. */
 #define VARRAY(field)      field[1]
 #define VARRAY_MIN(count)  (((count)<=0)?1:(count))
-#else
-#define VARRAY(field)      field[0]
-#define VARRAY_MIN(count)  (count)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wzero-length-array"
-#endif
 
 typedef struct Block{
     BLOCK_HEADER;
@@ -135,6 +137,10 @@ typedef enum {
     frame_handler_bind,          /* HANDLER-BIND: call handler in signal's dynamic context */
     frame_handler_bind_inactive, /* same frame, temporarily deactivated while handler runs */
     frame_restart,
+    frame_vm_call,               /* byte-code VM activation marker: name+function+args for the
+                                    backtrace ONLY.  Carries NO setjmp (unlike every other frame),
+                                    so the unwind cascade must SKIP it; never a RETURN-FROM/THROW
+                                    target (the VM handles BLOCK/TAGBODY lexically). */
 } frame_type;
 
 typedef struct Frame {
@@ -267,11 +273,7 @@ typedef struct OctetArray {
     uword VARRAY(dimensions);
 } OctetArray;
 
-#if defined(__STDC_ISO_10646__) || defined(__USE_ISOC11) || defined(strict_iso_c)
-/* --- */
-#else
-#pragma GCC diagnostic pop
-#endif
+
 
 
 typedef struct Cons {
@@ -369,6 +371,28 @@ typedef struct Function            { /* both FunctionClass and CompiledFunctionC
     Ref lambda_list;
     Ref body;
 } Function;
+
+/* Byte-code VM (plan-2, vm-1).  A CompiledFunction is an immutable TEMPLATE: the
+   bytecode + constant pool + arity/frame descriptor; a CompiledClosure pairs one
+   with its captured upvalues.  All slots are Refs (objcount counts them), so the
+   GC traces them generically.  See bytecode.h for the ISA and the arity packing. */
+typedef struct CompiledFunction    {
+    BLOCK_HEADER;                 /* objcount = 8 */
+    Ref lisp_name;                /* naming symbol, or NIL */
+    Ref lambda_list;              /* source lambda list (arglist / FLE) */
+    Ref code;                     /* (simple-array (unsigned-byte 8) (*)) — the bytecode */
+    Ref constants;                /* simple-vector — the constant pool */
+    Ref arity;                    /* fixnum: BC_ARITY_PACK(...) */
+    Ref max_stack;                /* fixnum: operand-stack depth needed */
+    Ref n_locals;                 /* fixnum: number of local slots */
+    Ref source;                   /* source lambda expression (FLE/disassemble), or NIL */
+} CompiledFunction;
+
+typedef struct CompiledClosure     {
+    BLOCK_HEADER;                 /* objcount = 2 */
+    Ref function;                 /* the CompiledFunction template */
+    Ref upvalues;                 /* simple-vector of captured cells (the display) */
+} CompiledClosure;
 
 typedef struct BuiltInFunction     {
     BLOCK_HEADER;
@@ -469,6 +493,8 @@ typedef union Slots {
     FileStream                  file_stream;
     Closure                     closure;
     Function                    function;
+    CompiledFunction            compiled_function;
+    CompiledClosure             compiled_closure;
     BuiltInFunction             built_in_function;
     FuncallableStandardObject	funcallable_function;
     Package                     package;

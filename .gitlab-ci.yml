@@ -36,7 +36,18 @@ variables:
 # the cached :latest is reused by every build job (the core of "cache the
 # environments as much as possible").
 # ----------------------------------------------------------------------
+.docker:
+  # Every containerised job (an `image:` job) carries the `docker` tag so it is
+  # only picked by a DOCKER-executor runner (poseidon: bocl-linux-docker over
+  # rootless docker).  Without tags, untagged SHELL runners grab these jobs and
+  # fail them: kaniko has no /kaniko on a shell, the toolchain images are
+  # ignored, and concurrent shell jobs share one /tmp.  The runner must have
+  # the `docker` tag (and may keep run-untagged off).
+  tags:
+    - docker
+
 .build-image:
+  extends: .docker
   stage: images
   image:
     name: gcr.io/kaniko-project/executor:v1.23.2-debug
@@ -91,6 +102,7 @@ image:debian-tcc:
 # PATH (CC stays the plain compiler name, keeping dist artifact names clean).
 # ----------------------------------------------------------------------
 .unix-build:
+  extends: .docker
   stage: build
   before_script:
     - export PATH="/usr/lib/ccache:/usr/lib/ccache/bin:$PATH"
@@ -136,6 +148,7 @@ build:alpine-musl:
 # intrinsics. Build + CUnit tests + static/shared linkage proof (via ci/build.sh,
 # CC=tcc from the image); no packaging — tcc output is not a shipping deliverable.
 build:debian-tcc:
+  extends: .docker
   stage: build
   image: "$REGISTRY_NS/debian-tcc:latest"
   script:
@@ -145,12 +158,17 @@ build:debian-tcc:
       junit: tests/*-Results.xml
     expire_in: 3 days
   rules:
+    # Blocking since the error(3) symbol collision was fixed (v1.8.47,
+    # issues/closed/tcc-lane-test-crash.issue): the crashes were libbocl's
+    # exported `error` binding to glibc's error(3) through tcc's NEEDED
+    # order, not a tcc miscompilation.
     - when: on_success
 
 # Sanitiser build — ASan + the wider -fsanitize=* set (common.mk SANITIZE=yes).
 # Kept separate (no packaging) so a default failure is distinguishable from a
 # sanitiser hit. Debug profile: -fsanitize=object-size needs >-O0 disabled.
 sanitise:debian-gcc:
+  extends: .docker
   stage: build
   image: "$REGISTRY_NS/debian-gcc:latest"
   script:
@@ -165,11 +183,14 @@ sanitise:debian-gcc:
     - when: on_success
 
 # Phase 4 — FreeBSD via QEMU. The BSDs cannot run in a container, so this boots
-# a FreeBSD cloud image under QEMU (TCG; shared runners have no KVM) and runs the
-# normal ci/build.sh over SSH with gmake. allow_failure while it is shaken out:
-# it reports BSD portability status without blocking the deliverable pipeline.
-# Serial console is saved as an artifact for diagnosis.
+# a FreeBSD cloud image under QEMU and runs the normal ci/build.sh over SSH with
+# gmake. On poseidon the runner passes /dev/kvm through (config.toml devices +
+# udev MODE 0666, see issues/closed/freebsd-kvm-runner.issue) so the VM runs
+# under KVM and the whole job takes ~15-20 min; without /dev/kvm the script
+# falls back to TCG, where the FreeBSD 14.4 firstboot alone can exceed the
+# timeout. Serial console is saved as an artifact for diagnosis.
 build:freebsd:
+  extends: .docker
   stage: build
   image: debian:bookworm-slim
   timeout: 1h30m
@@ -181,8 +202,11 @@ build:freebsd:
       - console.log
     expire_in: 3 days
   rules:
+    # Blocking again since freebsd-latent-gc-corruption.issue was fixed
+    # (v1.8.60): valid_block_start_p now rejects non-word-aligned block sizes,
+    # so the minor-GC mark no longer follows a stray interior pointer whose
+    # objcount field aliased a real cons's SIZE on the 64-bit-header build.
     - when: on_success
-      allow_failure: true
 
 # Phase 4 — native macOS on the thalassa shell runner. macOS cannot run in a
 # container, so jobs that must run on macOS carry the `macos` runner tag and
@@ -223,6 +247,7 @@ build:macos:
 # v* tag upload the set to the generic Package Registry and cut a Release.
 # ----------------------------------------------------------------------
 collect:
+  extends: .docker
   stage: collect
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:

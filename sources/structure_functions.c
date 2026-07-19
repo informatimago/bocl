@@ -611,8 +611,10 @@ void kernel_ENV_MAKE_LOCAL_FUNCTION(Ref function,Ref arguments,MultipleValues* r
     Ref par_lambda_list = pop_key_argument(function,&current,K(LAMBDA-LIST),def_lambda_list);
     Ref def_body = variable_value(S(NIL));
     Ref par_body = pop_key_argument(function,&current,K(BODY),def_body);
+    Ref def_env = variable_value(S(NIL));
+    Ref par_env = pop_key_argument(function,&current,K(ENV),def_env);
     results->count=1;
-    results->values[0] = env_make_local_function(par_name, par_lambda_list, par_body);
+    results->values[0] = env_make_local_function(par_name, par_lambda_list, par_body, par_env);
     close_live_pool(pool);
 }
 
@@ -712,6 +714,31 @@ void kernel_SET_ENV_LOCAL_FUNCTION_BODY(Ref function,Ref arguments,MultipleValue
     check_no_more_arguments(function,current);
     results->count=1;
     results->values[0] = set_env_local_function_body(par_new_body, par_local_function);
+    close_live_pool(pool);
+}
+
+void kernel_ENV_LOCAL_FUNCTION_ENV(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_local_function = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = env_local_function_env(par_local_function);
+    close_live_pool(pool);
+}
+
+void kernel_SET_ENV_LOCAL_FUNCTION_ENV(Ref function,Ref arguments,MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(function);
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref par_new_env = pop_mandatory_argument(function,&current);
+    Ref par_local_function = pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    results->count=1;
+    results->values[0] = set_env_local_function_env(par_new_env, par_local_function);
     close_live_pool(pool);
 }
 
@@ -1176,7 +1203,7 @@ void kernel_initialize_structure_functions(void){
     GLOBAL_SPECIAL_VARIABLE_Class    = make_structure_class(S(GLOBAL_SPECIAL_VARIABLE),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(VALUE),NULL));
     LOCAL_SPECIAL_VARIABLE_Class     = make_structure_class(S(LOCAL_SPECIAL_VARIABLE),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(SAVED-BOUNDP),S(SAVED-VALUE),NULL));
     GLOBAL_FUNCTION_Class            = make_structure_class(S(GLOBAL_FUNCTION),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),S(COMPILER-MACRO),NULL));
-    LOCAL_FUNCTION_Class             = make_structure_class(S(LOCAL_FUNCTION),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),NULL));
+    LOCAL_FUNCTION_Class             = make_structure_class(S(LOCAL_FUNCTION),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),S(ENV),NULL));
     GLOBAL_SYMBOL_MACRO_Class        = make_structure_class(S(GLOBAL_SYMBOL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(EXPANSION),NULL));
     LOCAL_SYMBOL_MACRO_Class         = make_structure_class(S(LOCAL_SYMBOL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(EXPANSION),NULL));
     GLOBAL_MACRO_Class               = make_structure_class(S(GLOBAL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),NULL));

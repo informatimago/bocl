@@ -1,0 +1,85 @@
+vm-3 — Compiler front-end: macroexpand + lexical analysis (plan-2-bytecode-vm).
+
+The Lisp-side compiler's analysis pass, producing an annotated form ready for
+codegen.
+
+WHAT
+- MACROEXPAND-ALL the lambda body (already exists and understands MACROLET /
+  SYMBOL-MACROLET, see the minimal-compilation work) so codegen sees only special
+  operators + calls.
+- LEXICAL ANALYSIS: walk the (macro-free) body with a compile-time environment;
+  resolve every lexical variable reference to a (depth, index) ADDRESS and every
+  local function (FLET/LABELS) to its slot; note which variables are SPECIAL
+  (declared or globally proclaimed) vs lexical; note captured-by-inner-lambda
+  variables (for closure conversion in vm-6).  This is the SAME pass as plan-3
+  hot-2 (lexical addressing) — factor it into one shared analyzer used by both the
+  tree-walker fast path and the bytecode compiler.
+- Compilation environment object: frames of {var-name -> (index, special?)},
+  block/tagbody labels, local macros/symbol-macros already expanded away.
+- Output: an IR — the form annotated with addresses + a per-node stack effect, or a
+  direct hand-off to vm-4/vm-5 codegen.
+
+Written in Lisp (bootstrapped); the analyzer must itself be compilable later
+(self-host, vm-9).
+
+ACCEPTANCE: analyze representative lambdas (nested LET, closures over outer vars,
+FLET recursion, SPECIAL declaration) and dump correct addresses; unit-test the
+analyzer independently of codegen.
+
+DEPENDS ON: vm-1; SHARES plan-3 hot-2 (do hot-2 first or co-develop the analyzer).
+
+====================================================================
+DONE (v1.8.2, branch vm).
+
+Implemented the compiler front-end as a Lisp module, bootstrap/vm-compiler.lisp,
+loaded at the end of the prelude (gated on the new %GLOBALLY-SPECIAL-P kernel
+primitive).  %VM-ANALYZE walks a (LAMBDA ...) expression into an IR tree with
+every lexical reference resolved to a (depth index) address.
+
+- FLAT-LOCALS addressing (plan §3.1): a function's parameters and every
+  LET/LET*/&aux binding share ONE frame; slots are allocated monotonically
+  (n-locals = high-water).  A nested LET consumes fresh slots (verified: nested
+  LET -> slots 1,2 not reset).  DEPTH>0 crosses an enclosing lambda only; such a
+  hit MARKS the binding captured (recorded for the vm-6 closure conversion).
+- Two environments: a mutable CENV (a list of FLEVELs, each (next-slot . scopes))
+  for variable/function addressing, and a functional LEXENV (macros, symbol-macros,
+  block names) threaded by rebinding.  Separate :VAR / :FUN namespaces.
+- SPECIAL detection: a LET of a globally-special var (DEFVAR'd) or one declared
+  (declare (special ...)) in the body lowers to a dynamic (:special name init)
+  bind, and references become (:gref name) — never a lexical slot.  The Lisp-side
+  predicate is the new kernel primitive %GLOBALLY-SPECIAL-P (sources/bocl.c),
+  wrapping variable.c:special_variable_p (the symbol $SPECIAL plist marker).
+- Full macro expansion: global macros via MACROEXPAND-1, and local MACROLET
+  (expander built with DESTRUCTURING-BIND) / SYMBOL-MACROLET are expanded away by
+  the walker itself, so codegen sees only special operators + calls.
+- Complete structural coverage of the special operators (special-operator-p list):
+  QUOTE IF PROGN SETQ LET LET* FUNCTION THE FLET LABELS LOCALLY EVAL-WHEN
+  MACROLET SYMBOL-MACROLET BLOCK RETURN-FROM TAGBODY GO CATCH THROW
+  UNWIND-PROTECT MULTIPLE-VALUE-CALL/PROG1 PROGV LOAD-TIME-VALUE — variable/call
+  forms fully addressed; the control forms emit their IR nodes (:block, :catch,
+  :tagbody, ...) whose CODEGEN is vm-5, so the analyzer is complete.
+- Lambda lists: required / &optional (default + supplied-p) / &rest / &key
+  (incl. (:kw var) form) / &allow-other-keys / &aux, each parameter (and each
+  supplied-p var) taking a slot; produces (:arity nreq nopt rest-p key-p aok-p).
+
+IR node summary (codegen contract for vm-4/5):
+  (:const v) (:lref d i) (:gref s) (:lset d i ir) (:gset s ir) (:if t th el)
+  (:progn ir...) (:call fn-ir arg...) (:call-named sym arg...) (:function sym)
+  (:make-closure lambda-ir) (:lambda :arity a :n-locals n :params p :body b :source s)
+  (:let entries body) (:let* entries body)  entry = (:lex idx ir) | (:special name ir)
+  (:flet fns body) (:labels fns body)  fn = (idx . lambda-ir)
+  control (codegen vm-5): (:block name b) (:return-from name ir) (:tagbody items)
+  (:go tag) (:catch tag b) (:throw tag ir) (:unwind-protect body cleanup)
+  (:mv-call fn arg...) (:mv-prog1 first rest...) (:progv syms vals body)
+  (:load-time-value ir read-only-p)
+
+Deferred (noted, not blocking): a parameter that is itself globally special takes
+a lexical slot for now (dynamic-binding the entry name is a vm-5 refinement, same
+machinery as the (:special ...) LET entry); &whole/&environment in MACROLET
+expanders.
+
+ACCEPTANCE met (tests/test_misc.c::test_vm_analyze, in the suite): nested LET,
+LET* sequential visibility, a closure over an outer var (depth 1), LABELS
+recursion (self at depth 1), a SPECIAL binding, SETQ lexical vs global, MACROLET
+and SYMBOL-MACROLET expansion, the arity pack, and FLET shadowing all analyze to
+the correct addresses.  Full suite green (42 suites).  Codegen is vm-4 (next).

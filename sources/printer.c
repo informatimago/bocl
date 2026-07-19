@@ -21,12 +21,9 @@
    back to NEL.  (issue "newline and I/O".) */
 #define BOCL_NEL 0x85
 
-/* Resolve an output stream designator (T -> *STANDARD-OUTPUT*) to a stream. */
+/* Resolve an output stream designator (NIL/T) to a stream (see stream.c). */
 static Ref resolve_output_stream(Ref stream){
-    if(eql(stream,T_Symbol)){
-        Ref so=S(*STANDARD-OUTPUT*);
-        if(symbol_boundp(so)){ return variable_value(so); }}
-    return stream;}
+    return stream_designator_output(stream);}
 
 /* True for a real device/file stream (translate NEL); false for an in-memory
    string stream (keep the internal NEL). */
@@ -69,14 +66,29 @@ Ref stream_line_start_p(Ref stream){
     return stream_at_line_start(stream) ? T_Symbol : NIL_Symbol;}
 
 Ref prin1_to_string(Ref object){
+    /* Root the fresh stream for the print's duration: printing allocates, and
+       an unrooted stream could be collected while being written (the v1.8.52
+       bug class).  Pool-balanced locally; the result string is re-rooted. */
+    uword pool=open_live_pool();
+    add_to_live_pool(object);
     Ref stream=stream_output_string(S(CHARACTER));
+    add_to_live_pool(stream);
     prin1(object,stream);
-    return string_output_stream_get_string(stream);}
+    Ref result=string_output_stream_get_string(stream);
+    close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: trimmed by the close */
+    return result;}
 
 Ref princ_to_string(Ref object){
+    uword pool=open_live_pool();
+    add_to_live_pool(object);
     Ref stream=stream_output_string(S(CHARACTER));
+    add_to_live_pool(stream);
     princ(object,stream);
-    return string_output_stream_get_string(stream);}
+    Ref result=string_output_stream_get_string(stream);
+    close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: trimmed by the close */
+    return result;}
 
 Ref print(Ref object,Ref stream){
     terpri(stream);
@@ -129,7 +141,12 @@ static bool g_in_print_object = false;
    symbols, characters, vectors, pathnames — have already been handled.) */
 static bool print_via_print_object(Ref object,Ref stream,bool escape){
     if(g_in_print_object){ return false; }
-    if(clos_instance_p(object)){ return false; }   /* handled by the CLOS path below */
+    /* CLOS instances dispatch here too (clos-condition-report-not-printed):
+       the prelude's PRINT-OBJECT generic has a (standard-object t) default,
+       per-condition report methods, and the CLOS simple-condition reporter,
+       so user DEFINE-CONDITION classes print their report under PRINC and
+       #<...> under PRIN1.  The #<Name addr> branch below remains the
+       pre-prelude fallback. */
     Ref po=S(PRINT-OBJECT);
     if(!symbol_fboundp(po)){ return false; }   /* before the prelude defines it */
     g_in_print_object=true;
@@ -361,9 +378,12 @@ static int current_readtable_case(void){
     Ref rc = rt->slots->readtable.readcase;
     if(symbolp(rc)){
         char* nm = string_cstring(symbol_name(rc));
-        if(strcmp(nm,"DOWNCASE")==0){ return 1; }
-        if(strcmp(nm,"PRESERVE")==0){ return 2; }
-        if(strcmp(nm,"INVERT")==0){ return 3; }
+        int r = 0;
+        if(strcmp(nm,"DOWNCASE")==0){ r = 1; }
+        else if(strcmp(nm,"PRESERVE")==0){ r = 2; }
+        else if(strcmp(nm,"INVERT")==0){ r = 3; }
+        free(nm);
+        return r;
     }
     return 0;
 }
@@ -406,8 +426,11 @@ static int current_print_case(void){
     Ref c = variable_value(S(*PRINT-CASE*));
     if(symbolp(c)){
         char* nm = string_cstring(symbol_name(c));
-        if(strcmp(nm,"DOWNCASE")==0){ return 1; }
-        if(strcmp(nm,"CAPITALIZE")==0){ return 2; }
+        int r = 0;
+        if(strcmp(nm,"DOWNCASE")==0){ r = 1; }
+        else if(strcmp(nm,"CAPITALIZE")==0){ r = 2; }
+        free(nm);
+        return r;
     }
     return 0;
 }
@@ -429,11 +452,13 @@ static unsigned char fold_char(unsigned char c, int pcase, bool word_start){
 static void invert_scan(Ref name, int rcase, bool* up, bool* lo){
     char* s   = string_cstring(name);
     uword len = string_length(name);
-    if(symbol_name_needs_escape(s,len,rcase)){ return; }
-    for(uword i=0;i<len;i++){
-        unsigned char c=(unsigned char)s[i];
-        if(c>='A'&&c<='Z'){ *up=true; } else if(c>='a'&&c<='z'){ *lo=true; }
+    if(!symbol_name_needs_escape(s,len,rcase)){
+        for(uword i=0;i<len;i++){
+            unsigned char c=(unsigned char)s[i];
+            if(c>='A'&&c<='Z'){ *up=true; } else if(c>='a'&&c<='z'){ *lo=true; }
+        }
     }
+    free(s);   /* leaked per printed symbol before (sanitiser-error-path-leaks) */
 }
 
 /* Write a symbol/package name to OUT honouring READTABLE-CASE and *PRINT-CASE*
@@ -454,8 +479,9 @@ static void print_name_escaped(Ref name, FILE* out, bool escape, int inv){
             if(c=='|' || c=='\\'){ fputc('\\',out); }
             fputc(c,out); }
         fputc('|',out);
+        free(s);
         return; }
-    if(rcase==2){ fwrite(s,1,(size_t)len,out); return; }   /* :PRESERVE — verbatim */
+    if(rcase==2){ fwrite(s,1,(size_t)len,out); free(s); return; }   /* :PRESERVE — verbatim */
     if(rcase==3){                                           /* :INVERT — flip a uniform-case token */
         bool uniform;
         if(inv>=0){ uniform=(inv==1); }
@@ -471,6 +497,7 @@ static void print_name_escaped(Ref name, FILE* out, bool escape, int inv){
                 if(c>='A'&&c<='Z'){ c=(unsigned char)(c+32); }
                 else if(c>='a'&&c<='z'){ c=(unsigned char)(c-32); } }
             fputc(c,out); }
+        free(s);
         return; }
     /* :UPCASE / :DOWNCASE — fold the foldable letters (uppercase under :UPCASE,
        lowercase under :DOWNCASE) per *PRINT-CASE*; emit the rest verbatim. */
@@ -483,6 +510,7 @@ static void print_name_escaped(Ref name, FILE* out, bool escape, int inv){
         fputc(foldable ? fold_char(c,pcase,word_start) : c, out);
         word_start = !alnum;
     }
+    free(s);   /* leaked per printed symbol before (sanitiser-error-path-leaks) */
 }
 
 /* --- Radix-aware integer / ratio printing (*PRINT-BASE* / *PRINT-RADIX*) ----
@@ -1330,8 +1358,10 @@ Ref bocl_format_run(Ref stream, Ref ctrl_string, uword start, uword end, Ref* ar
               uword close_pos=fmt_find_close_paren(ctrl,i,end);
               uword sub_end  =(close_pos!=(uword)-1) ? close_pos : end;
               Ref buf=stream_output_string(S(CHARACTER));
+              add_to_live_pool(buf);   /* fresh stream, written to across allocations */
               bocl_format_run(buf,ctrl_string,i,sub_end,args_ptr);
               Ref s=string_output_stream_get_string(buf);
+              add_to_live_pool(s);
               octet* b=string_octets(s);
               uword  n=string_length(s);
               bool at_word_start=true;   /* start of string is a word start */

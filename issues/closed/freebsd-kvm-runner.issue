@@ -1,0 +1,53 @@
+freebsd-kvm-runner: pass /dev/kvm into the poseidon docker runner
+
+Symptom
+-------
+build:freebsd works end to end (v1.8.45) but only under KVM.  On the
+poseidon docker runner the job falls back to TCG because /dev/kvm is not
+visible in the job container, and under TCG the FreeBSD 14.4 first boot
+runs firstboot freebsd-update for ~1 h before sshd comes up (nuageinit
+applies write_files too late to pre-disable it), so the job times out.
+The job is allow_failure, so pipelines stay green meanwhile.
+
+What is needed (host-side, on poseidon — needs root/runner admin)
+-----------------------------------------------------------------
+1. Expose /dev/kvm to the bocl-linux-docker runner (id 53805892):
+   in /home/runners/.gitlab-runner/config.toml, under that runner's
+   [runners.docker] section, add:
+
+       devices = ["/dev/kvm"]
+
+2. Make /dev/kvm usable from the ROOTLESS docker userns: the device node
+   maps to nobody:nogroup inside the container, so open() fails even
+   when passed through.  Simplest durable fix is a udev rule:
+
+       # /etc/udev/rules.d/65-kvm-rootless.rules
+       KERNEL=="kvm", MODE="0666"
+
+   then `udevadm control --reload && udevadm trigger /dev/kvm`
+   (a one-off `chmod 666 /dev/kvm` works until reboot).
+
+3. Restart the runner (or `gitlab-runner restart` for the user service).
+
+Verification
+------------
+Re-run build:freebsd: the log should say
+    == booting FreeBSD VM (KVM) ==
+and the whole job should finish in ~15-20 min.  Once it does, drop
+allow_failure from the freebsd job in .gitlab-ci.yml.
+
+Context
+-------
+ci/freebsd-build.sh auto-detects: KVM when /dev/kvm is writable, TCG
+otherwise.  Everything else (image fetch, nuageinit seed, build, 42
+test suites, linkage proof, prelude byte-compilation) was validated on
+FreeBSD 14.4 under KVM on 2026-07-14.
+
+RESOLUTION (2026-07-14)
+-----------------------
+All three host-side steps done on poseidon (udev rule by pjb; config.toml
+devices entry by pjb, comma typo fixed; runner restarted).  Verified
+in-container: /dev/kvm passed through rwm and world-rw; the very next
+build:freebsd run picked it up (qemu -accel kvm -cpu host) and the job
+SUCCEEDED in 33 min (pipeline 2676205546, commit 56200bb).
+allow_failure dropped from build:freebsd in .gitlab-ci.yml (v1.8.46).

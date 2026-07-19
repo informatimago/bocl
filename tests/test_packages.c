@@ -19,7 +19,7 @@ TEST_SUITE_SETUP(packages_init){
 TEST_SUITE_TEARDOWN(packages_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_standard_packages_exist(void){
     TEST_EQ(eql, T_Symbol, e("(packagep (find-package \"COMMON-LISP\"))"));

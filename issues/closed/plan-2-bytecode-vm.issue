@@ -1,0 +1,72 @@
+PLANIFICATION 2 — Byte-code virtual machine + compiler (the strategic answer).
+
+MOTIVATION
+The tree-walker pays ~150us/funcall (see [[bocl-interpreter-perf]]) and re-walks
+every form on every call; minimal compilation only INFLATES the trees.  A byte-code
+VM addresses BOTH axes and — critically — stays fully portable:
+- RUN: a compiled function executes a tight bytecode loop instead of re-walking a
+  tree; typically 5-30x on real code.
+- LOAD: the fasl becomes compact BYTECODE + a constant pool (extends plan-1's
+  serializer), so loading is deserialize-and-install, not read-and-walk; form size
+  stops mattering.
+This is the portable sweet spot: NO native codegen / JIT / LLVM / assembler (those
+break "compilable with a standard C17 compiler in POSIX").  The VM is a C switch
+dispatch (with an OPTIONAL computed-goto fast path under #ifdef __GNUC__); the
+compiler (Lisp -> bytecode) is written in Lisp and self-hosts.
+
+CONSTRAINTS
+Strict C17 core (switch dispatch must work with no GCC extensions; computed-goto is
+an opt-in acceleration only).  Coexist with the tree-walker: uncompiled code, kernel
+built-ins, and bytecode functions must inter-call freely, so nothing regresses and
+migration is incremental.
+
+EXPANSION — implementation issues, in order (see vm-*.issue):
+  vm-1-isa-and-function-layout.issue  the stack-VM instruction set, the
+                                      compiled-function object (code vector +
+                                      constant pool + arity/lambda-list + name),
+                                      value representation reuse.
+  vm-2-dispatch-core.issue            the C VM loop, operand stack, call/return
+                                      frames, core opcodes; switch dispatch + opt
+                                      computed-goto.
+  vm-3-compiler-frontend.issue        MACROEXPAND-ALL + lexical analysis ->
+                                      (depth,index) addresses; the compilation
+                                      environment.  REUSES plan-3 hot-2.
+  vm-4-codegen-core.issue             compile atoms / calls / IF / PROGN / LET /
+                                      LET* / SETQ / QUOTE / FUNCTION / THE / LAMBDA.
+  vm-5-codegen-control.issue          BLOCK/RETURN-FROM, TAGBODY/GO, CATCH/THROW,
+                                      UNWIND-PROTECT, MULTIPLE-VALUE-*, PROGV,
+                                      LOAD-TIME-VALUE, EVAL-WHEN, MACROLET/
+                                      SYMBOL-MACROLET, FLET/LABELS.
+  vm-6-closures-and-interop.issue     closure capture (display / upvalues); mixed
+                                      calling between bytecode / built-in /
+                                      tree-walked functions (a uniform APPLY path).
+  vm-7-clos-inline-cache.issue        generic-function dispatch in bytecode with
+                                      inline (monomorphic/polymorphic) caches.
+  vm-8-bytecode-fasl.issue            serialize compiled-function objects (bytecode +
+                                      constant pool) via plan-1's cfasl; COMPILE /
+                                      COMPILE-FILE produce bytecode; LOAD installs it.
+  vm-9-debug-bootstrap-validate.issue debugger/backtrace + condition frames for VM
+                                      frames; compile the prelude to bytecode
+                                      (self-host); benchmark + suite.
+
+CROSS-PLAN
+- Depends on plan-1 (cfasl-1..3) for vm-8's fasl.
+- Depends on plan-3 hot-1 (profiling, to target opcodes) and hot-2 (lexical
+  addressing, reused by vm-3) — do hot-1/hot-2 before vm-3/vm-4.
+
+SUCCESS
+Bytecode fasl loads and runs materially faster than the tree-walker on the ASDF
+corpus; prelude self-hosts to bytecode; full suite green; still one-command C17
+build in POSIX with no extensions required.
+
+RESOLUTION (2026-07-18)
+-----------------------
+Planning issue, fully delivered: vm-1..vm-10 + vm-6b + hot-1..hot-6 are
+all implemented and closed (see issues/closed/vm-*.issue, hot-*.issue).
+COMPILE/COMPILE-FILE emit byte-code, the whole language compiles
+(top-level def-forms fall back by design), boot runs from byte-compiled
+images (~3x), tight loops ~10x, CLOS dispatch ~31x.  The living handoff
+document remains issues/open/vm-COMPILER-PLAN.md; the remaining
+off-critical-path leads are tracked by their own issues
+(vm-analyzer-decline-gaps, cfasl-6-literal-coverage, frame pooling
+noted in vm-COMPILER-PLAN.md §0).

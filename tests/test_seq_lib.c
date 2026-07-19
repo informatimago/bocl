@@ -24,7 +24,7 @@ TEST_SUITE_SETUP(seq_lib_init){
 TEST_SUITE_TEARDOWN(seq_lib_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_length(void){
     TEST_EQ(eql, I(0), e("(length nil)"));

@@ -489,19 +489,35 @@ bool set_garbage_collection_enabled(bool on){
 /* Return true iff PTR is a plausible start-of-block pointer:
    - non-null and pointer-aligned
    - lies within a managed heap zone
-   - has a block->size that fits inside that zone
-   This guards against corrupted refs that land in the middle of a block. */
+   - has a block->size that is word-aligned, at least MinimumBlockSize, and
+     fits inside that zone
+   This guards against corrupted refs that land in the middle of a block — the
+   case that must be caught before the GC follows a slot value as a child.
+
+   The WORD-ALIGNMENT check is load-bearing (freebsd-latent-gc-corruption): the
+   GC's mark walks a marked block's slots up to its objcount, and if a slot
+   holds a non-reference word (a length/dimension field over-scanned because it
+   sits within the objcount range, or any stray value) this predicate is the
+   only thing standing between that word and mark_block() stamping GC_MARK_BIT
+   into whatever the word points at.  allocate_internal rounds EVERY block size
+   up to a multiple of sizeof(word) and the heap-check walk asserts it, so a
+   candidate whose size field is not word-aligned is provably not a real block
+   start (an odd size like 0x3939 was the observed FreeBSD failure) — reject it.
+   The size is read at full width: the block header is 64-bit on non-LP64
+   targets (FreeBSD), where a truncated halfword read could clear high junk bits
+   and make an implausible size look valid. */
 static bool valid_block_start_p(Block* ptr){
     if(!ptr) return false;
-    if((uword)ptr % sizeof(void*) != 0) return false;   /* alignment */
+    if((uword)ptr % sizeof(void*) != 0) return false;   /* pointer alignment */
     for(Zone* z=Zones; z!=NULL; z=z->next_zone){
         char* zstart=(char*)first_block(z);
         char* zend  =(char*)end_block(z);
         if((char*)ptr<zstart || (char*)ptr>=zend) continue;
         /* ptr is in this zone — check size plausibility */
-        halfword bsz = ptr->size;   /* safe: ptr is aligned and within zone */
-        if(bsz < MinimumBlockSize)  return false;
-        if((char*)ptr + bsz > zend) return false;
+        uword bsz = ptr->size;   /* full width: header is 64-bit on non-LP64 */
+        if(bsz < MinimumBlockSize)     return false;
+        if(bsz % sizeof(word) != 0)    return false;   /* every real block size is word-aligned */
+        if((char*)ptr + bsz > zend)    return false;
         return true;}
     return false;}
 

@@ -16,7 +16,7 @@ common_SRCS = \
 	\
 	profile.c \
 	cfasl.c \
-	strdup.c \
+	bytecode.c \
 	\
 	$(DEBUG_SRCS)
 
@@ -38,7 +38,7 @@ INCLUDES     += $(libbocl_INCS)
 LIBRARIES    += $(libbocl_LIBS)
 
 .PHONY = clean prepare-macos deps build predefines run sign-gdb gdb \
-	run-print-limits run-print-types
+	run-print-limits run-print-types prelude-image
 
 include common.mk
 deps:   $(all_SRCS:%.c=%.d)
@@ -54,6 +54,8 @@ clean:
 	-$(VERBOSE) rm -rf libbocl.* $(PROGRAMS) *.o *.d *.e *.dSYM bocl.pc
 	-$(VERBOSE) rm -rf $(DISTSTAGE) check-stage driver_static driver_shared bocl-*.tar.* bocl-*.sha256
 	-$(VERBOSE)	rm -rf *.tem */*.tem *.[ld]x{32,64}fsl */*.[ld]x{32,64}fsl
+	@ printf "# Removing byte-compiled Lisp images (*.cfasl)\n"
+	-$(VERBOSE) rm -f $(BOOTSTRAP_CFASL) ../modules/*/*.cfasl
 
 prepare-macos:
 	- sudo xcode-select --install
@@ -106,6 +108,64 @@ bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o)
 	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
 	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o) $(LDLIBS)
 
+# ----------------------------------------------------------------------
+# vm-10 / cfasl — byte-compiled boot images.  COMPILE-FILE each system Lisp
+# file to a .cfasl sibling so the runtime boots pre-byte-compiled with no
+# reader and no macroexpansion.  A stage-0 bocl (booted from source via
+# --no-compiled-prelude) does the compilation, with *PACKAGE* = COMMON-LISP —
+# the package these files are loaded in at boot, so their bare kernel symbols
+# (%EXPORT-STRINGS, %BIGNUM-*, ...) resolve to the same symbols LOAD sees.
+#
+# The runtime auto-detects each .cfasl and prefers it over its .lisp source ONLY
+# when the .cfasl is at least as new (date-ordering; a stale cfasl is ignored)
+# and version-compatible (bocl_fasl_load returns NIL on a cfasl/byte-code
+# mismatch -> source fallback, never a half image).  --no-compiled-prelude forces
+# the prelude/cl-exports source.
+#
+# Dependency policy: a .cfasl depends on its .lisp source (rebuilt when the
+# source changes) but only ORDER-ONLY on bocl (the `| bocl` prerequisite) — a
+# plain relink after a C edit must NOT trigger a multi-minute recompile of every
+# image, and a byte-code/cfasl version bump is handled at runtime by the source
+# fallback (regenerate with `make -B fasls` when you want fresh images).
+# ----------------------------------------------------------------------
+BOOTSTRAP_LISP  = ../bootstrap/prelude.lisp     ../bootstrap/cl-exports.lisp        \
+                  ../bootstrap/bignum.lisp      ../bootstrap/bignum-integration.lisp \
+                  ../bootstrap/socket.lisp      ../bootstrap/vm-compiler.lisp
+BOOTSTRAP_CFASL = $(BOOTSTRAP_LISP:.lisp=.cfasl)
+
+# Byte-compile one system .lisp -> .cfasl with the boot package (COMMON-LISP).
+# A file that cannot be externalised (one that embeds a live object PRIN1 cannot
+# round-trip — e.g. a function via #.(function ...) in quoted data) writes no
+# cfasl and simply loads from source: COMPILE-FILE detects it and make tolerates
+# the missing target.  (All current system files DO compile.)
+../bootstrap/%.cfasl: ../bootstrap/%.lisp | bocl
+	@ printf "# Byte-compiling %s (prelude takes a few minutes)\n" "$(@F)"
+	$(VERBOSE) ./bocl --no-compiled-prelude --norc -b \
+	    -e '(let ((*package* (find-package "COMMON-LISP")) (common-lisp::*compile-file-splice-toplevel* nil)) (compile-file "$<" :output-file "$@"))' \
+	    --quit
+
+# All system images + the module images (see the `modules` root target).
+fasls: $(BOOTSTRAP_CFASL) module-fasls
+prelude-image: $(BOOTSTRAP_CFASL)          # kept as an alias for the vm-10 name
+
+# Byte-compile every installable module's *.lisp -> *.cfasl (best effort: a
+# module whose sources are absent, or that fails to compile, is simply left to
+# load from source).  Uses a stage-0 bocl already carrying its images.
+module-fasls: | bocl
+	@ printf "# Byte-compiling module images\n"
+	-$(VERBOSE) for mf in $(wildcard ../modules/*/module.manifest) ; do \
+	    md=`dirname $$mf` ; \
+	    for lf in $$md/*.lisp ; do \
+	        [ -f "$$lf" ] || continue ; \
+	        cf=`printf '%s' "$$lf" | sed 's/\.lisp$$/.cfasl/'` ; \
+	        [ "$$cf" -nt "$$lf" ] && continue ; \
+	        printf "#   %s\n" "$$cf" ; \
+	        ./bocl --norc -b -e "(compile-file \"$$lf\" :output-file \"$$cf\")" --quit || true ; \
+	    done ; \
+	done
+
+.PHONY: fasls prelude-image module-fasls
+
 #bocl: $(bocl_SRCS:%.c=%.d) $(bocl_SRCS:%.c=%.o) libbocl.$(SO)
 #	@ printf "# Linking %-20s   from %s\n" "$@" "$(bocl_SRCS:%.c=%.o)"
 #	$(VERBOSE) $(LINKBIN) -o $@ $(bocl_SRCS:%.c=%.o)  $(bocl_LIBS)
@@ -130,7 +190,8 @@ SYSTEM_LISP = \
 	../bootstrap/cl-exports.lisp \
 	../bootstrap/bignum.lisp \
 	../bootstrap/bignum-integration.lisp \
-	../bootstrap/socket.lisp
+	../bootstrap/socket.lisp \
+	../bootstrap/vm-compiler.lisp
 
 # Manual page (committed roff) and Texinfo source/output for the info manual.
 MAN_PAGE  = ../man/bocl.1
@@ -173,7 +234,7 @@ bocl.pc:
 	  printf 'Cflags: -I$${includedir}\n';                  \
 	} > $@
 
-install: build bocl.pc
+install: build fasls bocl.pc
 	@ printf "# Installing bocl %s into %s\n" "$(VERSION)" "$(DESTDIR)$(PREFIX)"
 	$(VERBOSE) $(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(libdir) \
 	    $(DESTDIR)$(boclincdir) $(DESTDIR)$(bocllibexecdir) $(DESTDIR)$(pkgconfdir) \
@@ -188,18 +249,24 @@ install: build bocl.pc
 	@ printf "#   include/bocl/*.h\n"
 	$(VERBOSE) for h in $(INSTALL_HEADERS) ; do \
 	    $(INSTALL) -m 644 $$h $(DESTDIR)$(boclincdir)/$$h ; done
-	@ printf "#   libexec/bocl/ system Lisp files\n"
+	@ printf "#   libexec/bocl/ system Lisp files (+ .cfasl images)\n"
 	$(VERBOSE) for f in $(SYSTEM_LISP) ; do \
-	    $(INSTALL) -m 644 $$f $(DESTDIR)$(bocllibexecdir)/ ; done
-	@ printf "#   libexec/bocl/modules/ (installed modules)\n"
+	    $(INSTALL) -m 644 $$f $(DESTDIR)$(bocllibexecdir)/ ; \
+	    cf=`printf '%s' "$$f" | sed 's/\.lisp$$/.cfasl/'` ; \
+	    [ -f "$$cf" ] && $(INSTALL) -m 644 $$cf $(DESTDIR)$(bocllibexecdir)/ || true ; \
+	done
+	@ printf "#   libexec/bocl/modules/ (installed modules + .cfasl images)\n"
 	$(VERBOSE) for mf in $(MODULE_MANIFESTS) ; do \
 	    md=`dirname $$mf` ; name=`basename $$md` ; \
 	    $(INSTALL) -d $(DESTDIR)$(bocllibexecdir)/modules/$$name ; \
 	    $(INSTALL) -m 644 $$mf $(DESTDIR)$(bocllibexecdir)/modules/$$name/module.manifest ; \
-	    for lf in $$md/*.lisp ; do \
-	        [ -f "$$lf" ] && $(INSTALL) -m 644 $$lf $(DESTDIR)$(bocllibexecdir)/modules/$$name/ ; \
+	    for lf in $$md/*.lisp $$md/*.cfasl ; do \
+	        [ -f "$$lf" ] && $(INSTALL) -m 644 $$lf $(DESTDIR)$(bocllibexecdir)/modules/$$name/ || true ; \
 	    done ; \
 	done
+	@ printf "#   (touch every installed .cfasl so it is newer than its source:\n"
+	@ printf "#    a type-less LOAD then prefers the byte-compiled image)\n"
+	-$(VERBOSE) find $(DESTDIR)$(bocllibexecdir) -name '*.cfasl' -exec touch {} + 2>/dev/null || true
 	@ printf "#   share/man/man1/bocl.1\n"
 	$(VERBOSE) $(INSTALL) -m 644 $(MAN_PAGE) $(DESTDIR)$(man1dir)/bocl.1
 	@ printf "#   share/info/bocl.info\n"
@@ -340,6 +407,9 @@ regenerate:
 	@printf "# Forcing regeneration of committed generated C sources via host CL\n"
 	$(VERBOSE) rm -f $(GENERATED_SOURCES)
 	$(VERBOSE) $(MAKE) $(GENERATED_SOURCES)
+	@printf "# Applying the hand-fix patch on top of the generators' output\n"
+	$(VERBOSE) patch -p1 -d .. < generated-sources-fixes.patch
+	@printf "# Regeneration reproducible: the tree should now be identical to the committed sources\n"
 
 kernel_objects.h kernel_objects.c : | generate-kernel-objects.lisp
 	@printf "# Generating %s from %s\n" "$@" "$|"

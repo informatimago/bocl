@@ -1,0 +1,81 @@
+PLANIFICATION 3 — Interpreter hot-path optimization (complementary; feeds plan-2).
+
+MOTIVATION
+The tree-walker's ~150us/funcall (see [[bocl-interpreter-perf]]) is dominated by
+per-call overhead: alist variable lookup, consing an argument list per call, and
+generic method dispatch.  These are portable C (and Lisp) changes that give a broad
+2-5x on eval AND on MACROEXPAND-ALL (the walker is an eval consumer, so this also
+shortens the ~300s compile), and — importantly — the lexical-addressing analysis is
+the SAME front-end plan-2's bytecode compiler needs, so this work is not throwaway.
+
+WHY BEFORE / WITH THE VM
+- hot-1 (profiling) must run FIRST: it attributes the ASDF load/compile time across
+  read / macroexpand / eval / CLOS, so plan-1/2/3 target the real bottleneck instead
+  of guessing.
+- hot-2 (lexical addressing) is reused verbatim by vm-3.  Doing it in the tree-walker
+  first de-risks it and delivers value even before the VM lands.
+
+CONSTRAINTS
+Portable C17 / POSIX; no representation changes that break the shared tagged-Ref
+value model; keep SPECIAL/dynamic binding semantics exact.
+
+EXPANSION — implementation issues, in order (see hot-*.issue):
+  hot-1-profile.issue              instrument the ASDF load + eval hot path; attribute
+                                   time; establish the baseline all three plans
+                                   measure against.  DO FIRST.
+  hot-2-lexical-addressing.issue   pre-resolve lexical variable/local-function refs
+                                   to (depth,index) addresses, cached on the function
+                                   body; replace alist search with array indexing.
+                                   SHARED with vm-3.
+  hot-3-frame-representation.issue represent environments as flat vectors indexed by
+                                   address; separate the special/dynamic binding
+                                   stack from lexical frames.
+  hot-4-arglist-avoidance.issue    stop consing an argument list per call; pass args
+                                   via a value stack / vector; adapt the calling
+                                   convention for kernel/tree-walked callees.
+  hot-5-dispatch-caches.issue      fast paths for global SYMBOL-FUNCTION / SYMBOL-VALUE
+                                   lookup + a generic-function method inline cache
+                                   (may share the cache design with vm-7).
+  hot-6-benchmark-validate.issue   re-run hot-1's benchmarks; quantify the tree-walker
+                                   speedup; full suite green on every step.
+
+CROSS-PLAN
+- hot-1 gates plan-1, plan-2, plan-3 (measure before choosing/targeting).
+- hot-2's analyzer is factored so vm-3 reuses it (single lexical analyzer).
+- hot-5's method-cache design is shared with vm-7's inline cache.
+
+SUCCESS
+A measured 2-5x on tree-walked eval and on MACROEXPAND-ALL, with the lexical
+analyzer factored for reuse by the bytecode compiler; full suite green throughout.
+
+--------------------------------------------------------------------------------
+CLOSING (v1.8.29, vm branch) — program complete; hot-1..hot-6 all closed.
+
+Outcome per implementation issue (details + numbers in each issue file):
+  hot-1  profiler (-DBOCL_PROFILE phases+counters) + baseline: source prelude
+         load 9.158 s, 96.3% EVAL — established "the tree-walker is the lever".
+  hot-2  interpreter side delivered v1.7.0/1.7.1 (2.6x lookup-cost drop); the
+         (depth,index) analyzer was built once, as the vm-3 front-end
+         (%VM-ANALYZE), per this issue's own FACTORING clause.
+  hot-3  cons-cell lexical bindings v1.7.2 (-12% allocations); the flat
+         vector frame indexed by (depth,index) is the VM's locals frame.
+  hot-4  value-stack calling convention + compile-time parameter plan exist as
+         the VM's operand stack + compiled binding prologue; the remaining
+         kernel_apply boundary cons is a documented, measured non-lever.
+  hot-5  global function/value lookup was already a direct cell load; the
+         method cache is vm-7's shared per-gf effective-method cache (~31x),
+         serving the tree-walker and the VM through the same dispatch path.
+  hot-6  re-measured everything (see the issue): source boot 9.16 s -> 3.79 s
+         (2.4x, with a prelude ~2x bigger: per-funcall eval cost 11.6 us ->
+         3.4 us = 3.4x); compiled-image boot 1.25 s (3.0x on top); VM vs
+         tree-walker 10x on operation-bound loops, 1x call-bound; dispatch 31x.
+
+The SUCCESS criterion ("a measured 2-5x on tree-walked eval, analyzer factored
+for reuse") is met: 3.4x per-funcall on the prelude-load workload, 2.6x on
+variable-heavy code, analyzer shared (built once in plan-2).  The strategic
+finding stands: after these wins the tree-walker's remaining floor is
+per-activation cost shared with the VM (frame allocation — the deferred
+frame-pooling lever) and, on allocation-heavy code, the non-generational GC
+(see generational-gc.issue, with fresh evidence from hot-6).  Further eval
+speed comes from plan-2's VM (done: whole language byte-compiles, prelude
+boots compiled) — not from more tree-walker tuning.

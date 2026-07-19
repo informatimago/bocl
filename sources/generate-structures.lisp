@@ -261,12 +261,19 @@
                                    (:conc-name   env/global-function-))
                                  '(name lambda-list body compiler-macro))
 
+             ;; ENV is the DEFINING lexical environment the local function's
+             ;; body closes over when called: for FLET the environment
+             ;; ENCLOSING the flet (siblings invisible, CLHS 3.1.2.1.2.1);
+             ;; for LABELS the new environment holding all the bindings
+             ;; (siblings visible).  NIL means "close over the environment
+             ;; current at the call site" (the pre-v1.8.36 behavior, kept as
+             ;; the fallback for wrappers built without an environment).
              (generate-structure '(local-function
                                    (:constructor env/make-local-function)
                                    (:constructor env/local-function (name))
                                    (:predicate   env/local-function-p)
                                    (:conc-name   env/local-function-))
-                                 '(name lambda-list body))
+                                 '(name lambda-list body env))
 
              (generate-structure '(global-symbol-macro
                                    (:constructor env/make-global-symbol-macro)

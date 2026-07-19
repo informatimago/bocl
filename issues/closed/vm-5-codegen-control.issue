@@ -1,0 +1,228 @@
+vm-5 — Code generation: control / non-local exits / values (plan-2-bytecode-vm).
+
+The remaining special operators — the ones with non-trivial control flow.
+
+WHAT
+- BLOCK / RETURN-FROM: lexical exit.  When the block is not captured by a closure,
+  compile to a plain forward JUMP + a value slot (fast path).  When it may be
+  invoked from an inner closure (escaping), fall back to a dynamic block frame
+  (marker on the frame stack, RETURN-FROM unwinds to it) — mirrors the tree-walker
+  frame model.  (Named-function implicit blocks are already lexical in the body,
+  see [[bocl-defun-lexical-block]], so DEFUN needs nothing special.)
+- TAGBODY / GO: intra-body jumps compile to JUMP for local tags; escaping GO uses a
+  dynamic tag frame like BLOCK.
+- CATCH / THROW: dynamic — push a catch frame (tag on the frame stack), THROW
+  unwinds to the matching tag.  Reuse the C frame_catch machinery if practical.
+- UNWIND-PROTECT: push a cleanup frame; any non-local exit through it runs the
+  cleanup thunk.
+- MULTIPLE-VALUE-CALL / -PROG1 / -BIND / VALUES / NTH-VALUE: use the VALUES opcode +
+  the MultipleValues path already in the kernel.
+- PROGV (dynamic bindings from a list), LOAD-TIME-VALUE (evaluate at load, store in
+  the constant pool — ties to vm-8), EVAL-WHEN (compile the :execute body; the
+  :compile-toplevel handling stays in COMPILE-FILE), FLET/LABELS (compile local
+  functions as sub-templates + closures), MACROLET/SYMBOL-MACROLET (already expanded
+  by vm-3).
+
+ACCEPTANCE: compile+run RETURN-FROM (local + escaping), TAGBODY loops, CATCH/THROW,
+UNWIND-PROTECT cleanup-on-throw, multiple values, PROGV; parity with the tree-walker
+incl. the must-control / must-restart style cases.
+
+DEPENDS ON: vm-4.
+
+====================================================================
+PROGRESS (v1.8.4, branch vm) — PART 1 of 2: lexical control done.
+
+Lexical (non-escaping) control now compiles to byte-code JUMPs — no frames.  Since
+compiled closures are vm-6, EVERY block/tag in a single compiled function is
+non-escaping, so this is complete for the current VM:
+- BLOCK / RETURN-FROM: forward JUMP to the block end; the exit value travels through
+  a scratch local slot (allocated beyond the analyzer's n-locals) so the normal-fall
+  and RETURN-FROM paths converge.  A RETURN-FROM taken from inside a sub-expression
+  first CUTS the operand stack back to the block base (DROP, chunked to u8) — the VM
+  is a stack machine, so the intervening partial values must be discarded.
+- TAGBODY / GO: each tag is a label; GO cuts the stack to the tagbody base then JUMPs.
+  TAGBODY returns NIL.  A codegen-time control-scope stack (in the compiler state)
+  resolves RETURN-FROM/GO to the enclosing block/tag; escaping (via a closure) errors
+  clearly (vm-6).
+This lets the VM run real LOOPS: DOTIMES / DO / DOLIST (which macroexpand to
+TAGBODY/GO/BLOCK) and early RETURN-FROM out of a loop all run and iterate without C
+recursion.  Verified: tests/test_misc.c::test_vm_control (differential vs the
+tree-walker, incl. a 1000-iteration countdown summing to 500500).  Full suite green.
+
+REMAINING (PART 2 — dynamic NLX, next commit): CATCH/THROW, UNWIND-PROTECT, dynamic
+(special) LET/LET*/PROGV binding save-restore, and MULTIPLE-VALUE-CALL / -PROG1
+(hence MULTIPLE-VALUE-BIND/LIST, NTH-VALUE).  These need the setjmp/longjmp frame
+machinery from eval.c (Frame + g_frame_stack; push_frame/pop_frame/find_catch_frame/
+unwind_next_frame are static and must be exported) wired into the VM loop (new
+opcode handlers BLOCK_OPEN/CATCH_OPEN/THROW/UNWIND_PROTECT/UNWIND_LEAVE/MV_*), plus
+lifting the &optional-default/supplied-p/&key/&aux restriction with a prologue.  MV
+codegen needs an mv-context threaded through %VM-GEN so single-valued tails set the
+MultipleValues buffer.  (values) the FUNCTION already works via CALL-NAMED.
+
+--------------------------------------------------------------------
+PROGRESS (v1.8.5, branch vm) — PART 2a: multiple values + non-capturing lambdas.
+
+- MULTIPLE-VALUE-CALL / MULTIPLE-VALUE-PROG1 (hence MULTIPLE-VALUE-BIND / -LIST and
+  NTH-VALUE, which macroexpand to them) now compile.  New opcode BC_MV_LIST
+  (appended; BYTECODE_VERSION -> 2) replaces a producer's primary with the LIST of
+  all its values from the MV buffer; codegen threads an mv-context (%VM-GEN-FOR-VALUES)
+  so single-valued producer tails emit VALUES 1 to sync the buffer, then builds the
+  call via the APPEND / APPLY (mv-call) and VALUES-LIST (mv-prog1) builtins.  Fixed
+  BC_VALUES (it took the wrong element as primary for n>1).
+- A NON-capturing LAMBDA in value position (:make-closure with no upvalue refs) now
+  compiles to a standalone template pushed as a constant — covers FUNCALL/MAPCAR of a
+  local lambda and the MULTIPLE-VALUE-BIND expansion's &optional/&rest lambda.  A
+  capturing lambda (a depth>0 ref) still errors clearly (real closures = vm-6).
+- Verified: tests/test_misc.c::test_vm_values (differential vs the tree-walker).
+
+Known limitation (documented, uncommon): a BLOCK that returns MULTIPLE values via
+(return-from b (values ...)) keeps only the primary — the block result travels
+through a single scratch slot.  The common MV return (a function whose last form is
+(values ...)) is unaffected (RETURN preserves the MV buffer).
+
+REMAINING (PART 2b): CATCH/THROW, UNWIND-PROTECT, dynamic (special) LET/LET*/PROGV —
+the setjmp/longjmp frame machinery wired into the VM loop.
+
+--------------------------------------------------------------------
+PART 2b — DESIGN & HANDOFF (dynamic NLX: CATCH/THROW, UNWIND-PROTECT, special bind).
+
+This is the setjmp/longjmp piece.  Research done (eval.c NLX map + GC audit); the
+design below is ready to implement in a fresh session with full context budget.
+
+FRAME MACHINERY (sources/eval.c, sources/kernel_types.h):
+- `Frame` (kernel_types.h:140) has `next` (g_frame_stack link), `type` (frame_type:
+  frame_catch/frame_protect/frame_dynamic_binding...), a `parameters` union
+  (.catch.object = the tag), `MultipleValues* results`, and `jmp_buf non_local_exit`.
+- `g_frame_stack` (eval.c:44) is non-static but not in a header — add
+  `extern Frame* g_frame_stack;` (ideally to kernel_functions.h).
+- CATCH/UNWIND-PROTECT/dynamic-bind are DYNAMIC (g_frame_stack only), NOT lexical, so
+  the VM does NOT need eval.c's push_frame/pop_frame (those also link env->frames for
+  the LEXICAL block/tagbody lookup, which the VM already handles as jumps — part 1).
+  Write VM-local helpers that touch only g_frame_stack:
+    vm_push_frame(f){ f->next=g_frame_stack; g_frame_stack=f; f->env_next=NULL; f->frame=NULL; }
+    vm_pop_frame(){ Frame* r=g_frame_stack; g_frame_stack=r->next; return r; }
+- EXPORT (un-static + declare) from eval.c: `find_catch_frame(tag, env)` (env unused,
+  pass NIL) and `_Noreturn unwind_next_frame(popped, env)` (env unused).  The exit
+  codes `non_local_exit_t` (0 initial / 1 unwind / 2 target) are in kernel.h.
+
+GC ROOTING (audited): memory.c GC does NOT scan g_frame_stack.  Every Ref stored in a
+VM frame (the catch tag; thrown values) MUST be add_to_live_pool'd (the VM's pool is
+open for the whole bytecode_apply).  NOTE the operand-stack simple-vector roots ALL
+its slots (even above sp) until overwritten, but a popped tag can be clobbered by a
+later PUSH, so root it explicitly when storing into the frame.
+
+VM-LOOP INTEGRATION (sources/bytecode.c, bytecode_apply):
+- Keep a C-stack array `VmFrame vframes[N]` and a **volatile** counter `nvf`
+  (volatile because it is read after longjmp to locate the active frame).  pc/sp need
+  NOT be volatile IF the longjmp-return path only ASSIGNS them (never reads the stale
+  value before assigning) — restore them from the frame's stored handler_pc/handler_sp.
+  S/L/K/results/etc. are set once before any setjmp, so they are safe.
+- Each frame-opening opcode does its own `setjmp(vframes[nvf].frame.non_local_exit)`
+  (legal as `if (setjmp(...))`).  On return 0: fill the frame, vm_push_frame, nvf++,
+  continue.  On return !=0: the frame being handled is g_frame_stack top == the
+  vframe at vframes[nvf-1]; read handler_pc/handler_sp/kind from it.
+    * code==2 (target, a CATCH hit): restore pc=handler_pc, sp=handler_sp, the thrown
+      values are already in results (see THROW); PUSH the primary; vm_pop_frame; nvf--.
+    * code==1 (unwind, passing through): run this frame's cleanup, vm_pop_frame, nvf--,
+      then unwind_next_frame(&vf->frame, NIL) to continue the cascade (never returns).
+      For a PROTECT frame the "cleanup" is bytecode: set pc=cleanup_pc and run it, and
+      make BC_UNWIND_LEAVE finish the cascade (see below).  For a dynamic-binding frame
+      the cleanup is C-only: restore the saved value cell, then unwind_next_frame.
+
+OPCODES (all already reserved in bytecode.h; wire handlers + codegen):
+- CATCH:  `gen tag; BC_CATCH_OPEN <off to L_handler>; <body>; BC_CATCH_CLOSE; JUMP L_end;
+           L_handler: ; L_end:`  — CATCH_OPEN stores handler_pc=L_handler, catch base sp.
+  THROW: `gen tag; gen-for-values value; BC_THROW` — value's MV are in results; find the
+  catch via find_catch_frame(tag); copy *results into target->results; kick the cascade
+  like eval.c's NON_LOCAL_EXIT: top=g_frame_stack; top->target=target;
+  longjmp(top->non_local_exit, top==target?2:1).
+- UNWIND-PROTECT: `BC_UNWIND_PROTECT <off to L_cleanup>; <protected>; BC_UNWIND_LEAVE(normal)
+  ; L_cleanup: <cleanup for effect>; BC_UNWIND_END`.  Mirror eval.c:1145 — cleanup runs
+  on BOTH paths: normal completion saves the protected value(s), runs cleanup, restores;
+  an unwind runs cleanup then continues the cascade.  Track a per-protect "mode" so
+  BC_UNWIND_END either resumes (normal) or calls unwind_next_frame (unwind).
+- Dynamic (special) LET/LET*/PROGV: the analyzer already emits (:special name init)
+  entries (LET) — lift %VM-GEN-LET's :special error.  Snapshot symbol_boundp/symbol_value,
+  set_symbol_value(sym,new) (NB arg order is symbol,value — see kernel.c:1576), push a
+  frame_dynamic_binding VmFrame carrying (sym, saved_boundp, saved_value); restore on
+  both normal exit and unwind (set_symbol_value back, or symbol_make_unbound).  PROGV
+  is the list-driven form of the same (:progv syms vals body).
+- Also lift %VM-CHECK-CORE-LAMBDA-LIST's &optional-default/supplied-p/&key/&aux
+  restriction by emitting a prologue (defaults for unsupplied optionals/keys need a
+  supplied-p test; &aux is sequential LET; &key needs keyword matching — can reuse the
+  arity pack's key bit + a keyword table in the constant pool).
+
+Value APIs (public): symbol_value / set_symbol_value(sym,val) / symbol_boundp /
+symbol_make_unbound; special_variable_p (variable.h).
+
+ACCEPTANCE (unchanged, top of file): CATCH/THROW, UNWIND-PROTECT cleanup-on-throw,
+dynamic bindings restored on normal + non-local exit, PROGV, and must-control style
+cases; parity with the tree-walker.  Then this issue closes.
+
+--------------------------------------------------------------------
+PROGRESS (v1.8.6, branch vm) — PART 2b DONE (core dynamic NLX).
+
+CATCH/THROW, dynamic (special) LET/LET* binding, and UNWIND-PROTECT are implemented
+and interoperate with tree-walked frames, exactly per the design above.
+
+- Infrastructure (sources/bytecode.c): a `volatile nvf` counter + a `vdyn[]` C-stack
+  array of dynamic-frame records in bytecode_apply; VM-local vm_push/pop_frame +
+  vm_find_catch_frame + vm_unwind_next_frame over `extern Frame* g_frame_stack`
+  (no eval.c change — the cascade protocol matches, so mixed VM/tree-walker unwinds
+  work).  Each frame-opening opcode does its own setjmp; the receiving frame after a
+  longjmp is recovered as (VmDyn*)g_frame_stack (Frame is the first member); pc/sp are
+  only ASSIGNED on the longjmp-return path, so they need not be volatile.  Frame Refs
+  (catch tags, saved special values) are add_to_live_pool'd (g_frame_stack is not
+  GC-scanned).
+- New opcodes (appended; BYTECODE_VERSION -> 5): BC_CATCH_OPEN(off)/CATCH_CLOSE/THROW,
+  BC_DYNAMIC_BIND(sym)/DYNAMIC_UNBIND, BC_UNWIND_PROTECT(off)/UNWIND_NORMAL/UNWIND_END.
+- THROW stages the thrown values into the target frame's results buffer and kicks the
+  cascade (NON_LOCAL_EXIT-style); an unwind-protect cleanup SAVES/RESTORES the shared
+  MV buffer around itself so a call in the cleanup cannot clobber the in-flight values.
+- Special LET: parallel LET evaluates all inits before binding (so an init sees the
+  OUTER dynamic value); LET* binds sequentially.  Restored on normal exit AND on any
+  non-local exit through the binding.
+- KEY FIX — lexical exits crossing dynamic frames: RETURN-FROM/GO compile to jumps
+  (part 1), which would bypass an intervening CATCH/UNWIND-PROTECT/special-binding.
+  The codegen now tracks a `:dframe` control-scope per dynamic frame and, at a
+  RETURN-FROM/GO site, emits the crossed frames' unwinds (DYNAMIC_UNBIND / CATCH_CLOSE
+  / inline cleanup + pop) innermost-first before the jump — so specials are restored
+  and cleanups run, matching a true non-local exit.
+- Verified: tests/test_misc.c::test_vm_nlx (CATCH/THROW incl. cross-call, nested and
+  MV-throw; special binding incl. parallel-LET outer visibility and restore-on-throw;
+  UNWIND-PROTECT on normal/throw/return-from, nested, MV-preserving; and lexical
+  exits crossing an unwind-protect + special binding).  Full suite green.
+
+REMAINING for this issue: PROGV and LOAD-TIME-VALUE (small); FLET/LABELS is closures
+(vm-6).  The CONDITION SYSTEM (HANDLER-BIND/HANDLER-CASE/RESTART, hence IGNORE-ERRORS)
+is NOT in the WHAT list and is deferred as a separate concern — it needs handler-frame
+opcodes; the core NLX frame machinery here is the substrate it will build on.
+
+--------------------------------------------------------------------
+DONE (v1.8.7, branch vm) — vm-5 COMPLETE (closing).
+
+PROGV and LOAD-TIME-VALUE landed, completing the control/values codegen:
+- PROGV: BC_PROGV_BIND/UNBIND bind a RUNTIME list of special symbols to a runtime
+  list of values (makunbound when VALUES is shorter), remembering every old cell in a
+  saved list on the frame; restored on normal exit AND on a non-local exit through the
+  PROGV (and via the :dframe lexical-exit unwind path).
+- LOAD-TIME-VALUE: evaluated once at compile(=load) time for %VM-COMPILE and embedded
+  as a constant.
+Verified in tests/test_misc.c::test_vm_nlx.  Full suite green (42 suites).
+
+Summary of what vm-5 delivered (v1.8.4 .. v1.8.7):
+  part 1  — lexical BLOCK/RETURN-FROM/TAGBODY/GO as byte-code jumps (loops run);
+  part 2a — MULTIPLE-VALUE-CALL/-PROG1 (+ -BIND/-LIST, NTH-VALUE) + non-capturing
+            lambdas;
+  part 2b — CATCH/THROW, dynamic (special) LET/LET* binding, UNWIND-PROTECT, with
+            lexical exits correctly unwinding crossed dynamic frames;
+  final   — PROGV, LOAD-TIME-VALUE.
+
+Explicitly NOT in vm-5 (tracked elsewhere):
+- FLET/LABELS and capturing lambdas — these are CLOSURES = vm-6.
+- The CONDITION SYSTEM (HANDLER-BIND/HANDLER-CASE/RESTART, hence IGNORE-ERRORS) —
+  a separate concern built on this NLX substrate; needs handler-frame opcodes.  File a
+  follow-up when wanted (the "must-restart" acceptance line lands there).
+- Known minor limitation (documented at vm-5.2a): a BLOCK returning MULTIPLE values via
+  (return-from b (values ...)) keeps only the primary; the common (values ...) tail
+  return is unaffected.

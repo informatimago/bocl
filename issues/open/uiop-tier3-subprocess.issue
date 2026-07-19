@@ -1,0 +1,20 @@
+UIOP Tier 3 — optional implementation surface (spun off the closed
+uiop-bocl-porting epic at v1.8.40; UIOP tolerates NOT-IMPLEMENTED-ERROR for
+all of these, so none blocks loading or building ordinary systems).
+
+- LAUNCH-PROGRAM: real async spawn with stream redirection (pipes +
+  fork/exec/waitpid or posix_spawn), PROCESS-INFO-PID, %PROCESS-STATUS,
+  WAIT-PROCESS, TERMINATE-PROCESS.  RUN-PROGRAM currently uses the
+  synchronous %use-system strategy (BOCL:SYSTEM + shell redirections to
+  temporary files), which covers :input/:output/:error-output as
+  files/strings/lines — everything except :STREAM interaction with a live
+  subprocess.
+- image.lisp DUMP-IMAGE / CREATE-IMAGE: would map naturally onto the cfasl
+  boot-image machinery (vm-10) — a "dump" could byte-compile + write the
+  loaded state's definitions, but a faithful heap dump needs kernel work.
+- lisp-build.lisp COMBINE-FASLS: text fasls concatenate trivially; binary
+  cfasls would need a multi-image reader or a merge tool (cfasl container
+  format extension).
+- get-optimization-settings: bocl tracks no OPTIMIZE qualities; the void
+  degrades to empty settings (harmless).  Implement if/when DECLAIM OPTIMIZE
+  becomes meaningful in bocl.

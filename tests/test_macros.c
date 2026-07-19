@@ -23,7 +23,7 @@ TEST_SUITE_SETUP(macros_init){
 TEST_SUITE_TEARDOWN(macros_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_defmacro_basic(void){
     e("(defmacro twice (x) (list 'progn x x))");
@@ -85,7 +85,7 @@ static void test_append_builtin(void){
 static void test_load_lisp_file_with_macro(void){
     /* Write a fixture, load it, then use the macro it defines. This is the
        Phase 5 happy-path: a Lisp file defines and uses macros via LOAD. */
-    const char* path = "/tmp/bocl-test-macros.lisp";
+    const char* path = bocl_test_tmp("test-macros.lisp");
     FILE* f = fopen(path, "w");
     fputs("(defmacro double-it (n) `(* ,n 2))\n"
           "(defparameter *loaded* 21)\n"

@@ -24,7 +24,7 @@ TEST_SUITE_SETUP(s25_init){
 TEST_SUITE_TEARDOWN(s25_fini){
     return CUE_SUCCESS;}
 
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- Environment query functions ---------------------------------------- */
 
@@ -127,34 +127,42 @@ static void test_macroexpand(void){
               "  (and (consp exp) (eq 'if (car exp))))"));}
 
 /* ---- COMPILE-FILE eval-when semantics ----------------------------------- */
-/* The test file /tmp/bocl-s25-cf-test.lisp contains:
+/* The per-process test file (bocl_test_tmp "s25-cf-test.lisp") contains:
  *   (eval-when (:compile-toplevel) (defvar *cf-s25-ct* t))
  *   (eval-when (:execute)          (defvar *cf-s25-ex* t))
- * It is created by the test suite setup or pre-exists on disk. */
+ * It is created by the test itself. */
+
+static char cf_test_path[512];
 
 static void write_cf_test_file(void){
     /* Write directly from C to avoid bocl file I/O issues. */
-    FILE* f = fopen("/tmp/bocl-s25-cf-test.lisp", "w");
+    snprintf(cf_test_path,sizeof(cf_test_path),"%s",bocl_test_tmp("s25-cf-test.lisp"));
+    FILE* f = fopen(cf_test_path, "w");
     if(f){
         fputs("(eval-when (:compile-toplevel) (defvar *cf-s25-ct* t))\n", f);
         fputs("(eval-when (:execute) (defvar *cf-s25-ex* t))\n", f);
         fclose(f);}}
 
 static void test_compile_file_eval_when(void){
+    char form[600];
     write_cf_test_file();
     /* compile-file: :COMPILE-TOPLEVEL fires, :EXECUTE does not */
-    e("(compile-file \"/tmp/bocl-s25-cf-test.lisp\")");
+    snprintf(form,sizeof(form),"(compile-file \"%s\")",cf_test_path);
+    e(form);
     TEST_EQ(eql, T_Symbol,
             e("(boundp '*cf-s25-ct*)"));      /* :compile-toplevel fired */
     TEST_EQ(eql, NIL_Symbol,
             e("(boundp '*cf-s25-ex*)"));      /* :execute did NOT fire */
     /* load: :EXECUTE fires, :COMPILE-TOPLEVEL does not */
     e("(when (boundp '*cf-s25-ct*) (makunbound '*cf-s25-ct*))");
-    e("(load \"/tmp/bocl-s25-cf-test.lisp\")");
+    snprintf(form,sizeof(form),"(load \"%s\")",cf_test_path);
+    e(form);
     TEST_EQ(eql, NIL_Symbol,
             e("(boundp '*cf-s25-ct*)"));      /* :compile-toplevel did NOT fire */
     TEST_EQ(eql, T_Symbol,
-            e("(boundp '*cf-s25-ex*)"));      /* :execute fired */ }
+            e("(boundp '*cf-s25-ex*)"));      /* :execute fired */
+    unlink(cf_test_path);
+    unlink(bocl_test_tmp("s25-cf-test.cfasl")); }
 
 /* ---- DEFUN is an ANSI macro (BOCL:DEFINE-FUNCTION expansion) ------------- */
 
@@ -217,8 +225,13 @@ static void test_def_form_macros(void){
 
 /* ---- COMPILE-FILE writes a real macro-free fast-load file ---------------- */
 
+static char cf_fasl_src[512];
+static char cf_fasl_out[512];
+
 static void write_cf_fasl_src(void){
-    FILE* f = fopen("/tmp/bocl-s25-fasl-src.lisp", "w");
+    snprintf(cf_fasl_src,sizeof(cf_fasl_src),"%s",bocl_test_tmp("s25-fasl-src.lisp"));
+    snprintf(cf_fasl_out,sizeof(cf_fasl_out),"%s",bocl_test_tmp("s25-fasl-src.cfasl"));
+    FILE* f = fopen(cf_fasl_src, "w");
     if(f){
         fputs("(defmacro s25-dbl (x) (list '* 2 x))\n", f);
         fputs("(defun s25-usedbl (n) (s25-dbl n))\n", f);
@@ -228,16 +241,21 @@ static void write_cf_fasl_src(void){
 
 static void test_compile_file_fasl(void){
     write_cf_fasl_src();
-    /* compile-file writes a real fasl that PROBE-FILE finds ... */
-    e("(compile-file \"/tmp/bocl-s25-fasl-src.lisp\")");
-    TEST_EQ(eql, T_Symbol,
-            e("(if (probe-file \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
-    /* ... which is a binary cfasl (the COMPILE-FILE default), recognised by its
-       magic so LOAD dispatches to the binary loader ... */
-    TEST_EQ(eql, T_Symbol,
-            e("(if (%cfasl-file-p \"/tmp/bocl-s25-fasl-src.fasl\") t nil)"));
-    /* ... which loads and defines everything, the macro having expanded. */
-    e("(load \"/tmp/bocl-s25-fasl-src.fasl\")");
+    /* compile-file writes a real fast-load file that PROBE-FILE finds — the
+       default output type is now "cfasl" (the byte-compiled binary; see
+       *DEFAULT-COMPILED-FILE-TYPE*) ... */
+    {   char form[600];
+        snprintf(form,sizeof(form),"(compile-file \"%s\")",cf_fasl_src);
+        e(form);
+        snprintf(form,sizeof(form),"(if (probe-file \"%s\") t nil)",cf_fasl_out);
+        TEST_EQ(eql, T_Symbol, e(form));
+        /* ... which is a binary cfasl, recognised by its magic so LOAD dispatches
+           to the binary loader ... */
+        snprintf(form,sizeof(form),"(if (%%cfasl-file-p \"%s\") t nil)",cf_fasl_out);
+        TEST_EQ(eql, T_Symbol, e(form));
+        /* ... which loads and defines everything, the macro having expanded. */
+        snprintf(form,sizeof(form),"(load \"%s\")",cf_fasl_out);
+        e(form); }
     TEST_EQ(eql, T_Symbol, e("(boundp '*s25-fasl-loaded*)"));
     TEST_EQ(eql, I(6),  e("(s25-usedbl 3)"));
     TEST_EQ(eql, I(10), e("(s25-sum '(1 2 3 4))"));

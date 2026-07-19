@@ -25,7 +25,7 @@ TEST_SUITE_SETUP(num_init){
 TEST_SUITE_TEARDOWN(num_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_expt(void){
     TEST_EQ(eql, I(1),   e("(expt 2 0)"));

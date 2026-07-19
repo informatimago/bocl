@@ -1,0 +1,63 @@
+vm-4 — Code generation: core forms (plan-2-bytecode-vm).
+
+Emit bytecode for the everyday special operators + calls.
+
+WHAT (compile <form> in an analyzed compile-env -> bytecode, tracking stack depth)
+- self-evaluating / QUOTE -> PUSH-CONST (add literal to the constant pool, dedup).
+- variable ref -> LOAD-LOCAL depth idx (lexical) or LOAD-GLOBAL sym (special/global).
+- (f a1..an) -> compile args left-to-right, then CALL-NAMED f n (or compile the
+  function form + CALL n).  Tail position -> TAIL-CALL (for loops-as-recursion).
+- IF -> compile test, JUMP-IF-NIL else, then-branch, JUMP end, else-branch.
+- PROGN -> compile each, DROP all but last (respect value/effect context).
+- LET / LET* -> evaluate inits, bind into fresh local slots (LET evaluates all
+  inits before binding; LET* sequentially); SPECIAL vars use a dynamic-bind opcode
+  + UNWIND on exit.
+- SETQ -> compile value, STORE-LOCAL / STORE-GLOBAL, leave value on stack.
+- FUNCTION -> LOAD-FUNCTION sym, or MAKE-CLOSURE for a local lambda (vm-6).
+- THE -> compile the sub-form (optionally emit a type check).
+- LAMBDA at top -> compile to a compiled-function template.
+- VALUE vs EFFECT vs TAIL context threaded through codegen so unused values are
+  dropped and tail calls emitted.
+
+ACCEPTANCE: compile+run a battery: arithmetic, nested LET/LET*, IF chains, a
+countdown loop, SETQ, calling built-ins and other compiled fns; compare to the
+tree-walker on the same inputs.
+
+DEPENDS ON: vm-2 (to run), vm-3 (analysis).
+
+====================================================================
+DONE (v1.8.3, branch vm).
+
+Byte-code code generation for the core (non-control, non-closure) forms, in
+bootstrap/vm-compiler.lisp (the vm-3 compiler module).  %VM-COMPILE analyzes a
+lambda (vm-3) and lowers the IR to the vm-2 ISA, boxing it with the new
+%MAKE-COMPILED-FUNCTION kernel primitive; the result runs on bytecode_apply.
+
+- Emitter + constant pool: a compiler-state vector tracks a reversed list of asm
+  items, the constant pool (EQL dedup) and the live/peak stack depth (-> max-stack).
+- Assembler: asm items -> an octet STRING (the VM reads code via string_octets, so
+  no VM change — §3.4 reconcile resolved to "compiler emits a string").  Jumps use a
+  FIXED 5-octet zig-zag LEB128 displacement so labels resolve in ONE position pass
+  (no fixpoint); vm_read_uvar accepts the non-minimal encoding.  Offsets are taken
+  relative to the byte after the 6-byte jump instruction (matching vm_read_svar).
+- %VM-GEN leaves each node's value on the stack (VALUE context; EFFECT = +POP).
+  Lowered: :const (PUSH-NIL/T/CONST, pooled), :lref depth 0 (LOAD-LOCAL), :gref
+  (LOAD-GLOBAL), :lset/:gset (STORE-* leaves the value), :if (JUMP-IF-NIL/JUMP with
+  a per-branch stack reset), :progn (POP between), :call / :call-named, :function
+  (LOAD-FUNCTION), :let / :let* (fresh-slot stores; the analyzer already baked the
+  parallel-vs-sequential addresses).  RETURN closes the body.
+- Two kernel primitives added (sources/bocl.c): %MAKE-COMPILED-FUNCTION (wraps
+  compiled_function_new) and %BYTECODE-OPCODES (returns the opcode alist straight
+  from the C enum, so the Lisp codegen has ONE source of truth for opcode numbers).
+- Not tail-call optimized yet: a call in tail position emits CALL then RETURN
+  (genuine TCO needs the vm-6 trampoline).  Closures / local functions (:make-closure,
+  :flet, :labels, LOAD-LOCAL depth>0), all control operators, and dynamic (special)
+  LET binds / &optional-default / supplied-p / &key / &aux error clearly (vm-5/vm-6).
+  COMPILE / COMPILE-FILE are NOT rewired to emit byte-code yet (that is vm-8);
+  %VM-COMPILE is the explicit entry for now.
+
+ACCEPTANCE met (tests/test_misc.c::test_vm_codegen, in the suite): a battery
+covering arithmetic, nested/parallel LET, LET*, IF-chains, PROGN, SETQ (lexical +
+global), QUOTE, FUNCALL, &optional/&rest, and a compiled fn calling a compiled fn
+is compiled AND interpreted (tree-walker) and the results compared EQUAL — every
+case matches.  Full suite green (42 suites).  Codegen for control / NLX is vm-5.

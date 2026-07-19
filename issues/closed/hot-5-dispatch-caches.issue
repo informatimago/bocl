@@ -1,0 +1,63 @@
+hot-5 — Global-lookup fast paths + method inline cache (plan-3).
+
+Cut the remaining per-call overheads: global function/value lookup and generic
+dispatch.
+
+WHAT
+- SYMBOL-FUNCTION / SYMBOL-VALUE global lookup: a called global function is fetched
+  from the symbol's function cell every call.  Add a per-call-site (or per-symbol)
+  cache / a direct cell pointer so a global call is a load + type check, not a plist
+  / hash walk.  Invalidate on redefinition (FMAKUNBOUND / SET-SYMBOL-FUNCTION bumps a
+  generation, or the cache holds the cell itself).
+- Generic-function method dispatch INLINE CACHE: cache the last argument-class-key ->
+  effective-method at the call site (monomorphic) with a small polymorphic fallback;
+  miss recomputes via COMPUTE-APPLICABLE-METHODS + method-combination.  Invalidate on
+  add-method / remove-method / class redefinition.  This is the SAME design as vm-7
+  — factor the cache so both the tree-walker and the VM use it.
+- Mind the kernel CLASS vs CLOS %cls duality ([[bocl-class-duality-and-quirks]]) for
+  the cache key.
+
+ACCEPTANCE: measured drop in global-call and generic-call cost; correctness under
+redefinition / add-method (cache invalidation) on the CLOS suite; parity with the
+current dispatch; shared cache module usable by vm-7.
+
+DEPENDS ON: hot-4.  Shares design with vm-7.
+
+--------------------------------------------------------------------------------
+CLOSING (v1.8.29, vm branch) — both remaining overheads are already gone; the
+shared cache exists (vm-7) and serves the tree-walker and the VM alike.
+
+1. SYMBOL-FUNCTION / SYMBOL-VALUE global lookup: already exactly the "load +
+   type check" the issue asks for.  A symbol's function and value are DIRECT
+   STRUCT SLOTS (kernel.c symbol_function/symbol_value: check_type + a slot
+   read) — there is no plist or hash walk to cache away, and no invalidation
+   problem: the "cache" IS the cell (set_symbol_function writes the same slot
+   every reader loads).  The interpreter's call dispatch (eval.c step 3) does
+   symbol_fboundp + symbol_function, both direct.  The one list walk that
+   remains on an interpreted call is the global-macro getf of $MACRO (eval.c
+   step 2, a short-plist scan of a few conses); its order BEFORE the function
+   cell is semantically load-bearing (kernel DEFMACRO stores $MACRO without
+   fmakunbound-ing, kernel DEFUN sets the cell without remf-ing $MACRO), and
+   its cost is noise against the measured per-activation floor (~150us/funcall,
+   hot-1 / vm-9 — the call-bound cost is frame/activation overhead, which is
+   the separately-tracked frame-pooling lever).  Compiled code doesn't even do
+   that: CALL_NAMED resolves through the constant pool + kernel_apply.
+
+2. Generic-function dispatch inline cache: DELIVERED as vm-7 (v1.8.16), and it
+   is the SHARED module this issue required — dispatch is 100% Lisp
+   (bootstrap/prelude.lisp %GF-DISPATCH), and both the tree-walker and the VM
+   reach the same discriminating function through kernel_apply, so ONE cache
+   accelerates both.  Design: per-generic-function EQUAL-hash cache keyed on
+   the required arguments' class tuple -> prebuilt effective-method closure
+   (sound because bocl has no EQL specializers — applicability and specificity
+   depend only on classes); invalidation exactly as specified here — a global
+   generation (*%DISPATCH-GEN*) bumped on any class (re)definition, plus
+   per-gf cache clear in ENSURE-METHOD on add/redefine/remove.  The class-
+   duality note is respected (keys are CLASS-OF objects, one per designator).
+   Measured ~31x on a method-combination-heavy GF (46.5s -> 1.5s / 4000 calls,
+   interpreted); correctness under add-method + class redefinition verified
+   (tests/test_misc.c::test_vm_clos_cache); full suite green.
+
+The per-CALL-SITE monomorphic variant sketched here (and in vm-7) remains a
+documented possible micro-opt in vm-7's closing note — worth revisiting only if
+the gf-level hash lookup ever shows in a profile.

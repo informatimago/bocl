@@ -1,0 +1,756 @@
+Hand fixes to the GENERATED C sources, applied on top of the generators' output.
+================================================================================
+
+The committed generated sources carry fixes the generators cannot express (see
+issues/closed/generated-sources-drift.issue):
+  - built_in_functions.c: kernel_TYPEP resolves symbol type specifiers to
+    classes; kernel_SET_SYMBOL_{PACKAGE,VALUE,FUNCTION,PLIST} call the C
+    setters in their real (object, new-value) argument order; the
+    kernel_structure_functions.h / bytecode.h / packages.h includes.
+  - kernel_structure_functions.{c,h}: the hot-3 CONS representation of
+    LEXICAL-VARIABLE (one allocation, car/cdr access) and the hot-2 _fast
+    accessors.
+  - structure_functions.c: the GC-rootset pinning of the structure classes in
+    kernel_initialize_structure_functions.
+
+`make regenerate` regenerates the pristine output and then applies this patch
+(patch -p1 from the repository root), so regeneration is REPRODUCIBLE and a
+generator-spec change shows up as a clean diff.  If the patch ever fails to
+apply, the generators' output shifted: re-derive this file by committing the
+intended final sources, running the bare generation, and capturing
+`git diff -R` over the generated files (then restore).
+
+Everything below this line is the unified diff (old = pristine generator
+output, new = the fixed sources).
+================================================================================
+diff --git b/sources/built_in_functions.c a/sources/built_in_functions.c
+index 500916f..41f07cf 100644
+--- b/sources/built_in_functions.c
++++ a/sources/built_in_functions.c
+@@ -1,11 +1,17 @@
+ #include "built_in_functions.h"
+ #include "kernel_functions.h"
++#include "kernel_structure_functions.h"
+ #include "kernel.h"
++#include "bytecode.h"
+ #include "cons.h"
+ #include "variable.h"
+ #include "stream.h"
+ #include "reader.h"
+ #include "printer.h"
++#include "packages.h"
++
++/* char_ref/char_set/bit/bit_set/svref/svref_set (defined in bostring.c /
++   bit_vector.c / vector.c) are declared in the generated kernel_functions.h. */
+ 
+ void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results){
+     uword pool=open_live_pool();
+@@ -133,10 +139,14 @@ void kernel_TYPEP(Ref function,Ref arguments,MultipleValues* results){
+     add_to_live_pool(arguments);
+     Ref current=arguments;
+     Ref par_object = pop_mandatory_argument(function,&current);
+-    Ref par_class = pop_mandatory_argument(function,&current);
++    Ref par_type   = pop_mandatory_argument(function,&current);
+     check_no_more_arguments(function,current);
+     results->count=1;
+-    results->values[0] = as_boolean(typep(par_object, par_class));
++    /* Resolve symbol type specifiers to class objects (e.g. 'vector → VECTOR_Class). */
++    Ref par_class = symbolp(par_type) ? find_class(par_type) : par_type;
++    results->values[0] = (par_class != NULL)
++                         ? as_boolean(typep(par_object, par_class))
++                         : NIL_Symbol;
+     close_live_pool(pool);
+ }
+ 
+@@ -468,7 +478,7 @@ void kernel_SET_SYMBOL_VALUE(Ref function,Ref arguments,MultipleValues* results)
+     Ref par_symbol = pop_mandatory_argument(function,&current);
+     check_no_more_arguments(function,current);
+     results->count=1;
+-    results->values[0] = set_symbol_value(par_new_value, par_symbol);
++    results->values[0] = set_symbol_value(par_symbol, par_new_value);
+     close_live_pool(pool);
+ }
+ 
+@@ -481,7 +491,7 @@ void kernel_SET_SYMBOL_FUNCTION(Ref function,Ref arguments,MultipleValues* resul
+     Ref par_symbol = pop_mandatory_argument(function,&current);
+     check_no_more_arguments(function,current);
+     results->count=1;
+-    results->values[0] = set_symbol_function(par_new_function, par_symbol);
++    results->values[0] = set_symbol_function(par_symbol, par_new_function);
+     close_live_pool(pool);
+ }
+ 
+@@ -494,7 +504,7 @@ void kernel_SET_SYMBOL_PLIST(Ref function,Ref arguments,MultipleValues* results)
+     Ref par_symbol = pop_mandatory_argument(function,&current);
+     check_no_more_arguments(function,current);
+     results->count=1;
+-    results->values[0] = set_symbol_plist(par_new_plist, par_symbol);
++    results->values[0] = set_symbol_plist(par_symbol, par_new_plist);
+     close_live_pool(pool);
+ }
+ 
+@@ -794,7 +804,14 @@ void kernel_FUNCTIONP(Ref function,Ref arguments,MultipleValues* results){
+     Ref par_object = pop_mandatory_argument(function,&current);
+     check_no_more_arguments(function,current);
+     results->count=1;
+-    results->values[0] = as_boolean(functionp(par_object));
++    /* CL FUNCTIONP returns T for any callable: interpreted function,
++       closure, or built-in function. */
++    results->values[0] = as_boolean(
++        functionp(par_object)         /* Function (interpreted) */
++        || closurep(par_object)       /* Closure (lambda/let capture) */
++        || compiled_function_p(par_object)   /* byte-code function (vm-1) */
++        || compiled_closure_p(par_object)    /* byte-code closure */
++        || built_in_function_p(par_object)); /* C built-in */
+     close_live_pool(pool);
+ }
+ 
+@@ -1243,7 +1260,20 @@ void kernel_LIST_LENGTH(Ref function,Ref arguments,MultipleValues* results){
+     Ref par_list = pop_mandatory_argument(function,&current);
+     check_no_more_arguments(function,current);
+     results->count=1;
+-    results->values[0] = integer_from_uword(list_length(par_list));
++    /* CLHS LIST-LENGTH: count via Floyd's tortoise/hare so a CIRCULAR list returns
++       NIL instead of looping forever; a dotted (improper) list is a type-error. */
++    Ref slow=par_list, fast=par_list;
++    uword n=0;
++    for(;;){
++        if(nullp(fast)){ results->values[0]=integer_from_uword(n); break; }
++        if(!consp(fast)){ TYPE_ERROR(par_list,LIST_Class); }
++        fast=cons_cdr(fast); n++;
++        if(nullp(fast)){ results->values[0]=integer_from_uword(n); break; }
++        if(!consp(fast)){ TYPE_ERROR(par_list,LIST_Class); }
++        fast=cons_cdr(fast); n++;
++        slow=cons_cdr(slow);
++        if(fast==slow){ results->values[0]=NIL_Symbol; break; }   /* circular */
++    }
+     close_live_pool(pool);
+ }
+ 
+@@ -1390,7 +1420,7 @@ void kernel_GETF(Ref function,Ref arguments,MultipleValues* results){
+     Ref current=arguments;
+     Ref par_plist = pop_mandatory_argument(function,&current);
+     Ref par_indicator = pop_mandatory_argument(function,&current);
+-    Ref def_default_value = variable_value(S(NIL));
++    Ref def_default_value = NIL_Symbol;
+     Ref par_default_value = pop_optional_argument(function,&current,def_default_value);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -1460,6 +1490,36 @@ void kernel_VECTOR_LENGTH(Ref function,Ref arguments,MultipleValues* results){
+     close_live_pool(pool);
+ }
+ 
++/* %ARRAY-FILL-POINTER vector  ->  the fill pointer (integer) or NIL.
++   Accepts any object (LENGTH calls it on arbitrary values): non-vectors and
++   vectors without a fill pointer both return NIL. */
++void kernel_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function);
++    add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref par_vector = pop_mandatory_argument(function,&current);
++    check_no_more_arguments(function,current);
++    results->count=1;
++    results->values[0] = array_fill_pointer(par_vector);
++    close_live_pool(pool);
++}
++
++/* %SET-ARRAY-FILL-POINTER vector fill-pointer  ->  fill-pointer.  Stores the
++   fill pointer inline in the vector's slots block. */
++void kernel_SET_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function);
++    add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref par_vector = pop_mandatory_argument(function,&current);
++    Ref par_fill_pointer = pop_mandatory_argument(function,&current);
++    check_no_more_arguments(function,current);
++    results->count=1;
++    results->values[0] = array_set_fill_pointer(par_vector,par_fill_pointer);
++    close_live_pool(pool);
++}
++
+ void kernel_SVREF(Ref function,Ref arguments,MultipleValues* results){
+     uword pool=open_live_pool();
+     add_to_live_pool(function);
+@@ -1487,6 +1547,73 @@ void kernel_SVREF_SET(Ref function,Ref arguments,MultipleValues* results){
+     close_live_pool(pool);
+ }
+ 
++/* ---- Slice 23: MAKE-LIST, AREF, AREF-SET -------------------------------- */
++
++/* (MAKE-LIST n &key initial-element) — build a list of N elements. */
++void kernel_MAKE_LIST(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function); add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref n_ref   = pop_mandatory_argument(function,&current);
++    Ref init    = NIL_Symbol;
++    /* Parse :initial-element keyword */
++    while(consp(current)){
++        Ref k=cons_car(current); current=cons_cdr(current);
++        Ref v=consp(current)?cons_car(current):NIL_Symbol; if(consp(current)) current=cons_cdr(current);
++        if(eql(k,keyword_intern_cstring("INITIAL-ELEMENT"))) init=v;}
++    word n=integer_value(n_ref);
++    if(n<0){ ERROR("MAKE-LIST: negative length %"WORD_FORMAT,n); }
++    Ref result=NIL_Symbol;
++    add_to_live_pool(init);
++    for(word i=0;i<n;i++){
++        result=cons(init,result);
++        add_to_live_pool(result);}
++    results->count=1;
++    results->values[0]=result;
++    close_live_pool(pool);}
++
++/* (AREF array index) — generic 1-D array element access.
++   Dispatches on the array type: vectors, strings, bit-vectors. */
++void kernel_AREF(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function); add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref arr  = pop_mandatory_argument(function,&current);
++    Ref idx  = pop_mandatory_argument(function,&current);
++    check_no_more_arguments(function,current);
++    Ref val;
++    /* STRING and BIT-VECTOR must be tested BEFORE the general VECTOR: both are
++       subtypes of VECTOR (typep "ab" 'vector => T), so checking VECTOR first would
++       send a string/bit-vector through svref, which reads its octet/bit storage as
++       Refs and crashes.  Order specific representations before the general one. */
++    if(typep(arr,STRING_Class)){         val = char_ref(arr,idx); }
++    else if(typep(arr,BIT_VECTOR_Class)){ val = bit(arr,idx); }
++    else if(typep(arr,VECTOR_Class)){    val = svref(arr,idx); }
++    else { TYPE_ERROR(arr,ARRAY_Class); val=NIL_Symbol; }
++    results->count=1;
++    results->values[0]=val;
++    close_live_pool(pool);}
++
++/* (AREF-SET value array index) — setter for AREF (used by (setf (aref …))). */
++void kernel_AREF_SET(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function); add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref val  = pop_mandatory_argument(function,&current);
++    Ref arr  = pop_mandatory_argument(function,&current);
++    Ref idx  = pop_mandatory_argument(function,&current);
++    check_no_more_arguments(function,current);
++    /* Specific representations before the general VECTOR — see kernel_AREF. */
++    if(typep(arr,STRING_Class)){
++        /* char_set takes (string, index, character) */
++        char_set(arr,idx,val);}
++    else if(typep(arr,BIT_VECTOR_Class)){ bit_set(arr,idx,val); }
++    else if(typep(arr,VECTOR_Class)){     svref_set(arr,idx,val); }
++    else { TYPE_ERROR(arr,ARRAY_Class); }
++    results->count=1;
++    results->values[0]=val;
++    close_live_pool(pool);}
++
+ void kernel_BIT_VECTOR_P(Ref function,Ref arguments,MultipleValues* results){
+     uword pool=open_live_pool();
+     add_to_live_pool(function);
+@@ -1827,11 +1954,11 @@ void kernel_KERNEL_READ_CHAR(Ref function,Ref arguments,MultipleValues* results)
+     Ref current=arguments;
+     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
+     Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+-    Ref def_eof_error_p = variable_value(S(T));
++    Ref def_eof_error_p = T_Symbol;
+     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
+-    Ref def_eof_value = variable_value(S(NIL));
++    Ref def_eof_value = NIL_Symbol;
+     Ref par_eof_value = pop_optional_argument(function,&current,def_eof_value);
+-    Ref def_recursive_p = variable_value(S(NIL));
++    Ref def_recursive_p = NIL_Symbol;
+     Ref par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -1847,11 +1974,11 @@ void kernel_KERNEL_PEEK_CHAR(Ref function,Ref arguments,MultipleValues* results)
+     Ref par_peek_type = pop_mandatory_argument(function,&current);
+     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
+     Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+-    Ref def_eof_error_p = variable_value(S(T));
++    Ref def_eof_error_p = T_Symbol;
+     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
+-    Ref def_eof_value = variable_value(S(NIL));
++    Ref def_eof_value = NIL_Symbol;
+     Ref par_eof_value = pop_optional_argument(function,&current,def_eof_value);
+-    Ref def_recursive_p = variable_value(S(NIL));
++    Ref def_recursive_p = NIL_Symbol;
+     Ref par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -1866,11 +1993,11 @@ void kernel_KERNEL_READ(Ref function,Ref arguments,MultipleValues* results){
+     Ref current=arguments;
+     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
+     Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+-    Ref def_eof_error_p = variable_value(S(T));
++    Ref def_eof_error_p = T_Symbol;
+     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
+-    Ref def_eof_value = variable_value(S(NIL));
++    Ref def_eof_value = NIL_Symbol;
+     Ref par_eof_value = pop_optional_argument(function,&current,def_eof_value);
+-    Ref def_recursive_p = variable_value(S(NIL));
++    Ref def_recursive_p = NIL_Symbol;
+     Ref par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -1885,11 +2012,11 @@ void kernel_KERNEL_READ_PRESERVING_WHITESPACE(Ref function,Ref arguments,Multipl
+     Ref current=arguments;
+     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
+     Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+-    Ref def_eof_error_p = variable_value(S(T));
++    Ref def_eof_error_p = T_Symbol;
+     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
+-    Ref def_eof_value = variable_value(S(NIL));
++    Ref def_eof_value = NIL_Symbol;
+     Ref par_eof_value = pop_optional_argument(function,&current,def_eof_value);
+-    Ref def_recursive_p = variable_value(S(NIL));
++    Ref def_recursive_p = NIL_Symbol;
+     Ref par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -1905,7 +2032,7 @@ void kernel_KERNEL_READ_DELIMITED_LIST(Ref function,Ref arguments,MultipleValues
+     Ref par_character = pop_mandatory_argument(function,&current);
+     Ref def_input_stream = variable_value(S(*STANDARD-INPUT*));
+     Ref par_input_stream = pop_optional_argument(function,&current,def_input_stream);
+-    Ref def_recursive_p = variable_value(S(NIL));
++    Ref def_recursive_p = NIL_Symbol;
+     Ref par_recursive_p = pop_optional_argument(function,&current,def_recursive_p);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -1919,19 +2046,23 @@ void kernel_KERNEL_READ_FROM_STRING(Ref function,Ref arguments,MultipleValues* r
+     add_to_live_pool(arguments);
+     Ref current=arguments;
+     Ref par_input_string = pop_mandatory_argument(function,&current);
+-    Ref def_eof_error_p = variable_value(S(T));
++    Ref def_eof_error_p = T_Symbol;
+     Ref par_eof_error_p = pop_optional_argument(function,&current,def_eof_error_p);
+-    Ref def_eof_value = variable_value(S(NIL));
++    Ref def_eof_value = NIL_Symbol;
+     Ref par_eof_value = pop_optional_argument(function,&current,def_eof_value);
+     Ref def_start = I(0);
+     Ref par_start = pop_optional_argument(function,&current,def_start);
+-    Ref def_end = variable_value(S(NIL));
++    Ref def_end = NIL_Symbol;
+     Ref par_end = pop_optional_argument(function,&current,def_end);
+-    Ref def_preserve_whitespace = variable_value(S(NIL));
++    Ref def_preserve_whitespace = NIL_Symbol;
+     Ref par_preserve_whitespace = pop_optional_argument(function,&current,def_preserve_whitespace);
+     check_no_more_arguments(function,current);
+-    results->count=1;
+-    results->values[0] = kernel_read_from_string(par_input_string, par_eof_error_p, par_eof_value, par_start, par_end, par_preserve_whitespace);
++    /* READ-FROM-STRING returns two values: the object and the index of the first
++       unread character (CLHS). */
++    Ref position = I(0);
++    results->count=2;
++    results->values[0] = kernel_read_from_string(par_input_string, par_eof_error_p, par_eof_value, par_start, par_end, par_preserve_whitespace, &position);
++    results->values[1] = position;
+     close_live_pool(pool);
+ }
+ 
+@@ -1941,9 +2072,9 @@ void kernel_MAKE_STRING_INPUT_STREAM(Ref function,Ref arguments,MultipleValues*
+     add_to_live_pool(arguments);
+     Ref current=arguments;
+     Ref par_string = pop_mandatory_argument(function,&current);
+-    Ref def_start = variable_value(S(NIL));
++    Ref def_start = NIL_Symbol;
+     Ref par_start = pop_optional_argument(function,&current,def_start);
+-    Ref def_end = variable_value(S(NIL));
++    Ref def_end = NIL_Symbol;
+     Ref par_end = pop_optional_argument(function,&current,def_end);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -1956,7 +2087,7 @@ void kernel_MAKE_STRING_OUTPUT_STREAM(Ref function,Ref arguments,MultipleValues*
+     add_to_live_pool(function);
+     add_to_live_pool(arguments);
+     Ref current=arguments;
+-    Ref def_element_type = variable_value(S(NIL));
++    Ref def_element_type = NIL_Symbol;
+     Ref par_element_type = pop_key_argument(function,&current,K(ELEMENT-TYPE),def_element_type);
+     results->count=1;
+     results->values[0] = stream_output_string(par_element_type);
+@@ -2155,9 +2286,9 @@ void kernel_MAKE_ENVIRONMENT(Ref function,Ref arguments,MultipleValues* results)
+     add_to_live_pool(function);
+     add_to_live_pool(arguments);
+     Ref current=arguments;
+-    Ref def_next_environment = variable_value(S(NIL));
++    Ref def_next_environment = NIL_Symbol;
+     Ref par_next_environment = pop_optional_argument(function,&current,def_next_environment);
+-    Ref def_toplevelp = variable_value(S(NIL));
++    Ref def_toplevelp = NIL_Symbol;
+     Ref par_toplevelp = pop_optional_argument(function,&current,def_toplevelp);
+     check_no_more_arguments(function,current);
+     results->count=1;
+@@ -2391,10 +2522,84 @@ void kernel_ENV_SPECIAL_VARIABLE_P(Ref function,Ref arguments,MultipleValues* re
+ }
+ 
+ 
++void kernel_SET_PRINT_LEVEL_DEPTH(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function);
++    add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref par_depth = pop_mandatory_argument(function,&current);
++    check_no_more_arguments(function,current);
++    printer_set_level_depth(integer_value(par_depth));
++    results->count=1;
++    results->values[0] = par_depth;
++    close_live_pool(pool);
++}
++
++/* (%CIRCLE-ACTIVE-P) — T while *PRINT-CIRCLE* labelling is in effect, so the
++   prelude array printer knows whether to use #n=/#n# or its lexical cycle guard. */
++void kernel_CIRCLE_ACTIVE_P(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function); add_to_live_pool(arguments);
++    check_no_more_arguments(function,arguments);
++    results->count=1;
++    results->values[0] = as_boolean(printer_circle_active());
++    close_live_pool(pool);
++}
++
++/* (%CIRCLE-ACTION obj) — the *PRINT-CIRCLE* label decision for OBJ: a positive
++   integer N for a back-reference (the prelude prints "#N#"), a negative -N for a
++   shared object's first appearance (the prelude prints "#N=" then OBJ), or NIL to
++   print OBJ normally.  Mutates the label registry (assigns N) like the C printer. */
++void kernel_CIRCLE_ACTION(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function); add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref obj = pop_mandatory_argument(function,&current);
++    check_no_more_arguments(function,current);
++    word act = printer_circle_action(obj);
++    results->count=1;
++    results->values[0] = (act==0) ? NIL_Symbol : integer_from_word(act);
++    close_live_pool(pool);
++}
++
++/* (%FIND-LOCAL-MACRO symbol environment) — if SYMBOL names a lexically-local macro
++   (MACROLET / WITH-HASH-TABLE-ITERATOR) in ENVIRONMENT, return a macro function for
++   it; else NIL.  MACRO-FUNCTION consults this so it sees local macros via the
++   &ENVIRONMENT it is given. */
++void kernel_FIND_LOCAL_MACRO(Ref function,Ref arguments,MultipleValues* results){
++    uword pool=open_live_pool();
++    add_to_live_pool(function); add_to_live_pool(arguments);
++    Ref current=arguments;
++    Ref sym = pop_mandatory_argument(function,&current);
++    Ref env = pop_mandatory_argument(function,&current);
++    check_no_more_arguments(function,current);
++    Ref result = NIL_Symbol;
++    if(!nullp(env)){
++        Ref local = environment_find_function(sym, env);
++        if(!nullp(local) && env_local_macro_p(local)){
++            result = function_new(env_local_macro_name(local),
++                                  env_local_macro_lambda_list(local),
++                                  env_local_macro_body(local)); } }
++    results->count=1; results->values[0]=result;
++    close_live_pool(pool);
++}
++
+ void kernel_initialize_built_in_functions(void){
+     {   Ref fname=S(KERNEL-ROOTSET);
+         Ref lambda_list=S(NIL);
+         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_KERNEL_ROOTSET));}
++    {   Ref fname=S(%SET-PRINT-LEVEL-DEPTH);
++        Ref lambda_list=list(S(DEPTH),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SET_PRINT_LEVEL_DEPTH));}
++    {   Ref fname=S(%CIRCLE-ACTIVE-P);
++        Ref lambda_list=S(NIL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CIRCLE_ACTIVE_P));}
++    {   Ref fname=S(%CIRCLE-ACTION);
++        Ref lambda_list=list(S(OBJECT),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_CIRCLE_ACTION));}
++    {   Ref fname=S(%FIND-LOCAL-MACRO);
++        Ref lambda_list=list(S(SYMBOL),S(ENVIRONMENT),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_FIND_LOCAL_MACRO));}
+     {   Ref fname=S(GET-EVAL-COUNTERS);
+         Ref lambda_list=S(NIL);
+         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_GET_EVAL_COUNTERS));}
+@@ -2749,6 +2954,12 @@ void kernel_initialize_built_in_functions(void){
+     {   Ref fname=S(VECTOR-LENGTH);
+         Ref lambda_list=list(S(VECTOR),NULL);
+         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_VECTOR_LENGTH));}
++    {   Ref fname=symbol_intern_cstring("%ARRAY-FILL-POINTER");
++        Ref lambda_list=list(S(VECTOR),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ARRAY_FILL_POINTER));}
++    {   Ref fname=symbol_intern_cstring("%SET-ARRAY-FILL-POINTER");
++        Ref lambda_list=list(S(VECTOR),S(FILL-POINTER),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SET_ARRAY_FILL_POINTER));}
+     {   Ref fname=S(SVREF);
+         Ref lambda_list=list(S(VECTOR),S(INDEX),NULL);
+         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_SVREF));}
+@@ -2956,5 +3167,15 @@ void kernel_initialize_built_in_functions(void){
+     {   Ref fname=S(ENV-SPECIAL-VARIABLE-P);
+         Ref lambda_list=list(S(OBJECT),NULL);
+         set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_ENV_SPECIAL_VARIABLE_P));}
++    /* Slice 23 — MAKE-LIST, AREF, AREF-SET. */
++    {   Ref fname=S(MAKE-LIST);
++        Ref lambda_list=list(S(N),S(&REST),S(KEYS),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_MAKE_LIST));}
++    {   Ref fname=S(AREF);
++        Ref lambda_list=list(S(ARRAY),S(INDEX),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_AREF));}
++    {   Ref fname=S(AREF-SET);
++        Ref lambda_list=list(S(VALUE),S(ARRAY),S(INDEX),NULL);
++        set_symbol_function(fname,built_in_function_new(fname,lambda_list,kernel_AREF_SET));}
+ }
+ /**** THE END ****/
+diff --git b/sources/built_in_functions.h a/sources/built_in_functions.h
+index baa7e32..9b212c6 100644
+--- b/sources/built_in_functions.h
++++ a/sources/built_in_functions.h
+@@ -4,6 +4,10 @@
+ #include "kernel.h"
+ 
+ void kernel_KERNEL_ROOTSET(Ref function,Ref arguments,MultipleValues* results);
++void kernel_SET_PRINT_LEVEL_DEPTH(Ref function,Ref arguments,MultipleValues* results);
++void kernel_CIRCLE_ACTIVE_P(Ref function,Ref arguments,MultipleValues* results);
++void kernel_CIRCLE_ACTION(Ref function,Ref arguments,MultipleValues* results);
++void kernel_FIND_LOCAL_MACRO(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_GET_EVAL_COUNTERS(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_CLASS_NEW(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_CLASSP(Ref function,Ref arguments,MultipleValues* results);
+@@ -122,6 +126,8 @@ void kernel_REMF(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_VECTOR(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_VECTORP(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_VECTOR_LENGTH(Ref function,Ref arguments,MultipleValues* results);
++void kernel_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results);
++void kernel_SET_ARRAY_FILL_POINTER(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_SVREF(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_SVREF_SET(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_BIT_VECTOR_P(Ref function,Ref arguments,MultipleValues* results);
+@@ -192,6 +198,11 @@ void kernel_ENVIRONMENT_FIND_BLOCK(Ref function,Ref arguments,MultipleValues* re
+ void kernel_ENVIRONMENT_FIND_CATCH(Ref function,Ref arguments,MultipleValues* results);
+ void kernel_ENV_SPECIAL_VARIABLE_P(Ref function,Ref arguments,MultipleValues* results);
+ 
++/* Slice 23 */
++void kernel_MAKE_LIST(Ref function,Ref arguments,MultipleValues* results);
++void kernel_AREF    (Ref function,Ref arguments,MultipleValues* results);
++void kernel_AREF_SET(Ref function,Ref arguments,MultipleValues* results);
++
+ void kernel_initialize_built_in_functions(void);
+ 
+ #endif
+diff --git b/sources/kernel_functions.h a/sources/kernel_functions.h
+index 10f225e..238cfc0 100644
+--- b/sources/kernel_functions.h
++++ a/sources/kernel_functions.h
+@@ -13,6 +13,10 @@ Ref class_of(Ref par_object);
+ Ref find_class(Ref par_class_name);
+ bool subclassp(Ref par_class, Ref par_superclass);
+ bool typep(Ref par_object, Ref par_class);
++/* CLOS type bridge — called from prelude to enable CLOS condition dispatch. */
++void clos_register_bridge(Ref obj_struct_class, Ref cls_struct_class);
++bool clos_instance_p(Ref object);
++bool clos_class_p(Ref cls);
+ void check_type(Ref par_object, Ref par_class);
+ void check_class(Ref par_object, Ref par_class);
+ Ref built_in_class_new(Ref par_name);
+@@ -24,12 +28,24 @@ Ref cons_rplaca(Ref par_cell, Ref par_newcar);
+ Ref cons_rplacd(Ref par_cell, Ref par_newcdr);
+ bool integerp(Ref par_object);
+ bool floatp(Ref par_object);
++bool ratiop(Ref par_object);
++bool complexp(Ref par_object);
++Ref  ratio_new(Ref numerator, Ref denominator);
++Ref  ratio_numerator(Ref r);
++Ref  ratio_denominator(Ref r);
++floating ratio_to_float(Ref r);
++Ref  complex_new(Ref realpart, Ref imagpart);
++Ref  complex_realpart(Ref c);
++Ref  complex_imagpart(Ref c);
+ bool characterp(Ref par_object);
+ Ref character_code(Ref par_character);
+ Ref character_name(Ref par_character);
+ Ref code_character(Ref par_code);
+ Ref name_character(Ref par_name);
+ Ref find_symbol(Ref par_name, Ref par_obarray);
++Ref make_obarray(void);
++void obarray_add_symbol(Ref obarray, Ref sym);
++bool obarray_remove_symbol(Ref obarray, Ref sym);
+ Ref symbol_new(Ref par_name);
+ Ref symbol_intern(Ref par_name);
+ Ref symbol_name(Ref par_symbol);
+@@ -125,6 +141,9 @@ uword bit_vector_length(Ref par_bit_vector);
+ Ref bit(Ref par_bit_vector, Ref par_index);
+ Ref bit_set(Ref par_bit_vector, Ref par_index, Ref par_new_bit);
+ bool bit_vector_equal(Ref par_a, Ref par_b);
++bool array_has_fill_pointer(Ref par_vector);
++Ref array_fill_pointer(Ref par_vector);
++Ref array_set_fill_pointer(Ref par_vector, Ref par_fill_pointer);
+ uword string_length(Ref par_string);
+ bool string_eq(Ref par_a, Ref par_b);
+ bool string_equal(Ref par_a, Ref par_b);
+@@ -137,6 +156,7 @@ void values(Ref par_values, MultipleValues* results);
+ Ref pathname(Ref par_pathname_designator);
+ Ref namestring(Ref par_pathname);
+ Ref prin1_to_string(Ref par_object);
++Ref princ_to_string(Ref par_object);
+ Ref print(Ref par_object, Ref par_stream);
+ Ref prin1(Ref par_object, Ref par_stream);
+ Ref princ(Ref par_object, Ref par_stream);
+@@ -146,7 +166,7 @@ Ref kernel_peek_char(Ref par_peek_type, Ref par_input_stream, Ref par_eof_error_
+ Ref kernel_read(Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
+ Ref kernel_read_preserving_whitespace(Ref par_input_stream, Ref par_eof_error_p, Ref par_eof_value, Ref par_recursive_p);
+ Ref kernel_read_delimited_list(Ref par_character, Ref par_input_stream, Ref par_recursive_p);
+-Ref kernel_read_from_string(Ref par_input_string, Ref par_eof_error_p, Ref par_eof_value, Ref par_start, Ref par_end, Ref par_preserve_whitespace);
++Ref kernel_read_from_string(Ref par_input_string, Ref par_eof_error_p, Ref par_eof_value, Ref par_start, Ref par_end, Ref par_preserve_whitespace, Ref* position_out);
+ Ref stream_input_string(Ref par_string, Ref par_start, Ref par_end);
+ Ref stream_output_string(Ref par_element_type);
+ Ref string_output_stream_get_string(Ref par_string_output_stream);
+diff --git b/sources/kernel_structure_functions.c a/sources/kernel_structure_functions.c
+index 75127a8..63d3a4c 100644
+--- b/sources/kernel_structure_functions.c
++++ a/sources/kernel_structure_functions.c
+@@ -2,87 +2,39 @@
+ #include "structure_functions.h"
+ #include "kernel.h"
+ 
+-Ref LEXICAL_VARIABLE_Class;
++Ref LEXICAL_VARIABLE_Class;   /* still registered (structure_functions.c), now unused */
++/* hot-3: a LEXICAL binding is the hottest, most-allocated environment wrapper —
++   one is made per parameter and per LET binding on every call.  Represent it as a
++   plain CONS (name . value) instead of a two-allocation CLOS structure instance:
++   ONE allocation (was Object + slots-vector), O(1) car/cdr access, and it is
++   already fully integrated with the GC (traced) and printer.  In the VARIABLE
++   namespace only lexical wrappers are conses — local/global specials, constants
++   and symbol-macros stay structure instances — so env_lexical_variable_p is
++   exactly CONSP, and env_variable_wrapper_name / env_variable_value keep working
++   (they test env_lexical_variable_p first).  The dead (unregistered)
++   kernel_ENV_LEXICAL_* wrappers and the LEXICAL_VARIABLE_Class structure are left
++   defined but unused.  cons_rplac{a,d} apply the write barrier for us. */
+ bool env_lexical_variable_p(Ref par_object){
+-    return typep(par_object,LEXICAL_VARIABLE_Class);}
++    return consp(par_object);}
+ Ref env_make_lexical_variable(Ref par_name, Ref par_value){
+-    uword pool=open_live_pool();
+-    add_to_live_pool(par_name);
+-    add_to_live_pool(par_value);
+-    Ref instance = make_structure_instance(LEXICAL_VARIABLE_Class);
+-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
+-    {   Ref entry = assq(S(NAME),pos);
+-        if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
+-        structure_set(par_name,instance,cdr(entry));}
+-    {   Ref entry = assq(S(VALUE),pos);
+-        if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LEXICAL-VARIABLE"); }
+-        structure_set(par_value,instance,cdr(entry));}
+-    close_live_pool(pool);
+-    add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
+-    return instance;}
++    return cons(par_name, par_value);}
+ Ref env_lexical_variable(Ref par_name){
+-    uword pool=open_live_pool();
+-    add_to_live_pool(par_name);
+-    Ref instance = make_structure_instance(LEXICAL_VARIABLE_Class);
+-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
+-    {   Ref entry = assq(S(NAME),pos);
+-        if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
+-        structure_set(par_name,instance,cdr(entry));}
+-    close_live_pool(pool);
+-    add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
+-    return instance;}
+-Ref copy_lexical_variable(Ref par_lexical_variable_instance){
+-    uword pool=open_live_pool();
+-    add_to_live_pool(par_lexical_variable_instance);
+-    Ref instance = make_structure_instance(LEXICAL_VARIABLE_Class);
+-    Ref size = structure_class_instance_size(LEXICAL_VARIABLE_Class);
+-    for(word i = integer_value(size)-1;0<=i;i--){
+-        Ref index = integer_from_word(i);
+-        structure_set(structure_get(par_lexical_variable_instance,index),instance,index);}
+-    close_live_pool(pool);
+-    add_to_live_pool(instance);   /* re-root: close_live_pool trimmed the fresh instance */
+-    return instance;}
+-Ref env_lexical_variable_name(Ref par_lexical_variable_instance){
+-    uword pool=open_live_pool();
+-    add_to_live_pool(par_lexical_variable_instance);
+-    check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
+-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
+-    Ref entry = assq(S(NAME),pos);
+-    if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
+-    Ref result=structure_get(par_lexical_variable_instance,cdr(entry));
+-    close_live_pool(pool);
+-    return result;}
+-Ref set_env_lexical_variable_name(Ref par_new_name, Ref par_lexical_variable_instance){
+-    uword pool=open_live_pool();
+-    add_to_live_pool(par_new_name);
+-    add_to_live_pool(par_lexical_variable_instance);
+-    check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
+-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
+-    Ref entry = assq(S(NAME),pos);
+-    if(nullp(entry)){ FATAL("%s","NAME is not a slot-name of LEXICAL-VARIABLE"); }
+-    structure_set(par_new_name,par_lexical_variable_instance,cdr(entry));
+-    close_live_pool(pool);
++    return cons(par_name, NIL_Symbol);}
++Ref copy_lexical_variable(Ref inst){
++    return cons(cons_car(inst), cons_cdr(inst));}
++Ref env_lexical_variable_name(Ref inst){
++    return cons_car(inst);}
++Ref set_env_lexical_variable_name(Ref par_new_name, Ref inst){
++    cons_rplaca(inst, par_new_name);
+     return par_new_name;}
+-Ref env_lexical_variable_value(Ref par_lexical_variable_instance){
+-    uword pool=open_live_pool();
+-    add_to_live_pool(par_lexical_variable_instance);
+-    check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
+-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
+-    Ref entry = assq(S(VALUE),pos);
+-    if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LEXICAL-VARIABLE"); }
+-    Ref result=structure_get(par_lexical_variable_instance,cdr(entry));
+-    close_live_pool(pool);
+-    return result;}
+-Ref set_env_lexical_variable_value(Ref par_new_value, Ref par_lexical_variable_instance){
+-    uword pool=open_live_pool();
+-    add_to_live_pool(par_new_value);
+-    add_to_live_pool(par_lexical_variable_instance);
+-    check_type(par_lexical_variable_instance,LEXICAL_VARIABLE_Class);
+-    Ref pos = structure_class_instance_slots(LEXICAL_VARIABLE_Class);
+-    Ref entry = assq(S(VALUE),pos);
+-    if(nullp(entry)){ FATAL("%s","VALUE is not a slot-name of LEXICAL-VARIABLE"); }
+-    structure_set(par_new_value,par_lexical_variable_instance,cdr(entry));
+-    close_live_pool(pool);
++Ref env_lexical_variable_value(Ref inst){
++    return cons_cdr(inst);}
++/* Fast readers: identical here (cons access is already unchecked), kept for the
++   variable-lookup hot path callers established by hot-2. */
++Ref env_lexical_variable_name_fast(Ref inst){  return cons_car(inst);}
++Ref env_lexical_variable_value_fast(Ref inst){ return cons_cdr(inst);}
++Ref set_env_lexical_variable_value(Ref par_new_value, Ref inst){
++    cons_rplacd(inst, par_new_value);
+     return par_new_value;}
+ Ref CONSTANT_VARIABLE_Class;
+ bool env_constant_variable_p(Ref par_object){
+diff --git b/sources/kernel_structure_functions.h a/sources/kernel_structure_functions.h
+index 61e1969..e302fdb 100644
+--- b/sources/kernel_structure_functions.h
++++ a/sources/kernel_structure_functions.h
+@@ -11,6 +11,11 @@ Ref env_lexical_variable_name(Ref par_lexical_variable);
+ Ref set_env_lexical_variable_name(Ref par_new_name, Ref par_lexical_variable);
+ Ref env_lexical_variable_value(Ref par_lexical_variable);
+ Ref set_env_lexical_variable_value(Ref par_new_value, Ref par_lexical_variable);
++/* hot-2: name/value readers WITHOUT the redundant check_type — for callers that
++   have ALREADY established env_lexical_variable_p (the variable-lookup hot path),
++   so a lookup pays one class_of, not two. */
++Ref env_lexical_variable_name_fast(Ref par_lexical_variable);
++Ref env_lexical_variable_value_fast(Ref par_lexical_variable);
+ extern Ref CONSTANT_VARIABLE_Class;
+ bool env_constant_variable_p(Ref par_object);
+ Ref env_make_constant_variable(Ref par_name, Ref par_value);
+diff --git b/sources/structure_functions.c a/sources/structure_functions.c
+index 0949589..deaa4d1 100644
+--- b/sources/structure_functions.c
++++ a/sources/structure_functions.c
+@@ -1208,5 +1208,16 @@ void kernel_initialize_structure_functions(void){
+     LOCAL_SYMBOL_MACRO_Class         = make_structure_class(S(LOCAL_SYMBOL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(EXPANSION),NULL));
+     GLOBAL_MACRO_Class               = make_structure_class(S(GLOBAL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),NULL));
+     LOCAL_MACRO_Class                = make_structure_class(S(LOCAL_MACRO),STRUCTURE_OBJECT_Class,integer_from_uword(0),list(S(NAME),S(LAMBDA-LIST),S(BODY),NULL));
++    /* Pin all structure classes in the GC root set so they are never collected. */
++    push(LEXICAL_VARIABLE_Class,        &kernel_classes);
++    push(CONSTANT_VARIABLE_Class,       &kernel_classes);
++    push(GLOBAL_SPECIAL_VARIABLE_Class, &kernel_classes);
++    push(LOCAL_SPECIAL_VARIABLE_Class,  &kernel_classes);
++    push(GLOBAL_FUNCTION_Class,         &kernel_classes);
++    push(LOCAL_FUNCTION_Class,          &kernel_classes);
++    push(GLOBAL_SYMBOL_MACRO_Class,     &kernel_classes);
++    push(LOCAL_SYMBOL_MACRO_Class,      &kernel_classes);
++    push(GLOBAL_MACRO_Class,            &kernel_classes);
++    push(LOCAL_MACRO_Class,             &kernel_classes);
+ }
+ /**** THE END ****/

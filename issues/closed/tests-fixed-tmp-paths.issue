@@ -1,0 +1,44 @@
+tests: fixed /tmp file names collide across CONCURRENT runs on one host and
+mask staleness via residue.
+
+SYMPTOM (both bitten on the poseidon CI runners, 2026-07-14):
+1. Several C suites hardcode /tmp names (grep '"/tmp/' tests/*.c):
+   bocl_test_misc_*.tmp, bocl_cfasl_corpus.*, bocl_cfasl_feat.*, bocl_rs_test,
+   bocl-test-load.lisp, bocl-test-macros.lisp, bocl-et-*, bocl-s25-*.  Three
+   CI shell jobs running the suite CONCURRENTLY on one host (same user, shared
+   /tmp) stomp each other's fixtures -> spurious failures.
+2. Residue masks bugs: test_misc's cfasl-corpus check kept passing against a
+   STALE /tmp/bocl_cfasl_corpus.fasl from July 11 for days after
+   *DEFAULT-COMPILED-FILE-TYPE* changed the real output to .cfasl — the suite
+   was green on the developer host and red in every clean environment (the
+   docker CI images).  That expectation is fixed (v1.8.41); the residue
+   MECHANISM remains for every other fixed name.
+
+FIX SKETCH: a tests/ helper that builds per-process fixture paths
+(snprintf("%s/bocl-%s-%d", getenv("TMPDIR")?:"/tmp", name, getpid())) used by
+all suites, + unlink fixtures in teardown.  Until then CI routes all build
+jobs to the docker executor (isolated /tmp per container), which removes the
+concurrency half of the problem operationally.
+
+--------------------------------------------------------------------------------
+FIXED (v1.8.43) — per-process fixture paths via a "{TMP}/" token.
+
+- simple_test gained: BOCL_TEST_TMP(name) -> "$TMPDIR|/tmp"/bocl-<pid>-NAME
+  (pid BEFORE the name so the file TYPE survives — compile-file derives the
+  .cfasl sibling from it); BOCL_TEST_PATH(templ) expanding every "{TMP}/" in
+  a string to that prefix; and BOCL_TEST_EVAL(form) = the expansion + read-
+  eval, which EVERY suite's e() now routes through — a test form simply
+  writes "{TMP}/fixture.lisp".  The explicit token cannot collide with a
+  generated path (no double substitution) and is greppable.
+- Converted all fixed fixture paths: test_misc (11 names incl. the corpus/
+  feat/vm8/vm9/vm10 compile-file fixtures, C-side writers through
+  BOCL_TEST_PATH, corpus/feat now deleted after use), test_slice22 (element-
+  type trio + the must-not-exist probe, with delete-file cleanups),
+  test_slice25 (compile-file fixtures + unlinks), test_load (suite-setup
+  fixture, already unlinked in teardown), test_macros.  mkstemp users were
+  already unique.  Remaining "/tmp/..." mentions are comments or
+  system paths (/etc/hosts).
+- VERIFIED: two test_misc processes running CONCURRENTLY both finish
+  failure count = 0 (the collision case that broke the CI shell jobs);
+  TMPDIR is honoured ("/custom-tmp/bocl-<pid>-x.lisp"); the fixtures are
+  removed afterwards; full suite green (42 suites, failure count = 0).

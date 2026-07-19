@@ -59,6 +59,8 @@ void kernel_ENV_LOCAL_FUNCTION_LAMBDA_LIST(Ref function,Ref arguments,MultipleVa
 void kernel_SET_ENV_LOCAL_FUNCTION_LAMBDA_LIST(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_LOCAL_FUNCTION_BODY(Ref function,Ref arguments,MultipleValues* results);
 void kernel_SET_ENV_LOCAL_FUNCTION_BODY(Ref function,Ref arguments,MultipleValues* results);
+void kernel_ENV_LOCAL_FUNCTION_ENV(Ref function,Ref arguments,MultipleValues* results);
+void kernel_SET_ENV_LOCAL_FUNCTION_ENV(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_GLOBAL_SYMBOL_MACRO_P(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_MAKE_GLOBAL_SYMBOL_MACRO(Ref function,Ref arguments,MultipleValues* results);
 void kernel_ENV_GLOBAL_SYMBOL_MACRO(Ref function,Ref arguments,MultipleValues* results);

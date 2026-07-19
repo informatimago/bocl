@@ -1,0 +1,136 @@
+09:59[pjb@thalassa org.xquartz:0 bocl 22Gi]$ bocl
+
+Welcome to BOCL Version 1.8.40
+Copyright 2021-2026 Pascal J. Bourguignon
+Licensed under AGPL; source codes available at:
+http://gitlab.com/bocl/bocl/
+
+
+
+May the Cons be with you!
+
+
+Have fun!
+
+
+COMMON-LISP-USER> (time (load "/opt/local/libexec/bocl/modules/asdf/asdf.lisp" :verbose t :print t))
+
+
+Debugger invoked on condition of type SIMPLE-TYPE-ERROR:
+  The value (#<COMMON-LISP::BUILT-IN-FUNCTION TYPEP 0x4fbff2f38> #<PACKAGE 0x4fc048600> PACKAGE) is not of type STRING.
+
+Backtrace (innermost frame first):
+   0: (NIL COMMON-LISP::C)
+   1: restart STORE-VALUE
+   2: tagbody
+   3: block NIL
+   4: block UIOP/PACKAGE::ENSURE-SYMBOL
+   5: (UIOP/PACKAGE::ENSURE-SYMBOL UIOP/PACKAGE::NAME PACKAGE INTERN UIOP/PACKAGE::RECYCLE UIOP/PACKAGE::SHADOWED UIOP/PACKAGE::IMPORTED UIOP/PACKAGE::INHERITED UIOP/PACKAGE::EXPORTED)
+   6: tagbody
+   7: block NIL
+   8: block ENSURE-PACKAGE
+   9: (ENSURE-PACKAGE UIOP/PACKAGE::NAME UIOP/PACKAGE::NICKNAMES DOCUMENTATION UIOP/PACKAGE::USE SHADOW UIOP/PACKAGE::SHADOWING-IMPORT-FROM UIOP/PACKAGE::IMPORT-FROM EXPORT INTERN UIOP/PACKAGE::RECYCLE UIOP/PACKAGE::MIX UIOP/PACKAGE::REEXPORT UNINTERN UIOP/PACKAGE::LOCAL-NICKNAMES)
+  10: (NIL COMMON-LISP::PATH)
+  11: dynamic-binding
+  12: dynamic-binding
+  13: (LOAD)
+  14: handler-bind
+  15: restart ABORT
+  16: catch (NIL)
+  17: catch (COMMON-LISP::DONE . :%VM-NLX-BLOCK)
+  18: (COMMON-LISP::%REPL-EVAL COMMON-LISP::FORM)
+  19: catch BOCL::%QUIT-CATCH-TAG
+
+Available restarts:
+   0: [STORE-VALUE]
+   1: [ABORT]
+
+debug>
+
+  (defun ensure-symbol (name package intern recycle shadowed imported inherited exported)
+    (check-type name string)
+    (check-type package package)
+    (check-type intern (member nil t)) ; no cl:boolean on Genera
+    (check-type shadowed hash-table)
+    (check-type imported hash-table)
+    (check-type inherited hash-table)
+    (unless (or (gethash name shadowed)
+                (gethash name imported)
+                (gethash name inherited))
+      (multiple-value-bind (existing status)
+          (find-symbol name package)
+        (multiple-value-bind (recycled previous) (recycle-symbol name recycle exported)
+          (cond
+            ((and status (eq existing recycled) (eq previous package)))
+            (previous
+             (rehome-symbol recycled package))
+            ((and status (eq package (symbol-package existing))))
+            (t
+             (when status
+               (note-package-fishiness
+                :ensure-symbol name
+                (reify-package (symbol-package existing) package)
+                status intern)
+               (unintern existing))
+             (when intern
+               (intern* name package))))))))
+
+It looks like find-symbol is too picky with its package argument.  It
+is a package-designator, which is a string-designator for a package
+name or a package itself.
+
+Since string-designators are (or string symbol character)
+package-designator is (or pacakge string symbol character)
+(find-symbol "foo" #\A) searches for A::|foo|
+(find-symbol "BAR" :poo) searches for poo::bar
+(find-symbol "Quux" "Muux") searches for |Muux|::|Quux|
+and (find-symbol "MOO" *package*) searches for moo in the current package.
+
+1- correct find-symbol (assuming my diagnostic of the cause of the
+   above error is correct).
+
+2- for all functions in CL, lookup in clhs the definitions of its
+   arguments types, and verify if the function accepts all the specified
+   types (special care for designator types!).
+
+RESOLUTION (2026-07-15) — v1.8.49
+---------------------------------
+1. FIND-SYMBOL (and INTERN, UNINTERN, EXPORT, ...) already accept the full
+   package designator — package object, string, symbol, character — on the
+   current vm head: packages.c resolves every package argument through
+   package_find() / string_designator_name(), and the original repro
+   (loading modules/asdf/asdf.lisp) passes since the uiop-bocl-porting work
+   (v1.8.40 predates it).  Note (find-symbol "T" #\T) correctly errors:
+   #\T designates the package NAME "T", and no such package exists.
+
+2. Designator audit across the CL functions (CLHS argument types):
+   probed string / package / function / stream / pathname / character /
+   condition / restart designators over ~120 call shapes.  Findings, all
+   fixed:
+   - STREAM DESIGNATORS: the C stream built-ins used the stream argument
+     raw, so an explicit NIL (standard stream of the direction) or T
+     (*TERMINAL-IO*) type-errored in PRINT/PRIN1/PRINC/TERPRI/READ-CHAR/
+     PEEK-CHAR/READ/READ-PRESERVING-WHITESPACE/READ-DELIMITED-LIST/
+     FINISH-OUTPUT/FORCE-OUTPUT/WRITE-CHAR/%STREAM-LINE-START-P — and
+     through them in the prelude wrappers (READ-LINE, LISTEN, FRESH-LINE,
+     WRITE-LINE, READ-CHAR-NO-HANG...).  Added stream_designator_input/
+     output() resolvers in stream.c (NIL -> *STANDARD-INPUT*/-OUTPUT*,
+     T -> *TERMINAL-IO*, falling back to the standard stream while
+     *TERMINAL-IO* is NIL), used by stream_input/output_cstream() and by
+     every stream built-in at argument-pop time; printer.c's private
+     resolver now delegates to it.
+   - UNREAD-CHAR did not exist.  Implemented in C (one-character ungetc
+     pushback per CLHS, unreading #\Newline pushes the device newline
+     byte so the reader's NEL mapping round-trips).
+   - Everything else conformed: string functions take string designators,
+     package functions take package designators, sequence/apply functions
+     take 'symbol function designators, ERROR/SIGNAL/WARN/CERROR take
+     condition designators, INVOKE-RESTART/FIND-RESTART take restart
+     designators, pathname functions take namestrings.
+   New CUnit suite tests/test_designators.c (43rd suite) locks all of it.
+
+3. Found while auditing, tracked separately:
+   issues/open/gc-repl-handler-case-heap-corruption.issue — the audit
+   probe stream crashes the REPL under GC (BOCL_NOGC=1 passes 121/121);
+   the audit itself was validated GC-off and the committed test suite
+   (which uses bocl_test_eval, not the REPL path) passes GC-on.

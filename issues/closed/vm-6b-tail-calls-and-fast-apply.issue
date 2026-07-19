@@ -1,0 +1,91 @@
+vm-6b — Tail calls + fast APPLY + stack-overflow signal (plan-2, deferred from vm-6).
+
+Optimizations split out of vm-6 (whose ACCEPTANCE — closures + interop + &key — is met
+at v1.8.9).  None of these change observable results vs the tree-walker; they are about
+space and speed.  %VM-COMPILE is the entry (COMPILE isn't rewired until vm-8), so this
+is not on any critical path yet.
+
+WHAT
+- Genuine BC_TAIL_CALL / BC_TAIL_CALL_NAMED (both are in / append to the ISA): a
+  trampoline in bytecode_apply so a tail call to a COMPILED callee reuses the current C
+  frame (goto a `reinit:` label that re-binds the new function) instead of recursing
+  through kernel_apply — loops written as tail recursion then run in constant C-stack
+  space.  A tail call to a built-in / tree-walked callee falls back to kernel_apply +
+  RETURN.  DESIGN NOTES already worked out:
+  * Codegen must thread a TAIL context through %VM-GEN (progn-last, both IF branches,
+    let/let* body are tail) and emit TAIL_CALL only when NO dynamic frame (:dframe) is
+    active — inside CATCH/UNWIND-PROTECT/special-LET a call is not a true tail call.
+    So `nvf==0` holds at every TAIL_CALL, which also means no setjmp target is live
+    across the trampoline (the per-function state L/S/K/code need not be volatile).
+  * CONSTANT SPACE needs capture-aware frame REUSE: reusing the locals/stack vectors on
+    tail call would corrupt a frame that a closure captured.  Track a runtime
+    `frame_escaped` flag (set when MAKE_CLOSURE runs); on tail-call reinit reuse the
+    vectors only when the LEAVING frame did not escape and the incoming nloc/maxst fit
+    — else allocate fresh (and the old frame stays rooted for the closure).  Without
+    reuse, the live pool grows per tail call (bounded-depth only).
+- Stack-based fast APPLY: a calling convention that passes args on the VM operand stack
+  (no per-call Lisp arg-list re-cons — see plan §3.3), shared by compiled callees; keep
+  the kernel_apply fallback for built-in / tree-walked callees.
+- VM stack-overflow signal: bound the trampoline / recursion depth and signal
+  BOCL:OUT-OF-STACK-MEMORY-ERROR instead of crashing the C stack.
+
+ACCEPTANCE: a deep tail-recursive loop (e.g. count down 10,000,000) runs in constant
+space without a C-stack crash; a closure created inside a tail loop still captures a
+DISTINCT frame per iteration; micro-benchmark shows the fast APPLY beats the arg-list
+path; overflow signals a condition rather than crashing.
+
+DEPENDS ON: vm-6 (closures).
+
+====================================================================
+DONE (v1.8.14, branch vm) — genuine TAIL_CALL + stack-overflow signal.
+
+- GENUINE TAIL CALLS: BC_TAIL_CALL / BC_TAIL_CALL_NAMED (appended; BYTECODE_VERSION→8).
+  bytecode_apply is restructured with a `reinit:` trampoline: a call in tail position to
+  a COMPILED callee re-binds the new function into the SAME C frame (goto reinit) instead
+  of recursing through kernel_apply; a built-in / tree-walked callee falls back to
+  kernel_apply + RETURN.  Codegen threads a TAIL context (%VM-GEN-TAIL) through the
+  function body — progn-last, both IF branches, let/let* bodies — and emits TAIL_CALL
+  ONLY when no dynamic frame is active (a call inside CATCH/UNWIND-PROTECT/special-LET/
+  PROGV/HANDLER-BIND must unwind first, so it stays a normal call).
+  * CONSTANT SPACE — C-STACK: the trampoline reuses the C frame (no recursion).  HEAP:
+    each reinit TRIMS the per-call live-pool marker and re-roots the current
+    function/args/frame, so the previous iteration's arg list is freed — a tail loop is
+    constant heap too.  Verified: a 10,000,000-deep countdown and 1,000,000-deep mutual
+    even?/odd? both run to completion (test_misc.c::test_vm_tail_calls uses 1e6/2e5).
+  * CAPTURE-AWARE FRAME REUSE: a `frame_escaped` flag (set by MAKE_CLOSURE) forces a
+    FRESH frame on the next tail call, so a closure created inside a tail loop captures a
+    DISTINCT frame per iteration (verified) — the escaped frame stays alive via the
+    closure's display.
+- STACK-OVERFLOW SIGNAL: deep NON-tail VM recursion (each nested call is a new
+  bytecode_apply C frame) now calls the shared eval.c control-stack guard
+  (eval_stack_guard_check, exported) at each activation entry — it signals the catchable
+  BOCL:OUT-OF-STACK-MEMORY-ERROR (a STORAGE-CONDITION) instead of crashing, and the VM
+  recovers.  Verified in the REPL (the test harness does not arm the guard).
+- FRAME SIZE: VM_DYN_MAX cut 256 -> 32 (the vdyn[] array of jmp_buf-carrying dynamic
+  frames is on every activation's C stack; 256 made a frame ~100KB and NON-tail
+  recursion overflow at ~60 deep).  32 keeps a frame ~16KB — NON-tail depth (~200-500)
+  is now comparable to the interpreter, while 32 simultaneous dynamic frames in ONE
+  function is far more nesting than real code needs.
+
+REMAINING (optional refinement): the stack-based FAST APPLY — bind a tail call's args
+directly from the operand stack into the new frame for simple arities, skipping the
+arg-list cons entirely (a speed micro-opt; the trampoline is already constant-space via
+the per-iteration pool trim).  And a lazy/heap vdyn[] would let a dynamic-frame-free
+function have a tiny frame and recurse as deep as memory allows.
+
+--------------------------------------------------------------------
+CLOSING (v1.8.14).  The two substantive items — genuine TAIL_CALL (constant-space
+trampoline) and the stack-overflow SIGNAL — are done, tested, and full-suite-green.
+
+The stack-based FAST APPLY is INTENTIONALLY DEFERRED as a low-value micro-opt: its only
+saving is the per-call arg-list cons, which (a) the trampoline already frees each
+iteration (constant space is met without it), and (b) is CHEAP — a documented project
+finding is that bocl eval is CPU-per-operation bound, NOT allocation bound (see
+[[bocl-interpreter-perf]]), so avoiding a couple of conses per tail call would not
+meaningfully "beat the arg-list path".  The design, should it ever be wanted: in the
+TAIL_CALL handler, for a SIMPLE-arity (no &rest / no RAW) compiled callee whose frame is
+reused (no allocation -> no GC between copy and bind), copy the n operand-stack args into
+a fixed C buffer and bind them straight into the new locals, skipping the cons; keep the
+arg-list path for &rest / RAW / the allocate-fresh-frame case (where the args must be
+GC-rooted across make_vm_vector).  A lazy/heap vdyn[] (so a dynamic-frame-free function
+has a tiny C frame and recurses as deep as memory) is a separate, higher-value follow-up.

@@ -1,0 +1,92 @@
+GC: heap corruption under REPL top-level HANDLER-CASE churn
+
+SYMPTOM
+-------
+Feeding a long sequence (~120) of top-level HANDLER-CASE-wrapped forms to
+the bocl REPL on stdin corrupts the process after 15-70 forms.  Observed
+manifestations (they DRIFT with binary layout and file content — classic
+heap corruption):
+  - a C type_error signalled inside a HANDLER-CASE finds NO handler
+    (signal_condition walks g_frame_stack and misses the frame), so the
+    process prints "In some function: TYPE ERROR: ..." and exit(65);
+  - functions misbehave mid-run: (string-greaterp 'abd 'abc) — which
+    passed 20 forms earlier — suddenly raises TYPE ERROR SYMBOL/STRING;
+  - the run falls into the debug REPL and hangs with a backtrace of
+    stacked dynamic-binding frames.
+
+BOCL_NOGC=1 makes the whole sequence pass (121/121) — it is a GC bug:
+some Ref reachable only from a C local or a frame parameter is not in
+the rootset when a collection triggers, and the collected block's reuse
+corrupts the class graph / frame stack / function bindings.
+
+REPRO
+-----
+tests/test_designators.c exercises the same forms through bocl_test_eval
+and passes — the corruption needs the REPL top-level path (%REPL-EVAL +
+handler-case frames + the printer echo between forms).  Repro recipe:
+
+  1. Generate a file of ~120 top-level probes of the shape
+        (handler-case (let ((r <form>)) (if (equal r <expect>) ...))
+          (error (c) ...))
+     mixing package ops (intern/export/shadow with designators), string
+     functions on symbols, sequence functions with 'symbol function
+     designators, and with-output-to-string stream forms.  The probe file
+     used for the diagnosis: see the designator audit in
+     issues/closed/find-symbol-package.issue (2026-07-15) — any similar
+     mixture reproduces within ~70 forms.
+  2. ./bocl < probes.lisp        -> dies/hangs between form ~15 and ~72
+     BOCL_NOGC=1 ./bocl < probes.lisp -> 121/121 PASS, exit 0.
+
+Simple accumulations do NOT reproduce: 25x (handler-case (+ 1 i) ...)
+then a C type error is caught fine.  The trigger needs the mixture
+(allocation pressure from format/equal/with-output-to-string between the
+handler frames).
+
+TOOLS
+-----
+BOCL_POISON=1 (+BOCL_POISON_BT=1) exists for exactly this class of bug
+(use-after-free finder with per-free backtraces) but is very slow under
+the prelude load; run it on a machine with time or trim the prelude.
+Suspects to audit first: frame parameters (handler.clauses/condition)
+reachability during GC, %REPL-EVAL's live-pool discipline around
+signal_condition's longjmp (pools opened by the erring builtin are
+never closed), and printer echo allocations between forms.
+
+RESOLUTION (2026-07-18) — v1.8.52
+---------------------------------
+Root cause found and fixed: reader.c read_impl() closed its live pool
+and returned the freshly-read form WITHOUT re-rooting it — the entire
+object graph of every form returned by KERNEL-READ was unrooted in the
+caller.  In the REPL loop (bocl_repl), prin1_to_string(sexp) for the
+dribble note allocates a 32 KB string-stream buffer BEFORE the form is
+stored anywhere reachable (`-` / %REPL-EVAL); whenever the minor-GC
+allocation-count trigger landed inside that window, the just-read form
+was swept, and evaluation then walked freed blocks reused as free-list
+links — explaining every observed symptom: handler-case frames "not
+found" (clauses freed), functions misbehaving mid-run, exit(65)s, and
+the failure point drifting with any change to file content or binary
+layout (the trigger is GC-counter alignment, ~ once per 15-70 forms).
+
+Hunt (the recipe that worked, for next time):
+1. GCCHECK=1: no survivor->doomed edges => the lost object had no heap
+   parent — a C-local/frame Ref.
+2. gdb break on type_error at the deterministic death: the object being
+   PRIN1ed had objcount FREE_BLOCK and its "class" was a free-list
+   next-pointer => use-after-GC of a Lisp-visible object.
+3. gdb runs are ASLR-stable => hardware watchpoint on that block's
+   header: the fatal transition's backtrace showed sweep <- minor GC <-
+   32 KB alloc <- prin1_to_string <- bocl_repl, and the block's LAST
+   LIVE incarnation was allocated by parse_list's push while READING
+   the next REPL form.  reader.c read_impl's missing re-root closed the
+   case.
+
+Fix: read_impl re-roots its result after close_live_pool (one line +
+comment).  Also hardened two sibling constructors found by a mechanical
+scan (packages.c make_package, structure.c
+structure_class_instance_size); the full-codebase sweep is tracked in
+issues/open/live-pool-reroot-audit.issue.
+
+Validated: the 121-probe REPL repro passes 3/3 runs GC-on (was dying at
+form 15-70), survives %GC-STRESS 64; 44/44 suites green; the cesarum
+ASDF load — whose residual wandering errors were THIS bug reached
+through LOAD's kernel_read — now completes with zero debugger entries.

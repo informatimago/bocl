@@ -1,6 +1,7 @@
 *~
 *\!*.asd
 *.fasl
+*.cfasl
 *.sse2f
 *.[dao]
 *.so
@@ -57,6 +58,8 @@ tests/test_slice30
 tests/test_slice31
 tests/test_slice32
 tests/test_slice33
+tests/test_designators
+tests/test_conformance
 tests/test_clos
 
 *-Listing.xml

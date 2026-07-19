@@ -1,0 +1,72 @@
+hot-4 — Avoid per-call argument-list consing (plan-3).
+
+Stop allocating a fresh list for every funcall's arguments.
+
+WHAT
+- Today a call conses (a1 a2 ... an) and the callee walks it (pop_mandatory_argument
+  etc.).  For a variable-heavy load this is a huge chunk of the ~150us and of GC
+  pressure.
+- Introduce an argument passing convention over a VALUE STACK / reusable Ref buffer:
+  the caller pushes evaluated args onto a stack region; the callee reads them by
+  index for required params and only materialises a list for &REST.  A required-only
+  fast path binds directly from the stack into the (hot-3) frame slots with no
+  consing; &optional/&key use a general binder (still off the stack).
+- Adapt the callee kinds: tree-walked FUNCTION/CLOSURE bind from the stack;
+  BUILT-IN-FUNCTION primitives — provide a stack-based arg accessor alongside the
+  current cons-list one (or an adapter) so primitives need not all change at once.
+- This is also exactly the VM's calling convention (vm-2/vm-6) — design the stack
+  layout so the tree-walker and the VM SHARE it, easing plan-2.
+- GC: the arg stack is a rooted scan region (non-moving GC), same discipline as the
+  SORT scratch / the VM value stack.
+
+ACCEPTANCE: micro-benchmark call-heavy code showing reduced allocation + time;
+&optional/&rest/&key correctness (destructuring, apply) parity; suite green; the
+stack layout documented for reuse by the VM.
+
+DEPENDS ON: hot-3 (frame slots to bind into).
+
+--------------------------------------------------------------------------------
+NOTE before implementing (from hot-2/hot-3 measurements on this build):
+bocl allocation is CHEAP — GC is ~2% on prelude load and ~12% on allocation-
+churny loop code, and the per-call arg list is only a fraction of allocations.
+The v1.7.2 hot-3 change cut lexical-binding allocations 12% for ~0% wall-clock.
+So the "avoid consing" allocation win of hot-4 is expected to be ~TIME-NEUTRAL
+here.  hot-4's real TIME payoff is its CPU side: NOT re-walking a consed arg list
+in the callee (pop_mandatory_argument) and NOT re-parsing the lambda list on
+every call (a cached parameter plan).  Scope hot-4 to those CPU wins (value stack
++ cached lambda plan bound directly into hot-3 cons slots) and MEASURE against
+the CPU baseline, not the allocation count — and weigh it against just doing
+plan-2 (the byte-code VM), which removes the whole per-form interpretation
+overhead that dominates here.
+
+--------------------------------------------------------------------------------
+CLOSING (v1.8.29, vm branch) — delivered by the VM's calling convention; the
+tree-walker-side conversion is declined per this issue's own NOTE.
+
+The WHAT's mechanism exists where hot code runs (the VM, since vm-8/vm-10):
+- VALUE STACK: a compiled caller evaluates arguments onto the GC-rooted operand
+  stack (vm-2) — no per-argument-list traversal in the caller.
+- CACHED PARAMETER PLAN: a compiled callee binds parameters via its compiled
+  PROLOGUE (vm-6: required/&optional-with-defaults-and-supplied-p/&key/&aux as
+  emitted byte-code) — the lambda list is parsed ONCE at compile time, never
+  re-parsed per call; &REST is the only list materialisation.
+- The layout is shared and documented (vm-COMPILER-PLAN.md, sources/bytecode.h),
+  which was this issue's "design the stack layout so the tree-walker and the VM
+  SHARE it" — realised as one ISA + one kernel_apply interop path.
+- TCO: the vm-6b trampoline additionally frees the per-iteration arg list, so
+  tail loops are constant-heap.
+
+What is intentionally NOT done, and why:
+- The remaining kernel_apply boundary cons (crossing between byte-code /
+  built-in / tree-walked callees builds a Lisp arg-list) was analyzed and
+  DEFERRED in vm-6b's closing note as a low-value micro-opt: bocl allocation is
+  cheap (eval is CPU-per-operation bound — GC ~2% prelude, ~12% churny loops;
+  the v1.7.2 -12%-allocations change was time-neutral), and the design for a
+  stack-based fast apply is recorded there should a profile ever justify it.
+- Rewiring the TREE-WALKER's callee to a value stack: this issue's NOTE already
+  scoped the real payoff to the CPU side and said to weigh it against plan-2;
+  plan-2 has since been executed to completion (vm-1..vm-10), which settles the
+  weighing.  The interpreter keeps the simple cons convention on the cold path.
+
+Per-CALL frame pooling (the measured next lever for call-bound code, fib/tak
+~1x) is tracked separately in the vm program (off critical path), not here.

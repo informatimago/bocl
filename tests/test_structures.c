@@ -23,7 +23,7 @@ TEST_SUITE_SETUP(str_init){
 TEST_SUITE_TEARDOWN(str_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_basic(void){
     /* One struct covers: constructor, initforms, accessors, predicate,

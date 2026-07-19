@@ -62,7 +62,7 @@
 
 #define CFASL_MAGIC     "BOCLFASL"   /* 8 bytes, no trailing NUL written */
 #define CFASL_MAGIC_LEN 8
-#define CFASL_VERSION   1
+#define CFASL_VERSION   2   /* v2: CFASL_TAG_COMPILED_FUNCTION (byte-code templates) */
 
 typedef enum {
     CFASL_TAG_EOF = 0,
@@ -83,6 +83,7 @@ typedef enum {
     CFASL_TAG_SIMPLE_VECTOR,
     CFASL_TAG_STRUCTURE,
     CFASL_TAG_PACKAGE,
+    CFASL_TAG_COMPILED_FUNCTION,   /* vm-8: a byte-code CompiledFunction TEMPLATE */
     CFASL_TAG_N
 } cfasl_tag_t;
 
@@ -162,6 +163,8 @@ typedef struct cfasl_rctx cfasl_rctx;
 cfasl_rctx* cfasl_rctx_new(cfasl_in* in);
 void        cfasl_rctx_free(cfasl_rctx* r);
 int         cfasl_rctx_error(cfasl_rctx* r);   /* truncated / malformed / bad ref */
+void        cfasl_rctx_set_lenient_packages(cfasl_rctx* r, int flag);   /* validation
+    mode: an unknown package reads as an uninterned symbol instead of an error */
 Ref         cfasl_read_object(cfasl_rctx* r);
 
 /* Load a binary fasl: verify magic + version, then deserialize and evaluate

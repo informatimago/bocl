@@ -18,7 +18,7 @@ TEST_SUITE_TEARDOWN(loop_fini){
     return CUE_SUCCESS;}
 
 /* ---- helpers ---- */
-static Ref e(const char* s){ return bocl_read_eval_cstring(s); }
+static Ref e(const char* s){ return bocl_test_eval(s); }
 
 /* ---- simple (keywordless) loop ---- */
 static void test_simple_loop(void){

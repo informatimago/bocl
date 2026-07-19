@@ -1,0 +1,77 @@
+interp: FLET lets a local function's body see its SIBLINGS (LABELS semantics) —
+non-conforming, and it MASKS bugs the byte-compiler then exposes.
+
+SYMPTOM
+(flet ((g () 1)
+       (h () (g)))   ; CLHS: inside H, G is NOT the local (FLET bodies are
+  (h))               ; defined in the ENCLOSING environment — 'flet' bindings
+                     ; are visible only in the FLET's BODY, unlike LABELS)
+The tree-walker resolves (g) inside H to the local G and returns 1; conforming
+behavior is to call the GLOBAL function G (usually undefined).  The byte-code
+compiler implements FLET correctly, so the same code compiled signals
+"Undefined function: G".
+
+HOW FOUND (v1.8.34, thalassa)
+%LOOP-EXPAND used two FLETs whose functions called their siblings (ONE ->
+GRAB-TYPE, TRY! -> POP!, ...).  Interpreted, that worked (this bug); byte-
+compiled — which only happens where the control stack is large enough for the
+compiler not to decline the huge function, e.g. on thalassa — every LOOP with
+a WITH clause died at macroexpansion with "Undefined function: GRAB-TYPE"
+(pjb's asdf.lisp compile: DEFINE-PACKAGE -> LOOP :with -> crash).  Fixed at
+v1.8.35 by converting those FLETs to LABELS; the full-bootstrap audit
+(flet-sibling scan) found no other offender.
+
+REPRO
+(flet ((g () 1) (h () (g))) (h))
+  interpreted        -> 1                      (this bug)
+  (compile nil ...)  -> Undefined function: G  (conforming)
+
+CAUSE
+eval.c FLET evaluation extends ONE environment with all the local functions and
+evaluates the definitions' bodies in it (LABELS-style), instead of closing each
+definition over the ENCLOSING environment and binding the names only for the
+FLET body.
+
+FIX SKETCH
+In the FLET special form: build the function objects as closures over the
+OUTER environment, then push the name->function bindings into a NEW child env
+used for the BODY only.  (LABELS keeps the current behavior: close over the
+extended env.)  Suite + a full source boot are the gate: any prelude/module
+code still relying on sibling visibility will surface exactly like %LOOP-EXPAND
+did (fix those to LABELS as they appear).
+
+NOTE also MACROLET (CLHS: macro-function bodies are in the enclosing LEXICAL
+environment but local macros are NOT visible to each other) — check while here.
+
+--------------------------------------------------------------------------------
+FIXED (v1.8.36) — the tree-walker's FLET is now conforming; interp == VM.
+
+Root of the non-conformance was DEEPER than sibling visibility: the local-
+function wrapper carried no environment at all, and the call dispatch (and
+the FUNCTION special op) closed the transient closure over the environment
+CURRENT AT THE CALL SITE.  A local function therefore saw everything between
+its definition and its call — siblings (the reported symptom) but also
+call-site LET bindings:
+    (let ((x 10)) (flet ((g () x)) (let ((x 20)) (g))))
+returned 20 (call-site X) instead of 10 (defining-env X).
+
+FIX:
+- LOCAL-FUNCTION gains an ENV slot (generate-structures.lisp + the generated
+  kernel_structure_functions.* / structure_functions.* / lisp listing, applied
+  by hand — see generated-sources-drift.issue for why `make regenerate` could
+  not be used wholesale).  NIL means "close over the call site" (fallback for
+  wrappers built without an env).
+- eval.c FLET records the env ENCLOSING the flet as each wrapper's defining
+  env (siblings invisible, CLHS 3.1.2.1.2.1); LABELS records the NEW env
+  holding all the bindings (siblings visible).  The call dispatch and
+  (FUNCTION name) close over the wrapper's recorded env.
+
+VERIFIED (tests/test_misc.c::test_flet_scoping, interpreted AND compiled):
+sibling call errors (or resolves to the GLOBAL of the same name when one
+exists); nested-flet sibling resolves to the OUTER local; LABELS siblings and
+recursion unchanged; the defining-env closure returns 10 above, under both
+(g) and (funcall #'g).  MACROLET checked per the note: already conforming —
+a sibling used in an expander BODY is not visible (errors), a sibling in the
+EXPANSION is expanded in the body environment (works).  Full source boot OK
+(the v1.8.35 prelude has no flet-sibling references) and the full suite is
+green (42 suites, failure count = 0).

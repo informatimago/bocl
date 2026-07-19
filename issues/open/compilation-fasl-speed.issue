@@ -1,3 +1,4 @@
+# -*- mode:org;coding:utf-8 -*-
 NOTE: This issue is NOT READY. Ignore it.
 
 | version | compile asdf.lisp | load asdf.lisp | load asdf.fasl |
@@ -5,7 +6,9 @@ NOTE: This issue is NOT READY. Ignore it.
 |---------+-------------------+----------------+----------------|
 | 1.5.6   |         298.063 s |      239.294 s |      254.151 s |
 | 1.7.2   |         207.039 s |      170.785 s |      157.377 s |
-
+| 1.8.39  |         178.887 s |       82.589 s |       82.537 s |
+| 1.8.40  |         172.120 s |                |                |
+| 1.8.49  |         190.904 s |       86.771 s |       83.294 s |
 
 #+begin_src lisp
   (defparameter *asdf-file* (first (bocl::module-files (find-module :asdf))))
@@ -14,3 +17,6 @@ NOTE: This issue is NOT READY. Ignore it.
         (time (load *asdf-file*))
         (time (load "/tmp/asdf.fasl")))
 #+end_src
+
+==> cfasl-6-literal-coverage.issue
+==> hybrid cfasl format to avoid 100% fallback for 1 bad form.

@@ -10,6 +10,7 @@ Ref structure_class_instance_size(Ref structure_class){
     check_class(structure_class,STRUCTURE_CLASS_Class);
     Ref result=integer_from_uword(structure_class->slots->structure_class.nslots);
     close_live_pool(pool);
+    add_to_live_pool(result);   /* re-root: fresh integer, unrooted after close */
     return result;}
 
 
@@ -77,7 +78,7 @@ static uword structure_index(Ref structure_instance,Ref index){
     if(symbolp(index)){
         Ref entry=assq(index,structure_class_instance_slots(structure_instance->class));
         if(nullp(entry)){
-            ERROR("Invalid slot name %s",string_cstring(symbol_name(index)));}
+            ERROR("Invalid slot name %s",string_static_cstr(symbol_name(index)));}
         index=cdr(entry);}
     else{
         check_class(index,INTEGER_Class);}

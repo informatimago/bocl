@@ -22,7 +22,7 @@ TEST_SUITE_SETUP(hb_init){
 TEST_SUITE_TEARDOWN(hb_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 /* handler-bind: handler is called, if it returns signaling continues to
    the outer handler-case. */

@@ -7,6 +7,17 @@
 
 void kernel_initialize_arithmetic(void);
 
+/* ---- binary entry points for the byte-code VM inline arithmetic ops --------------- *
+ * (vm-inline-primitives) The SAME numeric-tower core the variadic +,-,*,<,= builtins  *
+ * fold over, exposed so BC_ADD2/SUB2/MUL2/LT2/GT2/LE2/GE2/NUM_EQ2 can compute a 2-arg  *
+ * op without building an arg list.  Full semantics preserved: bignum promotion,        *
+ * ratios, floats, complex, TYPE-ERROR on non-numbers, division-by-zero.  OP is one of  *
+ * '+' '-' '*' '/'.  num_lt/num_eq are the pairwise < / = predicates (num_le = !num_lt  *
+ * (b,a), num_gt = num_lt(b,a), num_ge = !num_lt(a,b)).                                  */
+Ref  num_combine(char op, Ref a, Ref b);
+bool num_lt(Ref a, Ref b);
+bool num_eq(Ref a, Ref b);
+
 /* ---- arithmetic --------------------------------------------------------- */
 void kernel_PLUS           (Ref function, Ref arguments, MultipleValues* results);
 void kernel_TIMES          (Ref function, Ref arguments, MultipleValues* results);

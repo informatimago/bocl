@@ -356,7 +356,7 @@ _Noreturn static void reader_signal(Ref class_symbol, Ref stream){
                      list(class_symbol, keyword_intern_cstring("STREAM"), stream, NULL), &mv);
         close_live_pool(pool);}
     /* No handler matched (or ERROR undefined): hard-fail via the C path. */
-    error("reader","%s on stream %s",
+    bocl_error("reader","%s on stream %s",
           string_cstring(symbol_name(class_symbol)),
           string_cstring(prin1_to_string(stream)));}
 
@@ -437,13 +437,23 @@ static Ref parse_list(parser_state* parser){
             bool eof2=false,err2=false;
             octet next=peek_octet(parser->input_stream,&eof2,&err2);
             if(eof2 || !constituentp(next)){
-                /* Consume the dot, skip whitespace, read the cdr object. */
+                /* Consume the dot, then read the cdr object.  A suppressed
+                   #+/#- form is NOT an object (CLHS 2.3.3, 2.4.8.17): keep
+                   reading until a real object follows the dot, and consume
+                   (discarding) any suppressed forms between that object and
+                   the closing paren.  asdf.asd relies on this, ending its
+                   DEFSYSTEM with `. #-asdf3 () #+asdf3 (...)`. */
                 advance_character(parser);
                 skip_spaces(parser);
-                if(!parser->eof){
-                    dotted_cdr=parse_object(parser);
+                while(!parser->eof && parser->ch!=')'){
+                    Ref cdr_obj=parse_object(parser);
+                    skip_spaces(parser);
+                    if(cdr_obj==reader_skip_marker){ continue; }
+                    if(is_dotted){
+                        READER_ERROR(parser->input_stream,
+                                     "more than one object follows . in list%s","");}
+                    dotted_cdr=cdr_obj;
                     is_dotted=true;}
-                skip_spaces(parser);
                 break;}}
         Ref element=parse_object(parser);
         if(element != reader_skip_marker){
@@ -1234,6 +1244,13 @@ static Ref read_impl(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursiv
     add_to_live_pool(input_stream);
     Ref result=read_impl_unrooted(input_stream,eof_error_p,eof_value,recursive_p,preserve);
     close_live_pool(pool);
+    /* Re-root: close_live_pool trimmed the freshly-read form out of the live
+       pool, so without this the ENTIRE returned object graph is unrooted in
+       the caller.  The REPL (bocl_repl) allocates a 32 KB print buffer for the
+       dribble note BEFORE storing the form anywhere reachable — a minor GC
+       landing in that window collected the just-read form and corrupted every
+       later evaluation (gc-repl-handler-case-heap-corruption). */
+    add_to_live_pool(result);
     return result;}
 
 Ref kernel_read(Ref input_stream,Ref eof_error_p,Ref eof_value,Ref recursive_p){

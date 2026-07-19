@@ -224,3 +224,105 @@ ANSI-test load measured.
    / size-class free list (or reviving bump allocation within a zone) would remove
    the churn regression.  ANSI-test end-to-end still needs the CL-completeness
    features above before per-module timings can be taken on the real suite.
+
+--------------------------------------------------------------------------------
+NEW EVIDENCE (2026-07-12, vm branch v1.8.29, hot-6 benchmarking) — a minimal
+repro of the super-linearity, with -DBOCL_PROFILE attribution, showing it now
+dominates ANY allocation-heavy benchmark and poisons the process for LATER work:
+
+  (defun lsum (n) (let ((s 0)) (dotimes (i n s) (setq s (+ s (* i i))))))
+  ;; ~6 boxed-int allocations/iteration either engine (VM: 12.0M allocs at n=2M,
+  ;; tree-walker: 28.0M — byte-code allocates 2.3x less than the interpreter).
+
+  Same process, byte-compiled lsum, x86-64 Linux 16-core, image boot:
+    run at n=1M   (repeated 3x): 2.6 s each — eval 1.1 s / gc 1.5 s (56%), stable.
+    fresh-process n=2M:          7.5 s      — gc 69%, per-GC ~0.18 s.
+    n=2M AFTER an interpreted n=2M run in the same process: 20.0 s — same 12.0M
+      allocations, same 29 gc-runs, but EVAL went 2.3 s -> 12.5 s (5.4x): the
+      allocator itself (charged to eval, not gc) degrades on the churned heap —
+      the first-fit free-list walk after the interpreter's 28M-allocation burst.
+    tests/vm-benchmark.lisp at loopsum n=2M (interp first, then VM, one process):
+      interp 157 s, VM 736 s (VM "0.2x") on the normal build — i.e. at this churn
+      level the numbers measure the allocator/GC, not the evaluator.  One
+      pathological collection was observed at 232 s wall (a later interpreted
+      200k run inheriting the heap of a VM 800k run).
+  Per-GC cost also grows with heap extent: ~0.10 s (after a 1M burst) ->
+  ~0.18 s (2M) -> ~0.5 s (after 28M cumulative churn).
+
+  Consequence for benchmarking (recorded in hot-6): keep per-process allocation
+  bursts below ~10M allocations or run each kernel in a fresh process; ratios
+  measured above that are GC artifacts.  This strengthens the case for this
+  branch (generational nursery) — the interpreter/VM work (hot-1..6, vm-1..10)
+  has lowered per-operation CPU to the point where the collector is the
+  dominant cost on allocation-heavy code even at moderate n.
+
+================================================================================
+NEW EVIDENCE (2026-07-18, vm branch v1.8.52, thalassa arm64) — a LIVE-SET repro
+that isolates the remembered-set rescan cost (distinct from the churn repros
+above, which conflate the first-fit allocator walk), and shows it inflating real
+compile times as a function of resident live heap.
+================================================================================
+
+Motivation: the same-machine bocl/SBCL COMPILE-FILE ratio is not constant. It is
+~64x for one modules/asdf/asdf.lisp (bocl 172-211 s vs SBCL ~3 s, small fresh
+image) but ~870x for cesarum (bocl ~3600 s vs SBCL ~4.1 s, large accumulating
+image). SBCL says cesarum is only ~1.4x the intrinsic work of asdf; bocl spends
+~19x more. So the extra cost is not harder forms — it scales with live-heap size.
+
+Repro (one bocl process, self-timed with GET-INTERNAL-REAL-TIME):
+  A. compile asdf.lisp, fresh image                : 211 s   (RSS 76 MB)
+  B. allocate 2,000,000 live rooted conses into a
+     simple-vector: (dotimes (i 2000000)
+                       (setf (svref *big* i) (cons i i)))  : 180 s   <-- should be <1 s
+  C. recompile the SAME asdf.lisp, 2M conses (~50 MB)
+     still live                                     : >24 min, NEVER FINISHED
+                                                      (killed at 31 min; RSS 522 MB)
+  (isolated fresh compile in its own process: 172 s, for reference.)
+
+Two independent super-linear signals, and the array is RETAINED (almost nothing
+is freed), so this is NOT the first-fit free-list walk of the churn repros — it
+is the cost of scanning the growing OLD/live set on every collection:
+  * B: allocating N live conses is O(N^2) (~90 us/cons at N=2M). Linear alloc
+    would be milliseconds.
+  * C: the identical compile is >=7x slower purely because ~50 MB of unrelated
+    data is resident. Compile cost scales with resident live-heap size.
+
+Mechanism (maps to the STATUS above, not the DESIGN):
+  * Step 2 (v1.0.5) landed the remembered set as option (b) — gc_write_barrier
+    records the OLD *Block* that physically holds the mutated slot — NOT the
+    card marking (option a) the DESIGN section recommended. For a large
+    container (a 2M-slot vector's inner VectorOfObject, or the growing
+    global-env / package / method structures of a real build), the minor
+    collector then rescans that ENTIRE block's slot array as roots on EVERY
+    minor GC: O(slots) per minor x O(n) minors = O(n^2).
+  * Additionally the MAJOR GC "rebuilds the remset by a full-heap scan"
+    (v1.0.6): O(total heap) per major, so majors also get more expensive as the
+    image grows.
+
+RECOMMENDED FIX (this branch's own option (a), now clearly justified):
+  * Replace the block-granular remset with CARD MARKING: a byte/bit per ~512 B
+    card; the barrier dirties only the card of the mutated slot; the minor GC
+    scans only DIRTY cards for old->young pointers, never the whole object.
+    A 2M-slot array touched sparsely then scans a handful of cards, not 2M slots.
+  * Drive the MAJOR's remset rebuild from the card table too, so no full-heap
+    scan is needed to recover old->young edges.
+  * The write-barrier chokepoint from Step 2 (cons_rplaca/d, svref_set,
+    structure_set, set_symbol_*, + the direct-field bypass sites) already exists;
+    the change is what the barrier RECORDS (dirty card, not block) and what the
+    collector SCANS (dirty cards, not whole remembered blocks). Existing
+    GCSTRESS/GCCHECK/HEAPCHECK validation applies unchanged — a missed card is
+    the same failure class as a missed remset entry.
+
+DISAMBIGUATION before coding (poseidon): run repro B/C under BOCL_GCLOG and
+confirm the time is in minor rescans and/or the major full-heap remset rebuild
+(not the free-list walk — this repro frees almost nothing, so that term should be
+small). Per-GC cost should be seen to grow with heap extent, as in the 2026-07-12
+section (~0.10 s -> 0.18 s -> 0.5 s).
+
+VALIDATION target: repro B drops from O(n^2) to ~O(n) (2M conses in well under a
+second), and repro C (recompile with 50 MB live) drops to near the 172-211 s
+fresh-compile time. That is what turns the asdf(64x)/cesarum(870x) divergence
+into a flat ~64x — the prerequisite for any large accumulating build (e.g. the
+hypothetical "compile SBCL with bocl") to leave the multi-day regime.
+(Measured via throwaway scratchpad drivers; not committed. See memory note
+bocl-gc-superlinear.)

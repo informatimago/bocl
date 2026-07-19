@@ -1,0 +1,65 @@
+vm-7 — CLOS dispatch in bytecode + inline caches (plan-2-bytecode-vm).
+
+Make generic-function calls fast — the dominant cost in method-heavy code (ASDF).
+
+WHAT
+- A CALL-GENERIC opcode (or CALL-NAMED recognising a generic function) that:
+  computes the argument classes, and consults an INLINE CACHE attached to the call
+  site (a slot in the constant pool / a per-callsite cache object):
+    monomorphic: cache the last (class-key -> effective-method); on hit, jump
+      straight to the effective method (a compiled function).
+    polymorphic: a small n-way cache; miss -> full COMPUTE-APPLICABLE-METHODS +
+      method-combination, then fill the cache.
+- Effective methods compiled to bytecode where possible (CALL-NEXT-METHOD as a
+  captured continuation / next-method chain).
+- Interacts with the CLOS class hierarchy (kernel CLASS vs CLOS %cls duality, see
+  [[bocl-class-duality-and-quirks]]): the cache key is the argument classes'
+  identity; invalidate caches on class redefinition / add-method / remove-method.
+- Fallback: if a generic function or its methods are not compiled, dispatch through
+  the existing tree-walked CLOS path (via the uniform APPLY, vm-6).
+
+ACCEPTANCE: a small class lattice with methods + method-combination; measure the
+per-call cost with vs without the inline cache; correctness under add-method /
+redefinition (cache invalidation); parity with the tree-walked CLOS on the CLOS
+tests.
+
+DEPENDS ON: vm-6.  Optional acceleration; can ship the VM first and add this.
+
+====================================================================
+DONE (v1.8.16, branch vm) — generic-function effective-method cache.
+
+CLOS dispatch (bootstrap/prelude.lisp) recomputed applicability + specificity sort +
+the effective method on EVERY call.  It now CACHES the effective method per generic
+function keyed on the tuple of the specialized (required) arguments' CLASSES.
+
+- Implementation (all Lisp — dispatch is 100% Lisp; the compiled VM reaches the SAME
+  discriminating function through kernel_apply, so this accelerates BOTH compiled and
+  interpreted calls, not a per-byte-code-call-site cache):
+  * %COMPUTE-EFFECTIVE-METHOD (refactored out of %INVOKE-EFFECTIVE-METHOD) returns a
+    closure of ARGS — the around/before/primary/after partition is argument-independent,
+    so it is built once per (gf, class-tuple) and reused.
+  * The discriminating function calls %GF-DISPATCH, which keys an EQUAL hash-table on
+    (mapcar #'class-of required-args) and, on a hit, funcalls the cached effective
+    method — skipping %APPLICABLE-METHODS + %SORT-METHODS + the partition.  Sound because
+    for every specializer kind bocl supports (a CLOS class / a built-in-or-condition type
+    name / T) both applicability and specificity depend only on the arguments' CLASSES,
+    never their values (no EQL specializers).  Full dispatch on a miss fills the cache.
+  * INVALIDATION: a global *%DISPATCH-GEN* bumped by ENSURE-CLOS-CLASS on any class
+    (re)definition (CPLs change) invalidates every gf cache at once; ENSURE-METHOD clears
+    the specific gf's cache when a method is added/redefined/removed.  *%DISPATCH-CACHE-
+    ENABLE* (default T) toggles the cache off for benchmarking.
+- ACCEPTANCE met: a class lattice with around/before/primary + call-next-method dispatches
+  identically cached and uncached; correctness under add-method AND class redefinition;
+  full suite green (CLOS + the prelude's own heavy generic use — print-object etc.).
+  Per-call cost: a method-combination GF called 4000x ran %applicable-methods 4000 times
+  uncached vs 2 times cached — ~31x faster dispatch (46.5s -> 1.5s in the interpreter).
+  Verified by tests/test_misc.c::test_vm_clos_cache.
+
+NOTE (scope): this is a per-GENERIC-FUNCTION cache, not the per-BYTE-CODE-CALL-SITE inline
+cache the issue sketched.  It is simpler, correct, and captures the dominant win
+(eliminating the per-call method scan + sort + combination) for every caller.  A
+per-call-site monomorphic inline cache in the byte-code (a CALL-GENERIC opcode + a
+constant-pool cache slot, skipping even the gf hash lookup) remains a possible future
+micro-opt; it would need class-key computation in the VM and the *%DISPATCH-GEN*
+generation check inline — worth it only if the gf-level hash lookup ever shows up in a
+profile (unlikely given the ~31x already achieved).

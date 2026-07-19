@@ -1,0 +1,58 @@
+generated C sources have drifted from their generators — `make regenerate` is
+DESTRUCTIVE.
+
+SYMPTOM
+Running `make -C sources regenerate` (host CL) produces files that DELETE
+hand-applied fixes present in the committed generated sources:
+- built_in_functions.c: kernel_TYPEP's symbol-type-specifier resolution;
+  kernel_SET_SYMBOL_{VALUE,FUNCTION,PLIST} argument order (the generated code
+  passes (symbol, value) to C functions taking (value, symbol)); the
+  bytecode.h/packages.h includes.
+- kernel_structure_functions.{c,h}: the v1.7.2 hot-3 CONS representation of
+  LEXICAL-VARIABLE (regenerates as a structure instance — a performance
+  regression AND an ABI change vs env_lexical_variable_p==consp callers);
+  the v1.7.1 _fast accessors.
+- structure_functions.c: the GC-rootset push of the structure classes in
+  kernel_initialize_structure_functions (regenerating removes kernel_classes
+  pinning — a GC hazard).
+Also environmental: the generators need com.informatimago.common-lisp.cesarum
+via quicklisp + a hard-coded ~/src/public/com-informatimago/ registry path.
+
+HOW FOUND (v1.8.36): adding the ENV slot to LOCAL-FUNCTION for the FLET
+conformance fix; regeneration had to be reverted and the slot applied by hand
+to the four generated files (generate-structures.lisp WAS updated, so the
+spec is current for that structure).
+
+FIX OPTIONS
+a) Teach the generators the hand fixes (TYPEP resolution, setter argument
+   order, cons-represented lexical variables, _fast accessors, rootset
+   pushes) so regeneration is faithful; or
+b) stop committing generator output for the drifted files and treat the C as
+   the source of truth (retire the generators); or
+c) split: keep generators for the mechanical parts, move the hand-fixed
+   functions out of the generated files.
+Until then: NEVER run `make regenerate` and commit blindly — diff against the
+committed files and keep every hand fix.
+
+--------------------------------------------------------------------------------
+RESOLVED (v1.8.37) — option (b') per pjb: a REPRODUCIBLE hand-fix PATCH applied
+on top of the generators' output, instead of editing generated files by hand.
+
+- sources/generated-sources-fixes.patch holds every hand fix as a unified diff
+  (old = pristine generator output, new = the committed sources), with a
+  header documenting each fix and how to re-derive the patch if the
+  generators' output shifts.
+- `make regenerate` now regenerates the pristine sources and applies the patch
+  (patch -p1 from the repo root).  VERIFIED: after `make regenerate` the tree
+  is byte-identical to the committed sources (empty git diff over all nine
+  generated files + the lisp listings) — regeneration is reproducible and no
+  longer destructive.
+- The v1.8.36 ENV-slot change had already been folded into
+  generate-structures.lisp, so it regenerates faithfully and is NOT in the
+  patch: the patch carries only what the generators cannot express (TYPEP
+  symbol-type resolution, the C setters' (object, new-value) argument order,
+  extra includes, the hot-3 cons representation of LEXICAL-VARIABLE, the
+  hot-2 _fast accessors, the GC-rootset pinning).
+- Teaching the generators these forms (option a) remains possible future work;
+  each fix migrated into a generator spec simply shrinks the patch (the
+  regenerate round-trip check tells you when it is empty).

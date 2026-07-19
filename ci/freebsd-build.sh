@@ -40,7 +40,8 @@ unxz -f "${IMG_BASE}.xz"
 qemu-img resize "$IMG_BASE" 10G
 
 echo "== preparing cloud-init seed (ssh key + build deps) =="
-ssh-keygen -t ed25519 -N "" -f id_ci >/dev/null
+rm -f id_ci id_ci.pub          # a stale key from an aborted run would make
+ssh-keygen -t ed25519 -N "" -f id_ci >/dev/null   # ssh-keygen prompt and fail
 PUBKEY="$(cat id_ci.pub)"
 # Create an explicit `ci` user with our key (the image's default user name and
 # root-SSH policy vary; this avoids depending on either). cloud-init runs as
@@ -69,16 +70,34 @@ users:
       - ${PUBKEY}
 write_files:
   - path: /etc/rc.conf.local
-    content: 'firstboot_freebsd_update_enable="NO" firstboot_pkgs_enable="NO"'
+    content: |
+      firstboot_freebsd_update_enable="NO"
+      firstboot_pkgs_enable="NO"
 runcmd:
   - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; pkg update -f >/dev/console 2>&1; pkg install -y gmake cunit >/dev/console 2>&1; echo BOCL-CLOUDINIT-DONE > /dev/console"
 EOF
 printf 'instance-id: bocl-ci\nlocal-hostname: bocl-ci\n' > meta-data
 cloud-localds seed.img user-data meta-data
 
-echo "== booting FreeBSD VM (TCG) =="
+# KVM when the runner passes /dev/kvm through (poseidon's docker runner does:
+# config.toml devices=["/dev/kvm"]); TCG otherwise (gitlab.com shared runners).
+# Under KVM the whole job takes minutes; under TCG the first boot alone can
+# spend tens of minutes in firstboot freebsd-update's "Inspecting system".
+if [ -w /dev/kvm ]; then
+    ACCEL="kvm -cpu host"
+    # 45 min, NOT 15: even under KVM the first boot runs firstboot
+    # freebsd-update (nuageinit applies the rc.conf.local disable too late),
+    # which fetches ~1300 patches — network-bound and slow when other
+    # pipeline jobs compete for the runner's bandwidth/CPU.
+    WAIT_TRIES=270
+    echo "== booting FreeBSD VM (KVM) =="
+else
+    ACCEL="tcg"
+    WAIT_TRIES=360       # TCG: allow a full hour for boot + provisioning
+    echo "== booting FreeBSD VM (TCG; no /dev/kvm) =="
+fi
 qemu-system-x86_64 \
-    -machine q35 -m "$VM_MEM" -smp "$VM_CPUS" -accel tcg \
+    -machine q35 -m "$VM_MEM" -smp "$VM_CPUS" -accel $ACCEL \
     -drive file="$IMG_BASE",if=virtio,format=qcow2 \
     -drive file=seed.img,if=virtio,format=raw \
     -netdev user,id=n0,hostfwd=tcp::${SSH_PORT}-:22 \
@@ -90,10 +109,10 @@ trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
 SSH_OPTS="-i id_ci -p $SSH_PORT -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8"
 
-echo "== waiting for cloud-init to finish (console marker; TCG boot is slow) =="
+echo "== waiting for cloud-init to finish (console marker) =="
 ready=""
 i=0
-while [ $i -lt 200 ]; do
+while [ $i -lt $WAIT_TRIES ]; do
     if grep -q "BOCL-CLOUDINIT-DONE" console.log 2>/dev/null; then ready=1; break; fi
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then echo "!! qemu exited early"; break; fi
     i=$((i+1)); sleep 10
@@ -127,7 +146,12 @@ $SSH "$RPATH gmake --version | head -1; cc --version | head -1; pkg info cunit |
 
 echo "== copying repo into VM =="
 $SSH 'mkdir -p ~/bocl'
-tar --exclude=.git --exclude='*.qcow2' --exclude='*.xz' --exclude='seed.img' -cf - . \
+# Exclude Linux build products: a stale .o/.a/.so or the Linux `bocl` binary
+# shipped into the VM makes gmake skip recompiles and link ELF objects of the
+# wrong ABI ("undefined symbol: stderr" and friends).
+tar --exclude=.git --exclude='*.qcow2' --exclude='*.xz' --exclude='seed.img' \
+    --exclude='*.o' --exclude='*.d' --exclude='*.a' --exclude='*.so*' \
+    --exclude='sources/bocl' --exclude='*.cfasl' -cf - . \
     | $SSH 'tar -xf - -C ~/bocl'
 
 echo "== building + testing on FreeBSD (gmake, clang) =="

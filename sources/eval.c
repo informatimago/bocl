@@ -173,10 +173,21 @@ unused static Frame* find_handler_frame(unused Ref condition,Ref environment){
 /* find_restart_frame: implemented in conditions.c as part of FIND-RESTART /
    INVOKE-RESTART.  The stub is removed. */
 
+/* Pop byte-code VM backtrace markers (frame_vm_call — they carry NO setjmp, they are pure
+   backtrace info) off the top of the global frame stack and return the first frame that can
+   RECEIVE a longjmp.  Every non-local exit — THROW, RETURN-FROM/GO, SIGNAL/ERROR to a
+   handler, INVOKE-RESTART — must route its "longjmp into the current top frame" through
+   this, or it could jump into a marker's uninitialised jmp_buf and crash.  Popping is
+   correct: an unwind through a marker's activation ends that activation's extent, and a
+   marker is never itself an unwind target (the VM handles BLOCK/TAGBODY lexically). */
+Frame* frame_top_live(void){
+    while(g_frame_stack && g_frame_stack->type==frame_vm_call){ g_frame_stack = g_frame_stack->next; }
+    return g_frame_stack;}
+
 static _Noreturn void unwind_next_frame(Frame* popped, unused Ref environment){
     /* `popped` has just been removed from the global frame stack; the new top
        is the next frame to unwind through on the way to popped->target. */
-    Frame* next = g_frame_stack;
+    Frame* next = frame_top_live();   /* skip byte-code VM markers (no setjmp) */
     if(next == NULL){
         FATAL("unwind_next_frame: %s","no next frame; target not reached");}
     non_local_exit_t exit = (next == popped->target)
@@ -297,7 +308,7 @@ static const int unwind_step[3][4]={{1,2,4,9},{3,4,5,9},{3,4,9,9}};
    frames list — that's the "current top frame" for unwind purposes. */
 #define NON_LOCAL_EXIT(target_frame)                                    \
     do {                                                                \
-        Frame* current_top = g_frame_stack;                             \
+        Frame* current_top = frame_top_live();                          \
         if(current_top==NULL){                                          \
             FATAL("NON_LOCAL_EXIT: %s","no active frame");}             \
         current_top->target=(target_frame);                             \
@@ -443,6 +454,23 @@ void eval_init_stack_guard(char* approx_base){
 /* The guard's limit (bytes) and the current control-stack usage, for filling the
    slots of BOCL:OUT-OF-STACK-MEMORY-ERROR (issue precise-condition-subclasses). */
 size_t eval_stack_guard_limit(void){ return g_stack_limit; }
+
+/* Shared control-stack guard, used by evale (inline, below) AND bytecode_apply: deep
+   NON-tail VM recursion signals a catchable STORAGE-CONDITION instead of crashing the C
+   stack.  (Tail calls reuse the C frame via the trampoline, so they never trip this.) */
+void eval_stack_guard_check(void){
+    char probe;
+    if(g_stack_base != NULL){
+        size_t used = (size_t)(g_stack_base - &probe);
+        if(used > g_stack_limit){
+            if(g_stack_guard_armed){
+                g_stack_guard_armed = false;
+                stack_overflow_error();        /* signals; no return */
+            }
+        } else {
+            g_stack_guard_armed = true;
+        }}}
+
 size_t eval_stack_guard_used(void){
     char probe;
     if(g_stack_base != NULL && g_stack_base > &probe){
@@ -493,7 +521,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         /* Not lexically bound — try the symbol's global value cell. */
         if(symbol_boundp(form)){
             VALUES1(symbol_value(form));}
-        ERROR("Unbound variable: %s",string_cstring(symbol_name(form)));}
+        ERROR("Unbound variable: %s",string_static_cstr(symbol_name(form)));}
 
     else if(!consp(form)){
         eval_counters.literal++;
@@ -515,13 +543,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,1,1);
             Ref fname = car(arguments);
             if(symbolp(fname)){
-                /* Local function bound by FLET/LABELS? Wrap it as a real Function. */
+                /* Local function bound by FLET/LABELS? Wrap it as a real Function,
+                   closed over its DEFINING environment (see the call dispatch). */
                 Ref local = environment_find_function(fname,environment);
                 if(!nullp(local) && env_local_function_p(local)){
                     Ref fn=function_new(env_local_function_name(local),
                                         env_local_function_lambda_list(local),
                                         env_local_function_body(local));
-                    VALUES1(closure_new(fn,environment));}
+                    Ref defenv=env_local_function_env(local);
+                    VALUES1(closure_new(fn,nullp(defenv)?environment:defenv));}
                 if(symbol_fboundp(fname)){
                     VALUES1(symbol_function(fname));}
                 ERROR("Undefined function: %s",
@@ -574,13 +604,13 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                 kernel_apply(symbol_function(symbol_intern_cstring("%REGISTER-SETF-FUNCTION")),
                              list(sym,fn,(Ref)NULL),&mv);
                 VALUES1(name);}
-            ERROR("DEFUN: %s is not a valid function name",string_cstring(prin1_to_string(name)));}
+            ERROR("DEFUN: %s is not a valid function name",string_static_cstr(prin1_to_string(name)));}
 
         if(operator==S(DEFPARAMETER)){
             check_arg_count(arguments,2,3);  /* name value [doc] */
             Ref name=car(arguments);
             if(!symbolp(name)){
-                ERROR("DEFPARAMETER: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFPARAMETER: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             Ref value=evale(cadr(arguments),environment,results);
             define_parameter(name,value);
             VALUES1(name);}
@@ -589,7 +619,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,1,3);  /* name [value [doc]] */
             Ref name=car(arguments);
             if(!symbolp(name)){
-                ERROR("DEFVAR: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFVAR: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             if(consp(cdr(arguments)) && !symbol_boundp(name)){
                 Ref value=evale(cadr(arguments),environment,results);
                 define_variable(name,value);}
@@ -601,7 +631,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,2,3);  /* name value [doc] */
             Ref name=car(arguments);
             if(!symbolp(name)){
-                ERROR("DEFCONSTANT: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFCONSTANT: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             Ref value=evale(cadr(arguments),environment,results);
             define_constant(name,value);
             VALUES1(name);}
@@ -615,7 +645,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref params=cadr(arguments);
             Ref body=cddr(arguments);
             if(!symbolp(name)){
-                ERROR("DEFMACRO: %s is not a symbol",string_cstring(prin1_to_string(name)));}
+                ERROR("DEFMACRO: %s is not a symbol",string_static_cstr(prin1_to_string(name)));}
             Ref fn=function_new(name,params,make_block_body(name,body,NULL));
             add_to_live_pool(fn);   /* function_new leaves fn unrooted; putf() below
                 conses (may GC) while fn is not yet on the plist — without this it is
@@ -954,7 +984,14 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             /* Skip DECLAREs at the head of body (only SPECIAL recognised so far). */
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
-            /* Build the new env. Local-function bodies see the OUTER env (parent of new). */
+            /* Build the new env holding the NAME bindings (visible to the FLET
+               BODY only).  Each function's wrapper records the OUTER env as its
+               defining environment (CLHS 3.1.2.1.2.1): a FLET function's body
+               does NOT see its siblings — (flet ((g ...) (h () (g))) ...) calls
+               the GLOBAL G — unlike LABELS.  The tree-walker used to close the
+               wrapper over the CALL-SITE env, which gave FLET LABELS semantics
+               and masked prelude bugs the (conforming) byte-compiler exposed
+               (issue interp-flet-sibling-visibility, the %LOOP-EXPAND case). */
             Ref new_environment=environment_new(environment,NIL_Symbol);
             add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
@@ -963,7 +1000,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref name=car(binding);
                     Ref lambda_list=cadr(binding);
                     Ref fn_body=cddr(binding);
-                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL));
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL),environment);
                     environment_add_function(fn_wrapper,new_environment);}}
              environment=new_environment;
              {dolist(subform,body){
@@ -978,10 +1015,11 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref body=cdr(arguments);
             while(consp(body) && consp(car(body)) && eql(DECLARE_Symbol,caar(body))){
                 pop(&body);}
-            /* Build the new env FIRST, then add wrappers — each fn body will resolve
-               its sibling references via the same env (because the wrapper's body is
-               evaluated only when the function is called, by which point all siblings
-               are bound). */
+            /* Build the new env FIRST, then add wrappers recording IT as their
+               defining environment — each fn body resolves its SIBLING references
+               via that same env (the wrapper's body is evaluated only when the
+               function is called, by which point all siblings are bound).  This
+               sibling visibility is what distinguishes LABELS from FLET. */
             Ref new_environment=environment_new(environment,NIL_Symbol);
             add_to_live_pool(new_environment); /* Object_new leaves it unrooted */
             {dolist(binding,bindings){
@@ -990,7 +1028,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     Ref name=car(binding);
                     Ref lambda_list=cadr(binding);
                     Ref fn_body=cddr(binding);
-                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL));
+                    Ref fn_wrapper=env_make_local_function(name,lambda_list,make_block_body(name,fn_body,NULL),new_environment);
                     environment_add_function(fn_wrapper,new_environment);}}
              environment=new_environment;
              {dolist(subform,body){
@@ -1134,7 +1172,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                             doit=1;
                             break;}}
                     else{
-                        ERROR("Invalid EVAL-WHEN situation: %s",string_cstring(prin1_to_string(situation)));}}}
+                        ERROR("Invalid EVAL-WHEN situation: %s",string_static_cstr(prin1_to_string(situation)));}}}
              if(doit){
                  {dolist(subform,body){
                          evale(subform,environment,results);}}
@@ -1304,9 +1342,25 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                            string_cstring(prin1_to_string(clause)));}
                  Ref type_spec  = car(clause);
                  Ref fn_form    = cadr(clause);
-                 Ref type_class = symbolp(type_spec) ? find_class(type_spec) : type_spec;
+                 /* Resolve type_spec to a class object.  Kernel classes first; if not found,
+                    fall back to the CLOS class registry via the Lisp FIND-CLASS — otherwise a
+                    HANDLER-BIND clause typed on a user DEFINE-CONDITION class resolves to NULL
+                    and typep(NULL,...) dereferences it (was a crash).  Mirrors HANDLER-CASE. */
+                 Ref type_class;
+                 if(symbolp(type_spec)){
+                     type_class = find_class(type_spec);            /* kernel lookup */
+                     if(type_class == NULL){
+                         Ref lisp_fc = symbol_function(S(FIND-CLASS));
+                         if(lisp_fc != NULL && lisp_fc != UNBOUND_Object &&
+                            (closurep(lisp_fc)||functionp(lisp_fc)||built_in_function_p(lisp_fc))){
+                             MultipleValues fc_res = {0};
+                             kernel_apply(lisp_fc, list(type_spec, NULL), &fc_res);
+                             type_class = (fc_res.count > 0) ? fc_res.values[0] : NULL;}}}
+                 else {
+                     type_class = type_spec;}
                  add_to_live_pool(type_class); /* protect across evale */
-                 if(!typep(type_class,T_Class)){
+                 if((type_class == NULL || type_class == NIL_Symbol) ||
+                    (!typep(type_class,T_Class) && !clos_class_p(type_class))){
                      ERROR("HANDLER-BIND: unknown type %s",
                            string_cstring(prin1_to_string(type_spec)));}
                  MultipleValues fn_results;
@@ -1489,6 +1543,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count_min(arguments,1);
             Ref name=car(arguments);
             Ref body=cdr(arguments);
+            /* Give each BLOCK its OWN child environment, so two lexically-nested BLOCKs with
+               the SAME name land in DIFFERENT environments.  find_block_frame walks a
+               closure's captured lexical env chain, so a closure created in the OUTER block's
+               scope RETURN-FROMs the OUTER block (correct, lexical) rather than the innermost
+               same-named frame — the effect of alpha-renaming the block to a gensym, without
+               a rename pass.  (The UWBODY macro pushes the frame into and evaluates the body
+               in `environment`, so we rebind it to the child.) */
+            environment=environment_new(environment,NIL_Symbol);
+            add_to_live_pool(environment);
             Frame frame;
             frame.type=frame_block;
             frame.parameters.block.name=name;
@@ -1509,7 +1572,19 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref result=cadr(arguments);
             Frame* target_frame=find_block_frame(name,environment);
             if(NULL==target_frame){
-                ERROR("No block named %s",string_cstring(prin1_to_string(name)));}
+                /* The block is lexically valid (the analyzer/reader saw it) but its dynamic
+                   extent has already EXITED — a closure captured this RETURN-FROM and is
+                   being called after the block returned.  Signal a descriptive, TYPED error
+                   HERE — in the dynamic context of the RETURN-FROM, BEFORE any unwinding —
+                   so a HANDLER-BIND active at this point may provide an alternative
+                   non-local exit (per CLHS 5.2 / the requested behaviour).  Falls back to a
+                   generic error before the prelude defines the signaler (early boot). */
+                Ref sig=package_intern_cstring_in("%RETURN-FROM-EXITED-BLOCK-ERROR",BOCL_Package);
+                if(symbol_fboundp(sig)){
+                    MultipleValues mv;
+                    kernel_apply(symbol_function(sig),list(name,(Ref)NULL),&mv);}
+                ERROR("RETURN-FROM: the block %s has already exited (or was never established)",
+                      string_cstring(prin1_to_string(name)));}
             evale(result,environment,target_frame->results);
             NON_LOCAL_EXIT(target_frame);}
 
@@ -1540,7 +1615,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             Ref result_form=cadr(arguments);
             Frame* target_frame=find_catch_frame(object,environment);
             if(NULL==target_frame){
-                ERROR("No active catch for tag %s",string_cstring(prin1_to_string(object)));}
+                ERROR("No active catch for tag %s",string_static_cstr(prin1_to_string(object)));}
             evale(result_form,environment,target_frame->results);
             NON_LOCAL_EXIT(target_frame);}
 
@@ -1581,10 +1656,18 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             check_arg_count(arguments,1,1);
             Ref tag=car(arguments);
             Frame* target_frame=find_tagbody_frame(tag,environment);
-            target_frame->parameters.tagbody.target_tag=tag;
             if(NULL==target_frame){
-                /* TODO: save the environment so error() and handlers can find it! */
-                ERROR("No active catch for tag %p",(void*)tag);}
+                /* The tag is lexically valid but its TAGBODY's dynamic extent has EXITED —
+                   signal a descriptive, typed error in the GO's context (before unwinding),
+                   like RETURN-FROM above.  (Also fixes a pre-existing NULL-deref: the
+                   target_tag was set BEFORE this NULL check.) */
+                Ref sig=package_intern_cstring_in("%GO-EXITED-TAGBODY-ERROR",BOCL_Package);
+                if(symbol_fboundp(sig)){
+                    MultipleValues mv;
+                    kernel_apply(symbol_function(sig),list(tag,(Ref)NULL),&mv);}
+                ERROR("GO: the tag %s's TAGBODY has already exited (or the tag is unknown)",
+                      string_cstring(prin1_to_string(tag)));}
+            target_frame->parameters.tagbody.target_tag=tag;
             NON_LOCAL_EXIT(target_frame);}
 
         /* operator is not a special operator. Lookup order matters here
@@ -1603,11 +1686,15 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
             if(env_local_function_p(local)){
                 eval_counters.local_function++;
                 /* Build a transient Function from the wrapper and close it over
-                   the env in which it was bound. */
+                   its DEFINING environment (FLET: the env enclosing the flet;
+                   LABELS: the env holding all the bindings).  NIL (a wrapper
+                   built without an env, e.g. from Lisp) falls back to the
+                   call-site env — the historical behavior. */
                 Ref fn=function_new(env_local_function_name(local),
                                     env_local_function_lambda_list(local),
                                     env_local_function_body(local));
-                function=closure_new(fn,environment);}
+                Ref defenv=env_local_function_env(local);
+                function=closure_new(fn,nullp(defenv)?environment:defenv);}
             else if(env_local_macro_p(local) || env_global_macro_p(local)){
                 eval_counters.local_macro++;
                 macro=local;}
@@ -1667,7 +1754,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
                     function=f;}}}
 
         if(nullp(function) && nullp(macro)){
-            ERROR("Undefined function: %s",string_cstring(symbol_name(operator)));}
+            ERROR("Undefined function: %s",string_static_cstr(symbol_name(operator)));}
 
         if(!nullp(macro)){
             /* Macro call: kernel_apply the macro function to the
@@ -1757,7 +1844,7 @@ Ref evale(Ref form,Ref environment,MultipleValues* results){
         PASS_VALUES();}
 
     else{
-        ERROR("evale: malformed form %s",string_cstring(prin1_to_string(form)));}
+        ERROR("evale: malformed form %s",string_static_cstr(prin1_to_string(form)));}
 
     close_live_pool(pool);
     return NIL_Symbol;}
@@ -1897,7 +1984,7 @@ static void bind_required_parameters(Ref function,Ref lambda_list,Ref arguments,
                     aux_var=car(aux_spec);
                     aux_init=nullp(cdr(aux_spec))?NIL_Symbol:cadr(aux_spec);
                 } else {
-                    ERROR("&AUX: bad spec %s",string_cstring(prin1_to_string(aux_spec)));}
+                    ERROR("&AUX: bad spec %s",string_static_cstr(prin1_to_string(aux_spec)));}
                 MultipleValues aux_res={0};
                 Ref val=(nullp(aux_init)?NIL_Symbol:evale(aux_init,target_env,&aux_res));
                 Ref wrap=env_make_lexical_variable(aux_var,val);

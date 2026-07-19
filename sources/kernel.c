@@ -1,4 +1,8 @@
-#define _POSIX_SOURCE
+/* XSI (SUSv4): FreeBSD guards struct sigaction's SA_SIGINFO member
+   sa_sigaction behind __XSI_VISIBLE, which plain _POSIX_C_SOURCE does not
+   set — the crash-handler installation below needs it.  _XOPEN_SOURCE 700
+   is a superset of the _POSIX_C_SOURCE=200809L the build already passes. */
+#define _XOPEN_SOURCE 700
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -12,6 +16,7 @@
 #include "kernel_types.h"
 #include "overflow.h"   /* portable bocl_u{add,mul}_overflow for the bignum magnitude code */
 #include "kernel_objects.h"
+#include "bytecode.h"
 #include "kernel_private.h"
 #include "macros.h"
 #include "memory.h"
@@ -1580,8 +1585,12 @@ Ref set_symbol_value(Ref symbol,Ref new_value){
 
 Ref set_symbol_function(Ref symbol,Ref new_function){
     check_type(symbol,SYMBOL_Class);
-    /* Accept any callable: kernel function, user closure, or built-in. */
-    if(!functionp(new_function) && !closurep(new_function) && !built_in_function_p(new_function)){
+    /* Accept any callable: kernel function, user closure, built-in, or a
+       byte-compiled function / closure (vm-8..10 — booting from a compiled
+       prelude image installs byte-compiled discriminating functions, so a
+       COMPILED-CLOSURE must be accepted here just like an interpreted one). */
+    if(!functionp(new_function) && !closurep(new_function) && !built_in_function_p(new_function)
+       && !compiled_function_p(new_function) && !compiled_closure_p(new_function)){
         TYPE_ERROR(new_function,FUNCTION_Class);}
     symbol->slots->symbol.function=new_function;
     gc_write_barrier(symbol->slots);
@@ -2180,8 +2189,8 @@ Ref normalize_encoding(Ref encoding_o,encoding_t* encoding){
         (*encoding)=encoding_us_ascii;
         return encoding_o;}
     else{
-        error("Invalid encoding %s",
-              string_cstring(prin1_to_string(encoding_o)));}}
+        bocl_error(__FUNCTION__,"Invalid encoding %s",
+              string_static_cstr(prin1_to_string(encoding_o)));}}
 
 Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
     if((new_line_o==K(LF))||(new_line_o==K(UNIX))
@@ -2195,8 +2204,8 @@ Ref normalize_new_line(Ref new_line_o,new_line_t* new_line){
         (*new_line)=new_line_crlf;
         return K(CRLF);}
     else{
-        error("Invalid new-line format %s",
-              string_cstring(prin1_to_string(new_line_o)));}}
+        bocl_error(__FUNCTION__,"Invalid new-line format %s",
+              string_static_cstr(prin1_to_string(new_line_o)));}}
 
 Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
     if(characterp(on_error_o)){
@@ -2210,8 +2219,8 @@ Ref normalize_on_error(Ref on_error_o,on_error_t* on_error){
         (*on_error)=on_error_ignore;
         return on_error_o;}
     else{
-        error("Invalid on-error format %s",
-              string_cstring(prin1_to_string(on_error_o)));}}
+        bocl_error(__FUNCTION__,"Invalid on-error format %s",
+              string_static_cstr(prin1_to_string(on_error_o)));}}
 
 Ref normalize_external_format_internal(Ref external_format,
                                   encoding_t* encoding,
@@ -2231,8 +2240,8 @@ Ref normalize_external_format_internal(Ref external_format,
         else{
             on_error_o=normalize_on_error(caddr(external_format),on_error);}}
     else{
-        error("Invalid external-format %s",
-              string_cstring(prin1_to_string(external_format)));}
+        bocl_error(__FUNCTION__,"Invalid external-format %s",
+              string_static_cstr(prin1_to_string(external_format)));}
     return cons(encoding_o,cons(new_line_o,cons(on_error_o,NIL_Symbol)));}
 
 Ref normalize_external_format(Ref external_format){
@@ -2368,6 +2377,7 @@ Ref stream_input_string(Ref string,Ref start,Ref end){
     stream->slots->file_stream.buffer=(octet*)buffer;
     stream->slots->file_stream.buffer_size=size;
     close_live_pool(pool);
+    add_to_live_pool(stream);   /* re-root: fresh stream, trimmed by the close */
     return stream;}
 
 Ref stream_output_string(unused Ref element_type){
@@ -2388,6 +2398,12 @@ Ref stream_output_string(unused Ref element_type){
     stream->slots->file_stream.buffer=(octet*)buffer;
     string->slots->octet_array.dimensions[0]=CHECK_SIZE_TO_UWORD(size);
     close_live_pool(pool);
+    /* NOT re-rooted here: the C callers root the stream themselves for the
+       print duration (prin1_to_string / princ_to_string / format ~/ below),
+       and the Lisp callers bind it to a variable.  A global re-root here was
+       tried (v1.8.58) and backed out: it perturbed live-pool growth enough to
+       expose the flaky FreeBSD corruption tracked in
+       issues/open/freebsd-latent-heap-corruption.issue. */
     return stream;}
 
 Ref string_output_stream_get_string(Ref string_output_stream){
@@ -2574,12 +2590,24 @@ void values(Ref arguments,MultipleValues* results){
 
 void kernel_apply(Ref function_or_closure,Ref arguments,MultipleValues* results){
     /* CL function designator: a symbol names the function in its function cell. */
-    if(symbolp(function_or_closure) && symbol_fboundp(function_or_closure)){
-        function_or_closure=symbol_function(function_or_closure);}
+    if(symbolp(function_or_closure)){
+        if(symbol_fboundp(function_or_closure)){
+            function_or_closure=symbol_function(function_or_closure);}
+        else{
+            /* An unfbound designator is an UNDEFINED function.  Report it like
+               the evaluator does, NAMING the symbol — falling through to the
+               generic type check yields a baffling "TYPE ERROR: expected
+               FUNCTION, got SYMBOL" with no hint of WHICH function is missing
+               (this is what a byte-compiled call to an undefined global used
+               to signal). */
+            ERROR("Undefined function: %s",
+                  string_cstring(symbol_name(function_or_closure)));}}
     if(closurep(function_or_closure)){
         kernel_apply_closure(function_or_closure,&function_or_closure->slots->closure,arguments,results);}
     else if(built_in_function_p(function_or_closure)){
         kernel_apply_built_in(function_or_closure,&function_or_closure->slots->built_in_function,arguments,results);}
+    else if(compiled_function_p(function_or_closure) || compiled_closure_p(function_or_closure)){
+        bytecode_apply(function_or_closure,arguments,results);}   /* byte-code VM (vm-2) */
     else if(functionp(function_or_closure)){
         kernel_apply_function(function_or_closure,&function_or_closure->slots->function,arguments,results);}
     else{
@@ -2605,7 +2633,7 @@ void check_no_more_arguments(Ref function,Ref arguments){
        crashed with "got SYMBOL, expected STRING".) */
     char* fname=string_cstring(symbol_name(function_name(function)));
     char* args=string_cstring(prin1_to_string(arguments));
-    error(fname,"Too many arguments, unused: %s",args);
+    bocl_error(fname,"Too many arguments, unused: %s",args);
     /* error() is _Noreturn, so the frees below are unreachable. Kept as a
        note that the strdup'd buffers are leaked when we exit on error. */
     free(fname);free(args);}
@@ -2613,7 +2641,7 @@ void check_no_more_arguments(Ref function,Ref arguments){
 Ref pop_mandatory_argument(Ref function,Ref* arguments){
     if(nullp(*arguments)){
         char* fname=string_cstring(symbol_name(function_name(function)));
-        error(fname,"Missing mandatory argument");
+        bocl_error(fname,"Missing mandatory argument");
         free(fname);}
     return pop(arguments);}
 
@@ -2631,7 +2659,7 @@ Ref pop_key_argument(Ref function,Ref* arguments,Ref keyword,Ref default_value){
             char* fname=string_cstring(function_name(function));
             char* args=string_cstring(prin1_to_string(*arguments));
             char* mkey=string_cstring(prin1_to_string(keyword));
-            error(fname,"Odd number of &key arguments %s, missing value for %s",
+            bocl_error(fname,"Odd number of &key arguments %s, missing value for %s",
                   args,mkey);
             /* TODO: clear up this mess, error doesn't return! */
             free(fname);free(args);free(mkey);}}

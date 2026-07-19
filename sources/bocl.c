@@ -19,10 +19,13 @@
 #include "eval.h"
 #include "packages.h"
 #include "cfasl.h"
+#include "bytecode.h"
 #include <time.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
+#include <limits.h>   /* PATH_MAX (PROBE-FILE realpath) */
 #include <unistd.h>
+#include <sys/wait.h>   /* WIFEXITED/WEXITSTATUS for %SYSTEM (system(3)) */
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,7 +162,11 @@ Ref bocl_repl(Ref inp,Ref out){
            OUT) so a DRIBBLE in effect tees the result echo to the dribble file;
            the prompt stays on OUT so it is not recorded. */
         {   Ref cur_out=variable_value(S(*STANDARD-OUTPUT*));
-            print(primary,cur_out);
+            /* Echo EVERY value, one per line (values.issue): the value list is
+               already rooted via the / history variable set above.  Zero
+               values — (values) — print nothing, like other CL REPLs. */
+            for(uword i=0;i<results.count;i++){
+                print(results.values[i],cur_out);}
             terpri(cur_out);}}}
 
 Ref bocl_read_eval_loop_cstring(const char* text){
@@ -180,7 +187,7 @@ Ref bocl_in_package(Ref package_designator){
 /* When true, each top-level form is evaluated through the Lisp wrapper
    %LOAD-EVAL-TOPLEVEL-FORM, which catches errors so a single bad form does not
    abort the whole file.  main.c enables this only after the prelude has loaded
-   and only under -on-error appease — never during the bootstrap. */
+   and only under --on-error appease — never during the bootstrap. */
 bool bocl_load_recover = false;
 
 Ref bocl_load_cstring(const char* path){
@@ -306,6 +313,21 @@ Ref bocl_fasl_load(const char* path){
     if(got != (size_t)sz){ free(buf); return NIL_Symbol; }
 
     if(memcmp(buf, CFASL_MAGIC, CFASL_MAGIC_LEN) != 0){ free(buf); return NIL_Symbol; }
+    /* A complete image's FINAL byte is always CFASL_TAG_EOF (the writer emits
+       it last, after the forms; kernel_WRITE_CFASL serializes fully in memory
+       before the file is opened).  Check it BEFORE evaluating anything: a
+       truncated file (interrupted write, full disk, partial copy) whose cut
+       lands on a form boundary would otherwise load as a silent PREFIX of the
+       image — half a prelude that boots and then fails much later with
+       undefined functions — and rejecting it only after some forms have run
+       would leave the fallback source load to fight the partial state.
+       Rejected here, the source loads on a clean kernel. */
+    if(buf[sz-1] != CFASL_TAG_EOF){
+        fprintf(stderr, ";; WARNING: %s is truncated (missing end-of-image tag)"
+                        " — ignoring it.\n", path);
+        free(buf);
+        return NIL_Symbol;
+    }
     uint8_t ver = buf[CFASL_MAGIC_LEN];
     /* buf[CFASL_MAGIC_LEN+1] = flags (reserved) */
     if(ver != CFASL_VERSION){
@@ -339,9 +361,23 @@ Ref bocl_fasl_load(const char* path){
         if(!(functionp(wrapper) || built_in_function_p(wrapper) || closurep(wrapper))){ wrapper = NIL_Symbol; }
     }
 
+    /* Maintenance diagnostic (vm-10): with $BOCL_CFASL_DEBUG set, trace each
+       top-level form as it loads ("[cfasl N] OP NAME").  Booting from a compiled
+       prelude image is order-sensitive (a form runs before its later helper is
+       defined), so a form-by-form trace is the way to localise a bad load. */
+    int cfasl_dbg = getenv("BOCL_CFASL_DEBUG") ? 1 : 0;
+    long cfasl_formn = 0;
     int ok = 1;
+    int saw_eof = 0;   /* a complete image ENDS with CFASL_TAG_EOF (the writer
+        always emits it — kernel_WRITE_CFASL serializes fully in memory first).
+        Running off the end of the buffer WITHOUT the tag means the file was
+        truncated AT a form boundary (interrupted write, full disk, partial
+        copy): the prefix loads cleanly form by form, so without this check the
+        boot would silently run on HALF a prelude and fail much later with
+        undefined functions. */
     for(;;){
-        if(cfasl_at_end(&in) || in.data[in.pos] == CFASL_TAG_EOF){ break; }
+        if(cfasl_at_end(&in)){ break; }
+        if(in.data[in.pos] == CFASL_TAG_EOF){ saw_eof = 1; break; }
         /* One live-pool frame per form: the form graph and its eval garbage are
            reclaimed before the next form, keeping GC scans O(form) not O(file);
            definitions survive via their symbols, exactly as the text loader. */
@@ -355,6 +391,26 @@ Ref bocl_fasl_load(const char* path){
             break;
         }
         add_to_live_pool(form);
+        cfasl_formn++;
+        if(cfasl_dbg){
+            Ref op = consp(form) ? cons_car(form) : form;
+            char opbuf[64]="?"; char nmbuf[96]="";
+            if(symbolp(op) && stringp(symbol_name(op))){
+                char* s = string_cstring(symbol_name(op));
+                snprintf(opbuf,sizeof(opbuf),"%s",s); free(s);
+            }
+            /* (define-function 'NAME ...) — dig out NAME for identification */
+            if(consp(form) && consp(cons_cdr(form))){
+                Ref a = cons_car(cons_cdr(form));
+                if(consp(a) && consp(cons_cdr(a))) a = cons_car(cons_cdr(a)); /* (quote NAME) */
+                if(symbolp(a) && stringp(symbol_name(a))){
+                    char* s = string_cstring(symbol_name(a));
+                    snprintf(nmbuf,sizeof(nmbuf)," %s",s); free(s);
+                }
+            }
+            fprintf(stderr, ";; [cfasl %ld] %s%s\n", cfasl_formn, opbuf, nmbuf);
+            fflush(stderr);
+        }
         PROFILE_ENTER(PROF_EVAL);
         if(!nullp(wrapper)){
             MultipleValues res = {0};
@@ -372,8 +428,18 @@ Ref bocl_fasl_load(const char* path){
     close_live_pool(load_pool);
     free(buf);
 
-    if(!ok){
-        fprintf(stderr, ";; WARNING: %s is a truncated / malformed cfasl.\n", path);
+    if(!ok || !saw_eof){
+        /* Corruption detected only after SOME forms already ran (the upfront
+           final-byte check passed, so this is interior corruption, not simple
+           truncation).  The state is partially loaded; the caller falls back
+           to the source, which may itself trip over the partial definitions —
+           say so, and name the remedy. */
+        fprintf(stderr, ";; WARNING: %s is a malformed cfasl%s; %ld forms were"
+                        " already evaluated — falling back to the source, but the"
+                        " session may be inconsistent.  Delete or rebuild the"
+                        " image (make -C sources prelude-image).\n",
+                path, (ok && !saw_eof) ? " (interior end-of-image tag)" : "",
+                cfasl_formn);
         return NIL_Symbol;
     }
     return T_Symbol;}
@@ -684,6 +750,43 @@ static void kernel_CHDIR(unused Ref function, Ref arguments, MultipleValues* res
     results->count=1; results->values[0]=as_boolean(rc==0);
     close_live_pool(pool);}
 
+/* (%SYSTEM command) -> exit status of the shell command (libc system(3)):
+   the child's exit code, or 128+signal when it died on a signal (the shell
+   convention).  Signals an ERROR when the shell itself cannot be run.
+   The synchronous subprocess primitive UIOP's %system / run-program build on
+   (uiop-bocl-porting Tier 2). */
+static void kernel_SYSTEM(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref cmd=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    check_type(cmd,STRING_Class);
+    char* c=string_cstring(cmd);
+    int st=system(c);
+    free(c);
+    if(st==-1){ ERROR("%%SYSTEM: cannot run the shell%s",""); }
+    int code=st;
+    if(WIFEXITED(st)){ code=WEXITSTATUS(st); }
+    else if(WIFSIGNALED(st)){ code=128+WTERMSIG(st); }
+    results->count=1; results->values[0]=integer_from_word(code);
+    close_live_pool(pool);}
+
+/* (%RMDIR path) -> T when the (empty) directory was removed, NIL on failure
+   (missing, not empty, permission).  rmdir(2). */
+static void kernel_RMDIR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref pathspec=pop_mandatory_argument(function,&current);
+    check_no_more_arguments(function,current);
+    char* path;
+    if(typep(pathspec,STRING_Class)){ path=string_cstring(pathspec); }
+    else if(typep(pathspec,PHYSICAL_PATHNAME_Class)){ path=string_cstring(namestring(pathspec)); }
+    else { TYPE_ERROR(pathspec,STRING_Class); }
+    int rc=rmdir(path);
+    free(path);
+    results->count=1; results->values[0]=as_boolean(rc==0);
+    close_live_pool(pool);}
+
 /* (%COMMAND-LINE-ARGUMENTS) -> list of the raw argv strings (argv[0] first). */
 static void kernel_COMMAND_LINE_ARGUMENTS(unused Ref function, unused Ref arguments, MultipleValues* results){
     uword pool=open_live_pool();
@@ -742,8 +845,31 @@ static void kernel_WRITE_CHAR(unused Ref function, Ref arguments, MultipleValues
     Ref current=arguments;
     Ref ch=cons_car(current); current=cons_cdr(current);
     Ref stream=consp(current)?cons_car(current):variable_value(S(*STANDARD-OUTPUT*));
+    stream=stream_designator_output(stream);
     results->count=1;
     results->values[0]=bocl_write_char(ch,stream);
+    close_live_pool(pool);}
+
+/* (UNREAD-CHAR character &optional input-stream) — push CHARACTER back onto
+   the stream; the next READ-CHAR/PEEK-CHAR must return it.  CLHS guarantees
+   only ONE unread between reads, which C ungetc() provides.  The reader maps
+   the device newline (LF / CR / CRLF) to the internal #\Newline (NEL) on
+   input, so unreading #\Newline pushes back the device byte '\n', which the
+   next read maps to NEL again. */
+static void kernel_UNREAD_CHAR(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool();
+    add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref ch=cons_car(current); current=cons_cdr(current);
+    Ref stream=consp(current)?cons_car(current):variable_value(S(*STANDARD-INPUT*));
+    stream=stream_designator_input(stream);
+    if(!characterp(ch)){ TYPE_ERROR(ch,CHARACTER_Class); }
+    FILE* in=stream_cstream(stream);
+    int code=(int)integer_value(character_code(ch));
+    if(code==0x85){ code='\n'; }   /* internal NEL -> device newline */
+    ungetc(code,in);
+    results->count=1;
+    results->values[0]=NIL_Symbol;
     close_live_pool(pool);}
 
 /* (%STREAM-LINE-START-P stream) -> T if STREAM is at the start of a line (used by
@@ -753,7 +879,7 @@ static void kernel_STREAM_LINE_START_P(unused Ref function, Ref arguments, Multi
     uword pool=open_live_pool();
     add_to_live_pool(arguments);
     Ref current=arguments;
-    Ref stream=cons_car(current);
+    Ref stream=stream_designator_output(cons_car(current));
     results->count=1;
     results->values[0]=stream_line_start_p(stream);
     close_live_pool(pool);}
@@ -848,9 +974,16 @@ static void kernel_PROBE_FILE(unused Ref function, Ref arguments, MultipleValues
     char* path=string_cstring(name_ref);
     struct stat st;
     bool exists=(stat(path,&st)==0);
+    /* CLHS: PROBE-FILE returns the TRUENAME — a physical PATHNAME with any
+       symlinks/relative components resolved — not a namestring.  (ASDF's
+       system-source-file check-types (or null pathname system) on it.) */
+    Ref result=NIL_Symbol;
+    if(exists){
+        char resolved[PATH_MAX];
+        result=physical_pathname_new_cstring(realpath(path,resolved)?resolved:path);}
     free(path);
     results->count=1;
-    results->values[0]=exists?name_ref:NIL_Symbol;
+    results->values[0]=result;
     close_live_pool(pool);}
 
 /* (FILE-WRITE-DATE filespec) — return the file's modification time as a
@@ -881,6 +1014,33 @@ static void kernel_FILE_LENGTH(unused Ref function, Ref arguments, MultipleValue
     if(f==NULL || fstat(fileno(f),&st)!=0){ ERROR("FILE-LENGTH: not an open file stream%s",""); }
     results->count=1;
     results->values[0]=integer_from_word((word)st.st_size);
+    close_live_pool(pool);}
+
+/* (FILE-POSITION stream &optional position) — CLHS: with no POSITION, the
+   current file position (ftell) or NIL; with POSITION (an integer, :START or
+   :END), reposition the stream (fseek) and return T (NIL on failure). */
+static void kernel_FILE_POSITION(unused Ref function, Ref arguments, MultipleValues* results){
+    uword pool=open_live_pool(); add_to_live_pool(arguments);
+    Ref current=arguments;
+    Ref stream=cons_car(current); current=cons_cdr(current);
+    stream=stream_designator_input(stream);
+    check_type(stream,FILE_STREAM_Class);
+    FILE* f=stream->slots->file_stream.stream;
+    results->count=1;
+    if(f==NULL){
+        results->values[0]=NIL_Symbol;
+        close_live_pool(pool);
+        return;}
+    if(consp(current)){
+        Ref pos=cons_car(current);
+        int rc;
+        if(pos==K(START))      { rc=fseek(f,0L,SEEK_SET); }
+        else if(pos==K(END))   { rc=fseek(f,0L,SEEK_END); }
+        else                   { rc=fseek(f,(long)integer_value(pos),SEEK_SET); }
+        results->values[0]=(rc==0)?T_Symbol:NIL_Symbol;
+    } else {
+        long at=ftell(f);
+        results->values[0]=(at<0)?NIL_Symbol:integer_from_word((word)at);}
     close_live_pool(pool);}
 
 /* (%COPY-FILE source destination) — byte-for-byte copy of SOURCE to
@@ -1132,7 +1292,7 @@ static void kernel_WRITE_STRING(unused Ref function, Ref arguments, MultipleValu
                 /* Positional: start then end. */
                 start=x; current=cons_cdr(current);
                 if(consp(current)){ end=cons_car(current);}}}}
-    if(nullp(stream)) stream=variable_value(S(*STANDARD-OUTPUT*));
+    stream=stream_designator_output(stream);
     results->count=1;
     results->values[0]=bocl_write_string(str,stream,start,end);
     close_live_pool(pool);}
@@ -1239,7 +1399,9 @@ static void kernel_PARSE_FLOAT(unused Ref function, Ref arguments, MultipleValue
     char* cstr=string_cstring(str_ref);
     char* endp=NULL; errno=0;
     double val=strtod(cstr,&endp);
-    if(errno!=0||endp==cstr){
+    int bad=(errno!=0||endp==cstr);
+    free(cstr);
+    if(bad){
         ERROR("PARSE-FLOAT: cannot parse ~S as a float",str_ref); }
     results->count=1; results->values[0]=float_from_floating(val);
     close_live_pool(pool);}
@@ -1414,6 +1576,23 @@ static void kernel_FUNCTION_LAMBDA_BODY(unused Ref function, Ref arguments, Mult
         results->values[2]=NIL_Symbol;
         results->values[3]=fn->slots->built_in_function.lisp_name;
         results->values[4]=NIL_Symbol;
+    } else if(compiled_function_p(fn) || compiled_closure_p(fn)){
+        /* A byte-code function keeps no interpreted body — reconstruct the lambda
+           expression from its SOURCE slot (stored MACROEXPAND-ALL'd by %VM-COMPILE).
+           CLOSURE-P is conservative T (as for an interpreted COMPILE'd function). */
+        Ref cf  = compiled_closure_p(fn) ? compiled_closure_function(fn) : fn;
+        Ref src = compiled_function_source(cf);        /* (lambda lambda-list . body) */
+        if(consp(src) && consp(cons_cdr(src))){
+            results->values[0]=T_Symbol;
+            results->values[1]=cons_car(cons_cdr(src));    /* lambda-list */
+            results->values[2]=cons_cdr(cons_cdr(src));    /* body */
+        } else {
+            results->values[0]=NIL_Symbol;
+            results->values[1]=NIL_Symbol;
+            results->values[2]=NIL_Symbol;
+        }
+        results->values[3]=compiled_function_name(cf);
+        results->values[4]=T_Symbol;
     } else if(functionp(fn)){
         results->values[0]=T_Symbol;
         results->values[1]=fn->slots->function.lambda_list;
@@ -1452,6 +1631,14 @@ static void kernel_bocl_DEFINE_FUNCTION(unused Ref self, Ref arguments, Multiple
                                              inner->slots->function.body),
                                 fn->slots->closure.environment);}
     }else if(built_in_function_p(fn)){
+        named = fn;
+    }else if(compiled_function_p(fn) || compiled_closure_p(fn)){
+        /* A byte-code function (from %VM-COMPILE / a byte-code fasl): install it as-is,
+           name-preserving — set the TEMPLATE's lisp_name (do NOT rebuild it as an
+           interpreted Function, whose .body would be the code octet string). */
+        Ref cf = compiled_closure_p(fn) ? compiled_closure_function(fn) : fn;
+        cf->slots->compiled_function.lisp_name = name;
+        gc_write_barrier(cf->slots);
         named = fn;
     }else if(functionp(fn)){
         named = function_new(name,
@@ -1549,7 +1736,11 @@ static void kernel_CFASL_LOAD(unused Ref f, Ref arguments, MultipleValues* resul
    memory before the file is opened).  Each form gets a fresh writer context so
    its shared-object ids restart at 0, matching the per-form reader. */
 static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* results){
-    results->count=1; results->values[0]=NIL_Symbol;
+    /* Values: (values wrote-p failed-form-index) — FAILED-FORM-INDEX is the
+       1-based index of the first form the binary writer cannot serialize (or
+       NIL), so COMPILE-FILE can NAME the culprit when it falls back to the
+       text fasl. */
+    results->count=2; results->values[0]=NIL_Symbol; results->values[1]=NIL_Symbol;
     Ref path  = cons_car(arguments);
     Ref forms = cons_car(cons_cdr(arguments));
     if(!stringp(path)){ return; }
@@ -1558,22 +1749,211 @@ static void kernel_WRITE_CFASL(unused Ref f, Ref arguments, MultipleValues* resu
     cfasl_put_u8(&b, (uint8_t)CFASL_VERSION);
     cfasl_put_u8(&b, 0);                              /* flags (reserved) */
     int ok = 1;
+    word formi = 0;
     for(Ref l=forms; consp(l); l=cons_cdr(l)){
+        formi++;
         cfasl_wctx* w = cfasl_wctx_new(&b);
         cfasl_write_object(w, cons_car(l));
         int err = cfasl_wctx_error(w);
         cfasl_wctx_free(w);
-        if(err){ ok=0; break; }}
+        if(err){ ok=0; results->values[1]=integer_from_word(formi); break; }}
     cfasl_put_u8(&b, CFASL_TAG_EOF);
     if(ok && !b.error){
         char* p = string_cstring(path);
         FILE* fp = fopen(p, "wb");
-        free(p);
         if(fp){
             size_t wn = fwrite(b.data, 1, b.len, fp);
             fclose(fp);
-            if(wn==b.len){ results->values[0]=T_Symbol; }}}
+            if(wn==b.len){ results->values[0]=T_Symbol; }
+            else{ remove(p); }}   /* short write (e.g. full disk): do not leave
+                a partial image behind — the loader would reject it anyway, but
+                a form-boundary-truncated file used to load silently. */
+        free(p);}
     cfasl_out_free(&b);}
+
+/* (%CFASL-VALIDATE namestring) -> (values valid-p form-count message version)
+   Structurally validate a compiled fasl WITHOUT evaluating anything: check the
+   magic, the format version, that every top-level form reads back through the
+   ordinary cfasl reader, and that the image ends with the end-of-image tag as
+   its final byte (the invariant the v1.8.32 loader enforces).  VALID-P is T
+   only when every check passes; FORM-COUNT is how many top-level forms read
+   cleanly; MESSAGE is a string naming the first problem, or NIL; VERSION is
+   the image's format version byte, or NIL when the header itself is
+   unreadable.  Reading materialises each form (rooted per form, then dropped)
+   but never evaluates it, so validating an image is side-effect free. */
+static void kernel_CFASL_VALIDATE(unused Ref f, Ref arguments, MultipleValues* results){
+    char msg[512];
+    results->count=4;
+    results->values[0]=NIL_Symbol;                 /* valid-p    */
+    results->values[1]=integer_from_word(0);       /* form-count */
+    results->values[2]=NIL_Symbol;                 /* message    */
+    results->values[3]=NIL_Symbol;                 /* version    */
+    Ref path = cons_car(arguments);
+    check_type(path,STRING_Class);
+    char* pth = string_cstring(path);
+    uint8_t* buf = NULL;
+    long sz = -1;
+    FILE* fp = fopen(pth,"rb");
+    if(fp && fseek(fp,0,SEEK_END)==0 && (sz=ftell(fp))>=0 && fseek(fp,0,SEEK_SET)==0){
+        buf = (uint8_t*)malloc((size_t)sz);
+        if(buf && fread(buf,1,(size_t)sz,fp)!=(size_t)sz){ free(buf); buf=NULL; }}
+    if(fp){ fclose(fp); }
+    if(!buf){
+        snprintf(msg,sizeof msg,"cannot read %s",pth);
+        results->values[2]=string_new_cstring(msg);
+        free(pth);
+        return; }
+    free(pth);
+    if(sz < (long)(CFASL_MAGIC_LEN+2+1)){          /* header + at least the EOF tag */
+        snprintf(msg,sizeof msg,"too short to be a cfasl (%ld octets)",sz); }
+    else if(memcmp(buf,CFASL_MAGIC,CFASL_MAGIC_LEN)!=0){
+        snprintf(msg,sizeof msg,"bad magic: not a %s image",CFASL_MAGIC); }
+    else{
+        uint8_t ver = buf[CFASL_MAGIC_LEN];
+        results->values[3]=integer_from_word((word)ver);
+        if(ver!=CFASL_VERSION){
+            snprintf(msg,sizeof msg,
+                     "format version v%u; this build reads v%u — cannot check the body",
+                     (unsigned)ver,(unsigned)CFASL_VERSION); }
+        else{
+            cfasl_in in;
+            cfasl_in_init(&in, buf+CFASL_MAGIC_LEN+2, (size_t)sz-CFASL_MAGIC_LEN-2);
+            long formn=0;
+            int saw_eof=0, bad=0;
+            size_t badpos=0;
+            for(;;){
+                if(cfasl_at_end(&in)){ break; }
+                if(in.data[in.pos]==CFASL_TAG_EOF){ saw_eof=1; break; }
+                uword form_pool=open_live_pool();  /* root the form graph across the read,
+                                                      then drop it — validation only */
+                cfasl_rctx* rc = cfasl_rctx_new(&in);
+                /* Lenient package resolution: validation reads WITHOUT evaluating,
+                   so a package a preceding form would have created (DEFPACKAGE in
+                   the same file) cannot exist yet; an unknown package reads as an
+                   uninterned symbol.  Without this the verdict would depend on the
+                   session's package state (pjb: the SAME factorial.cfasl bytes
+                   validated INVALID before, VALID after, a compile-file that
+                   happened to create the FACTORIAL package). */
+                if(rc){ cfasl_rctx_set_lenient_packages(rc, 1);
+                        (void)cfasl_read_object(rc); }
+                bad = (!rc || cfasl_rctx_error(rc));
+                if(rc){ cfasl_rctx_free(rc); }
+                close_live_pool(form_pool);
+                if(bad){ badpos=in.pos; break; }
+                formn++; }
+            results->values[1]=integer_from_word(formn);
+            msg[0]='\0';
+            if(bad){
+                snprintf(msg,sizeof msg,
+                         "form %ld is malformed (at octet %lu of %ld); %ld forms read cleanly before it",
+                         formn+1,(unsigned long)(badpos+CFASL_MAGIC_LEN+2),sz,formn); }
+            else if(!saw_eof){
+                snprintf(msg,sizeof msg,
+                         "missing end-of-image tag: truncated after %ld complete forms",formn); }
+            else if((long)(in.pos+1+CFASL_MAGIC_LEN+2)!=sz){
+                snprintf(msg,sizeof msg,
+                         "%ld trailing octets after the end-of-image tag",
+                         sz-(long)(in.pos+1+CFASL_MAGIC_LEN+2)); }
+            else{
+                results->values[0]=T_Symbol; }}}
+    if(msg[0]){ results->values[2]=string_new_cstring(msg); }
+    free(buf);}
+
+/* (%GLOBALLY-SPECIAL-P symbol) -> T if SYMBOL is globally proclaimed special
+   (DEFVAR/DEFPARAMETER/proclaim SPECIAL set the $SPECIAL plist marker).  Used by
+   the byte-code compiler's lexical analyzer (vm-3) to decide whether a free
+   variable reference is dynamic (a :gref) or a lexical slot.  Non-symbols → NIL. */
+static void kernel_GLOBALLY_SPECIAL_P(unused Ref f, Ref arguments, MultipleValues* results){
+    results->count=1; results->values[0]=NIL_Symbol;
+    Ref sym = cons_car(arguments);
+    if(symbolp(sym) && special_variable_p(sym)){ results->values[0]=T_Symbol; }}
+
+/* (%MAKE-COMPILED-FUNCTION name lambda-list code constants arity max-stack
+   n-locals source) -> a CompiledFunction template the VM (bytecode_apply) runs.
+   The Lisp byte-code codegen (vm-4, bootstrap/vm-compiler.lisp) assembles CODE (an
+   octet string) + CONSTANTS (a simple-vector) and calls this to box them.  ARITY is
+   the BC_ARITY_PACK fixnum; MAX-STACK / N-LOCALS are fixnums. */
+static void kernel_MAKE_COMPILED_FUNCTION(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref name        = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref lambda_list = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref code        = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref constants   = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref arity       = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref max_stack   = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref n_locals    = cons_car(arguments); arguments = cons_cdr(arguments);
+    Ref source      = cons_car(arguments);
+    results->count = 1;
+    results->values[0] = compiled_function_new(name, lambda_list, code, constants,
+                                               arity, max_stack, n_locals, source);}
+
+/* (%COMPILED-FUNCTION-P object) -> T if OBJECT is a byte-code CompiledFunction or
+   CompiledClosure (so CL:COMPILED-FUNCTION-P can recognise VM-compiled functions). */
+static void kernel_COMPILED_FUNCTION_P(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref o = cons_car(arguments);
+    results->count=1;
+    results->values[0] = (compiled_function_p(o) || compiled_closure_p(o)) ? T_Symbol : NIL_Symbol;}
+
+/* (%COMPILED-FUNCTION-PARTS object) -> (values name code constants arity), the raw
+   template fields the byte-code DISASSEMBLE (vm-9) decodes.  Accepts a CompiledFunction
+   or a CompiledClosure (unwrapped to its template).  NIL for anything else. */
+static void kernel_COMPILED_FUNCTION_PARTS(unused Ref f, Ref arguments, MultipleValues* results){
+    Ref o = cons_car(arguments);
+    if(compiled_closure_p(o)){ o = compiled_closure_function(o); }
+    if(!compiled_function_p(o)){ results->count=1; results->values[0]=NIL_Symbol; return; }
+    results->count = 4;
+    results->values[0] = compiled_function_name(o);
+    results->values[1] = compiled_function_code(o);
+    results->values[2] = compiled_function_constants(o);
+    results->values[3] = compiled_function_arity(o);}
+
+/* (%BYTECODE-OPCODES) -> an alist ((:opcode-name . value) ...) plus
+   (:version . BYTECODE_VERSION), built straight from the C enum so the Lisp codegen
+   has a SINGLE source of truth for opcode numbers (no hard-coded magic constants
+   that could drift from bytecode.h). */
+static void kernel_BYTECODE_OPCODES(unused Ref f, unused Ref arguments, MultipleValues* results){
+    uword pool = open_live_pool();
+    Ref a = NIL_Symbol;
+    #define OPC(kw,val) do { \
+        Ref _pair = cons(keyword_intern_cstring(kw), integer_from_word((word)(val))); \
+        add_to_live_pool(_pair); \
+        a = cons(_pair, a); add_to_live_pool(a); } while(0)
+    OPC("PUSH-CONST",BC_PUSH_CONST);  OPC("PUSH-NIL",BC_PUSH_NIL);
+    OPC("PUSH-T",BC_PUSH_T);          OPC("DUP",BC_DUP);
+    OPC("POP",BC_POP);                OPC("DROP",BC_DROP);
+    OPC("LOAD-LOCAL",BC_LOAD_LOCAL);  OPC("STORE-LOCAL",BC_STORE_LOCAL);
+    OPC("LOAD-GLOBAL",BC_LOAD_GLOBAL);OPC("STORE-GLOBAL",BC_STORE_GLOBAL);
+    OPC("LOAD-FUNCTION",BC_LOAD_FUNCTION);
+    OPC("JUMP",BC_JUMP);              OPC("JUMP-IF-NIL",BC_JUMP_IF_NIL);
+    OPC("JUMP-IF-NOT-NIL",BC_JUMP_IF_NOT_NIL);
+    OPC("CALL",BC_CALL);              OPC("CALL-NAMED",BC_CALL_NAMED);
+    OPC("TAIL-CALL",BC_TAIL_CALL);    OPC("RETURN",BC_RETURN);
+    OPC("VALUES",BC_VALUES);          OPC("MV-CALL",BC_MV_CALL);
+    OPC("MV-BIND",BC_MV_BIND);        OPC("BLOCK-OPEN",BC_BLOCK_OPEN);
+    OPC("RETURN-FROM",BC_RETURN_FROM);OPC("CATCH-OPEN",BC_CATCH_OPEN);
+    OPC("THROW",BC_THROW);            OPC("UNWIND-PROTECT",BC_UNWIND_PROTECT);
+    OPC("UNWIND-LEAVE",BC_UNWIND_LEAVE);OPC("MAKE-CLOSURE",BC_MAKE_CLOSURE);
+    OPC("LOAD-UPVAL",BC_LOAD_UPVAL);  OPC("NOP",BC_NOP);
+    OPC("HALT",BC_HALT);              OPC("MV-LIST",BC_MV_LIST);
+    OPC("CATCH-CLOSE",BC_CATCH_CLOSE);
+    OPC("DYNAMIC-BIND",BC_DYNAMIC_BIND); OPC("DYNAMIC-UNBIND",BC_DYNAMIC_UNBIND);
+    OPC("UNWIND-PROTECT",BC_UNWIND_PROTECT); OPC("UNWIND-NORMAL",BC_UNWIND_NORMAL);
+    OPC("UNWIND-END",BC_UNWIND_END);
+    OPC("PROGV-BIND",BC_PROGV_BIND); OPC("PROGV-UNBIND",BC_PROGV_UNBIND);
+    OPC("HANDLER-BIND-OPEN",BC_HANDLER_BIND_OPEN);
+    OPC("HANDLER-BIND-CLOSE",BC_HANDLER_BIND_CLOSE);
+    OPC("TAIL-CALL",BC_TAIL_CALL); OPC("TAIL-CALL-NAMED",BC_TAIL_CALL_NAMED);
+    /* vm-inline-primitives (operand-less; args on the operand stack) */
+    OPC("ADD2",BC_ADD2); OPC("SUB2",BC_SUB2); OPC("MUL2",BC_MUL2);
+    OPC("NUM-EQ2",BC_NUM_EQ2); OPC("LT2",BC_LT2); OPC("GT2",BC_GT2);
+    OPC("LE2",BC_LE2); OPC("GE2",BC_GE2);
+    OPC("CONS",BC_CONS); OPC("CAR",BC_CAR); OPC("CDR",BC_CDR);
+    OPC("EQ",BC_EQ); OPC("EQL",BC_EQL); OPC("NULL",BC_NULL);
+    OPC("RESTART-BIND-OPEN",BC_RESTART_BIND_OPEN);
+    OPC("RESTART-BIND-CLOSE",BC_RESTART_BIND_CLOSE);
+    OPC("VERSION",BYTECODE_VERSION);
+    #undef OPC
+    results->count = 1; results->values[0] = a;
+    close_live_pool(pool);}
 
 /* (ED &optional x) → NIL stub. */
 static void kernel_ED(unused Ref function, unused Ref arguments, MultipleValues* results){
@@ -1853,7 +2233,7 @@ void bocl_register_load(void){
     Ref ld=symbol_intern_cstring("%LIST-DIRECTORY");
     set_symbol_function(ld,built_in_function_new(ld,list(S(PATH),NULL),kernel_LIST_DIRECTORY));
     {   Ref md=symbol_intern_cstring("%DEFAULT-MODULES-DIRECTORY");
-        set_symbol_function(md,built_in_function_new(md,list(NULL),kernel_DEFAULT_MODULES_DIRECTORY)); }
+        set_symbol_function(md,built_in_function_new(md,NIL_Symbol,kernel_DEFAULT_MODULES_DIRECTORY)); }
     {   Ref sc=symbol_intern_cstring("%STRING-CONTAINS-CI");
         set_symbol_function(sc,built_in_function_new(sc,list(S(NAME),S(VALUE),NULL),kernel_STRING_CONTAINS_CI)); }
     {   Ref sc=symbol_intern_cstring("%STRING-CMP2");
@@ -1865,6 +2245,20 @@ void bocl_register_load(void){
     {   Ref sc=symbol_intern_cstring("%KERNEL-SORT!");
         set_symbol_function(sc,built_in_function_new(sc,
             list(S(SEQUENCE),S(LESS),NULL),kernel_KERNEL_SORT)); }
+    {   Ref sc=symbol_intern_cstring("%GLOBALLY-SPECIAL-P");
+        set_symbol_function(sc,built_in_function_new(sc,
+            list(S(SYMBOL),NULL),kernel_GLOBALLY_SPECIAL_P)); }
+    {   Ref sc=symbol_intern_cstring("%MAKE-COMPILED-FUNCTION");
+        set_symbol_function(sc,built_in_function_new(sc,
+            list(S(NAME),S(LAMBDALIST),S(CODE),S(CONSTANTS),
+                 S(ARITY),S(MAXSTACK),S(NLOCALS),S(SOURCE),NULL),
+            kernel_MAKE_COMPILED_FUNCTION)); }
+    {   Ref sc=symbol_intern_cstring("%BYTECODE-OPCODES");
+        set_symbol_function(sc,built_in_function_new(sc,NIL_Symbol,kernel_BYTECODE_OPCODES)); }
+    {   Ref sc=symbol_intern_cstring("%COMPILED-FUNCTION-P");
+        set_symbol_function(sc,built_in_function_new(sc,list(S(OBJECT),NULL),kernel_COMPILED_FUNCTION_P)); }
+    {   Ref sc=symbol_intern_cstring("%COMPILED-FUNCTION-PARTS");
+        set_symbol_function(sc,built_in_function_new(sc,list(S(OBJECT),NULL),kernel_COMPILED_FUNCTION_PARTS)); }
     /* OS portability primitives (UIOP/ASDF): env, cwd, argv. */
     {   Ref s;
         s=symbol_intern_cstring("%GETENV");
@@ -1877,6 +2271,10 @@ void bocl_register_load(void){
         set_symbol_function(s,built_in_function_new(s,NIL_Symbol,kernel_GETCWD));
         s=symbol_intern_cstring("%CHDIR");
         set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_CHDIR));
+        s=symbol_intern_cstring("%SYSTEM");
+        set_symbol_function(s,built_in_function_new(s,list(symbol_intern_cstring("COMMAND"),NULL),kernel_SYSTEM));
+        s=symbol_intern_cstring("%RMDIR");
+        set_symbol_function(s,built_in_function_new(s,list(S(PATH),NULL),kernel_RMDIR));
         s=symbol_intern_cstring("%COMMAND-LINE-ARGUMENTS");
         set_symbol_function(s,built_in_function_new(s,NIL_Symbol,kernel_COMMAND_LINE_ARGUMENTS));
         s=symbol_intern_cstring("%DIRECTORY-P");
@@ -1910,6 +2308,11 @@ void bocl_register_load(void){
         Ref wc_ll = list(symbol_intern_cstring("CHARACTER"),
                          S(&OPTIONAL), symbol_intern_cstring("STREAM"), NULL);
         set_symbol_function(wc_fn,built_in_function_new(wc_fn,wc_ll,kernel_WRITE_CHAR));}
+    /* UNREAD-CHAR — one-character pushback (CLHS). */
+    {   Ref uc_fn = symbol_intern_cstring("UNREAD-CHAR");
+        Ref uc_ll = list(symbol_intern_cstring("CHARACTER"),
+                         S(&OPTIONAL), symbol_intern_cstring("INPUT-STREAM"), NULL);
+        set_symbol_function(uc_fn,built_in_function_new(uc_fn,uc_ll,kernel_UNREAD_CHAR));}
     {   Ref sls = symbol_intern_cstring("%STREAM-LINE-START-P");
         set_symbol_function(sls,built_in_function_new(sls,list(S(STREAM),NULL),kernel_STREAM_LINE_START_P));}
     /* Slice 22 — I/O, pathnames, type-of, array, stream predicates. */
@@ -1939,6 +2342,9 @@ void bocl_register_load(void){
             built_in_function_new(symbol_intern_cstring("FILE-WRITE-DATE"),ll_f,kernel_FILE_WRITE_DATE));
         set_symbol_function(symbol_intern_cstring("FILE-LENGTH"),
             built_in_function_new(symbol_intern_cstring("FILE-LENGTH"),ll_s,kernel_FILE_LENGTH));
+        {   Ref fp=symbol_intern_cstring("FILE-POSITION");
+            Ref fp_ll=list(S(STREAM),S(&OPTIONAL),symbol_intern_cstring("POSITION"),NULL);
+            set_symbol_function(fp,built_in_function_new(fp,fp_ll,kernel_FILE_POSITION));}
         set_symbol_function(symbol_intern_cstring("%COPY-FILE"),
             built_in_function_new(symbol_intern_cstring("%COPY-FILE"),ll_f2,kernel_COPY_FILE));
         set_symbol_function(symbol_intern_cstring("WILD-PATHNAME-P"),
@@ -1992,7 +2398,7 @@ void bocl_register_load(void){
         set_symbol_function(frf,built_in_function_new(frf,ll_fmt,kernel_FORMAT_RUN));
     }
     /* Slice 25 — environment, PARSE-FLOAT, compiler stubs. */
-    {   Ref ll_0=list(NULL);
+    {   Ref ll_0=NIL_Symbol;
         Ref ll_s=list(symbol_intern_cstring("STRING"),
                       S(&REST),symbol_intern_cstring("KEYS"),NULL);
         Ref ll_n=list(symbol_intern_cstring("NAME"),
@@ -2030,7 +2436,7 @@ void bocl_register_load(void){
                      symbol_intern_cstring("FUNCTION"),NULL),
                 kernel_bocl_DEFINE_FUNCTION));
             package_export(BOCL_Package,dfn); }
-        {   Ref nofn=list(NULL);
+        {   Ref nofn=NIL_Symbol;
             Ref opt_s=list(symbol_intern_cstring("&OPTIONAL"),symbol_intern_cstring("STREAM"),NULL);
             Ref id1=list(symbol_intern_cstring("ID"),NULL);
             set_symbol_function(symbol_intern_cstring("%PROFILE-RESET"),
@@ -2038,7 +2444,7 @@ void bocl_register_load(void){
             set_symbol_function(symbol_intern_cstring("%PROFILE-REPORT"),
                 built_in_function_new(symbol_intern_cstring("%PROFILE-REPORT"),opt_s,kernel_PROFILE_REPORT));
             set_symbol_function(symbol_intern_cstring("%PROFILE-ENABLED-P"),
-                built_in_function_new(symbol_intern_cstring("%PROFILE-ENABLED-P"),list(NULL),kernel_PROFILE_ENABLED_P));
+                built_in_function_new(symbol_intern_cstring("%PROFILE-ENABLED-P"),NIL_Symbol,kernel_PROFILE_ENABLED_P));
             set_symbol_function(symbol_intern_cstring("%PROFILE-PHASE-ENTER"),
                 built_in_function_new(symbol_intern_cstring("%PROFILE-PHASE-ENTER"),id1,kernel_PROFILE_PHASE_ENTER));
             set_symbol_function(symbol_intern_cstring("%PROFILE-PHASE-EXIT"),
@@ -2050,7 +2456,9 @@ void bocl_register_load(void){
             set_symbol_function(symbol_intern_cstring("%CFASL-LOAD"),
                 built_in_function_new(symbol_intern_cstring("%CFASL-LOAD"),list(symbol_intern_cstring("PATH"),NULL),kernel_CFASL_LOAD));
             set_symbol_function(symbol_intern_cstring("%WRITE-CFASL"),
-                built_in_function_new(symbol_intern_cstring("%WRITE-CFASL"),pathfs,kernel_WRITE_CFASL)); }
+                built_in_function_new(symbol_intern_cstring("%WRITE-CFASL"),pathfs,kernel_WRITE_CFASL));
+            set_symbol_function(symbol_intern_cstring("%CFASL-VALIDATE"),
+                built_in_function_new(symbol_intern_cstring("%CFASL-VALIDATE"),path1,kernel_CFASL_VALIDATE)); }
         {   Ref nv=list(symbol_intern_cstring("NAME"),symbol_intern_cstring("VALUE"),NULL);
             Ref n =list(symbol_intern_cstring("NAME"),NULL);
             set_symbol_function(symbol_intern_cstring("%DEFINE-VARIABLE"),

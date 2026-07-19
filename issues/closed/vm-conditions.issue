@@ -1,0 +1,119 @@
+vm-conditions — Condition system in the byte-code VM (plan-2, split from vm-5/vm-8).
+
+Make HANDLER-BIND / HANDLER-CASE (hence IGNORE-ERRORS) and the RESTART system work in
+compiled code.  This is the last language gap in the VM and the BLOCKER for wiring
+COMPILE globally to emit byte-code (vm-8 part 2).
+
+CONTEXT / WHY IT'S MISSING
+- HANDLER-BIND, HANDLER-CASE, RESTART-BIND, RESTART-CASE are kernel SPECIAL OPERATORS
+  (sources/eval.c ~1300-1450) but are NOT in SPECIAL-OPERATOR-P's list (prelude ~6598).
+  So %VM-ANALYZE treats (handler-bind ...) / (handler-case ...) as ordinary function
+  CALLS — the handler frame is never established, and a compiled fn using them COMPILES
+  but the handler silently never fires (errors escape).  Confirmed with a compiled
+  (ignore-errors (error "x")) — the error escapes.
+
+DESIGN (builds directly on vm-5's dynamic-frame machinery in bytecode.c)
+- HANDLER-BIND is the easy one: it is a dynamic frame with NO cleanup and is NEVER a
+  longjmp target — the SIGNAL machinery (conditions.c) walks g_frame_stack, finds
+  frame_handler_bind frames, and CALLS the matching handler in the signalling context
+  (no unwind unless the handler itself exits).  So model it as a VmDyn kind:
+  HANDLER_BIND_OPEN pops a bindings list ((type-class . handler-fn) ...) and pushes a
+  Frame{type=frame_handler_bind, parameters.handler_bind.bindings=...}; on normal exit
+  pop; on unwind-through pop + continue the cascade (exactly the dbind pattern minus the
+  restore).  Codegen builds the bindings list at runtime: for each (type fn), push
+  (cons (find-class 'type) <handler-fn>); a :dframe :handler scope makes a lexical exit
+  pop it.  find-class is exposed; the handler-fns are ordinary (compiled) closures.
+- HANDLER-CASE is the harder one: a distinct frame_handler with clause resolution +
+  longjmp-on-match (eval.c) — when a matching condition is signalled, control UNWINDS to
+  the handler-case and runs the chosen clause with the condition bound.  Two options:
+  (a) implement frame_handler in the VM analogous to CATCH (setjmp; the signaller sets
+      matched_clause+condition then longjmps; on arrival, bind the condition var and run
+      the clause); or (b) since HANDLER-CASE = HANDLER-BIND + BLOCK + RETURN-FROM in the
+      classic expansion, add a Lisp-level macro that rewrites HANDLER-CASE to that form
+      (which the VM already compiles once HANDLER-BIND works) and register it so the
+      analyzer expands it before seeing the special op.  Option (b) is far less VM work
+      — prefer it; keep the eval.c special op for the tree-walker.
+- RESTART-BIND / RESTART-CASE / INVOKE-RESTART: same shape (a registry frame +, for
+  restart-case, a longjmp-on-invoke).  Do after handler-*.  ("must-restart" acceptance.)
+
+ACCEPTANCE: compiled HANDLER-CASE catches a signalled ERROR and runs the right clause
+with the condition bound; IGNORE-ERRORS returns (values nil condition); HANDLER-BIND
+runs a handler that declines (falls through) and one that transfers control; a compiled
+RESTART-CASE + INVOKE-RESTART round-trips; parity with the tree-walker on the condition
+tests; full suite green.  Then vm-8 part 2 can wire COMPILE globally.
+
+DEPENDS ON: vm-5 (NLX frames), vm-6 (closures — handlers are closures).
+
+====================================================================
+PROGRESS (v1.8.11, branch vm) — HANDLER-BIND + HANDLER-CASE + IGNORE-ERRORS done.
+
+- HANDLER-BIND is a VM special form now (analyzer recognizes it via
+  %VM-SPECIAL-OPERATOR-P, which adds handler-bind/handler-case to SPECIAL-OPERATOR-P's
+  list).  Codegen builds the ((type-class . handler-fn) ...) list at runtime — the type
+  is a class-name symbol resolved with FIND-CLASS — and BC_HANDLER_BIND_OPEN pushes a
+  frame_handler_bind (a no-cleanup dynamic VmDyn: never a longjmp target, so on an
+  unwind-through it just pops + continues the cascade; BYTECODE_VERSION -> 7).  SIGNAL
+  (conditions.c, shared with the tree-walker) walks g_frame_stack and CALLS a matching
+  handler in the signalling context — so handlers that decline (return) fall through and
+  handlers that transfer control (THROW / RETURN-FROM) just work.  A :dframe :handler
+  control scope makes a lexical exit pop the frame.
+- HANDLER-CASE is EXPANDED by the analyzer (analyzer-local — the tree-walker's own
+  eval.c special op is untouched) into BLOCK/RETURN-FROM + CATCH/THROW + HANDLER-BIND
+  with capturing handler closures: a matching handler stashes the condition and THROWs a
+  clause index to a fresh-cons tag; the CATCH returns it and a CASE runs the clause with
+  the condition bound.  Handles :NO-ERROR (via MULTIPLE-VALUE-CALL).  IGNORE-ERRORS (a
+  prelude macro -> handler-case) therefore works and returns (values nil condition).
+- FIXED the block-multiple-values limitation as part of this: BLOCK / RETURN-FROM now
+  generate their value in mv-context (%VM-GEN-FOR-VALUES) and :block is an mv-buffer
+  setter, so BLOCK preserves ALL values (needed since IGNORE-ERRORS returns 2 values
+  through the handler-case block).
+- Verified: tests/test_misc.c::test_vm_conditions — ignore-errors (caught + ok),
+  handler-case catch/bind/normal/type-dispatch/nested, handler-bind transfer + decline,
+  and block-MV.  Full suite green.
+
+REMAINING for this issue: the RESTART system (RESTART-BIND / RESTART-CASE /
+INVOKE-RESTART — same frame shape, frame_restart) for the "must-restart" acceptance.
+NOT a blocker for vm-8 part 2 if COMPILE uses a SAFE FALLBACK (compile with the VM;
+fall back to minimal compilation when the analyzer errors) — the analyzer should ERROR
+on the still-unsupported kernel special operators (restart-*) so they trigger fallback
+rather than miscompile.
+
+====================================================================
+DONE — RESTART system (v1.8.21, branch vm).  vm-conditions is now COMPLETE.
+
+RESTART-BIND is a VM special form: BC_RESTART_BIND_OPEN pops a runtime restarts list
+((name fn interactive-fn test-fn) ...) and pushes a frame_restart — structurally a
+HANDLER-BIND (a no-cleanup dynamic VmDyn, VMK_RESTART_BIND; never a longjmp target, so an
+unwind-through just pops + continues the cascade; BYTECODE_VERSION -> 10).  Codegen
+(%vm-gen-restart-bind) builds the specs at runtime; the analyzer (%vm-analyze-restart-bind)
+parses :interactive-function / :test-function; a :dframe :restart control scope makes a
+lexical exit pop the frame.  FIND-RESTART / INVOKE-RESTART / COMPUTE-RESTARTS (conditions.c)
+are SHARED with the tree-walker and already walk g_frame_stack for frame_restart, so they
+find the VM's frame with no new code.
+
+RESTART-CASE is analyzer-EXPANDED (%vm-expand-restart-case, exactly parallel to
+HANDLER-CASE) into RESTART-BIND + BLOCK/RETURN-FROM + CATCH/THROW: each clause becomes a
+restart-bind restart whose function stashes the invocation args and THROWs the clause index
+to a fresh-cons tag; the CATCH returns the index and a CASE runs that clause's body with its
+(full ordinary) lambda-list bound to the args via APPLY.  So RESTART-CASE needs no new VM
+opcode.
+
+BUG FIXED (shared, was latent): INVOKE-RESTART decided "apply a RESTART-BIND fn in place vs
+unwind to a RESTART-CASE frame" by (functionp || closurep || built_in_function_p) — which
+EXCLUDES byte-code CompiledFunction / CompiledClosure.  So a COMPILED restart-bind function
+(and every RESTART-CASE clause's throwing CLOSURE) was mistaken for a RESTART-CASE restart
+and longjmp'd into the frame_restart, which is NOT a target (it is a HANDLER-BIND-style
+pass-through) -> the cascade ran off the end ("unwind_next_frame: no next frame").  Fixed by
+also accepting compiled_function_p / compiled_closure_p (conditions.c).
+
+ACCEPTANCE MET: compiled RESTART-CASE + INVOKE-RESTART round-trips (normal + invoked), binds
+the clause lambda-list (incl. &rest) to the invocation args, is invocable from a HANDLER-BIND
+handler, selects the right clause among several, nests, and MATCHES the tree-walker;
+FIND-RESTART / COMPUTE-RESTARTS see the compiled restart.  test_vm_restarts.  Full 42-suite
+green, -std=c17 -Wpedantic -Wextra clean.
+
+KNOWN LIMITATION (orthogonal, pre-existing vm-6 gap, NOT restart-specific): an escaping
+RETURN-FROM out of an inner closure to an outer BLOCK does not byte-compile (COMPILE falls
+back to interpreted).  A RESTART-BIND function that transfers via such a RETURN-FROM thus
+runs interpreted; one that transfers via THROW / a restart-case clause compiles.
+====================================================================

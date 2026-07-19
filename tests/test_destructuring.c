@@ -24,7 +24,7 @@ TEST_SUITE_SETUP(db_init){
 TEST_SUITE_TEARDOWN(db_clean){
     return CUE_SUCCESS;}
 
-static Ref e(const char* text){ return bocl_read_eval_cstring(text); }
+static Ref e(const char* text){ return bocl_test_eval(text); }
 
 static void test_required(void){
     /* GC budget (task #59): only 1 D-B eval survives after 1221-line prelude.

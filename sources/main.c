@@ -14,10 +14,10 @@
 #include "macros.h"
 #include "memory.h"
 #include "boerror.h"
-#include "strdup.h"
 #include "stream.h"
 #include "printer.h"
 #include "reader.h"
+#include "cfasl.h"
 #include "variable.h"
 #include "eval.h"
 #include "version.h"
@@ -43,6 +43,7 @@ static char* all_encoding;
 static char* terminal_encoding;
 static bool do_norc=false;
 static bool do_noprelude=false;
+static bool do_no_compiled_prelude=false;
 static bool do_quiet=false;
 static bool do_verbose=false;
 static bool do_batch=false;
@@ -205,6 +206,48 @@ static char* find_prelude(void){
 
     return NULL;}
 
+/* Write the byte-compiled sibling of a .lisp source path (its stem + ".cfasl")
+   into BUF; return 1 on success, 0 if BUF is too small. */
+static int cfasl_sibling(const char* src,char* buf,size_t n){
+    const char* slash=strrchr(src,'/');
+    const char* base =slash?slash+1:src;
+    const char* dot  =strrchr(base,'.');
+    size_t stem=dot?(size_t)(dot-src):strlen(src);
+    if(stem+sizeof(".cfasl")>=n){ return 0; }
+    memcpy(buf,src,stem);
+    strcpy(buf+stem,".cfasl");
+    return 1;}
+
+/* Load the system Lisp file SRC (a .lisp path), preferring its byte-compiled
+   image (a .cfasl sibling, or $ENV_OVERRIDE when set) when it exists, loads
+   cleanly, and — for the derived sibling — is at least as new as SRC.  A byte-
+   compiled image loads pre-compiled DEFUN templates with no reader and no
+   macroexpansion (much faster startup).  bocl_fasl_load returns NIL on a magic /
+   version mismatch or a truncated image, so we always fall back to the source
+   and never boot a stale or half image.  --no-compiled-prelude and an out-of-date
+   sibling both force the source; an explicit $ENV_OVERRIDE bypasses the date test
+   (the caller pointed us at it deliberately). */
+static void load_system_lisp(const char* src,const char* env_override){
+    if(!do_no_compiled_prelude){
+        const char* img=NULL;
+        char image[4096];
+        const char* ov=env_override?getenv(env_override):NULL;
+        if(ov && access(ov,R_OK)==0){
+            img=ov;
+        } else if(cfasl_sibling(src,image,sizeof image) && access(image,R_OK)==0){
+            /* Only prefer the sibling image when it is not OLDER than its source:
+               an edited-but-not-recompiled .lisp must win, so a stale image is
+               never loaded (the user's date-ordering requirement). */
+            struct stat si,ss;
+            if(stat(image,&si)==0 && stat(src,&ss)==0 && si.st_mtime>=ss.st_mtime){
+                img=image;}}
+        if(img){
+            Ref r=bocl_fasl_load(img);
+            if(!nullp(r)){
+                if(do_verbose){ fprintf(stderr,";; loaded compiled image %s\n",img); }
+                return;}}}
+    bocl_load_cstring(src);}
+
 
 #define PSOP(name) printf("%-30s = %s\n",#name,(name)?(name):"NULL")
 #define PBOP(name) printf("%-30s = %s\n",#name,(name)?"true":"false")
@@ -248,22 +291,23 @@ static struct {
     {{"-E",NULL},                           NULL,        strg, {"encoding",{.string=&all_encoding}},      "set encodings"},
     {{"-Eterminal",NULL},                   NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
     {{"--terminal-encoding",NULL},          NULL,        strg, {"encoding",{.string=&terminal_encoding}}, "specify character encoding to use for *TERMINAL-IO*"},
-    {{"-n","-norc","--no-init",NULL},       &do_norc,    none, {.name=NULL},                              "suppress loading of default init file ~/.boclrc"},
+    {{"-n","--norc","--no-init",NULL},      &do_norc,    none, {.name=NULL},                              "suppress loading of default init file ~/.boclrc"},
     {{"--no-prelude",NULL},                 &do_noprelude, none, {.name=NULL},                            "suppress loading of bootstrap/prelude.lisp (bare kernel only)"},
-    {{"-Q","-q","--quiet","--silent",NULL}, &do_quiet,   none, {.name=NULL},                              "if --batch, also suppress printing of heralds, prompts."},
+    {{"--no-compiled-prelude",NULL},        &do_no_compiled_prelude, none, {.name=NULL},                "ignore any prelude.cfasl boot image; always load the prelude from source"},
+    {{"-Q","--quiet","--silent",NULL},      &do_quiet,   none, {.name=NULL},                              "if --batch, also suppress printing of heralds, prompts."},
     {{"-b","--batch",NULL},                 &do_batch,   none, {.name=NULL},                              "exit when EOF on *STANDARD-INPUT*"},
     {{"--verbose",NULL},                    &do_verbose, none, {.name=NULL},                              "verbosity level: affects banner, *LOAD-VERBOSE*, *COMPILE-VERBOSE*"},
     {{"--print",NULL},                      &do_print,   none, {.name=NULL},                              "sets *LOAD-PRINT*, *COMPILE-PRINT*"},
     {{"--dump",NULL},                       &do_dump,    none, {.name=NULL},                              "dumps the heap"},/* TODO: put that in expressions_and_loads */
     {{"--dribble",NULL},                    &do_dribble, none, {.name=NULL},                              "record the session to a dribble file (or --dribble=FILE)"},
     {{"--no-sigtrap",NULL},                 &do_sigtrap, none, {.name=NULL},                              "obscure option for running under GDB"},
-    {{"--on-error","-on-error",NULL},       NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
+    {{"--on-error",NULL},                   NULL,        strg, {"action",{.string=&on_error_action}},     "action can be one of debug, exit, abort, appease"},
     {{"-i","--init",NULL},                  NULL,        elst, {"file",{.list=&initfiles}},               "load initfile (can be repeated)"},
     {{"-x","-e","--eval",NULL},             NULL,        elst, {"form",{.list=&expressions_and_loads}},   "evaluate form (may need to quote form in shell)"},
     {{"-l","--load",NULL},                  NULL,        load, {"file",{.list=&expressions_and_loads}},   "load file"},
     {{"-p","--package",NULL},               NULL,        strg, {"package",{.string=&package}},            "start in the package"},
-    {{"-repl","--repl",NULL},               &do_repl,    none, {.name=NULL},                              "enter the interactive read-eval-print loop when done (default)"},
-    {{"-quit","--quit",NULL},               &do_quit,    none, {.name=NULL},                              "quit when argument processing is done"},
+    {{"--repl",NULL},                       &do_repl,    none, {.name=NULL},                              "enter the interactive read-eval-print loop when done (default; --quit overrides)"},
+    {{"-q","--quit",NULL},                  &do_quit,    none, {.name=NULL},                              "quit when argument processing is done (do not enter the REPL)"},
     {{"-w","--wait",NULL},                  &do_wait,    none, {.name=NULL},                              "wait for a keypress after program termination"},
     {{NULL},NULL,none,{.name=NULL},NULL}};
 
@@ -530,7 +574,10 @@ static Ref run_session(void* ctx){
     if(package){
         bocl_in_package(bocl_read_cstring(package));}
 
-    if(do_repl){
+    /* --quit suppresses the (default-on) REPL: without this, a scripted
+       invocation (-e ... -q) on a tty — e.g. the Makefile's byte-compile
+       rules under `make install` — would sit at the interactive prompt. */
+    if(do_repl && !do_quit){
         /* The interactive REPL defaults to DEBUG; if --on-error was given
            anywhere, BOCL:*ON-ERROR* already holds its final value. */
         if(!any_on_error){ apply_on_error(on_error_debug); }
@@ -601,16 +648,19 @@ int main(int argc,char** argv){
             /* FIRST make the standard CL symbols external (generated
                cl-exports.lisp, sibling of prelude.lisp): it uses only QUOTE and
                the %EXPORT-STRINGS primitive, so it runs before the prelude and
-               the prelude's cl:FOO references then resolve to external symbols. */
+               the prelude's cl:FOO references then resolve to external symbols.
+               Then the prelude itself.  Each prefers its byte-compiled .cfasl
+               sibling when present and newer (see load_system_lisp); the prelude
+               also honours $BOCL_PRELUDE_IMAGE. */
             char* p=strstr(prelude,"prelude.lisp");
             if(p){
                 size_t base=(size_t)(p-prelude);
                 char* exports=malloc(base+sizeof("cl-exports.lisp"));
                 memcpy(exports,prelude,base);
                 strcpy(exports+base,"cl-exports.lisp");
-                bocl_load_cstring(exports);
+                load_system_lisp(exports,NULL);
                 free(exports);}
-            bocl_load_cstring(prelude);
+            load_system_lisp(prelude,"BOCL_PRELUDE_IMAGE");
             free(prelude);
         } else if(!do_quiet){
             fprintf(stderr,

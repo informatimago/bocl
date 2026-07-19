@@ -37,6 +37,13 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #  define _DARWIN_C_SOURCE 1
 #  define _BSD_SOURCE 1
+   /* FreeBSD: ANY strict feature macro (the build passes -D_POSIX_C_SOURCE
+      globally) sets __BSD_VISIBLE to 0, hiding MSG_DONTWAIT, EHOSTDOWN and
+      even EAI_OVERFLOW (grouped with the BSD-only EAI_BADHINTS/EAI_PROTOCOL
+      in <netdb.h>) — _BSD_SOURCE is a GLIBC name and does nothing here.
+      Undo the command-line macro for this translation unit only. */
+#  undef _POSIX_C_SOURCE
+#  undef _XOPEN_SOURCE
 #else
 #  define _DEFAULT_SOURCE 1
 #  define _GNU_SOURCE 1
