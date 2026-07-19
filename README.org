@@ -224,7 +224,7 @@ The version lives in [[sources/version.h]] and is reported by
 
 - *CI*: a GitLab matrix with blocking lanes for Debian gcc/clang,
   tcc, Alpine musl, FreeBSD (KVM), macOS, plus an ASan/UBSan
-  sanitiser lane ([[ci/.gitlab-ci.yml]]).
+  sanitiser lane ([[.gitlab-ci.yml]]).
 
 - *Debugger*: a minimal debugger with function-call backtraces and
   =--on-error debug|exit|abort|appease= handling exists; the real

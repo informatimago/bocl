@@ -67,6 +67,15 @@ precise-condition-subclasses.issue    (umbrella, incremental)
     condition classes with slots.  Do it incrementally, driven by
     handlers that actually need to discriminate (should-tests below).
 
+type-specifier-conformance.issue      (conformance, S-M)
+    Cluster found by the v1.9.0 CL-STATUS audit (2026-07-19): float
+    subtype specifiers (SINGLE-FLOAT & co) and BASE-STRING /
+    SIMPLE-BASE-STRING / SIMPLE-BIT-VECTOR not wired into TYPEP;
+    CONSTANTP misses constant variables (PI); (BOUNDP T/NIL) => NIL;
+    TYPEP silently NIL on unknown specifiers.  ansi-test bait — fix
+    with or before the campaign.  Audit script:
+    issues/open/audit-cl-symbols.lisp.
+
 should-tests-type-errors.issue        (conformance, M-L)
     ~45 SACLA should-* failures, almost all "wrong-type argument should
     signal TYPE-ERROR".  Mechanical once the pattern per function family

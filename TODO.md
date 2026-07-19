@@ -1,208 +1,166 @@
 # bocl — Remaining Work
 
-Snapshot at **v1.4.30** (2026-07-07). Previous snapshot ("post-v0.0.56")
-is superseded — the "Completed" sections there are all still true,
-plus ~340 subsequent commits.
+Snapshot at **v1.9.0** (2026-07-19). Previous snapshot (v1.4.30,
+2026-07-07) is superseded — its "Landed" sections are all still true,
+plus the ~144 commits of the `vm` branch program consolidated below.
 
-The live queue is [issues/open/](issues/open/); this file cross-refs
+The live, *ordered* queue is
+[issues/open/index.txt](issues/open/index.txt); this file cross-refs
 the highest-signal items. For the full CL-symbol coverage picture see
 [CL-STATUS.md](CL-STATUS.md); for the phase-by-phase plan see
 [PLAN.md](PLAN.md).
 
-## Landed since v0.0.57
+## Landed since v1.4.30
 
-Consolidated highlights of what shipped between v0.0.57 and v1.4.30 —
-individual entries live in the git log and PLAN.md.
+Consolidated highlights — the detail is in
+[CL-STATUS.md](CL-STATUS.md) § "Landed between v1.4.30 and v1.9.0"
+and the git log.
 
-### v0.0.57 – v0.0.60 (finishing Phase 5)
+### v1.5.x (minimal compilation + text fasls)
 
-- **Logical pathnames** — full conforming implementation (Slice 33,
-  v0.0.57).
-- **Installable static + shared libs** + `make install PREFIX=…` +
-  `make dist` (Slice 35, v0.0.60).
-- Full ANSI **condition system** for user code (`DEFINE-CONDITION`
-  on top of CLOS; full standard hierarchy).
+- Minimal compilation: `FUNCTION-LAMBDA-EXPRESSION`, `DISASSEMBLE`,
+  `MACROLET` / `SYMBOL-MACROLET` walk, `COMPILE-FILE` `EVAL-WHEN`.
+- `COMPILE-FILE` writes a real fast-load file (macroexpanded forms,
+  controlled I/O syntax for safe round-tripping).
 
-### v0.1.x – v0.9.x (CLOS + reader completeness + big arrays)
+### v1.6.x – v1.7.x (plan-3 interpreter hot path)
 
-- **Full CLOS**: `DEFCLASS` / `DEFGENERIC` / `DEFMETHOD` /
-  `MAKE-INSTANCE` / `INITIALIZE-INSTANCE` / `SHARED-INITIALIZE` /
-  `REINITIALIZE-INSTANCE` / `CHANGE-CLASS` /
-  `UPDATE-INSTANCE-FOR-DIFFERENT-CLASS`, `:before` / `:after` /
-  `:around` method combination (standard only).
-- **True per-package obarrays** (present + external symbol tables) —
-  Slice 46 v0.0.71. The v0.0.16 known limitation is gone.
-- Fill-pointer arrays / adjustable / displaced (Slices 94–104).
-- Multi-dim + bit arrays (Slices 100–102).
-- Reader: `READTABLE-CASE`, `|…|` case-preserving symbol syntax,
-  `#C` complex, `#\Newline` and named chars, `#n=` / `#n#` circular
-  structures, `#.` read-time eval, `#nA` multi-dim array literal,
-  `SET-MACRO-CHARACTER`, `SET-DISPATCH-MACRO-CHARACTER`, custom
-  readtables.
-- Restarts: `RESTART-BIND`, `COMPUTE-RESTARTS`, `HANDLER-CASE
-  :NO-ERROR`, `FIND-RESTART` `:test-function`.
-- **Bignum engine** ([bootstrap/bignum.lisp](bootstrap/bignum.lisp))
-  + kernel type — Slices 72–75, 122.
-- `*QUERY-IO*` / `DEFINE-METHOD-COMBINATION` (stub) / `FIND-METHOD`,
-  `(SETF foo)` functions, `*LOAD-TRUENAME*`, `DEFGENERIC (:method
-  …)`, O(1) bucketed hash tables.
+- Phase-exclusive load profiler; hot-1..hot-6: cached lexical-variable
+  slot indices (2.6× variable-heavy eval), fast-path lexical lookup,
+  cons-based lexical bindings, and the rest of the hot-path program.
 
-### v1.0.x
+### v1.8.x (plan-2 byte-code VM + compiler, conformance, GC)
 
-- Release milestone.
-- **Generational nursery GC** with write barrier + proactive default
-  (Slices 168–174).
-
-### v1.1.x – v1.2.x (SACLA must-* suite green)
-
-- Iterated fixes across `must-character`, `must-string`, `must-do`,
-  `must-eval`, `must-hash-table`, `must-data-and-control`,
-  `must-package`, reader completeness, `SETF` eval-order,
-  `MACRO-FUNCTION` env, condition/restart ordering.
-- Slice 113 (v1.2.40): `must-package` conformance 31 → 0.
-- Slice 114: finished the minimal debugger with function-call
-  backtrace frames.
-- **v1.3.0 = must-\* GREEN**.
-
-### v1.3.x (ASDF + modules)
-
-- `make install PREFIX=/opt/local` FHS layout (Slices 114–116).
-- `--on-error` split: REPL defaults to `debug`, batch to `exit`
-  (Slice 118).
-- Package `PRINT-OBJECT` (Slice 119).
-- `SORT` segfault fix: iterative `%merge` (Slice 120).
-- Control-stack overflow → catchable `STORAGE-CONDITION`
-  (Slice 121).
-- **Module system**: `BOCL:*MODULE-LIST*` + manifest-driven `REQUIRE`
-  + `modules/` build dir (Slices 122–124).
-- **ASDF as git submodule** at [modules/asdf-src/](modules/asdf-src)
-  (Slice 124).
-- **UIOP Tier-1 portability** hooks (Slice 125).
-- `:allocation :class` (v1.3.17), computed `:initform` per-instance
-  (v1.3.16), CLOS-aware `SUBTYPEP` / `TYPEP` (v1.3.15), structured
-  pathnames + `DEFGENERIC` / `DEFMETHOD (setf name)` + `(setf
-  DOCUMENTATION)` (v1.3.14).
-- **v1.4.0 = ASDF 3.3.7 loads and runs**.
-
-### v1.4.x (sockets + ASDF using + printer specials + CI fixes)
-
-- Clang / gcc warning cleanup (v1.4.1–3).
-- Callback stream + DRIBBLE (v1.4.4–6).
-- `FORMAT ~D` mincol/padchar (v1.4.8), `--on-error` ordered (v1.4.9).
-- `PARSE-NAMESTRING`, `TYPEP` compound types with `:*` bounds /
-  `FUNCTION` / `BOOLEAN` / `KEYWORD` / `ATOM` / `BIT`.
-- `REINITIALIZE-INSTANCE` + `SHARED-INITIALIZE` fix.
-- `LOOP ALWAYS` / `NEVER` / `THEREIS` timing fix.
-- `MAKE-PATHNAME :DIRECTORY NIL` supplied-p vs defaults.
-- `WITH-COMPILATION-UNIT` (CLHS 3.2.2.3).
-- CLOS multi-value preservation through generic-function dispatch.
-- **BSD sockets kernel** + `BOCL-SOCKET` package (v1.4.20–21).
-- Install ships [bootstrap/socket.lisp](bootstrap/socket.lisp)
-  (v1.4.23).
-- UIOP patch idempotent (v1.4.22).
-- macOS thalassa CI runner.
-- `(asdf:load-system)` runs a real system (v1.4.19).
-- `*PRINT-CIRCLE*` SIGSEGV fix (v1.4.24), printer specials bound in
-  kernel (v1.4.26), test-suite triage (v1.4.25–29), CI fails on test
-  failure (v1.4.30).
+- **Byte-code ISA, VM dispatch core, compiler front-end** (vm-1..vm-10,
+  vm-6b): the whole language byte-compiles — ~10× tight loops, ~31×
+  CLOS dispatch, ~3× boot from the cached `prelude.cfasl` image.
+- **cfasl compact binary fasls** (cfasl-1..5); ASDF systems compile
+  to cfasls (real compile path).
+- **UIOP ported** (all but async subprocess);
+  `com.informatimago.common-lisp` loads through ASDF — eight CLHS
+  conformance fixes fell out (DEFSETF rewrite, typed DEFSTRUCT,
+  DEFINE-MODIFY-MACRO, …).
+- **v1.8.5x conformance run**: REPL echoes all values,
+  `DIVISION-BY-ZERO`, CLOS condition reports, 33 missing symbols
+  implemented (MOP defaults wired into dispatch, `TRACE`/`UNTRACE`,
+  `FILE-POSITION`, degraded pprint entry points), designator audit,
+  kernel errors name their function.
+- **GC correctness campaign**: unrooted KERNEL-READ form (the
+  wandering REPL/LOAD corruptions, v1.8.52), live-pool re-root audit
+  (v1.8.58), FreeBSD interior-pointer hardening (v1.8.60);
+  generational collector integrated and reworked on `vm`.
+- **CI lanes green and blocking**: Debian gcc/clang, Alpine musl,
+  tcc, FreeBSD (KVM), macOS, ASan/UBSan.
+- **v1.9.0 = the vm program merged to master and released.**
 
 ## Still Remaining
 
-The queue is now split across live issues plus a few unfiled items.
+Work through [issues/open/index.txt](issues/open/index.txt) in order;
+this is the same queue grouped by theme.
 
-### Blocker for the last quality gate
+### The last quality gate
 
-- [ ] **ansi-test integration** — see [PLAN.md §3](PLAN.md) +
-  [ansi-test.issue](issues/open/ansi-test.issue). No submodule, no
-  `tests/ansi-test-harness/`, no `make ansi-test`. Should come with a
-  known-fail map and a "pass count only goes up" CI gate.
+- [ ] **ansi-test campaign** —
+  [ansi-test.issue](issues/open/ansi-test.issue). The harness loads
+  and runs end-to-end; still needed: a submodule / `make ansi-test`
+  target, a known-fail map, and a "pass count only goes up" CI gate.
+  Feeds every conformance item below. **Target: SACLA and ansi-test
+  100 % green.**
 
-### Live issues (see [issues/open/](issues/open/) for full text)
+### Conformance (ansi-test fodder)
 
-- [ ] [missing-functions](issues/open/missing-functions.issue) —
-  systematic audit of the ~120 remaining CL symbols
-  (CL-STATUS.md coverage table is the entry point).
+- [ ] [missing-functions](issues/open/missing-functions.issue) — 11
+  residual symbols: 6 composite-stream accessors (blocked on real
+  composite stream objects) + 5 special forms without
+  `MACRO-FUNCTION` visibility (def-forms Phase-2).
+- [ ] [type-specifier-conformance](issues/open/type-specifier-conformance.issue)
+  — float subtypes / `BASE-STRING` / `SIMPLE-BIT-VECTOR` not in
+  `TYPEP`; `CONSTANTP` misses constant variables; `(BOUNDP T)` ⇒
+  `NIL` (found by the v1.9.0 CL-STATUS audit).
 - [ ] [precise-condition-subclasses](issues/open/precise-condition-subclasses.issue)
-  — kernel signals `SIMPLE-ERROR` where a specific ANSI subclass is
-  required.
-- [ ] [clos-condition-hierarchy-parents](issues/open/clos-condition-hierarchy-parents.issue)
-  — style-warning parent chain breaks `(TYPEP c 'WARNING)`.
-- [ ] [ratio-floor-round-truncate](issues/open/ratio-floor-round-truncate.issue)
-  — 1-arg `FLOOR` / `ROUND` / `CEILING` / `TRUNCATE` reject a
-  `RATIO`.
-- [ ] [subtypep-certainty](issues/open/subtypep-certainty.issue) —
-  returns `(NIL NIL)` for disjoint known types.
-- [ ] [open-element-type-default](issues/open/open-element-type-default.issue)
-  — `OPEN` rejects `:ELEMENT-TYPE :DEFAULT`.
-- [ ] [minimal-compilation](issues/open/minimal-compilation.issue) —
-  real `COMPILE` + eager `MACROEXPAND-ALL` at `LOAD`.
-- [ ] [deferred-bignum-ops](issues/open/deferred-bignum-ops.issue) —
-  remaining bitwise + `ISQRT` paths that aren't bignum-aware.
-- [ ] [defstruct-conc-name-package](issues/open/defstruct-conc-name-package.issue)
-  — accessors interned in `*PACKAGE*` instead of the struct's home
-  package.
-- [ ] [package-print-object-method](issues/open/package-print-object-method.issue)
-  — packages print as `#<PACKAGE 0x…>`.
-- [ ] [uiop-bocl-porting](issues/open/uiop-bocl-porting.issue) — Tier
-  1 done; further UIOP hooks remain.
-- [ ] [asdf-modules](issues/open/asdf-modules.issue) — `REQUIRE`
-  couldn't find asdf module at v1.4.19 (worked around; needs
-  cleanup).
-- [ ] [asdf-source-registry-inherit-scan-slow](issues/open/asdf-source-registry-inherit-scan-slow.issue)
-  — ASDF `DIRECTORY` tree-walk hangs.
-- [ ] [slow-apropos](issues/open/slow-apropos.issue) — 17 s for
-  `(apropos "MODULE")`.
-- [ ] [deferred-signal-hooks](issues/open/deferred-signal-hooks.issue)
-  — extend `*ABORT-HOOK*` to `SIGTERM` / Core.
-- [ ] [deferred-sacla-logic-bugs](issues/open/deferred-sacla-logic-bugs.issue)
-  — residual GC + logic bugs in the SACLA harness.
-- [ ] [deferred-cons-paged-heap](issues/open/deferred-cons-paged-heap.issue)
-  — 16-byte cons arena (perf).
-- [ ] [generational-gc](issues/open/generational-gc.issue) — further
-  nursery work.
-- [ ] [slice22-cls-vs-class-type-error](issues/open/slice22-cls-vs-class-type-error.issue)
-  — state-dependent `%CLS` / `CLASS` abort.
-- [ ] [structured-pathnames](issues/open/structured-pathnames.issue)
-  — core done v1.3.14; refinements remain.
-- [ ] [stale-test-suite-failures](issues/open/stale-test-suite-failures.issue)
-  — kernel-only suites lack prelude load.
+  — ~134 kernel + ~90 prelude error sites to reclassify onto precise
+  condition classes; incremental, driven by handlers that
+  discriminate.
 - [ ] [should-tests-type-errors](issues/open/should-tests-type-errors.issue)
-  — ~45 SACLA `should-*` TYPE-ERROR gaps.
+  — ~45 SACLA `should-*` failures, almost all "wrong-type argument
+  should signal TYPE-ERROR"; pairs with the previous item.
 
-### Unfiled follow-ups (from the previous TODO.md "Low Priority")
+### VM / compiler
 
-- [ ] **`UPDATE-INSTANCE-FOR-REDEFINED-CLASS`** — wire into the
-  class-redefinition path when `DEFCLASS` is re-evaluated on an
-  existing class.
-- [ ] **`DEFINE-METHOD-COMBINATION`** full support — stubs exist;
-  implement custom combination types (currently only `standard`
-  works).
-- [ ] **MOP surface**: `FIND-METHOD` variants, `METHOD-QUALIFIERS`,
+- [ ] [vm-analyzer-decline-gaps](issues/open/vm-analyzer-decline-gaps.issue)
+  — 3 of asdf.lisp's 586 functions decline byte-compilation
+  (&REST-as-variable analyzer bug ×2, RETURN-FROM/BLOCK visibility).
+- [ ] [cfasl-6-literal-coverage](issues/open/cfasl-6-literal-coverage.issue)
+  — bignum / structure / bit-vector literals in the binary fasl
+  writer ([plan-1-compact-fasl](issues/open/plan-1-compact-fasl.issue)
+  stays open until this lands).
+
+### GC
+
+- [ ] [minor-gc-doomed-under-gcminorstress](issues/open/minor-gc-doomed-under-gcminorstress.issue)
+  — filed against the old new-gc branch; re-verify under the current
+  collector, close or chase as a remembered-set gap.
+- [ ] [generational-gc](issues/open/generational-gc.issue) — status
+  reconciliation: mark what landed on `vm`, keep only the remaining
+  ideas (or close in favour of deferred-cons-paged-heap).
+
+### Epics (schedule deliberately)
+
+- [ ] [green-threads](issues/open/green-threads.issue) — cooperative
+  threads in the VM, single C thread, bordeaux-threads API; prereq
+  for the Strandh-style debugger (debugger as coroutine).
+- [ ] [posix-shared-heap](issues/open/posix-shared-heap.issue) —
+  `BOCL-POSIX` (fork/exec/pipes/mmap/shm/sem), then shared-memory
+  Lisp arenas + channels; Part 1 also unblocks uiop-tier3.
+- [ ] [uiop-tier3-subprocess](issues/open/uiop-tier3-subprocess.issue)
+  — async `LAUNCH-PROGRAM`, `DUMP-IMAGE` / `COMBINE-FASLS` (optional;
+  UIOP tolerates NOT-IMPLEMENTED-ERROR).
+
+### Deferred by design (revisit when their trigger appears)
+
+- [ ] [deferred-bignum-ops](issues/open/deferred-bignum-ops.issue),
+  [deferred-cons-paged-heap](issues/open/deferred-cons-paged-heap.issue),
+  [deferred-sacla-logic-bugs](issues/open/deferred-sacla-logic-bugs.issue),
+  [deferred-signal-hooks](issues/open/deferred-signal-hooks.issue).
+
+### Unfiled follow-ups
+
+- [ ] **`DEFINE-METHOD-COMBINATION`** full support — only the
+  `standard` combination works; user-defined combinations are stubs.
+- [ ] **Pretty-printer layout engine** — all entry points exist since
+  v1.8.57 but output is linear; `PPRINT-INDENT` / `PPRINT-NEWLINE` /
+  `SET-PPRINT-DISPATCH` need a real engine.
+- [ ] **Remaining MOP surface** —
   `COMPUTE-APPLICABLE-METHODS-USING-CLASSES`, class-precedence-list
-  finalisation hooks.
-- [ ] **Pretty printer**: `PPRINT-LOGICAL-BLOCK`, `PPRINT-POP`,
-  `PPRINT-EXIT-IF-LIST-EXHAUSTED`, `PPRINT-INDENT`, `PPRINT-NEWLINE`,
-  `PPRINT-TAB`, `SET-PPRINT-DISPATCH`.
-- [ ] **Phase 6 kernel test suite** — see [PLAN.md](PLAN.md); ~15
-  `test_*.c` files still missing per subsystem (`test_memory`,
-  `test_kernel_objects`, `test_cons`, `test_symbol`, `test_integer`,
-  `test_float`, `test_character`, `test_string`, `test_vector`,
-  `test_bit_vector`, `test_structure`, `test_printer`, `test_stream`,
-  `test_filename`, `test_environment`, `test_built_in`).
-- [ ] **Phase 7 quality**: Valgrind-clean Linux job (ASan / UBSan
-  already in CI); build matrix currently gcc / clang / tcc on Debian
-  + Alpine musl + FreeBSD + macOS — no OpenBSD job.
+  finalisation hooks (most MOP defaults landed v1.8.57).
+- [ ] **`UPDATE-INSTANCE-FOR-REDEFINED-CLASS` trigger** — the generic
+  function exists (v1.8.57); verify the `DEFCLASS`-redefinition path
+  actually calls it (ansi-test will check).
+- [ ] **Phase 6 kernel test suites** — the 44 existing CUnit suites
+  are functional-area/slice suites; the per-subsystem files from
+  [PLAN.md](PLAN.md) Phase 6 (`test_memory`, `test_cons`,
+  `test_symbol`, `test_printer`, `test_stream`, …) are still absent.
+- [ ] **Phase 7 quality** — Valgrind-clean Linux job (ASan/UBSan
+  already in CI); no OpenBSD lane in the matrix yet.
 
-## Completed items (formerly on this list) — cross-check for closure
+### Perf ledger (not ready to process; keep measuring)
 
-Items from the previous TODO.md "Still Remaining" section, verified
-against master:
+- [compilation-fasl-speed](issues/open/compilation-fasl-speed.issue) —
+  update the measurement table per release. Root cause of the
+  remaining gap is GC superlinearity (minor GC rescans whole
+  remembered container blocks); fix = card-marking remset.
+- [minimal-compilation-optimization](issues/open/minimal-compilation-optimization.issue).
 
-- [x] **Full PRINT-OBJECT auto-dispatch** — landed; prelude method
-  dispatch is present.
-- [x] **Ratio / complex numbers** — landed as first-class kernel
-  types (`Ratio`, `Complex` in
-  [sources/kernel_types.h](sources/kernel_types.h)); arithmetic
-  auto-promotes. One edge case remains ([ratio-floor-round-truncate](issues/open/ratio-floor-round-truncate.issue)).
-- [x] **Logical pathname stubs → real** — Slice 33 shipped conforming
-  translations, `PATHNAME-MATCH-P`, `WILD-PATHNAME-P`.
+## Completed items (formerly on this list) — verified closures
+
+Everything the v1.4.30 TODO listed as a live issue is now closed and
+in [issues/closed/](issues/closed/): minimal-compilation (subsumed by
+the VM compiler), uiop-bocl-porting, asdf-modules,
+asdf-source-registry-inherit-scan-slow, slow-apropos,
+ratio-floor-round-truncate, subtypep-certainty,
+open-element-type-default, defstruct-conc-name-package,
+package-print-object-method, clos-condition-hierarchy-parents,
+slice22-cls-vs-class-type-error, structured-pathnames,
+stale-test-suite-failures. From the "unfiled" list, the MOP defaults
+and `UPDATE-INSTANCE-FOR-REDEFINED-CLASS` landed at v1.8.57, and the
+pretty-printer entry points exist (degraded).

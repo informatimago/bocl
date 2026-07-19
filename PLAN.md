@@ -17,6 +17,28 @@ by exactly one. PR descriptions and commit messages should reference the
 resulting version. MAJOR and MINOR only move on intentional milestone
 bumps (e.g. ansi-test passing, first self-host).
 
+### Release procedure
+
+**Rule**: before tagging a release `vM.m.d` and branching
+`release-M.m.d`, refresh the status documents so the release snapshot
+is self-describing:
+
+1. Update [CL-STATUS.md](CL-STATUS.md) — re-survey the CL-symbol
+   coverage table, fold in everything landed since the previous
+   snapshot, and re-cross-reference the "still open" list against
+   [issues/open/](issues/open/).
+2. Update [TODO.md](TODO.md) — consolidate the "Landed since" section
+   for the released version band, regroup "Still Remaining" to match
+   the current [issues/open/index.txt](issues/open/index.txt) triage,
+   and move verified closures to the "Completed items" section.
+3. Update [README.org](README.org) — the "Current status" section
+   (version number, coverage, test/CI state) and the "Future plans"
+   section (drop delivered items, reflect the current
+   [issues/open/index.txt](issues/open/index.txt) triage).
+
+The release tag must point at a commit where all three documents
+describe that very version.
+
 ## 1. Audit (current state, 2026-07-07 — v1.4.30)
 
 bocl follows a two-layer bootstrap: a small **C kernel** plus a **Lisp library** under [bootstrap/](bootstrap/) loaded on top of it. The original audit (2026-05-24, v0.0.10 era) estimated 30–40 % of the bootstrap target; master (v1.4.30) is now at roughly **88 %** by CL-external-symbol coverage — see [CL-STATUS.md](CL-STATUS.md).

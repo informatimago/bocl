@@ -41,5 +41,10 @@ REMAINING (11), by dependency:
    becomes real macro definitions in the def-forms Phase-2 plan
    (see bocl-defun-lexical-block notes).
 
-The audit script lives in the v1.8.57 resolution trail; re-run it after
-any of the above to keep this list honest.
+The audit script is now committed as
+issues/open/audit-cl-symbols.lisp (run with
+  sources/bocl -n -Q -b --on-error exit -l issues/open/audit-cl-symbols.lisp -q
+from the repo root); re-run it after any of the above to keep this
+list honest.  Re-run 2026-07-19 at v1.9.0 for the CL-STATUS refresh:
+both residual groups confirmed unchanged; the marker/type-specifier
+probes it prompted are filed as type-specifier-conformance.issue.

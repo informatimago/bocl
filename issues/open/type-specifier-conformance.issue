@@ -1,0 +1,58 @@
+Type-specifier and constant-variable conformance nits (found by the
+v1.9.0 CL-STATUS audit, 2026-07-19).
+
+Re-running the missing-functions audit (issues/open/audit-cl-symbols.lisp)
+against the v1.9.0 binary surfaced a cluster of small conformance gaps.
+None blocks anything today, but every one of them is the kind of check
+ansi-test performs systematically, so they should be fixed before or
+during the ansi-test campaign.
+
+1. Float subtype specifiers are not wired into TYPEP:
+       (typep 1.5 'single-float) => NIL   ; and DOUBLE-FLOAT,
+       (typep 1.5 'double-float) => NIL   ; SHORT-FLOAT, LONG-FLOAT
+   bocl has a single float representation (C double); per CLHS 12.1.4.2
+   an implementation with fewer distinct internal float formats maps the
+   four subtypes onto the formats it has — all four should be non-empty
+   aliases of the one float type, and 1.5 should be TYPEP under (at
+   least) the format named by *READ-DEFAULT-FLOAT-FORMAT*.
+
+2. String/bit-vector subtype specifiers not wired:
+       (typep "x" 'base-string)          => NIL
+       (typep "x" 'simple-base-string)   => NIL
+       (typep #*101 'simple-bit-vector)  => NIL
+   bocl strings ARE octet-backed simple strings; BASE-STRING and
+   SIMPLE-BASE-STRING should be satisfied (or bocl must decide that
+   CHARACTER /= BASE-CHAR, which contradicts its octet storage).
+   SIMPLE-BIT-VECTOR should hold for freshly-read #*... literals.
+   (SIMPLE-STRING and SIMPLE-VECTOR already work.)
+
+3. CONSTANTP does not recognize constant variables:
+       (constantp 'pi)                   => NIL   ; should be T
+       (constantp 'most-positive-fixnum) => NIL   ; should be T
+   Self-evaluating objects and QUOTE forms are handled correctly
+   (T, 5, keywords, 'x all return T); the DEFCONSTANT-variable branch
+   is missing.
+
+4. BOUNDP on the constant symbols T and NIL returns NIL:
+       (boundp t)   => NIL   ; should be T
+       (boundp nil) => NIL   ; should be T
+   Evaluation of T/NIL works (special-cased in eval), but they are not
+   visible as bound variables.  This is also why NIL shows up in the
+   audit's no-hard-evidence list.
+
+5. TYPEP with an unknown/atomic bogus type specifier silently returns
+   NIL instead of signalling:
+       (typep nil 'no-such-type-xyz) => NIL
+   CLHS leaves unknown specifiers undefined for TYPEP, so this is
+   technically permitted — but silently-NIL masks typos (it defeated
+   the first version of the coverage audit) and diverges from every
+   major implementation, which signal a SIMPLE-ERROR.  Consider
+   signalling; at minimum keep this documented.
+
+Suggested order: 1 and 2 are pure TYPEP-table work (pairs with the
+existing subtypep machinery); 3 and 4 are one-line-ish fixes in
+CONSTANTP/BOUNDP; 5 is a design decision.
+
+Cross-refs: should-tests-type-errors.issue (same "wrong-type should
+signal" family), ansi-test.issue (will exercise all of these),
+missing-functions.issue (the audit this fell out of).
