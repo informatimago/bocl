@@ -127,6 +127,10 @@ vm-COMPILER-PLAN.md                   — plan-2 handoff document (READ
                                         FIRST for any VM/compiler work)
 plan-1-compact-fasl.issue             — plan doc; cfasl-1..5 delivered,
                                         stays open until cfasl-6 lands
+gc-rooting-formal-validation.issue    — discussion record: formalizing /
+                                        validating the rooting discipline;
+                                        conservative stack-scan rejected on
+                                        C17+POSIX portability grounds
 
 ====================================================================
 HISTORY (condensed; details in issues/closed/)

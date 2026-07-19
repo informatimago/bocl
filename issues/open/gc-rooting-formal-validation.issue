@@ -1,0 +1,212 @@
+Formalizing and validating the GC rooting discipline
+=====================================================
+
+STATUS: design note / discussion record — NOT yet an actionable work item.
+This records a discussion about how to eliminate (or at least systematically
+validate) the recurring use-after-free bug class described in the memory note
+"bocl GC rooting" and in issues/closed/live-pool-reroot-audit.issue.
+
+
+1. The bug class
+----------------
+
+bocl uses a PRECISE, EXPLICITLY-ROOTED, NON-MOVING collector.  Roots are the
+live pool (sources/memory.c, open/add/close_live_pool) plus globals
+(obarray / packages).  The C stack is NOT scanned.  Therefore a Ref held only
+in a C local — not in the live pool and not reachable from a rooted object —
+is invisible to mark() and is freed by any intervening GC.  A later use is a
+use-after-free.
+
+Two facts make this subtler than "is it in a Rooted<T>?":
+
+  (a) allocate() auto-roots its own result (add_to_live_pool) and zeroes the
+      body, so a fresh allocation IS rooted and half-built objects are safe.
+
+  (b) Object_new and the *_slots constructors open_live_pool()...close_live_pool(),
+      which TRIMS the result back out (LIFO).  So the caller must
+      add_to_live_pool() the result before the next allocation.
+
+The live pool is therefore exactly a HandleScope / RAII rooting scope:
+close_live_pool == leaving the scope; a missing add_to_live_pool in the caller
+== a missing scope.Escape(handle).  Rootedness is LIFO-scoped, not monotonic.
+
+The property to guarantee:  at every safepoint (any point that may GC — in a
+Lisp, nearly every call), every Ref that is live (used later) must be rooted.
+
+
+2. The ~800 open_live_pool sites are NOT a per-type count
+---------------------------------------------------------
+
+A count of ~800 open_live_pool calls across the tree does NOT reflect ~800 data
+types.  open_live_pool is not the allocation primitive (allocate() is); it is a
+per-FUNCTION rooting scope.  The 800 tracks "functions that hold live Refs
+across a possible-GC point", not types.  Three populations:
+
+  - Built-in wrappers (built_in_functions.c ~197): uniform shape —
+    open; root function+arguments; pop args; call the real C function;
+    store result; close.  Pure boilerplate, ~nil bug risk.
+
+  - Struct ctors/accessors (kernel_structure_functions.c ~77,
+    structure_functions.c ~94): uniform — root params; make_structure_instance;
+    structure_set per slot; close.  Derivable from the defstruct.
+
+  - Genuine constructors + ad-hoc helpers (Object_new, cons_new, *_slots,
+    environment_new, map_walk, Closure_slots, ...): a few dozen, varied,
+    hand-rolled.  THIS is where every historical bug lived (see the memory
+    note's fix list: environment_new callers, map_walk accumulator,
+    Closure_slots args).
+
+So ~370 of the 800 are mechanical boilerplate that never contained a bug.  This
+is a factorization smell, and reducing it is itself a verification strategy:
+
+  - Macro-collapse the scope into WITH_LIVE_POOL { ... } using
+    __attribute__((cleanup)) on a scope guard.  This deletes ~800 hand-written
+    close_live_pool calls AND closes a latent bug: any early return / FATAL /
+    condition-signal (longjmp) BETWEEN open and close skips the close and
+    mismatches the pool.  (FATAL already appears between open and close in
+    kernel_structure_functions.c.)  A cleanup macro makes the bracket
+    non-local-exit safe and un-forgettable.
+
+  - GENERATE the uniform wrappers.  bocl already generates kernel_functions.h;
+    generating the ~370 wrapper/accessor BODIES from a declarative arglist/slot
+    spec removes them from the hand-audited set (correct-by-construction) and
+    replaces "verify 370 sites" with "verify the generator once".
+
+  - The residue — a few dozen genuine constructors — is the real verification
+    target, and small enough that formal methods become tractable.
+
+
+3. Layered validation plan (for the residue)
+---------------------------------------------
+
+Full Coq/ACL2 proof of every call site against a C semantics is NOT the right
+first target (hundreds of sites, call graph obscured by generic dispatch
+evale/apply/CLOS, moving target).  Layered instead:
+
+  A. ACL2 executable model + invariant (do first; we are a Lisp shop, the GC
+     *is* Lisp).  Model heap/roots/live-pool/mark/sweep/minor+remset as ACL2
+     functions mirroring memory.c.  Prove the core safety invariant:
+       forall a in reachable(roots,heap). heap_after_gc(a) = heap_before_gc(a)
+     (full and minor, with the remset theorem for old->young).  Then prove a
+     caller-hazard theorem over a tiny imperative IL: a trace with no static
+     hazard never dereferences a freed address.  DIFFERENTIAL ORACLE: dump the
+     allocation/GC trace from the existing BOCL_GCSTRESS/BOCL_POISON harness,
+     replay through the ACL2 model, assert heap/root state matches the C.
+
+  B. Static hazard analysis (the workhorse; catches regressions in CI).  A
+     Clang/LLVM intra-procedural dataflow modeled on SpiderMonkey's rootAnalysis.
+     Lattice per Ref-local: {Rooted, Unrooted, Maybe} tagged by live-pool DEPTH
+     (LIFO), so close_live_pool(p) demotes everything rooted only below p.
+     Transfer: allocate -> Rooted; trimming ctor -> Unrooted; add_to_live_pool
+     -> Rooted; store into rooted slot -> Rooted; close_live_pool -> demote;
+     call args -> Rooted-by-contract.  Hazard = Unrooted AND live-after at a
+     may-GC point.  Treat every call conservatively as a safepoint (matches the
+     Lisp reality: almost everything may GC).  VALIDATE against the 72-site
+     ground-truth in issues/closed/live-pool-reroot-audit.issue to measure
+     false-positive/negative rates before rolling out.
+
+  C. (Optional, highest assurance) VST/CompCert proof of the ACTUAL C of
+     allocate/mark/sweep/add/close_live_pool + 2-3 canonical constructors
+     against the rooting spec.  Core only, not all callers.
+
+  Phase 0 (shared bridge): write the rooting CONTRACT as machine-readable
+  annotations per function — may-GC (default yes) and result-rooting-effect
+  (Rooted like allocate vs Trimmed like Object_new/*_slots).  The 72-site audit
+  is the validation corpus.
+
+Recommendation: do B and A together; skip/defer C.  But first do the
+refactor in section 2 — the safest code is the code you no longer hand-write.
+
+
+4. Conservative stack scanning — CONSIDERED AND REJECTED (for now)
+-----------------------------------------------------------------
+
+The one architectural lever that collapses the rooting OBLIGATION to ~zero
+(no function need root anything) is conservative stack + register scanning
+(Boehm model).  It is attractive here because bocl's collector is NON-MOVING:
+conservative roots need no pinning, cannot corrupt (valid_block_start_p already
+guards false pointers), cost is only some floating garbage.  It would delete the
+entire bug class rather than validate it.
+
+DECISION (2026-07-19): avoid it, on PORTABILITY grounds.  Target is any
+C17 + POSIX platform.  C gives no portable handle on the stack:
+
+  - stacks grow up on some ISAs/ABIs, down on others (addressing-wise);
+  - locating stack base/extent is non-portable (no C17/POSIX API — needs
+    pthread_attr_getstack, /proc, __libc_stack_end, mach APIs, TIB walks...
+    all platform-specific and each with caveats);
+  - flushing register windows / callee-saved registers to the stack is
+    ISA-specific (SPARC register windows, setjmp-does-not-guarantee-all-regs);
+  - split/segmented/discontiguous stacks and green threads break the
+    "one contiguous range" assumption entirely.
+
+So conservative scanning trades the rooting-discipline problem for a
+platform-portability problem, against our C17+POSIX-portability goal.  Needs
+more reflection before it could be reconsidered (e.g. as an OPTIONAL backend on
+platforms where the stack can be located reliably, with precise rooting as the
+portable fallback).
+
+
+5. CLISP-style Lisp stack — and what we ALREADY have (2026-07-19)
+----------------------------------------------------------------
+
+CLISP uses two stacks: a Lisp stack (STACK) holding every live Lisp reference,
+and the C stack (control flow only, no refs).  The GC scans STACK precisely;
+portable, no C-stack scanning.  Question raised: don't we already have a Lisp
+stack via the bytecode VM?
+
+FINDING: YES, for compiled code.  The VM's operand stack and locals are NOT C
+arrays — make_vm_vector() (bytecode.c:169) allocates a real VECTOR_Class heap
+object, and each activation roots both via add_to_live_pool (bytecode.c:349).
+So every Ref a compiled function pushes on S[sp] lives inside a rooted,
+precisely-traced vector; the interpreter loop needs no per-value rooting.  The
+CLISP property already holds inside the VM.
+
+BUT that does NOT retire the rooting bug class, because the bugs are not in the
+VM's operand stack — they are in the C-coded kernel primitives/constructors the
+VM (and the tree-walker) CALL OUT to (Object_new, *_slots, environment_new,
+map_walk...), which hold Refs in C locals across allocations.  A Lisp stack
+traces the caller's values; it does nothing for a callee C function's locals.
+CLISP closes that only because its primitives keep working refs ON STACK
+(pushSTACK/popSTACK) instead of in C locals — that discipline, not merely
+"having a second stack", is the fix.
+
+DEEPER FRAMING: bocl ALREADY HAS an explicit Lisp reference stack — the live
+pool itself is one (open/add/close = scope/push/pop, GC-scanned, portable, no
+C-stack scan).  The difference from CLISP is SHADOW-stack vs PRIMARY-stack:
+  - live pool = SHADOW stack: the value lives in a C local Ref x;
+    add_to_live_pool(x) copies the pointer in as a SECOND root.  Bugs come from
+    the duplication — forget the shadow, or the shadow is trimmed while the C
+    local still holds the now-dangling value.
+  - CLISP STACK = PRIMARY stack: the value lives ONLY on the stack; placement IS
+    existence IS rootedness.  A live-but-unrooted value is not representable.
+So CLISP's advantage is not the Lisp stack (we have one) but that its primitives
+never hold a live Ref in a C local.  Adopting it = rewriting the residue of
+genuine constructors to pushSTACK/popSTACK (same portability, one contiguous
+scan vs the segmented live-pool block list, arguably cleaner) — the same
+few-dozen-site rewrite as section 2, but the PRINCIPLED version that makes the
+bug unrepresentable rather than merely easier to detect.
+
+Synthesis: (1) the VM already protects compiled code, so routing more execution
+through the VM shrinks the C-local surface naturally; (2) for the residue, the
+primary-stack idiom IS the principled form of the WITH_LIVE_POOL / codegen fix
+in section 2 — prefer it when touching those sites.
+
+
+6. Open questions / next steps
+------------------------------
+
+- Reconsider whether the per-function rooting OBLIGATION can be reduced without
+  stack scanning (e.g. a shadow-stack macro that auto-registers locals, keeping
+  precision + portability but minimizing boilerplate).
+- Prototype the WITH_LIVE_POOL cleanup macro and the non-local-exit safety it
+  buys; audit for open/close pairs currently straddling FATAL/signal.
+- Assess generating the ~370 uniform wrapper/accessor bodies.
+- Prototype Phase-B rootedness dataflow against the 72-site audit corpus to
+  measure how many real bugs a static checker would have caught before
+  investing in the ACL2 proof.
+
+Related: memory notes "bocl GC rooting", "bocl GC superlinear";
+issues/closed/live-pool-reroot-audit.issue;
+issues/open/freebsd-latent-gc-corruption.issue;
+issues/open/minor-gc-doomed-under-gcminorstress.issue.
