@@ -1,0 +1,137 @@
+Multi-process parallelism: BOCL-POSIX package + shared Lisp heap IPC
+====================================================================
+
+STATUS: design plan (discussion of 2026-07-19); scheduled AFTER
+green-threads.issue.  Two independent parts — Part 1 is useful on its own.
+
+MODEL: parallelism WITHOUT threads.  N bocl processes, each keeping its own
+private heap and its own single-threaded GC (nothing in the collector
+changes), sharing data through a shared-memory Lisp heap.  This is the
+Erlang/actor family, hardened by fork semantics — and bocl's green-threads
+design makes it unusually clean: with a SINGLE C thread per process, fork()
+is safe (no pthread+fork undefined-behaviour minefield: no other thread
+holds a lock at fork time).  The two features compose:
+N processes × M green threads.
+
+NOTE: this model is deliberately NOT covered by the bordeaux-threads API
+(BT promises shared-memory threads).  It gets its own API.  Prior art to
+mine: the user's portable shared-memory Lisp heap at
+/Users/pjb/src/public/lisp/common-lisp/heap/heap.lisp
+(com.informatimago.common-lisp.heap) — which implements a full Lisp heap in
+a shared-memory block WITH serialization/deserialization because it had to
+be implementation-neutral.  Here both sides are the SAME implementation
+(bocl<->bocl, same object representation, same word size), so the
+serialization layer can be DROPPED: objects in the shared heap are read in
+place.
+
+
+Part 1 — BOCL-POSIX package (kernel bindings to POSIX)
+------------------------------------------------------
+
+A new kernel module (posix.c) + BOCL-POSIX package exposing, as thin
+primitives with Lispy error handling (errno -> conditions):
+
+  Process:   fork, exec* family (execv/execvp/execve...), waitpid, kill,
+             getpid/getppid, _exit
+  Pipes/fds: pipe, close, dup2, read, write, fcntl (O_NONBLOCK, FD_CLOEXEC)
+  Memory:    mmap/munmap/msync (MAP_SHARED, MAP_ANONYMOUS), mprotect,
+             shm_open/shm_unlink, ftruncate
+  Sync:      POSIX named semaphores sem_open/sem_wait/sem_post/sem_close/
+             sem_unlink (chosen over process-shared pthread mutexes:
+             PTHREAD_PROCESS_SHARED is an option we cannot assume and
+             pthreads is exactly the dependency we avoid; sem_* is plain
+             POSIX and sufficient to build a mutex)
+  Misc:      pipe2/socketpair where available (feature-tested), uname,
+             sysconf(_SC_NPROCESSORS_ONLN)
+
+Design rules:
+  - Primitives stay 1:1 with POSIX (names/args mirror the manpages);
+    convenience layers live in Lisp above them.
+  - fork() from Lisp: document the contract — the child resumes as a
+    single-C-thread bocl with a COPY of the private heap (CoW); open
+    streams are shared fd-wise (flush before fork); green threads other
+    than the forker are cloned but a run-child-hook may kill them.
+  - Feature detection at build time (uname lanes already exist in CI);
+    anything absent on a platform signals NOT-IMPLEMENTED-ERROR like the
+    uiop tier-3 convention.
+  - This part also unblocks uiop-tier3-subprocess.issue (async
+    LAUNCH-PROGRAM wants fork/exec/pipes anyway).
+
+
+Part 2 — Shared Lisp heap (lispy IPC without serialization)
+-----------------------------------------------------------
+
+A distinguished heap ZONE backed by MAP_SHARED memory (shm_open+mmap or
+MAP_ANONYMOUS+fork inheritance), holding real bocl objects that several
+bocl processes access in place.
+
+Key design problems (to settle in this issue before coding):
+
+  (a) ADDRESSES.  bocl Refs are raw pointers.  Two options:
+      - Map the shared zone at an agreed fixed address in every process
+        (child processes inherit the mapping through fork at the same
+        address AUTOMATICALLY — this is the big argument for a
+        fork-first model; unrelated processes would need MAP_FIXED, which
+        is the fragile case).  RECOMMENDED: fork-inherited mappings,
+        making address identity free and portable.
+      - Offset-based (position-independent) shared refs with a distinct
+        tag — heavier, touches every accessor; keep as fallback only if
+        attach-by-unrelated-process becomes a requirement.
+
+  (b) LIFETIME / GC.  The shared zone is NOT collected by the private GCs
+      (a process cannot see other processes' roots).  Policy options, in
+      increasing ambition: (1) manual arenas — create/destroy whole shared
+      heaps (the heap.lisp model, fits request/response and fan-out
+      workloads); (2) per-object refcounts updated under the allocation
+      lock; (3) epoch/cycle collection coordinated by a master process.
+      START WITH (1); it covers the motivating use cases.
+      Private->shared references are fine (shared outlives the reference
+      or the arena discipline says otherwise); shared->PRIVATE references
+      are FORBIDDEN (dangling in every other process) — the shared-heap
+      writer must copy transitively (a deep-copy-into-arena primitive,
+      cf. heap.lisp's copying entry points, minus serialization).
+      In heap.lisp, there's an explicit rootset in the shared heap.
+
+  (c) MUTATION & COHERENCE.  Allocation lock = one sem_t in the zone
+      header.  Object mutation policy: prefer IMMUTABLE-after-publish
+      (build, then publish a root pointer under the lock; readers never
+      lock) — message-passing discipline rather than shared mutable state.
+      A small mutable mailbox/channel structure (ring of refs + semaphores)
+      is the one blessed mutable object, giving Erlang-style channels.
+
+  (d) WHAT MAY LIVE THERE.  Conses, strings, vectors, structs, numbers:
+      yes.  Symbols: share by name — a symbol written to a shared arena is
+      re-interned on read (identity across images is per-name, packages
+      stay private).  Functions/closures/streams: excluded initially.
+
+  (e) PORTABILITY GUARDRAIL.  Everything is plain POSIX (mmap, shm, sem).
+      Windows would need a separate backend someday; out of scope, same
+      status as the rest of bocl's POSIX assumption.
+
+API sketch (BOCL-IPC package, above BOCL-POSIX):
+    (make-shared-arena size) -> arena          ; mmap'd zone
+    (with-shared-arena (a) ...)
+    (share object arena) -> shared-ref         ; transitive copy-in
+    (make-channel arena &key capacity)         ; blessed mutable mailbox
+    (channel-send ch object) / (channel-receive ch &key timeout)
+    (spawn-worker fn &key arenas) -> process   ; fork + supervise
+    fallback path: channels over pipes with cfasl serialization when no
+    shared arena is wanted (slower, but also works across exec).
+
+Phasing:
+  PSH-1  BOCL-POSIX core (fork/exec/wait/pipe/read/write) — also serves
+         uiop-tier3.
+  PSH-2  mmap/shm/sem primitives + feature lanes in CI.
+  PSH-3  Shared arena zone type + deep-copy-in (share) + read-in-place;
+         fork-inherited mapping model.
+  PSH-4  Channels + spawn-worker supervision; demo: parallel map over N
+         workers.
+  PSH-5  Revisit lifetime policy (b) beyond manual arenas if usage
+         demands it.
+
+Related: green-threads.issue (concurrency complement; single-C-thread
+makes fork safe); uiop-tier3-subprocess.issue (Part 1 overlaps/unblocks);
+gc-rooting-formal-validation.issue (the private GC stays single-threaded —
+preserving that simplicity is the whole point of this model);
+~/src/public/lisp/common-lisp/heap/heap.lisp (prior art: portable shared
+Lisp heap; reuse the arena/copy design, drop the serialization).

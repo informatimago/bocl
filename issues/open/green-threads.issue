@@ -1,0 +1,190 @@
+Green threads (cooperative, VM-level) with bordeaux-threads API
+===============================================================
+
+STATUS: design + implementation plan (discussion of 2026-07-19, on master
+after the vm merge, v1.9.0).  Successor discussion to
+gc-rooting-formal-validation.issue (whose §5 finding — the VM already reifies
+execution state as heap objects — is what makes this cheap).
+
+
+1. Goals
+--------
+
+- COROUTINES / GREEN THREADS in the byte-code VM, cooperative, on a SINGLE
+  C thread.  No pthreads, no C11 <threads.h> (optional in C17), no
+  platform stack switching (ucontext is obsolescent, custom switching is
+  ISA-specific) — fully C17+POSIX portable, same policy that rejected
+  conservative stack scanning.
+
+- PRIMARY MOTIVATION: Robert Strandh's debugger strategy — the debugger runs
+  as its own thread used like a coroutine, giving it an execution environment
+  (bindings, stack, dynamic state) INDEPENDENT of the debugged thread; the
+  debuggee suspends at breakpoints and the debugger inspects it as data.
+  Green threads are a perfect fit (deterministic, single-core, full
+  introspection of the suspended thread's reified state).
+
+- API: MUST follow and provide the bordeaux-threads API and SEMANTICS (both
+  the classic BT-V1 surface and BORDEAUX-THREADS-2), so the library ecosystem
+  using bordeaux-threads works unchanged.  Green threads are a conforming
+  implementation: BT does not promise parallelism, only threads.
+
+- Also wanted: DELIMITED CONTINUATIONS (the general substrate; threads,
+  generators, schedulers become library code) and NON-BLOCKING I/O
+  (select/poll event loop) so one thread's blocking read does not freeze all.
+
+
+2. Why this is cheap in bocl: the state is already reified
+----------------------------------------------------------
+
+A VM activation's operand stack and locals are heap VECTOR_Class objects
+(make_vm_vector, bytecode.c), pc/sp are plain integers.  A green thread is
+essentially a heap object
+
+    thread = { pc, code, operand-stack vec, locals vec, call chain,
+               dynamic-binding save list, per-thread live pool,
+               per-thread g_frame_stack, status, ... }
+
+all GC-traced like any other object.  Suspend = stop touching it;
+resume = reload the C locals of the VM loop from it.  No C-stack switching.
+
+SINGLE-C-THREAD CONSEQUENCE (the key simplification): yields happen ONLY at
+explicit VM safepoints (loop back-edges / call sites, plus an
+instruction-count or allocation-count based involuntary-yield check for
+preemption-like fairness).  A kernel C function called from the VM therefore
+runs ATOMICALLY from start to return — every C primitive is automatically
+serialized, as if under a global mutex, with zero code change.  The GC stays
+single-threaded.  fork() stays sane (single thread — none of the
+pthread+fork minefield).
+
+
+3. "Almost no impact on the C code" — TRUE, with exactly four exceptions
+------------------------------------------------------------------------
+
+Verified against the sources 2026-07-19:
+
+  (1) LIVE POOL MUST BECOME PER-THREAD (memory.c).  The pool is a global
+      LIFO; two threads interleaving open/close scopes would let thread A's
+      close_live_pool(mark) trim thread B's roots pushed above the mark.
+      Fix: rootset->live_pool becomes a per-thread pointer swapped on
+      context switch; the GC root scan iterates every thread's pool chain
+      (and every thread object itself is a root).  Small, localized.
+
+  (2) DYNAMIC BINDINGS ARE SHALLOW (global value cell).  BC_DYNAMIC_BIND
+      saves the old value in the frame and set_symbol_value's the GLOBAL
+      cell (bytecode.c ~600).  Context switch must therefore UNWIND the
+      outgoing thread's bindings (restore saved values) and REWIND the
+      incoming thread's (reinstall its values) — the classic shallow-binding
+      swap (Emacs, CLISP).  Cost O(depth of dynamic bindings) per switch;
+      fine at green-thread switch rates.  Also g_frame_stack (eval.c:44)
+      becomes per-thread.  BT semantics to honor:
+      bt:*default-special-bindings* — a new thread starts with the listed
+      fresh bindings, NOT sharing the parent's dynamic environment.
+
+  (3) DYNAMIC-EXIT FRAMES ARE TIED TO THE C STACK.  VmDyn records live in a
+      C-stack array (vdyn[VM_DYN_MAX] in the VM activation) and carry a
+      setjmp jmp_buf; CATCH/UNWIND-PROTECT/HANDLER-BIND/DBIND unwinding is
+      longjmp-based.  A jmp_buf is only valid at its original C-stack
+      position, so a thread suspended with an OPEN dynamic frame cannot be
+      resumed.  PREREQUISITE: reify dynamic frames into the thread object
+      (heap-allocated frame chain) and make VM-to-VM unwinding VM-level
+      (walk the reified chain, run cleanups by re-entering the VM) instead
+      of longjmp.  longjmp remains only for crossing genuine C frames
+      (interpreter interop), which brings us to:
+
+  (4) THE TREE-WALKER (evale) RECURSES ON THE C STACK, and VM<->interpreter
+      re-entrancy nests C frames.  With one C stack, a thread that is
+      inside interpreted code (or inside a kernel primitive that re-entered
+      eval) CANNOT be suspended.  POLICY (phase 1): yields are legal only
+      when the current thread's C stack is at scheduler base (pure-VM
+      execution, no nested C frames); interpreted stretches run to
+      completion atomically.  Acceptable because compiled code is the norm
+      post-vm-6b; long-term mitigation = route more through the VM /
+      trampoline VM-to-VM calls so nesting is rare.
+
+  Plus the scheduler-level (not kernel-level) work:
+  (5) BLOCKING SYSCALLS BLOCK THE WORLD.  A kernel read(2) on a stream
+      blocks the single C thread.  Fix at the stream layer: fds go
+      O_NONBLOCK; a would-block turns into "register (fd, direction,
+      thread) with the scheduler and yield"; the scheduler's idle loop is
+      poll/select (both POSIX) with a timeout feeding timers
+      (SLEEP, bt:with-timeout, condition-wait :timeout).
+
+Everything else — the ~800 kernel primitives, the GC mark/sweep, cfasl,
+CLOS, packages — is untouched.  The claim "impact is confined to the VM,
+the interpreter's globals, and a thin slice of memory.c" is correct.
+
+
+4. bordeaux-threads surface to implement
+----------------------------------------
+
+Threads:  make-thread (:name, :initial-bindings from
+  *default-special-bindings*), current-thread, thread-name, threadp,
+  all-threads, thread-alive-p, join-thread (+ timeout in BT2),
+  thread-yield, destroy-thread (BT2: interrupt with abort),
+  interrupt-thread — schedule the function to run in the TARGET thread's
+  context at its next safepoint (deterministic and safe here, unlike
+  native signals).
+Locks:  make-lock, acquire-lock (:wait-p/:timeout), release-lock,
+  with-lock-held, recursive locks.  NOT no-ops: a lock held across a yield
+  must genuinely block other acquirers (FIFO wait queue in the scheduler);
+  only the uncontended fast path is trivial.
+Condition variables:  make-condition-variable, condition-wait (atomically
+  release lock + sleep on the CV's queue; reacquire on wake; spurious
+  wakeups permitted by BT so timeouts are easy), condition-notify (one) /
+  condition-broadcast (BT2 :broadcast).
+Semaphores (BT2):  make-semaphore, signal-semaphore, wait-on-semaphore
+  (:timeout).
+Atomics:  trivially atomic (no preemption inside a primitive).
+Semantics notes:  single core ⇒ sequential consistency for free; document
+  that yields occur only at safepoints (a tight Lisp loop yields via the
+  instruction-count check; a C primitive never yields inside itself).
+
+Package layout: kernel primitives under BOCL (%make-thread, %yield, ...);
+BORDEAUX-THREADS / BORDEAUX-THREADS-2 packages in the prelude on top.
+
+Note: perhaps it would be inconvenient for systems that use
+bordeaux-threads, be it via asdf or via quicklisp?  We'd have to make
+believe we're THE bordeaux-threads system. Perhaps it would be better
+to have a different package name and to define ourselve as an
+implementation in bordeaux-threads upstream? (for asdf, we used a
+patch, but eventually we'd have to move it upstream too).
+
+5. Delimited continuations & generators
+----------------------------------------
+
+With frames reified (prereq 3), one-shot delimited continuations are
+capture = "package the reified segment of the current thread's chain up to
+the prompt", resume = splice it back.  Provide PROMPT/CONTROL (or
+SHIFT/RESET) as VM primitives; green threads, generators, and the Strandh
+debugger's coroutine step protocol become Lisp-level libraries over them.
+Multi-shot continuations (copying the segment) optional later — one-shot
+suffices for threads/generators and avoids copying cost.
+
+
+6. Phasing
+----------
+
+  GT-1  Reify dynamic-exit frames off the C stack (prereq; independent
+        value: also removes the setjmp-across-open-live-pool hazards noted
+        in gc-rooting-formal-validation.issue §2).
+  GT-2  Thread objects + round-robin scheduler + voluntary yield at
+        safepoints; %make-thread/%join/%yield; per-thread live pool +
+        g_frame_stack swap.
+  GT-3  Shallow-binding swap on context switch; *default-special-bindings*.
+  GT-4  Involuntary yield (instruction/allocation count) for fairness.
+  GT-5  Locks, condition variables, semaphores; BT + BT2 prelude packages;
+        run the bordeaux-threads test suite.
+  GT-6  Non-blocking I/O: O_NONBLOCK streams + poll/select idle loop +
+        timers (SLEEP, timeouts).
+  GT-7  Delimited continuations (PROMPT/CONTROL) + generators.
+  GT-8  Debugger integration: breakpoint suspends the thread, debugger
+        thread inspects/steps it (Strandh strategy).
+
+Testing: bordeaux-threads' own suite; deterministic-interleaving tests
+(cooperative scheduling makes interleavings reproducible — an advantage for
+testing); BOCL_GCSTRESS with many threads to exercise per-thread pools.
+
+Related: gc-rooting-formal-validation.issue (§5: reified state; shared
+prereq GT-1); posix-shared-heap.issue (the PARALLELISM complement: green
+threads give concurrency, fork+shared-heap gives cores; the two compose —
+N processes × M green threads).

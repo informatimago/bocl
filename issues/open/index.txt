@@ -93,6 +93,19 @@ generational-gc.issue                 (epic, reconcile M)
     reconciliation pass: mark what landed, keep only the remaining
     ideas (or close in favour of deferred-cons-paged-heap).
 
+green-threads.issue                   (epic, L)
+    Cooperative green threads in the byte-code VM, single C thread,
+    bordeaux-threads API/semantics (BT1+BT2), delimited continuations,
+    poll/select non-blocking I/O.  Motivated by Strandh's debugger-as-
+    coroutine strategy.  Prereq GT-1 (reify dynamic-exit frames off the
+    C stack) is shared with gc-rooting-formal-validation.issue.
+
+posix-shared-heap.issue               (epic, L, after green-threads)
+    Parallelism without threads: Part 1 BOCL-POSIX package (fork/exec*/
+    pipes/mmap/shm/sem — Part 1 also unblocks uiop-tier3-subprocess);
+    Part 2 shared-memory Lisp arenas + channels for lispy IPC (private
+    GCs untouched; prior art ~/src/public/lisp/common-lisp/heap/).
+
 --- DEFERRED (by design; revisit when their trigger appears) ------
 
 deferred-bignum-ops.issue             — remaining bignum-aware ops
