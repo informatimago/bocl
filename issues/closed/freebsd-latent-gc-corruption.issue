@@ -80,3 +80,49 @@ lldb script pattern (see /tmp/m*.cmds in the VM, reproduced here):
   ran with one-slot-smaller varray structs than every Linux-tested
   layout; unifying did not fix THIS bug but removes a whole family of
   never-tested layout divergence.
+
+RESOLUTION (2026-07-19) — v1.8.60
+---------------------------------
+Root mechanism nailed and fixed.  The minor-GC drain (minor_drain) walks a
+marked block's slots up to its objcount and calls minor_push_if_young on
+each; that guards with valid_block_start_p.  A slot held a stray non-block
+word — an interior/off-by-one-header pointer (X-8, where X is a real cons):
+its "size" field (the word at X-8) was 0x3939, an ODD value.  The old
+valid_block_start_p only checked size >= MinimumBlockSize and in-zone bounds,
+NOT word-alignment, so it ACCEPTED the fake; mark_block then OR'd GC_MARK_BIT
+into the fake's objcount field, which on the 64-bit-header FreeBSD build
+ALIASES the real cons X's SIZE field — producing the
+"Size 0x80000...28 too big for a halfword" in the next sweep.  On Linux's
+32-bit-header build the same stray word aliases differently and stays benign,
+so the crash is FreeBSD-only and layout/heisenbug sensitive.
+
+Fix (sources/memory.c valid_block_start_p): reject any candidate whose size
+field is not word-aligned, and read the size at full uword width (not a
+truncated halfword).  allocate_internal rounds EVERY block size up to a
+multiple of sizeof(word) and the BOCL_HEAPCHECK walk already asserts it, so
+this is a documented allocator invariant: a candidate with a non-word-aligned
+size is provably not a real block start.  Pure strengthening — every real
+block still passes (real sizes are always word-aligned), so nothing valid is
+rejected; the GC simply stops following stray non-reference words, which is
+exactly what this predicate's docstring says it guards against.
+
+How it was hunted (recipe, reusable): BOCL_HEAPCHECK=500 to catch the corrupt
+block; a zone-relative hardware watchpoint (*(char**)&Zones + offset) to find
+the corrupting write = minor_collect's inlined drain; then a targeted C
+instrumentation in minor_drain (abort + dump when a child slot is an off-by-8
+interior pointer) that printed the parent block, the fake child, and the fake's
+odd size field.  The conditional-breakpoint approach was too slow (expression
+eval per hit); instrumenting the C and breaking on abort was the fast path.
+
+Validation: Linux 44/44 (hardening is a no-op for aligned sizes); FreeBSD
+(KVM VM) 60/60 individual runs, 5/5 full-suite, and 4/4 under
+BOCL_GCMINORSTRESS=300 + BOCL_GCCHECK=1 (forces a minor GC every 300 allocs
+with the post-mark dangling verifier) — all clean.  build:freebsd re-enabled
+as blocking.
+
+FOLLOW-UP (non-blocking): the UPSTREAM producer of the stray slot value was
+not separately fixed — most likely an object whose objcount range includes a
+not-yet-a-reference or padding word, which the hardened GC now correctly
+ignores.  If a future audit wants it, the minor_drain instrumentation above
+prints the parent block's class; run it under BOCL_GCMINORSTRESS to surface
+the parent type quickly.
