@@ -8,7 +8,6 @@ eventually commit by first check-in.
 
 https://github.com/robert-strandh/Bootstrap-Common-Lisp
 
-
 The purpose is to write an implementation of Common Lisp that can be
 compiled easily on any POSIX platform with only a standard C compiler.
 
@@ -25,16 +24,19 @@ Emphasis is on:
 - *maintainability*;
 - *correctness*.
 
-The kernel will implement a heap of lisp objects, with a simple
-garbage collector. (Differing from Robert Strandh's plans, I won't use
-a Boehm GC, since its purpose is to garbage collect C heap objects,
+The kernel implements a heap of lisp objects, with its own garbage
+collector. (Differing from Robert Strandh's plans, we don't use a
+Boehm GC, since its purpose is to garbage collect C heap objects,
 which renders it more complex and implementation dependent than we
-need).  However, the basic structure of the heap is implemented as
-described in the preliminary documents of Bootstrap-Common-Lisp.
+need).  The basic structure of the heap follows the description in the
+preliminary documents of Bootstrap-Common-Lisp.
 
 More details in the [[specifications/specifications.org]] document.
 
-The following section is the README from Robert Strandh's project.
+The following section is the README from Robert Strandh's project,
+kept as-is for reference.  Note that bocl has since diverged from
+several of the simplifications listed there — see the section
+[[*Where bocl diverges from the original design][Where bocl diverges from the original design]] below.
 
 ** Welcome to Bootstrap Common Lisp, or BOCL for short.
 
@@ -128,13 +130,147 @@ BOCL will not happen unless it is contributed to by others, so if you
 have knowledge of how to implement Common Lisp in C or interest in
 learning how to do it, please consider contributing.
 
+* Where bocl diverges from the original design
+
+Robert Strandh's list of simplifications above was the starting
+point.  Experience (mainly: compiling real systems such as ASDF and
+com.informatimago.common-lisp through bocl, and watching the
+interpreter and GC dominate the build times) led us to revisit
+several of them, always for *optimisation* or *portability* reasons,
+while keeping the "simple, strictly conforming C, POSIX only" rule.
+
+- *Garbage collector* — instead of the Boehm-Weiser conservative
+  collector, bocl has its own *precise* mark-and-sweep collector with
+  a *generational nursery* (write barrier + remembered set), a
+  multi-zone heap, and stress/diagnostic modes (=BOCL_GCSTRESS=,
+  =BOCL_GCCHECK=, poisoning) used to hunt rooting bugs.  A
+  conservative C-stack scan was evaluated and rejected: it cannot be
+  written in strictly conforming C17+POSIX.  See
+  [[sources/memory.c]] and
+  [[issues/open/gc-rooting-formal-validation.issue]].
+
+- *"No attempt to make it fast"* — relaxed.  bocl now includes a
+  *byte-code compiler and VM* ([[sources/bytecode.c]]); the whole
+  language byte-compiles, giving roughly 10× on tight loops, 31× on
+  CLOS dispatch, and 3× faster boot from byte-compiled images.  The
+  tree-walking interpreter remains (as the semantic reference and
+  fallback) and received its own hot-path optimisations.  A compact
+  *binary fasl format* (cfasl, [[sources/cfasl.c]]) caches compiled
+  files, including the prelude image.
+
+- *Hash tables* — bucket-backed with O(1) access
+  ([[sources/hash_table.c]]), not lists: package obarrays and
+  compiled-file loading made list-based tables intolerable.
+
+- *Integers* — fixnum-range integers are a word-backed kernel type
+  (=Integer=, a 64-bit =word= on every target, including 32-bit
+  ones), with a separate =Bignum= kernel type and a full
+  auto-promoting numeric tower (bignum / ratio / complex).  The type
+  FIXNUM still has no corresponding class.
+
+- *Strings* — use compact octet storage (=VectorOfOctet=), not one
+  boxed object per character.  Other arrays keep the simple
+  one-object-per-element representation from the original plan.
+
+- *Packages* — true per-package obarrays (present + external symbol
+  tables) with full ANSI package semantics, rather than a single
+  symbol list.
+
+- *Calling convention* — interpreted calls still pass a Common Lisp
+  list of arguments; byte-compiled calls pass arguments on the VM
+  operand stack.
+
+Everything else in the original list still stands: no tail-call
+merging, undefined/implementation-defined behaviors resolved to
+whatever is simplest, and no general attempt to save space.
+
+* Current status (v1.9.0, 2026-07)
+
+The version lives in [[sources/version.h]] and is reported by
+=--version= and =(lisp-implementation-version)=.  Detailed inventories:
+[[CL-STATUS.md]] (CL symbol coverage), [[PLAN.md]] (phased plan),
+[[issues/open/index.txt]] (triaged work queue).
+
+- *Architecture*: a C kernel (~50 modules under [[sources/]])
+  implementing the heap/GC, tagged kernel types, the evaluator, the
+  byte-code VM, reader, printer, streams, pathnames, packages,
+  conditions, sockets and POSIX primitives; plus a Lisp library
+  ([[bootstrap/prelude.lisp]], ~11 000 lines) loaded — or byte-compiled
+  and cached — on startup, implementing everything expressible in CL.
+
+- *Language coverage*: all 25 special operators; roughly 90 % of the
+  978 =COMMON-LISP= external symbols.  CLOS (=DEFCLASS= /
+  =DEFGENERIC= / =DEFMETHOD=, =:before= / =:after= / =:around=,
+  =CHANGE-CLASS=, class reinitialisation), the full condition and
+  restart system, =LOOP=, =FORMAT=, the numeric tower, logical
+  pathnames, circular-structure reader/printer, and a
+  usocket-compatible socket layer all work.  The main remaining gaps:
+  most MOP hooks, user-defined method combinations, the pretty
+  printer, and precise condition subclasses at every kernel error
+  site.
+
+- *ASDF / UIOP*: ASDF 3.3.7 ships as a submodule
+  ([[modules/asdf-src/]]); =(require :asdf)= and
+  =(asdf:load-system …)= work, with a real compile path (systems
+  byte-compile to cfasls).  UIOP is ported except the asynchronous
+  subprocess tier.
+
+- *Tests*: 44 CUnit kernel suites under [[tests/]]; the SACLA
+  conformance suites under [[bootstrap/sacla/lisp/tests/]] — the
+  =must-*= suites are *green*, the =should-*= suites still have ~45
+  failures (mostly "wrong-type argument should signal TYPE-ERROR").
+  The official ansi-test suite harness loads and runs under bocl; a
+  full pass is the target, not yet the state.
+
+- *CI*: a GitLab matrix with blocking lanes for Debian gcc/clang,
+  tcc, Alpine musl, FreeBSD (KVM), macOS, plus an ASan/UBSan
+  sanitiser lane ([[ci/.gitlab-ci.yml]]).
+
+- *Debugger*: a minimal debugger with function-call backtraces and
+  =--on-error debug|exit|abort|appease= handling exists; the real
+  debugger is a future plan (below).
+
+* Future plans
+
+The triaged queue is [[issues/open/index.txt]]; the target is bocl
+running the SACLA suites *and* ansi-test *100 % green*.
+
+- *Conformance to 100 %* — run ansi-test systematically
+  ([[issues/open/ansi-test.issue]]) and let it drive the remaining
+  work: precise condition subclasses
+  ([[issues/open/precise-condition-subclasses.issue]]), the SACLA
+  =should-*= type-error fixes
+  ([[issues/open/should-tests-type-errors.issue]]), and the last
+  missing symbols ([[issues/open/missing-functions.issue]]).
+
+- *A real debugger, as specified by Robert Strandh* — following his
+  design where the debugger runs as a separate thread/coroutine
+  communicating with the debuggee, rather than as a function called
+  in the erring frame.  This motivates the green-threads work below.
+
+- *Green threads* — cooperative threads in the byte-code VM (single C
+  thread), exposing the bordeaux-threads API and semantics
+  ([[issues/open/green-threads.issue]]), with delimited continuations
+  and non-blocking I/O.
+
+- *Parallelism via fork + shared heap* — a =BOCL-POSIX= package
+  (fork/exec/pipes/mmap/shm), then shared-memory Lisp arenas and
+  channels ([[issues/open/posix-shared-heap.issue]]).  Native threads
+  were considered and rejected: a thread-safe GC would compromise the
+  simplicity goal.
+
+- *UIOP tier 3* — asynchronous =LAUNCH-PROGRAM=, =DUMP-IMAGE=
+  ([[issues/open/uiop-tier3-subprocess.issue]]).
+
+- *Performance follow-ups* — cfasl literal coverage, a paged cons
+  heap, GC and compilation-speed work
+  ([[issues/open/compilation-fasl-speed.issue]] and the
+  =deferred-*= issues).
+
 * BUILDING BOCL the Bootstrap Common Lisp
 
-By default, on macOS, the compilation is performed with clang
-(=$(CC)=) and with the SANITIZER on.  On other systems, the sanitizer
-is disabled.
-
-=-Wall= =-Werror= are used, with a bunch of other options.
+The compilation is performed with =$(CC)= (clang on macOS, gcc
+elsewhere), with =-Wall= =-Werror= and a bunch of other options.
 
 #+BEGIN_EXAMPLE
 make clean
@@ -144,13 +280,13 @@ make run
 #+END_EXAMPLE
 
 The compilation can be performed in verbose mode (printing all the
-build commands) by defining the =VERBOSE== variable, and the sanitizer
-can be disabled on *Darwin* (aka *macOS*) with the =SANITIZE=no=
-option.
+build commands) by defining the =VERBOSE== variable, and the
+AddressSanitizer/UBSan instrumented build (off by default) is enabled
+with =SANITIZE=yes=.
 
 #+BEGIN_EXAMPLE
 make clean all VERBOSE=
-make clean all SANITIZE=no
+make clean all SANITIZE=yes
 #+END_EXAMPLE
 
 
