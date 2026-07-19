@@ -225,7 +225,8 @@ build:macos:
   stage: build
   variables:
     # macOS base ships gzip but not zstd; gzip keeps packaging dependency-free.
-    # (This job is not gathered by collect, so it needs no release compressor.)
+    # collect gathers this job's dist/ via an OPTIONAL need (see `collect`), so
+    # the .tar.gz lands in the release the same as the zstd Linux tarballs.
     COMPRESS: "gzip"
   script:
     - sh ci/build.sh
@@ -254,6 +255,12 @@ collect:
     - { job: "build:debian-gcc", artifacts: true }
     - { job: "build:debian-clang", artifacts: true }
     - { job: "build:alpine-musl", artifacts: true }
+    # Native macOS (thalassa) tarball, when available.  optional: true so a
+    # pipeline without the macOS job present still collects; build:macos is
+    # allow_failure, so an offline/failed thalassa does not block the release —
+    # collect just omits macOS.  Trade-off: when build:macos IS present, collect
+    # waits for it to finish, so keep thalassa online when cutting a v* tag.
+    - { job: "build:macos", artifacts: true, optional: true }
   script:
     - apk add --no-cache curl >/dev/null 2>&1 || true
     - mkdir -p release && cp dist/* release/ 2>/dev/null || true
