@@ -270,12 +270,13 @@ collect:
     - cd ..
     - |
       if [ -n "${CI_COMMIT_TAG:-}" ]; then
-        # Build the release asset links in a JSON FILE and pass --assets-links-file.
-        # The previous `eval release-cli create ... --assets-link {"name":..}` had
-        # the JSON re-parsed by `eval`, which STRIPPED the quotes, so release-cli
-        # received invalid JSON and silently attached zero assets (releases showed
-        # no downloadable tarballs even though the uploads to the Package Registry
-        # succeeded).  A links file avoids all shell re-parsing.
+        # Upload each tarball to the generic Package Registry and build a JSON
+        # ARRAY of asset links.  release-cli's flag is --assets-link, which accepts
+        # a whole JSON array as ONE value.  The original code passed it through
+        # `eval`, which stripped the JSON quotes so release-cli attached zero
+        # assets (releases showed no downloadable tarballs).  Pass the array as a
+        # single quoted argument instead — no eval, and NOT --assets-links-file
+        # (that flag does not exist in release-cli 0.24).
         links=""
         for f in release/*.tar.zst release/*.tar.gz release/*.tar.xz; do
           [ -e "$f" ] || continue
@@ -286,16 +287,15 @@ collect:
                --header "JOB-TOKEN: $CI_JOB_TOKEN" \
                --upload-file "$f" "$url"
           [ -n "$links" ] && links="$links,"
-          links="$links{\"name\":\"$bn\",\"url\":\"$url\",\"link_type\":\"package\"}"
+          links="$links{\"name\":\"$bn\",\"url\":\"$url\"}"
         done
-        printf '[%s]\n' "$links" > assets-links.json
-        echo "release asset links:"; cat assets-links.json
+        assets="[$links]"
+        echo "release asset links: $assets"
         # release-cli create returns 409 "Release already exists" if a release for
-        # this tag was made by a previous pipeline (a re-run, or re-cutting the
-        # same tag), which fails collect.  Make it idempotent: delete any existing
-        # release first (this removes only the Release object; the git tag and the
-        # uploaded Package-Registry files are kept), then create it fresh with the
-        # current asset links.  DELETE 404s harmlessly the first time.
+        # this tag was made by a previous pipeline (a re-run, or re-cut).  Make it
+        # idempotent: delete any existing Release first (removes only the Release
+        # object; the git tag and the uploaded Package-Registry files are kept),
+        # then create it fresh.  DELETE 404s harmlessly the first time.
         curl --silent --show-error --request DELETE \
              --header "JOB-TOKEN: $CI_JOB_TOKEN" \
              "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/$CI_COMMIT_TAG" >/dev/null 2>&1 || true
@@ -303,7 +303,7 @@ collect:
           --name "bocl $CI_COMMIT_TAG" \
           --tag-name "$CI_COMMIT_TAG" \
           --description "Automated binary release of bocl ${CI_COMMIT_TAG}. SHA256SUMS in the collect job artifacts." \
-          --assets-links-file assets-links.json
+          --assets-link "$assets"
       fi
   artifacts:
     name: "bocl-release"
