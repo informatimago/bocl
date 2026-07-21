@@ -157,3 +157,13 @@ tar --exclude=.git --exclude='*.qcow2' --exclude='*.xz' --exclude='seed.img' \
 echo "== building + testing on FreeBSD (gmake, clang) =="
 $SSH "$RPATH cd ~/bocl && MAKE=gmake CC=clang sh ci/build.sh"
 echo "== FreeBSD build OK =="
+
+# Package the FreeBSD deliverable INSIDE the VM (gzip: always in the base
+# system, unlike zstd which we don't want to depend on), then stream the dist/
+# tarball back out to the runner so the collect job can gather it into releases.
+echo "== packaging on FreeBSD =="
+$SSH "$RPATH cd ~/bocl && MAKE=gmake CC=clang COMPRESS=gzip sh ci/package.sh"
+echo "== copying the FreeBSD dist tarball out of the VM =="
+$SSH 'cd ~/bocl && tar -cf - dist' | tar -xf - -C "$WORK"
+ls -l "$WORK/dist" || true
+echo "== FreeBSD package OK =="

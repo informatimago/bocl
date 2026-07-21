@@ -200,7 +200,8 @@ build:freebsd:
     when: always
     paths:
       - console.log
-    expire_in: 3 days
+      - dist/          # FreeBSD tarball, streamed out of the VM by freebsd-build.sh
+    expire_in: 7 days
   rules:
     # Blocking again since freebsd-latent-gc-corruption.issue was fixed
     # (v1.8.60): valid_block_start_p now rejects non-word-aligned block sizes,
@@ -261,6 +262,10 @@ collect:
     # collect just omits macOS.  Trade-off: when build:macos IS present, collect
     # waits for it to finish, so keep thalassa online when cutting a v* tag.
     - { job: "build:macos", artifacts: true, optional: true }
+    # FreeBSD tarball (built + packaged in the QEMU VM).  optional: true so
+    # collect still runs if the job is absent; build:freebsd is blocking, so if
+    # it fails the pipeline fails anyway (no release).
+    - { job: "build:freebsd", artifacts: true, optional: true }
   script:
     - apk add --no-cache curl >/dev/null 2>&1 || true
     - mkdir -p release && cp dist/* release/ 2>/dev/null || true
