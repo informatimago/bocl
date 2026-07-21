@@ -10,7 +10,11 @@
 #   VM_MEM / VM_CPUS  default 2048 / 2
 set -eu
 
-VM_MEM="${VM_MEM:-2048}"
+# 4 GB, not 2: FreeBSD 14.x `pkg update` (building the repository catalogue) now
+# spikes past 2 GB and gets OOM-killed ("failed to reclaim memory",
+# swp_pager_getswapspace failed) on the swapless cloud image, so gmake/cunit
+# never install.  poseidon has ample RAM.
+VM_MEM="${VM_MEM:-4096}"
 VM_CPUS="${VM_CPUS:-2}"
 SSH_PORT=2222
 WORK="$(pwd)"
