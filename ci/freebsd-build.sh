@@ -74,7 +74,7 @@ write_files:
       firstboot_freebsd_update_enable="NO"
       firstboot_pkgs_enable="NO"
 runcmd:
-  - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; pkg update -f >/dev/console 2>&1; pkg install -y gmake cunit >/dev/console 2>&1; echo BOCL-CLOUDINIT-DONE > /dev/console"
+  - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for i in 1 2 3 4 5; do pkg update -f >/dev/console 2>&1 && pkg install -y gmake cunit >/dev/console 2>&1 && break; echo 'BOCL: pkg update/install failed, retrying' >/dev/console; sleep 15; done; if pkg info -e gmake && pkg info -e cunit; then echo BOCL-CLOUDINIT-DONE > /dev/console; else echo BOCL-CLOUDINIT-INSTALL-FAILED > /dev/console; fi"
 EOF
 printf 'instance-id: bocl-ci\nlocal-hostname: bocl-ci\n' > meta-data
 cloud-localds seed.img user-data meta-data
@@ -114,6 +114,13 @@ ready=""
 i=0
 while [ $i -lt $WAIT_TRIES ]; do
     if grep -q "BOCL-CLOUDINIT-DONE" console.log 2>/dev/null; then ready=1; break; fi
+    # pkg update/install (gmake+cunit) failed after retries — fail now with a
+    # clear message instead of booting into a build that can't find gmake.
+    if grep -q "BOCL-CLOUDINIT-INSTALL-FAILED" console.log 2>/dev/null; then
+        echo "!! pkg install of gmake/cunit failed in the VM (see console tail):" >&2
+        tail -60 console.log 2>/dev/null || true
+        exit 1
+    fi
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then echo "!! qemu exited early"; break; fi
     i=$((i+1)); sleep 10
 done
