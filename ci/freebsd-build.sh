@@ -10,11 +10,13 @@
 #   VM_MEM / VM_CPUS  default 2048 / 2
 set -eu
 
-# 4 GB, not 2: FreeBSD 14.x `pkg update` (building the repository catalogue) now
-# spikes past 2 GB and gets OOM-killed ("failed to reclaim memory",
-# swp_pager_getswapspace failed) on the swapless cloud image, so gmake/cunit
-# never install.  poseidon has ample RAM.
-VM_MEM="${VM_MEM:-4096}"
+# 8 GB, not 2: FreeBSD 14.x `pkg update` (building the repository catalogue) now
+# spikes hard — the same 14.4 image that built fine in 2 GB two days ago now
+# OOM-kills pkg even at 4 GB ("swap_pager: out of swap space", "failed to
+# reclaim memory"), so gmake/cunit never install.  8 GB + a swap file (added in
+# the cloud-init runcmd below) give pkg the headroom to fit / swap.  poseidon
+# has ample RAM; overridable via $VM_MEM.
+VM_MEM="${VM_MEM:-8192}"
 VM_CPUS="${VM_CPUS:-2}"
 SSH_PORT=2222
 WORK="$(pwd)"
@@ -78,7 +80,7 @@ write_files:
       firstboot_freebsd_update_enable="NO"
       firstboot_pkgs_enable="NO"
 runcmd:
-  - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for i in 1 2 3 4 5; do pkg update -f >/dev/console 2>&1 && pkg install -y gmake cunit >/dev/console 2>&1 && break; echo 'BOCL: pkg update/install failed, retrying' >/dev/console; sleep 15; done; if pkg info -e gmake && pkg info -e cunit; then echo BOCL-CLOUDINIT-DONE > /dev/console; else echo BOCL-CLOUDINIT-INSTALL-FAILED > /dev/console; fi"
+  - "export ASSUME_ALWAYS_YES=yes; export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; ( dd if=/dev/zero of=/swap0 bs=1m count=4096 status=none && mdconfig -a -t vnode -f /swap0 -u 0 && swapon /dev/md0 && swapinfo -h ) >/dev/console 2>&1 || echo 'BOCL: swap setup skipped' >/dev/console; for i in 1 2 3 4 5; do pkg update -f >/dev/console 2>&1 && pkg install -y gmake cunit >/dev/console 2>&1 && break; echo 'BOCL: pkg update/install failed, retrying' >/dev/console; sleep 15; done; if pkg info -e gmake && pkg info -e cunit; then echo BOCL-CLOUDINIT-DONE > /dev/console; else echo BOCL-CLOUDINIT-INSTALL-FAILED > /dev/console; fi"
 EOF
 printf 'instance-id: bocl-ci\nlocal-hostname: bocl-ci\n' > meta-data
 cloud-localds seed.img user-data meta-data
