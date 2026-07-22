@@ -27,4 +27,12 @@ Ref   stream_read_byte(Ref stream, Ref eof_error_p, Ref eof_value);
 Ref make_output_callback_stream(Ref write_function);
 void kernel_MAKE_OUTPUT_CALLBACK_STREAM(Ref function,Ref arguments,MultipleValues* results);
 
+/* Composite (compound) streams — TWO-WAY / ECHO / SYNONYM / CONCATENATED — as
+   real FILE-STREAMs whose cookie-FILE* read/write callbacks forward to their
+   component streams in pure C (no allocation / no evaluator re-entry, so they
+   are GC-safe inside the kernel reader).  KIND is a composite_t; DATA is the
+   component data ((INPUT . OUTPUT), the synonym SYMBOL, or the stream list). */
+Ref make_composite_stream(int kind, Ref data);
+void kernel_MAKE_COMPOSITE_STREAM(Ref function,Ref arguments,MultipleValues* results);
+
 #endif

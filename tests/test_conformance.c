@@ -146,6 +146,56 @@ static void test_defpackage_shadowing_order(void){
               "         (:shadowing-import-from \"CONF-SET\" \"UNION\" \"MERGE\"))"
               "  (package-name (symbol-package (find-symbol \"UNION\" \"CONF-IX\"))))"));}
 
+/* ---- Composite streams: two-way / echo / synonym / concatenated -------- */
+static void test_composite_streams(void){
+    /* TWO-WAY: predicate T; input/output accessors return the components. */
+    TEST_EQ(eql, e("t"),
+            e("(let* ((i (make-string-input-stream \"\"))"
+              "       (o (make-string-output-stream))"
+              "       (tw (make-two-way-stream i o)))"
+              "  (and (two-way-stream-p tw)"
+              "       (eq (two-way-stream-input-stream tw) i)"
+              "       (eq (two-way-stream-output-stream tw) o)"
+              "       t))"));
+    /* TWO-WAY: reads come from the input side, writes go to the output side. */
+    TEST_EQ(equal, e("\"hiWORLD\""),
+            e("(let* ((i (make-string-input-stream \"hi\"))"
+              "       (o (make-string-output-stream))"
+              "       (tw (make-two-way-stream i o)))"
+              "  (with-output-to-string (r)"
+              "    (write-char (read-char tw) r) (write-char (read-char tw) r)"
+              "    (write-string \"WORLD\" tw)"
+              "    (write-string (get-output-stream-string o) r))))"));
+    /* CONCATENATED: reads through each component in turn, advancing at EOF. */
+    TEST_EQ(equal, e("\"abcde\""),
+            e("(let ((c (make-concatenated-stream (make-string-input-stream \"abc\")"
+              "                                   (make-string-input-stream \"de\"))))"
+              "  (and (concatenated-stream-p c)"
+              "       (with-output-to-string (o)"
+              "         (loop for ch = (read-char c nil nil) while ch do (write-char ch o)))))"));
+    /* ECHO: a character read from the input is echoed to the output. */
+    TEST_EQ(equal, e("\"xy\""),
+            e("(let* ((i (make-string-input-stream \"xyz\"))"
+              "       (o (make-string-output-stream))"
+              "       (e (make-echo-stream i o)))"
+              "  (and (echo-stream-p e)"
+              "       (eq (echo-stream-input-stream e) i)"
+              "       (progn (read-char e) (read-char e)"
+              "              (get-output-stream-string o)))))"));
+    /* SYNONYM: forwards to the current value of its symbol. */
+    TEST_EQ(equal, e("\"PQ\""),
+            e("(let ((s (make-synonym-stream '*conf-syn*)))"
+              "  (declare (special *conf-syn*))"
+              "  (setf (symbol-value '*conf-syn*) (make-string-input-stream \"PQR\"))"
+              "  (and (synonym-stream-p s)"
+              "       (eq (synonym-stream-symbol s) '*conf-syn*)"
+              "       (with-output-to-string (o)"
+              "         (write-char (read-char s) o) (write-char (read-char s) o)))))"));
+    /* READ parses a whole s-expression through a two-way stream's cookie FILE*. */
+    TEST_EQ(equal, e("'(1 2 3 4)"),
+            e("(read (make-two-way-stream (make-string-input-stream \"(1 2 . (3 4))\")"
+              "                           (make-string-output-stream)))"));}
+
 TEST_INITIALIZE(test_conformance);
 TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("reader dotted conditionals", test_reader_dotted_conditionals)
@@ -157,4 +207,5 @@ TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("defpackage shadowing order", test_defpackage_shadowing_order)
     TEST_CASE("division-by-zero class",     test_division_by_zero)
     TEST_CASE("clos condition printing",    test_clos_condition_printing)
+    TEST_CASE("composite streams",          test_composite_streams)
     TEST_FINALIZE()

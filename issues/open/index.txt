@@ -34,11 +34,14 @@ implementation.  Effort: S < 1/2 day, M ~ 1-2 days, L = campaign.)
     symbols; 33 gaps implemented — MOP defaults wired, TRACE/UNTRACE,
     FILE-POSITION, degraded pprint family...).
 
-missing-functions.issue               (residual, M, blocked items)
-    11 symbols remain, documented in the ticket: 6 composite-stream
-    accessors (blocked on real echo/two-way/concatenated/synonym stream
-    objects — the constructors are stubs) and 5 special forms without
-    MACRO-FUNCTION visibility (functional; Phase-2 def-forms work).
+missing-functions.issue               (residual, deferred items only)
+    Composite streams DONE (v1.8.61): the 6 accessors + real
+    echo/two-way/concatenated/synonym stream objects (cookie-FILE*-backed,
+    pure-C forwarding callbacks) + the 4 *-STREAM-P predicates.  5 symbols
+    remain and are all DEFERRED to the Phase-2 def-forms plan: DEFMACRO /
+    HANDLER-CASE / HANDLER-BIND / RESTART-BIND / RESTART-CASE are fully
+    functional but lack MACRO-FUNCTION / SPECIAL-OPERATOR-P visibility
+    (conformance-only).  Nothing actionable until def-forms land.
 
 --- TIER 2 — well-scoped correctness work ------------------------
     (live-pool-reroot-audit: DONE v1.8.58 — 72 sites classified, 3

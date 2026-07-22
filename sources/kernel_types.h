@@ -293,6 +293,13 @@ typedef struct Symbol {
 
 
 typedef enum { direction_input, direction_output, direction_io, direction_probe } direction_t;
+/* Composite (compound) stream kinds.  composite_none is an ordinary FILE-STREAM;
+   the others are cookie-FILE*-backed streams whose read/write callbacks forward
+   to their component streams in pure C (see callback_stream.c).  The integer
+   values are part of the kernel/prelude contract: BOCL::%MAKE-COMPOSITE-STREAM
+   in prelude.lisp passes them by number. */
+typedef enum { composite_none=0, composite_two_way=1, composite_echo=2,
+               composite_synonym=3, composite_concatenated=4 } composite_t;
 typedef enum { type_character, type_octet, type_bit } type_t;
 typedef enum { encoding_us_ascii, encoding_iso_8859_1 } encoding_t;
 typedef enum { new_line_crlf, new_line_cr, new_line_lf } new_line_t;
@@ -310,6 +317,9 @@ typedef struct FileStream {
     halfword encoding;    /* derived from external_format */
     halfword new_line;    /* derived from external_format */
     halfword on_error;    /* derived from external_format */
+    halfword composite_kind;  /* composite_t: 0 = ordinary stream; else a compound
+                                 stream whose `string` slot holds its component data
+                                 (see callback_stream.c).  Not a Ref: outside objcount. */
     FILE* stream;
     octet* buffer;        /* buffer for memstream; in string. */
     size_t buffer_size;   /* size of buffer for memstream; in string. */

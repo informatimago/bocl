@@ -20,18 +20,33 @@ PPRINT-TAB, PPRINT-LOGICAL-BLOCK, PPRINT-POP,
 PPRINT-EXIT-IF-LIST-EXHAUSTED (no layout engine: linear output).
 FILE-LENGTH (the original report) was already implemented.
 
-REMAINING (11), by dependency:
+REMAINING (5 — composite streams DONE v1.8.61), by dependency:
 
 1. Composite-stream accessors (6): ECHO-STREAM-INPUT-STREAM,
    ECHO-STREAM-OUTPUT-STREAM, TWO-WAY-STREAM-INPUT-STREAM,
    TWO-WAY-STREAM-OUTPUT-STREAM, CONCATENATED-STREAM-STREAMS,
    SYNONYM-STREAM-SYMBOL.
-   BLOCKED: MAKE-ECHO-STREAM / MAKE-TWO-WAY-STREAM /
-   MAKE-CONCATENATED-STREAM / MAKE-SYNONYM-STREAM are stubs returning an
-   underlying stream, so there is no composite object to access.  The
-   real fix is composite stream objects (the callback-stream
-   funopen/fopencookie machinery can back them); implement the four
-   stream classes, then the accessors are trivial.
+   DONE (v1.8.61): the four MAKE-* constructors now build real composite
+   stream objects, and all six accessors + the four *-STREAM-P predicates
+   are implemented.  Design: each composite is a genuine FILE-STREAM backed
+   by a cookie FILE* (fopencookie/funopen) whose read/write callbacks
+   forward, IN PURE C, to the component streams — resolving their FILE*s and
+   doing fgetc/fputc with no allocation, no evaluator re-entry, so they are
+   GC-safe inside the kernel reader (unlike the Lisp-callback OUTPUT stream).
+   Concatenated advances past exhausted components (feof); echo tees each
+   read char to the output side; synonym re-resolves SYMBOL-VALUE per op;
+   two-way splits input/output.  A new kernel primitive
+   BOCL::%MAKE-COMPOSITE-STREAM (callback_stream.c) + a composite_kind field
+   on FileStream back it; the CL registry drives predicates/accessors.
+   Because everything routes through stream_cstream()'s FILE*, READ /
+   READ-CHAR / PEEK-CHAR / WRITE-CHAR / LISTEN all work uniformly, including
+   full (READ composite-stream) parses.  Covered by the "composite streams"
+   case in tests/test_conformance.c.
+   Note: the *-STREAM-P predicates (STRING-STREAM-P, FILE-STREAM-P,
+   TWO-WAY-STREAM-P, ...) are bocl EXTENSIONS, not standard CL, so — like
+   the pre-existing BROADCAST-STREAM-P — they are interned in COMMON-LISP as
+   INTERNAL symbols (accessible as CL::TWO-WAY-STREAM-P, not as a bare name
+   from CL-USER).  The six accessors ARE standard CL and are exported.
 
 2. Special forms without MACRO-FUNCTION visibility (5): DEFMACRO,
    HANDLER-CASE, HANDLER-BIND, RESTART-BIND, RESTART-CASE are

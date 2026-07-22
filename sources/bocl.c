@@ -2290,6 +2290,12 @@ void bocl_register_load(void){
     {   Ref mcs=package_intern_cstring_in("%MAKE-OUTPUT-CALLBACK-STREAM",BOCL_Package);
         set_symbol_function(mcs,built_in_function_new(mcs,list(S(WRITE-FUNCTION),NULL),
                             kernel_MAKE_OUTPUT_CALLBACK_STREAM));}
+    /* BOCL::%MAKE-COMPOSITE-STREAM kind data — kernel hook for the compound
+       input/output streams (two-way / echo / synonym / concatenated). */
+    {   Ref mcs=package_intern_cstring_in("%MAKE-COMPOSITE-STREAM",BOCL_Package);
+        set_symbol_function(mcs,built_in_function_new(mcs,
+                            list(S(KIND),S(DATA),NULL),
+                            kernel_MAKE_COMPOSITE_STREAM));}
     /* Helper for CLOS: detect C NULL (returned by kernel find-class for unknown names). */
     Ref cn=symbol_intern_cstring("%CLOS-NULL-P");
     set_symbol_function(cn,built_in_function_new(cn,list(S(X),NULL),kernel_CLOS_NULL_P));

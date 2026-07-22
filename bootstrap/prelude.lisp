@@ -6018,14 +6018,20 @@ the class object it denotes, so two specializers compare by class identity."
 
 (defun input-stream-p (stream)
   "Return T if STREAM can be read from."
-  (handler-case
-      (progn (peek-char nil stream nil nil) t)
-    (error () nil)))
+  (let ((info (bocl::%compound-stream-info stream)))
+    (if info
+        ;; A compound stream's directionality is known exactly from its kind.
+        (and (member (car info) '(:concatenated :two-way :echo :synonym)) t)
+        (handler-case
+            (progn (peek-char nil stream nil nil) t)
+          (error () nil)))))
 
 (defun output-stream-p (stream)
   "Return T if STREAM can be written to."
-  ;; In bocl we check via stream type
-  (and (streamp stream) t))   ; approximate: all streams support output for now
+  (let ((info (bocl::%compound-stream-info stream)))
+    (if info
+        (and (member (car info) '(:broadcast :two-way :echo :synonym)) t)
+        (and (streamp stream) t))))   ; approximate: plain streams assumed output-capable
 
 (defun open-stream-p (stream)
   "Return T if STREAM is open."
@@ -6426,25 +6432,41 @@ the class object it denotes, so two specializers compare by class identity."
         (progn (dolist (s (cdr info)) (finish-output s)) nil)
         (bocl::%kernel-finish-output stream))))
 
+;;; The composite input/output streams (concatenated / echo / synonym /
+;;; two-way) are real FILE-STREAMs backed by a kernel cookie FILE* whose
+;;; read/write callbacks forward to the component streams in pure C
+;;; (BOCL::%MAKE-COMPOSITE-STREAM; see callback_stream.c).  The KIND integers
+;;; below match the composite_t enum in kernel_types.h:
+;;;   1 = two-way   2 = echo   3 = synonym   4 = concatenated
+;;; The registry entry (KIND . COMPONENTS) drives the predicates and accessors.
+
 (defun make-concatenated-stream (&rest streams)
-  "Return a stream that reads from STREAMS in sequence.
-  Stub: returns the first stream or an empty string stream."
-  (if streams (car streams) (make-string-input-stream "")))
+  "Return an input stream that reads from STREAMS in sequence: when one is
+   exhausted the next is used, until all are (CLHS MAKE-CONCATENATED-STREAM)."
+  (bocl::%register-compound-stream
+   (bocl::%make-composite-stream 4 streams)
+   :concatenated streams))
 
 (defun make-echo-stream (input-stream output-stream)
-  "Return a stream that reads from INPUT-STREAM and echoes to OUTPUT-STREAM.
-  Stub: returns INPUT-STREAM."
-  output-stream input-stream)
+  "Return a bidirectional stream that reads from INPUT-STREAM (echoing every
+   character read to OUTPUT-STREAM) and writes to OUTPUT-STREAM."
+  (bocl::%register-compound-stream
+   (bocl::%make-composite-stream 2 (cons input-stream output-stream))
+   :echo (list input-stream output-stream)))
 
 (defun make-synonym-stream (symbol)
-  "Return a stream that is a synonym for the stream in SYMBOL's value.
-  Stub: returns the current value of SYMBOL."
-  (symbol-value symbol))
+  "Return a stream that forwards every operation to the stream that is the
+   current SYMBOL-VALUE of SYMBOL (re-resolved on each operation)."
+  (bocl::%register-compound-stream
+   (bocl::%make-composite-stream 3 symbol)
+   :synonym symbol))
 
 (defun make-two-way-stream (input-stream output-stream)
-  "Return a two-way stream combining INPUT-STREAM and OUTPUT-STREAM.
-  Stub: returns INPUT-STREAM."
-  output-stream input-stream)
+  "Return a bidirectional stream that reads from INPUT-STREAM and writes to
+   OUTPUT-STREAM (CLHS MAKE-TWO-WAY-STREAM)."
+  (bocl::%register-compound-stream
+   (bocl::%make-composite-stream 1 (cons input-stream output-stream))
+   :two-way (list input-stream output-stream)))
 
 ;;; ---- Array utilities ----------------------------------------------------
 
@@ -6862,24 +6884,60 @@ SUBTYPEP round-trips)."
        (not (typep stream 'string-stream))))
 
 (defun synonym-stream-p (stream)
-  "Return T if STREAM is a synonym stream.  In bocl: always NIL."
-  (declare (ignore stream)) nil)
+  "Return T if STREAM is a synonym stream."
+  (eq :synonym (car (bocl::%compound-stream-info stream))))
 
 (defun broadcast-stream-p (stream)
   "Return T if STREAM is a broadcast stream."
   (eq :broadcast (car (bocl::%compound-stream-info stream))))
 
 (defun concatenated-stream-p (stream)
-  "Return T if STREAM is a concatenated stream.  In bocl: always NIL."
-  (declare (ignore stream)) nil)
+  "Return T if STREAM is a concatenated stream."
+  (eq :concatenated (car (bocl::%compound-stream-info stream))))
 
 (defun two-way-stream-p (stream)
-  "Return T if STREAM is a two-way stream.  In bocl: always NIL."
-  (declare (ignore stream)) nil)
+  "Return T if STREAM is a two-way stream."
+  (eq :two-way (car (bocl::%compound-stream-info stream))))
 
 (defun echo-stream-p (stream)
-  "Return T if STREAM is an echo stream.  In bocl: always NIL."
-  (declare (ignore stream)) nil)
+  "Return T if STREAM is an echo stream."
+  (eq :echo (car (bocl::%compound-stream-info stream))))
+
+;;; ---- Composite-stream accessors (CLHS 21.2) -----------------------------
+;;; The COMPONENTS recorded in the registry are, per kind:
+;;;   :two-way / :echo -> (INPUT-STREAM OUTPUT-STREAM)
+;;;   :synonym         -> the SYMBOL          :concatenated -> the stream list
+
+(defun bocl::%composite-component (stream expected-kind type-name)
+  "COMPONENTS of STREAM if it is of EXPECTED-KIND, else a TYPE-ERROR."
+  (let ((info (bocl::%compound-stream-info stream)))
+    (if (eq (car info) expected-kind)
+        (cdr info)
+        (error 'type-error :datum stream :expected-type type-name))))
+
+(defun two-way-stream-input-stream (stream)
+  "The input stream of a two-way STREAM."
+  (first (bocl::%composite-component stream :two-way 'two-way-stream)))
+
+(defun two-way-stream-output-stream (stream)
+  "The output stream of a two-way STREAM."
+  (second (bocl::%composite-component stream :two-way 'two-way-stream)))
+
+(defun echo-stream-input-stream (stream)
+  "The input stream of an echo STREAM."
+  (first (bocl::%composite-component stream :echo 'echo-stream)))
+
+(defun echo-stream-output-stream (stream)
+  "The output stream of an echo STREAM."
+  (second (bocl::%composite-component stream :echo 'echo-stream)))
+
+(defun concatenated-stream-streams (stream)
+  "The list of streams a concatenated STREAM reads from."
+  (bocl::%composite-component stream :concatenated 'concatenated-stream))
+
+(defun synonym-stream-symbol (stream)
+  "The symbol a synonym STREAM forwards to."
+  (bocl::%composite-component stream :synonym 'synonym-stream))
 
 ;;; ---- MACRO-FUNCTION / (SETF MACRO-FUNCTION) ------------------------------
 ;;; In bocl, DEFMACRO stores the expansion function on the symbol's plist

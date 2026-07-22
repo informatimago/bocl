@@ -2319,6 +2319,7 @@ Ref file_stream_new(Ref pathname,     /* a PHYSICAL-PATHNAME */
     slots->encoding=encoding;
     slots->new_line=new_line;
     slots->on_error=on_error;
+    slots->composite_kind=composite_none;
     slots->stream=NULL;
     return Object_new(find_class(symbol_intern_cstring("FILE-STREAM")),
                       (Slots*)slots);}
