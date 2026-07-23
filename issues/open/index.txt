@@ -47,6 +47,18 @@ missing-functions.issue               (residual, deferred items only)
     (live-pool-reroot-audit: DONE v1.8.58 — 72 sites classified, 3
     fresh-object returns fixed, gate green under BOCL_GCSTRESS.)
 
+adjustable-string-not-string-class.issue  (bug, M-L — type system)
+    Adjustable / fill-pointer character vectors are %MD-ARRAY, so STRINGP
+    / (TYPEP x 'STRING) / CLOS ((x string)) dispatch all miss them.  The
+    remaining blocker for bug-cl-ppcre (two prerequisite bugs — a LOOP
+    `= then` stepping bug and a COERCE %MD-ARRAY bug — fixed v1.9.3).
+    Unify complex 1-D char arrays with STRING at the type-system level.
+
+bug-cl-ppcre.issue                    (bug, blocked)
+    Loading cl-ppcre.  Root-caused to a 3-bug cascade; two fixed in
+    v1.9.3 (LOOP `= then`, COERCE %MD-ARRAY) — parsing is now correct and
+    SCAN works.  Blocked on adjustable-string-not-string-class.issue.
+
 vm-analyzer-decline-gaps.issue        (bug, M)
     3 of asdf.lisp's 586 functions decline byte-compilation: an
     analyzer bug evaluating &REST as a variable (x2) and a

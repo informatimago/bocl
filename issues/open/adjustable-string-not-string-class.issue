@@ -1,0 +1,59 @@
+Adjustable / fill-pointer character vectors are %MD-ARRAY, not recognised as STRING
+==================================================================================
+
+SYMPTOM
+-------
+An adjustable and/or fill-pointer vector of characters is classified by bocl
+as %MD-ARRAY, and STRINGP / (TYPEP x 'STRING) / CLASS-OF all say it is NOT a
+string, even though it is a rank-1 character vector:
+
+    (let ((a (make-array 3 :element-type 'character :adjustable t :fill-pointer 0)))
+      (vector-push-extend #\a a) (vector-push-extend #\b a)
+      (list (type-of a) (stringp a) (typep a 'string) (vectorp a)))
+    => (COMMON-LISP::%MD-ARRAY NIL NIL T)      ; want STRINGP / TYPEP-STRING = T
+
+Per CLHS a STRING is *any* one-dimensional array whose element type is a
+subtype of CHARACTER — adjustable and fill-pointer strings included.  bocl
+only treats its *simple* string representation (STRING_Class, octet_array
+storage) as a string; every complex 1-D char array is the generic %MD-ARRAY.
+
+CONSEQUENCES (why this matters)
+-------------------------------
+1. STRINGP / TYPEP: false negatives for adjustable strings.
+2. CLOS dispatch: a method specialised on ((x string)) is NOT selected for an
+   adjustable char vector, because %APPLICABLE-P tests built-in specializers
+   with kernel TYPEP (prelude %applicable-p -> *%kernel-typep*).  The arg
+   falls through to the default method.  This is exactly what breaks cl-ppcre
+   (see bug-cl-ppcre.issue): its regex parser accumulates multi-character
+   literal runs into an ADJUSTABLE string (parser.lisp SEQ /
+   make-array-from-two-chars + vector-push-extend), so a run like the literal
+   \E converts via CONVERT-SIMPLE-PARSE-TREE's *default* method (not the
+   ((parse-tree string)) method) and signals  "Unknown token \E in parse tree."
+3. COERCE, string kernel ops: worked around piecemeal (COERCE now uses
+   ELT/LENGTH — v1.9.3), but the general defect remains.
+
+ROOT CAUSE
+----------
+sources/kernel.c:  bool stringp(Ref o){ return class_of(o)==STRING_Class; }
+STRING_Class is the simple-string built-in class only; adjustable char arrays
+have class %MD-ARRAY.  The kernel string primitives (string_length,
+string_octets, string_cstring, string_eq, char accessors, ...) all
+check_class(x, STRING_Class) and so cannot operate on an %MD-ARRAY either.
+
+FIX (design — larger than a point fix)
+--------------------------------------
+Unify complex 1-D character arrays with strings at the type-system level:
+ - STRINGP and TYPEP against STRING must be true for a rank-1 %MD-ARRAY whose
+   element-type is a subtype of CHARACTER (this alone fixes CLOS dispatch,
+   since %APPLICABLE-P routes through TYPEP).
+ - The string kernel primitives must then accept such arrays (read/scan their
+   element storage), OR bocl must grow a real adjustable-string representation
+   that is a subclass of STRING (preferred: CLASS-OF returns a string class so
+   PRINT-OBJECT / TYPE-OF / methods are all consistent).
+Do it as a deliberate change with its own tests (STRINGP/TYPEP/CLOS-dispatch/
+CHAR/AREF/LENGTH/COERCE/PRINT on adjustable + fill-pointer strings), because
+the surface is wide.
+
+Discovered 2026-07-23 while fixing bug-cl-ppcre (two prerequisite bugs — a LOOP
+`for v = init then step` stepping bug and a COERCE %MD-ARRAY bug — were fixed in
+v1.9.3; this is the remaining blocker for loading cl-ppcre).

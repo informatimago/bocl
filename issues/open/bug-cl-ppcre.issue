@@ -226,3 +226,49 @@ Available restarts:
    7: [ABORT]
 
 debug> 
+
+====================================================================
+DIAGNOSIS & PROGRESS (2026-07-23, v1.9.3)
+
+Root cause is a CASCADE of three bocl bugs exposed by cl-ppcre's regex
+parser/converter.  Loading was traced by loading the component files
+directly (packages…scanner…api) interpreted, then reducing:
+
+  1. LOOP `for v = init THEN step` stepping bug  [FIXED v1.9.3]
+     When INIT references a PRECEDING loop variable, iteration 1 left V at
+     its stale LETB value (NIL), e.g. `(loop for q in '(a b c)
+     for s = q then (list s q) finally (return s))` gave ((NIL B) C)
+     instead of ((A B) C).  cl-ppcre's PARSER (parser.lisp SEQ) uses exactly
+     this shape (`for quant = (quant lexer) ... for seq = quant then (cond…)`),
+     so EVERY parse dropped its first token to NIL — "a"→NIL,
+     "ab"→(:SEQUENCE NIL #\b) — which then hit CONVERT-SIMPLE-PARSE-TREE's
+     default method → "Undefined function PARSE-TREE-SYNONYM" (the reported
+     symptom; PARSE-TREE-SYNONYM is defined later in api.lisp).
+     Fix: %loop-expand now assigns a standalone `= init then step`'s INIT in
+     SETUPS on the first iteration (after preceding FOR clauses step), not in
+     the LET.  (prelude.lisp)
+
+  2. COERCE of an adjustable char vector to STRING  [FIXED v1.9.3]
+     `(coerce <adjustable-char-vector> 'simple-string)` raised
+     "expected VECTOR, got %MD-ARRAY" because the vector→string / vector→list
+     branches used SVREF/VECTOR-LENGTH (simple-vector only).  Fixed to use
+     ELT/LENGTH.  (prelude.lisp)
+
+  3. Adjustable / fill-pointer character vectors are not STRINGs  [OPEN]
+     After 1 & 2, parsing is fully correct and (SCAN …) works, but api.lisp
+     still fails building the \Q-quoting scanners: a multi-character literal
+     run (e.g. the literal \E) is accumulated by the parser into an
+     ADJUSTABLE string, which bocl classifies as %MD-ARRAY.  STRINGP / TYPEP
+     'STRING are false for it, so CONVERT-SIMPLE-PARSE-TREE's ((x string))
+     method is not selected (CLOS dispatch tests built-in specializers via
+     TYPEP) and it falls to the default → "Unknown token \E in parse tree."
+     This is a type-system-level defect filed separately as
+     adjustable-string-not-string-class.issue — the remaining blocker.  It is
+     a larger change (unify complex 1-D char arrays with STRING across
+     STRINGP/TYPEP/CLASS-OF and the string kernel primitives), so cl-ppcre
+     stays OPEN until it lands (further bugs may surface past api.lisp once it
+     does).
+
+VERIFIED after 1 & 2: all cl-ppcre parse trees correct
+(e.g. "a.c"→(:SEQUENCE #\a :EVERYTHING #\c), "x*?"→(:NON-GREEDY-REPETITION
+0 NIL #\x)); (cl-ppcre:scan "a.c" "xabcy") => 1 4 #() #().
