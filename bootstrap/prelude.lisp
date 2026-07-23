@@ -3019,10 +3019,11 @@ SETQ/INCF/DECF is left in place (sequential)."
                                (let ((stepform (pop!)))
                                  (push (list v init) letb)
                                  ;; Push the step at the bottom (so an AND group can
-                                 ;; fuse it); also record it so a STANDALONE `= then`
-                                 ;; can be hoisted to the loop top afterwards.
+                                 ;; fuse it); also record V, STEP and INIT so a
+                                 ;; STANDALONE `= then` can be hoisted to the loop top
+                                 ;; (and its INIT deferred past preceding FOR clauses).
                                  (push `(setq ,v ,stepform) steps)
-                                 (setq %eq-then-info (list v stepform))))
+                                 (setq %eq-then-info (list v stepform init))))
                         (progn
                           (push (list v nil) letb)
                           (push `(setq ,v ,init) setups)))))
@@ -3157,9 +3158,20 @@ SETQ/INCF/DECF is left in place (sequential)."
               ((and (= %nvars 1) %eq-then-info)
                (do () ((eq steps %old-steps)) (pop steps))   ; drop the bottom step
                (let ((vv (first %eq-then-info)) (sf (second %eq-then-info))
+                     (iv (third %eq-then-info))
                      (ff (gensym "LOOP-FIRST-")))
+                 ;; V was bound to INIT in LETB, but INIT may reference a PRECEDING
+                 ;; loop variable whose per-iteration value is not yet set at LET
+                 ;; time (e.g. `for q in l for s = q then (f s q)` — S must see Q's
+                 ;; first element, not the outer / NIL Q).  So drop V's (V INIT)
+                 ;; binding, rebind it to NIL, and assign INIT in SETUPS on the
+                 ;; FIRST iteration (after the preceding FOR clauses have stepped)
+                 ;; and the STEP form on the rest.
+                 (do () ((eq letb %old-letb)) (pop letb))   ; drop this group's V binding
+                 (push (list vv nil) letb)
                  (push (list ff t) letb)
-                 (push `(if ,ff (setq ,ff nil) (setq ,vv ,sf)) setups)))
+                 (push `(if ,ff (progn (setq ,ff nil) (setq ,vv ,iv))
+                              (setq ,vv ,sf)) setups)))
               ((> %nvars 1)
                (let ((%new nil))
                  (do () ((eq steps %old-steps)) (push (pop steps) %new))
@@ -3723,17 +3735,20 @@ SETQ/INCF/DECF is left in place (sequential)."
     ;; Vector identity
     ((and (vectorp object) (member result-type '(vector simple-vector)))
      object)
-    ;; Vector → list
+    ;; Vector → list.  Use ELT/LENGTH, not SVREF/VECTOR-LENGTH: an adjustable
+    ;; or fill-pointer vector is a bocl %MD-ARRAY (rank 1, VECTORP true) which
+    ;; the simple-vector accessors reject.
     ((and (vectorp object) (member result-type '(list cl:list)))
      (let ((acc nil))
-       (dotimes (i (vector-length object) (nreverse acc))
-         (push (svref object i) acc))))
-    ;; Vector → string
+       (dotimes (i (length object) (nreverse acc))
+         (push (elt object i) acc))))
+    ;; Vector → string (same ELT/LENGTH reasoning — e.g. cl-ppcre coerces an
+    ;; adjustable character vector to SIMPLE-STRING).
     ((and (vectorp object) (member result-type '(string cl:string simple-string base-string simple-base-string)))
-     (let* ((len (vector-length object))
+     (let* ((len (length object))
             (s   (make-string len)))
        (dotimes (i len s)
-         (char-set s i (svref object i)))))
+         (char-set s i (elt object i)))))
     ;; Fall through to kernel for numeric coercions
     (t (funcall *%old-coerce* object result-type))))
 
