@@ -282,3 +282,13 @@ cl-ppcre now loads further and (cl-ppcre:scan "a.c" "xabcy") works.  The next
 blocker is unrelated: api.lisp uses (SETF (THE type place) value) and bocl's
 SETF has no handler for the THE place operator ("SETF: no expander for place
 operator THE").  Filed as setf-the-place.issue.
+
+--------------------------------------------------------------------
+UPDATE (v1.9.5, 2026-07-24)
+Fixed SETF of THE and of macro places (setf-the-place.issue) — cl-ppcre now
+LOADS COMPLETELY and (scan …), (do-matches …), (do-matches-as-strings …) all
+work.  Next blocker: the aggregating functions (all-matches-as-strings,
+regex-replace-all, split) pass a pre-compiled scanner CLOSURE to the generic
+function SCAN, whose ((scanner function)) method is not selected because the
+kernel TYPEP does not see a closure as a FUNCTION.  Filed as
+typep-function-closure.issue.

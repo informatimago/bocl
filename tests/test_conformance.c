@@ -218,6 +218,16 @@ static void test_adjustable_string(void){
               "  (let ((a (make-array 1 :element-type 'character :adjustable t :fill-pointer 0)))"
               "    (vector-push-extend #\\z a) (adjs-k a)))"));}
 
+/* ---- SETF of THE and of a macro place (CLHS 5.1.2.3 / 5.1.2.6) ---------- */
+static void test_setf_place_forms(void){
+    /* (setf (the type place) v) == (setf place (the type v)). */
+    TEST_EQ(equal, e("'(9 2 3)"),
+            e("(let ((v (vector 1 2 3))) (setf (the fixnum (aref v 0)) 9) (coerce v 'list)))"));
+    /* A macro place with no SETF expander is macroexpanded, then SETF'd. */
+    TEST_EQ(equal, e("'(1 2 99)"),
+            e("(progn (defmacro conf-third-place (l) `(third ,l))"
+              "  (let ((x (list 1 2 3))) (setf (conf-third-place x) 99) x))"));}
+
 TEST_INITIALIZE(test_conformance);
 TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("reader dotted conditionals", test_reader_dotted_conditionals)
@@ -231,4 +241,5 @@ TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("clos condition printing",    test_clos_condition_printing)
     TEST_CASE("composite streams",          test_composite_streams)
     TEST_CASE("adjustable string is string", test_adjustable_string)
+    TEST_CASE("setf THE / macro place",      test_setf_place_forms)
     TEST_FINALIZE()
