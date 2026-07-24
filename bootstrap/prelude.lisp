@@ -4388,10 +4388,15 @@ SETQ/INCF/DECF is left in place (sequential)."
    fill-pointer) one-dimensional character array."
   (or (funcall *%kernel-stringp* x) (%md-string-p x)))
 (defun %typep-builtin (object type)
-  "Kernel TYPEP extended with the complex-array cases it misses: a %MD-ARRAY
-   satisfies ARRAY; a rank-1 one satisfies VECTOR / SEQUENCE and, by element
-   type, STRING / BASE-STRING or BIT-VECTOR.  It is never SIMPLE-*."
+  "Kernel TYPEP extended with the built-in cases it misses:
+   * a closure satisfies FUNCTION (the kernel TYPEP only sees named / built-in
+     functions there, though FUNCTIONP is true of a closure);
+   * a %MD-ARRAY satisfies ARRAY; a rank-1 one satisfies VECTOR / SEQUENCE and,
+     by element type, STRING / BASE-STRING or BIT-VECTOR (never SIMPLE-*).
+   Used by both TYPEP and the CLOS applicability tests, so method dispatch on
+   these built-in classes agrees with FUNCTIONP / VECTORP / STRINGP."
   (or (funcall *%kernel-typep* object type)
+      (and (eq type 'function) (functionp object))
       (and (%md-array-p object)
            (let ((rank1 (= (length (%md-array-dimensions object)) 1))
                  (et    (%md-array-element-type object)))
