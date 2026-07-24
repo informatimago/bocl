@@ -47,19 +47,20 @@ missing-functions.issue               (residual, deferred items only)
     (live-pool-reroot-audit: DONE v1.8.58 — 72 sites classified, 3
     fresh-object returns fixed, gate green under BOCL_GCSTRESS.)
 
-setf-the-place.issue                  (bug, S)
-    (SETF (THE type place) value) has no SETF handler ("no expander for
-    place operator THE").  Should expand to (SETF place (THE type value)).
-    A blocker for bug-cl-ppcre (api.lisp uses it).
+typep-function-closure.issue          (bug, S — type system)
+    Kernel TYPEP says a closure is not a FUNCTION (though FUNCTIONP is T),
+    so CLOS dispatch on ((x function)) misses closures.  Blocker for
+    bug-cl-ppcre (SCAN's ((scanner function)) method).
 
 bug-cl-ppcre.issue                    (bug, blocked)
-    Loading cl-ppcre.  Root-caused to a multi-bug cascade; fixed so far:
-    LOOP `= then` + COERCE %MD-ARRAY (v1.9.3) and the adjustable-string
-    type-system issue (v1.9.4, DONE).  Parsing + SCAN work; next blocker
-    is setf-the-place.issue.
+    Loading cl-ppcre.  Multi-bug cascade; fixed so far: LOOP `= then` +
+    COERCE %MD-ARRAY (v1.9.3), adjustable-string type system (v1.9.4),
+    SETF of THE + macro places (v1.9.5).  cl-ppcre now LOADS fully and
+    SCAN / DO-MATCHES work; next blocker is typep-function-closure.issue
+    (the aggregating fns pass a scanner closure to SCAN).
 
-    (adjustable-string-not-string-class: FIXED v1.9.4 — complex char
-    arrays are now STRINGs for STRINGP/TYPEP/CLOS; moved to closed.)
+    (setf-the-place: FIXED v1.9.5 — moved to closed.
+     adjustable-string-not-string-class: FIXED v1.9.4 — moved to closed.)
 
 vm-analyzer-decline-gaps.issue        (bug, M)
     3 of asdf.lisp's 586 functions decline byte-compilation: an

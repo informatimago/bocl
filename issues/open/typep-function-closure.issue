@@ -1,0 +1,33 @@
+Kernel TYPEP does not recognise a closure as FUNCTION (CLOS dispatch misses it)
+==============================================================================
+
+SYMPTOM
+-------
+    (let ((clo (let ((n 5)) (lambda (x) (+ x n)))))
+      (list (functionp clo)                       ; => T
+            (typep clo 'function)                 ; => T (Lisp TYPEP)
+            (funcall *%kernel-typep* clo 'function))) ; => NIL  <-- inconsistent
+
+    (defgeneric g (x) (:method ((x function)) :fn) (:method (x) :other))
+    (g (lambda () 1))   ; => :OTHER   (should be :FN)
+    (g #'car)           ; => :FN      (a named/built-in function dispatches)
+
+FUNCTIONP is true of a closure but the KERNEL TYPEP says it is not a FUNCTION,
+so a CLOS method specialised on ((x function)) is not applicable to a closure
+(CLOS %APPLICABLE-P tests built-in specializers via the kernel TYPEP, through
+%TYPEP-BUILTIN).  Named / built-in functions dispatch fine; only closures are
+missed — the closure's class is not seen as a subclass of FUNCTION.
+
+Consequence: a blocker for bug-cl-ppcre — cl-ppcre's SCAN is a generic function
+with a ((scanner function)) method, and its higher-level functions (ALL-MATCHES,
+REGEX-REPLACE-ALL, SPLIT) pass a pre-compiled scanner CLOSURE to SCAN, which
+then falls to the (t …) method and tries to parse the closure as a regex ->
+PPCRE-SYNTAX-ERROR.
+
+FIX
+---
+Make the type system recognise a closure as FUNCTION consistently — either in
+the kernel (closure class a subclass of FUNCTION for TYPEP) or, like the
+%MD-ARRAY string fix, in %TYPEP-BUILTIN so both TYPEP and CLOS dispatch agree.
+
+Discovered 2026-07-24 unblocking bug-cl-ppcre after the SETF-place fixes.

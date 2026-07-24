@@ -26,3 +26,13 @@ the SETF macro that rewrites (setf (the type place) v) to
 
 Discovered 2026-07-24 as the next blocker for bug-cl-ppcre after the
 adjustable-string type-system fix (cl-ppcre's api.lisp uses SETF of THE).
+
+====================================================================
+RESOLUTION (v1.9.5, 2026-07-24)
+Two SETF place-completeness gaps fixed in the SETF macro (prelude.lisp):
+ * THE: (setf (the type place) v) now expands to (setf place (the type v)).
+ * Macro place: a place operator that is a macro with no SETF expander is now
+   MACROEXPAND-1'd and re-SETF'd (CLHS 5.1.2.3), so accessor macros like
+   cl-ppcre's (single-line-mode-p flags) -> (third flags) are setf-able.
+Covered by "setf THE / macro place" in tests/test_conformance.c; suite green.
+Both were blockers for bug-cl-ppcre (api.lisp uses both).

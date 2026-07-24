@@ -94,6 +94,12 @@
                  ((consp place)
                   (let ((expander (gethash (car place) *setf-expanders*)))
                     (cond
+                      ;; THE is a place (CLHS 5.1.2.6): (setf (the type place) v)
+                      ;; == (setf place (the type v)).  TYPE is a type specifier
+                      ;; (not a value) and PLACE must stay a place, so this cannot
+                      ;; go through the generic temp-binding expander below.
+                      ((eq (car place) 'the)
+                       `(setf ,(caddr place) (the ,(cadr place) ,value)))
                       ;; GETF is place-recursive — its expander re-SETFs its first
                       ;; subform, so binding that subform to a temp would write the
                       ;; temp, not the place.  Keep the (value-first) expansion.
@@ -121,6 +127,12 @@
                          `(let ((,g ,value))
                             (funcall (%setf-function ',(car place)) ,g ,@(cdr place))
                             ,g)))
+                      ;; A macro place with no SETF expander (CLHS 5.1.2.3):
+                      ;; macroexpand the place and SETF the result — e.g.
+                      ;; (setf (single-line-mode-p flags) v), where the accessor
+                      ;; macro expands to (third flags).
+                      ((and (symbolp (car place)) (macro-function (car place)))
+                       `(setf ,(macroexpand-1 place) ,value))
                       (t (error "SETF: no expander for place operator ~S" (car place))))))
                  (t (error "SETF: invalid place")))))
         (t
