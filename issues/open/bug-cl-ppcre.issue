@@ -272,3 +272,13 @@ directly (packages…scanner…api) interpreted, then reducing:
 VERIFIED after 1 & 2: all cl-ppcre parse trees correct
 (e.g. "a.c"→(:SEQUENCE #\a :EVERYTHING #\c), "x*?"→(:NON-GREEDY-REPETITION
 0 NIL #\x)); (cl-ppcre:scan "a.c" "xabcy") => 1 4 #() #().
+
+--------------------------------------------------------------------
+UPDATE (v1.9.4, 2026-07-24)
+Bug 3 (adjustable-string-not-string-class) is FIXED — the type system now
+recognises complex character arrays as STRINGs and CLOS dispatches the
+((parse-tree string)) method correctly; CHAR/SCHAR/SUBSEQ etc. work on them.
+cl-ppcre now loads further and (cl-ppcre:scan "a.c" "xabcy") works.  The next
+blocker is unrelated: api.lisp uses (SETF (THE type place) value) and bocl's
+SETF has no handler for the THE place operator ("SETF: no expander for place
+operator THE").  Filed as setf-the-place.issue.

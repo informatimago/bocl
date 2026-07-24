@@ -1,0 +1,28 @@
+(SETF (THE type place) value) is unsupported
+============================================
+
+SYMPTOM
+-------
+    (let ((v (vector 1 2 3)))
+      (setf (the fixnum (aref v 0)) 9) v)
+    => SETF: no expander for place operator THE
+
+CLHS 5.1.2.6: THE is a valid place.  (setf (the value-type place) value)
+must store VALUE (of type VALUE-TYPE) into PLACE.  The standard expansion is
+simply
+
+    (setf (the type place) value)  ==  (setf place (the type value))
+
+WHY THE GENERIC PATH FAILS
+--------------------------
+bocl's SETF binds every place-operator argument to a gensym temp and calls the
+registered expander with those temps (prelude.lisp, the `(expander …)` cond
+branch).  That is correct for places whose args are all VALUES (e.g. AREF's
+index), but THE's first argument is a TYPE SPECIFIER (not evaluable) and its
+second argument must remain a PLACE (not be pre-evaluated into a temp).  So a
+plain DEFINE-SETF-EXPANDER cannot express it — THE needs a dedicated clause in
+the SETF macro that rewrites (setf (the type place) v) to
+(setf place (the type v)).
+
+Discovered 2026-07-24 as the next blocker for bug-cl-ppcre after the
+adjustable-string type-system fix (cl-ppcre's api.lisp uses SETF of THE).

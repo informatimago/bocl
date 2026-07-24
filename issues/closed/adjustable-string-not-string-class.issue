@@ -57,3 +57,31 @@ the surface is wide.
 Discovered 2026-07-23 while fixing bug-cl-ppcre (two prerequisite bugs — a LOOP
 `for v = init then step` stepping bug and a COERCE %MD-ARRAY bug — were fixed in
 v1.9.3; this is the remaining blocker for loading cl-ppcre).
+
+====================================================================
+RESOLUTION (v1.9.4, 2026-07-24)
+
+Fixed at the Lisp/type-system layer (a %MD-ARRAY is a Lisp struct, so the
+recognition lives above the kernel):
+
+* %MD-STRING-P + a wrapped STRINGP: a rank-1 character %MD-ARRAY is now a
+  STRING.
+* %TYPEP-BUILTIN wraps the kernel TYPEP with the complex-array cases it
+  misses — a %MD-ARRAY satisfies ARRAY; a rank-1 one VECTOR / SEQUENCE and,
+  by element type, STRING / BASE-STRING or BIT-VECTOR (never SIMPLE-*).  Both
+  TYPEP definitions and the CLOS applicability tests (%APPLICABLE-P,
+  %SPECIALIZER-POSITION) route through it, so (TYPEP x 'STRING) and a method
+  specialised on ((x string)) now apply to a complex string — matching the
+  ARRAYP / VECTORP / STRINGP predicate wrappers (previously TYPEP disagreed
+  with them).
+* Element access: CHAR / SCHAR / (SETF CHAR) / STRING-LENGTH taught to follow
+  a %MD-ARRAY (row-major storage), so every string function layered on them
+  (SUBSEQ, case ops, %COERCE-TO-CHARACTER, …) works on adjustable / displaced
+  / fill-pointer strings.
+
+Covered by the "adjustable string is string" case in tests/test_conformance.c;
+full CUnit suite green.  This unblocked the CLOS-dispatch failure in
+bug-cl-ppcre (which now advances to an unrelated (SETF (THE …) …) gap).
+Note: the kernel string primitives (string_length, string_octets, …) still
+require a simple kernel STRING — callers reach complex strings through the
+%MD-ARRAY-aware Lisp wrappers, which is the existing design.
