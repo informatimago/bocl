@@ -196,6 +196,28 @@ static void test_composite_streams(void){
             e("(read (make-two-way-stream (make-string-input-stream \"(1 2 . (3 4))\")"
               "                           (make-string-output-stream)))"));}
 
+/* ---- Adjustable / fill-pointer character vectors are STRINGs ------------ */
+static void test_adjustable_string(void){
+    /* Type recognition: a complex 1-D character array is a STRING / VECTOR /
+       ARRAY / SEQUENCE (but never SIMPLE-STRING); STRINGP and TYPEP agree. */
+    TEST_EQ(eql, e("t"),
+            e("(let ((a (make-array 3 :element-type 'character :adjustable t :fill-pointer 0)))"
+              "  (vector-push-extend #\\a a) (vector-push-extend #\\b a)"
+              "  (and (stringp a) (typep a 'string) (typep a 'vector) (typep a 'array)"
+              "       (typep a 'sequence) (not (typep a 'simple-string))"
+              "       (not (stringp (make-array 2 :adjustable t :fill-pointer 0))) t))"));
+    /* Element access + string ops run on it (CHAR / SCHAR / SUBSEQ / case). */
+    TEST_EQ(equal, e("\"ab AB b bc\""),
+            e("(let ((a (make-array 3 :element-type 'character :adjustable t :fill-pointer 0)))"
+              "  (vector-push-extend #\\a a) (vector-push-extend #\\b a) (vector-push-extend #\\c a)"
+              "  (format nil \"~A ~A ~A ~A\" (subseq a 0 2) (string-upcase (subseq a 0 2))"
+              "                              (char a 1) (subseq a 1)))"));
+    /* CLOS method specialised on STRING is applicable to it. */
+    TEST_EQ(equal, e("\"str\""),
+            e("(progn (defgeneric adjs-k (x) (:method ((x string)) \"str\") (:method (x) \"other\"))"
+              "  (let ((a (make-array 1 :element-type 'character :adjustable t :fill-pointer 0)))"
+              "    (vector-push-extend #\\z a) (adjs-k a)))"));}
+
 TEST_INITIALIZE(test_conformance);
 TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("reader dotted conditionals", test_reader_dotted_conditionals)
@@ -208,4 +230,5 @@ TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("division-by-zero class",     test_division_by_zero)
     TEST_CASE("clos condition printing",    test_clos_condition_printing)
     TEST_CASE("composite streams",          test_composite_streams)
+    TEST_CASE("adjustable string is string", test_adjustable_string)
     TEST_FINALIZE()

@@ -4354,6 +4354,42 @@ SETQ/INCF/DECF is left in place (sequential)."
 (defparameter *%kernel-class-of*   (symbol-function 'class-of))
 (defparameter *%kernel-typep*      (symbol-function 'typep))
 
+;;; ---- Complex arrays / strings and the type system -----------------------
+;;; bocl stores a SIMPLE string/vector as a kernel object, but a COMPLEX array
+;;; (adjustable, displaced, fill-pointer, or multi-dimensional) as a %MD-ARRAY
+;;; struct (see the DEFSTRUCT far below).  The kernel therefore does not see a
+;;; %MD-ARRAY as an ARRAY/VECTOR/STRING, so STRINGP / TYPEP / CLOS dispatch on
+;;; those built-in types would miss it.  The predicate wrappers VECTORP/ARRAYP
+;;; already special-case %MD-ARRAY; these make STRINGP and, crucially, TYPEP
+;;; (hence CLOS built-in dispatch, which tests specializers via TYPEP) agree.
+;;;   %MD-ARRAY-P is a forward placeholder (NIL) until its real DEFSTRUCT loads;
+;;; everything here short-circuits on it, so it is correct during the bootstrap
+;;; (no complex array exists yet) and gains the real behaviour afterwards.
+(defun %md-string-p (x)
+  "T if X is a rank-1 character %MD-ARRAY (a complex string)."
+  (and (%md-array-p x)
+       (eq (%md-array-element-type x) 'character)
+       (= (length (%md-array-dimensions x)) 1)))
+(defparameter *%kernel-stringp* (symbol-function 'stringp))
+(defun stringp (x)
+  "T for a simple kernel string OR a complex (adjustable / displaced /
+   fill-pointer) one-dimensional character array."
+  (or (funcall *%kernel-stringp* x) (%md-string-p x)))
+(defun %typep-builtin (object type)
+  "Kernel TYPEP extended with the complex-array cases it misses: a %MD-ARRAY
+   satisfies ARRAY; a rank-1 one satisfies VECTOR / SEQUENCE and, by element
+   type, STRING / BASE-STRING or BIT-VECTOR.  It is never SIMPLE-*."
+  (or (funcall *%kernel-typep* object type)
+      (and (%md-array-p object)
+           (let ((rank1 (= (length (%md-array-dimensions object)) 1))
+                 (et    (%md-array-element-type object)))
+             (case type
+               ((array)              t)
+               ((vector sequence)    rank1)
+               ((string base-string) (and rank1 (eq et 'character)))
+               ((bit-vector)         (and rank1 (eq et 'bit)))
+               (t nil))))))
+
 ;;; Structure class objects for %cls and %obj — needed so we can check types
 ;;; WITHOUT going through our overridden TYPEP (which would cause infinite recursion,
 ;;; since DEFSTRUCT predicates call TYPEP internally).
@@ -4448,13 +4484,13 @@ SETQ/INCF/DECF is left in place (sequential)."
     ((%is-cls type)
      (and (%is-obj object)
           (not (null (member type (%cls-cpl (%obj-class object)))))))
-    ;; Symbol — check user classes first, then kernel
+    ;; Symbol — check user classes first, then kernel (+ complex-array cases)
     ((symbolp type)
      (let ((cls (gethash type *%classes*)))
        (if (%is-cls cls)
            (and (%is-obj object)
                 (not (null (member cls (%cls-cpl (%obj-class object))))))
-           (funcall *%kernel-typep* object type))))
+           (%typep-builtin object type))))
     ;; Compound type specifier — delegate to kernel
     (t (funcall *%kernel-typep* object type))))
 
@@ -4828,9 +4864,9 @@ SETQ/INCF/DECF is left in place (sequential)."
     ((%is-cls specializer)
      (and (%is-obj arg)
           (not (null (member specializer (%cls-cpl (%obj-class arg)))))))
-    ;; Built-in type symbol
+    ;; Built-in type symbol (+ complex-array cases: ARRAY/VECTOR/STRING/…)
     ((symbolp specializer)
-     (funcall *%kernel-typep* arg specializer))
+     (%typep-builtin arg specializer))
     (t nil)))
 
 (defun %all-applicable-p (specs args)
@@ -4863,7 +4899,7 @@ SETQ/INCF/DECF is left in place (sequential)."
          9999))
     ((symbolp spec)
      ;; Built-in type — use subtype relationships to rank (approx)
-     (if (funcall *%kernel-typep* arg spec) 1 9999))
+     (if (%typep-builtin arg spec) 1 9999))
     (t 9999)))
 
 (defun %spec-more-specific-p (s1 s2 arg)
@@ -8414,8 +8450,10 @@ change the count, but PREDICATE is called in that order (it may have effects)."
        (if (%is-cls cls)
            (or (and (%is-obj object)
                     (not (null (member cls (%cls-cpl (%obj-class object))))))
-               (funcall *%kernel-typep* object type))
-           (funcall *%kernel-typep* object type))))
+               (%typep-builtin object type))
+           ;; %typep-builtin = kernel typep + the complex-array (%MD-ARRAY)
+           ;; cases the kernel misses (STRING / VECTOR / ARRAY / SEQUENCE / …).
+           (%typep-builtin object type))))
     ;; Non-symbol non-CLOS type (e.g. a structure-class or kernel class object)
     ;; — delegate directly to the kernel typep which handles the class hierarchy.
     (t (funcall *%kernel-typep* object type))))
@@ -10593,6 +10631,33 @@ result array; return that array."
         (setf (row-major-aref target (+ (%md-array-displaced-offset array) index)) value)
         (%storage-set (%md-array-storage array) index value)))
   value)
+
+;; ---- Element access on complex strings ---------------------------------
+;; CHAR / (SETF CHAR) / STRING-LENGTH are kernel primitives that only accept a
+;; SIMPLE string (kernel STRING).  Now that STRINGP is true of a %MD-ARRAY
+;; character string too, teach these to follow it — index its row-major storage
+;; (ignoring the fill pointer, as AREF/CHAR must) — so every string function
+;; layered on them (SUBSEQ, string case ops, %COERCE-TO-CHARACTER, …) works on
+;; adjustable / displaced / fill-pointer strings without further changes.
+(defparameter *%kernel-char* (symbol-function 'char))
+(defun char (string index)
+  (if (%md-array-p string) (%md-rmref string index)
+      (funcall *%kernel-char* string index)))
+;; SCHAR is the simple-string accessor, but bocl accepts a complex string here
+;; too (harmless superset) so code that assumes simple strings — e.g. cl-ppcre's
+;; BMH matcher — works on an adjustable/displaced pattern string as well.
+(defparameter *%kernel-schar* (symbol-function 'schar))
+(defun schar (string index)
+  (if (%md-array-p string) (%md-rmref string index)
+      (funcall *%kernel-schar* string index)))
+(defparameter *%kernel-char-set* (symbol-function 'char-set))
+(defun char-set (string index value)
+  (if (%md-array-p string) (progn (%md-rmset string index value) value)
+      (funcall *%kernel-char-set* string index value)))
+(defparameter *%kernel-string-length* (symbol-function 'string-length))
+(defun string-length (string)
+  (if (%md-array-p string) (length string)
+      (funcall *%kernel-string-length* string)))
 
 ;; Canonical element type (T / CHARACTER / BIT) for storage selection.
 (defun %canon-element-type (element-type)
