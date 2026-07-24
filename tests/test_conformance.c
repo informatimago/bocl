@@ -228,6 +228,18 @@ static void test_setf_place_forms(void){
             e("(progn (defmacro conf-third-place (l) `(third ,l))"
               "  (let ((x (list 1 2 3))) (setf (conf-third-place x) 99) x))"));}
 
+/* ---- A closure is a FUNCTION for TYPEP and CLOS dispatch ---------------- */
+static void test_function_type(void){
+    /* A closure satisfies (TYPEP x 'FUNCTION), consistently with FUNCTIONP. */
+    TEST_EQ(eql, e("t"),
+            e("(let ((clo (let ((n 5)) (lambda (x) (+ x n)))))"
+              "  (and (functionp clo) (typep clo 'function) t))"));
+    /* A method specialised on ((x function)) applies to a closure, not just to
+       a named / built-in function. */
+    TEST_EQ(equal, e("'(fn fn)"),
+            e("(progn (defgeneric conf-fk (x) (:method ((x function)) 'fn) (:method (x) 'other))"
+              "  (list (conf-fk (let ((n 1)) (lambda () n))) (conf-fk #'car)))"));}
+
 TEST_INITIALIZE(test_conformance);
 TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("reader dotted conditionals", test_reader_dotted_conditionals)
@@ -242,4 +254,5 @@ TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("composite streams",          test_composite_streams)
     TEST_CASE("adjustable string is string", test_adjustable_string)
     TEST_CASE("setf THE / macro place",      test_setf_place_forms)
+    TEST_CASE("closure is a function",       test_function_type)
     TEST_FINALIZE()

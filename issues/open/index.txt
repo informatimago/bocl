@@ -47,20 +47,15 @@ missing-functions.issue               (residual, deferred items only)
     (live-pool-reroot-audit: DONE v1.8.58 — 72 sites classified, 3
     fresh-object returns fixed, gate green under BOCL_GCSTRESS.)
 
-typep-function-closure.issue          (bug, S — type system)
-    Kernel TYPEP says a closure is not a FUNCTION (though FUNCTIONP is T),
-    so CLOS dispatch on ((x function)) misses closures.  Blocker for
-    bug-cl-ppcre (SCAN's ((scanner function)) method).
+bug-cl-ppcre.issue                    (bug, verify & close)
+    Loading cl-ppcre.  DONE interpreted: the whole cascade is fixed — LOOP
+    `= then` + COERCE %MD-ARRAY (v1.9.3), adjustable-string type system
+    (v1.9.4), SETF of THE + macro places (v1.9.5), closure-as-FUNCTION
+    (v1.9.6).  cl-ppcre loads and SCAN / REGEX-REPLACE-ALL / ALL-MATCHES /
+    SPLIT all work.  Remaining: confirm via ql:quickload (compiled path).
 
-bug-cl-ppcre.issue                    (bug, blocked)
-    Loading cl-ppcre.  Multi-bug cascade; fixed so far: LOOP `= then` +
-    COERCE %MD-ARRAY (v1.9.3), adjustable-string type system (v1.9.4),
-    SETF of THE + macro places (v1.9.5).  cl-ppcre now LOADS fully and
-    SCAN / DO-MATCHES work; next blocker is typep-function-closure.issue
-    (the aggregating fns pass a scanner closure to SCAN).
-
-    (setf-the-place: FIXED v1.9.5 — moved to closed.
-     adjustable-string-not-string-class: FIXED v1.9.4 — moved to closed.)
+    (typep-function-closure: FIXED v1.9.6 — moved to closed.
+     setf-the-place: FIXED v1.9.5.  adjustable-string: FIXED v1.9.4.)
 
 vm-analyzer-decline-gaps.issue        (bug, M)
     3 of asdf.lisp's 586 functions decline byte-compilation: an

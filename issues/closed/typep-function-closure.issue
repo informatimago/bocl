@@ -31,3 +31,14 @@ the kernel (closure class a subclass of FUNCTION for TYPEP) or, like the
 %MD-ARRAY string fix, in %TYPEP-BUILTIN so both TYPEP and CLOS dispatch agree.
 
 Discovered 2026-07-24 unblocking bug-cl-ppcre after the SETF-place fixes.
+
+====================================================================
+RESOLUTION (v1.9.6, 2026-07-24)
+%TYPEP-BUILTIN now returns T for (FUNCTION-object, 'FUNCTION) via FUNCTIONP.
+Since both TYPEP and the CLOS applicability tests (%APPLICABLE-P,
+%SPECIALIZER-POSITION) route through %TYPEP-BUILTIN, a method specialised on
+((x function)) is now applicable to a closure, consistently with FUNCTIONP.
+Covered by "closure is a function" in tests/test_conformance.c; suite green.
+
+This was the last blocker for bug-cl-ppcre: with it, cl-ppcre LOADS and its
+functions (SCAN, REGEX-REPLACE-ALL, ALL-MATCHES-AS-STRINGS, SPLIT, …) all work.
