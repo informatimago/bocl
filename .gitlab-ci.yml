@@ -246,7 +246,8 @@ build:macos:
 
 # ----------------------------------------------------------------------
 # Collect every environment's tarball, write a combined SHA256SUMS, and on a
-# v* tag upload the set to the generic Package Registry and cut a Release.
+# release-M.m.d tag upload the set to the generic Package Registry and cut a
+# Release.
 # ----------------------------------------------------------------------
 collect:
   extends: .docker
@@ -305,9 +306,9 @@ collect:
              --header "JOB-TOKEN: $CI_JOB_TOKEN" \
              "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases/$CI_COMMIT_TAG" >/dev/null 2>&1 || true
         release-cli create \
-          --name "bocl $CI_COMMIT_TAG" \
+          --name "bocl ${CI_COMMIT_TAG#release-}" \
           --tag-name "$CI_COMMIT_TAG" \
-          --description "Automated binary release of bocl ${CI_COMMIT_TAG}. SHA256SUMS in the collect job artifacts." \
+          --description "Automated binary release of bocl ${CI_COMMIT_TAG#release-}. SHA256SUMS in the collect job artifacts." \
           --assets-link "$assets"
       fi
   artifacts:
@@ -316,5 +317,5 @@ collect:
       - release/
     expire_in: 30 days
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^v/'
+    - if: '$CI_COMMIT_TAG =~ /^release-[0-9]/'
     - when: always

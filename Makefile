@@ -7,7 +7,8 @@ all:       		 documents build test
 documents: 		 specifications design documentation
 .PHONY:    		 documents bocl clean clean-backups regenerate                  \
 		 test tests specifications design documentation modules          \
-		 install install-strip uninstall info dist check-lib
+		 install install-strip uninstall info dist check-lib             \
+		 check-versions
 
 specifications:  ; @cd specifications && $(MAKE) $(MFLAGS) $(DOCTARGET)
 design:          ; @cd design         && $(MAKE) $(MFLAGS) $(DOCTARGET)
@@ -33,6 +34,11 @@ clean:
 regenerate:
 	@printf "# Regenerating generated C sources via host CL\n"
 	$(MAKE) -C sources $(MFLAGS) regenerate
+
+# Audit the release tags / version-* pointers against the shared version
+# rules (see AGENTS.md). Run `git fetch --prune --tags` first.
+check-versions:
+	sh scripts/check-versions.sh
 
 # Remove the *.~N~ Emacs backup files cluttering the tree. They are gitignored
 # by the `*~` pattern in .gitignore, but having hundreds of them in the working

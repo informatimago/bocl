@@ -19,9 +19,15 @@ bumps (e.g. ansi-test passing, first self-host).
 
 ### Release procedure
 
-**Rule**: before tagging a release `vM.m.d` and branching
-`release-M.m.d`, refresh the status documents so the release snapshot
-is self-describing:
+Release marks, pointers and branches follow the shared rules — see
+[AGENTS.md](AGENTS.md) § /Versions and releases/ and
+[version-rules.md](https://gitlab.com/informatimago/rules/-/blob/master/version-rules.md).
+In short: a release is the **annotated tag** `release-M.m.d`, the
+moving user-facing reference is the pointer branch `version-M.m`, and
+commits land only on `master`, `maint-M.m` or `dev-M.m`.
+
+**Rule**: before tagging a release `release-M.m.d`, refresh the status
+documents so the release snapshot is self-describing:
 
 1. Update [CL-STATUS.md](CL-STATUS.md) — re-survey the CL-symbol
    coverage table, fold in everything landed since the previous
