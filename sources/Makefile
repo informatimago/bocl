@@ -211,7 +211,8 @@ DOC_PDF = $(wildcard ../documentation/documentation.pdf \
 # such a directory via the root `modules` target before install.
 MODULE_MANIFESTS = $(wildcard ../modules/*/module.manifest)
 
-.PHONY: install install-strip uninstall dist pkgconfig info
+.PHONY: install install-programs install-libraries install-documentation \
+        install-strip strip-installed uninstall dist pkgconfig info
 
 # (Re)build the Texinfo info manual.  Needs makeinfo (texinfo); best-effort.
 info: $(INFO_FILE)
@@ -234,21 +235,30 @@ bocl.pc:
 	  printf 'Cflags: -I$${includedir}\n';                  \
 	} > $@
 
-install: build fasls bocl.pc
-	@ printf "# Installing bocl %s into %s\n" "$(VERSION)" "$(DESTDIR)$(PREFIX)"
-	$(VERBOSE) $(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(libdir) \
-	    $(DESTDIR)$(boclincdir) $(DESTDIR)$(bocllibexecdir) $(DESTDIR)$(pkgconfdir) \
-	    $(DESTDIR)$(man1dir) $(DESTDIR)$(infodir) $(DESTDIR)$(docdir)
+# Split by artefact kind (build-rules.md § 1): the root Makefile stages
+# each phase separately, so a host that lacks one toolchain — or a CI job
+# that only exercises the programs — can install just what it needs.
+#
+# These targets are pure copies: they must not compile. The root
+# `stage-*' targets run the build first (build-rules.md B2), which is
+# what keeps `sudo make install' from ever compiling as root.
+#
+# NOTE: $(PREFIX) is compiled into the deliverables — BOCL_PRELUDE_PATH
+# in the executable, -install_name in the shared library, prefix= in
+# bocl.pc — so a staged tree is bound to the PREFIX it was built for.
+# DESTDIR moves where it is written, never where it will live.
+
+install: install-programs install-libraries install-documentation
+
+# bin/bocl plus everything the executable needs at run time: the system
+# Lisp files it loads while booting (the prelude and its siblings) and
+# the installed modules. Without libexec/bocl/ the binary cannot start,
+# so these travel with the program, not with the library.
+install-programs:
+	@ printf "# Installing bocl %s programs into %s\n" "$(VERSION)" "$(DESTDIR)$(PREFIX)"
+	$(VERBOSE) $(INSTALL) -d $(DESTDIR)$(bindir) $(DESTDIR)$(bocllibexecdir)
 	@ printf "#   bin/bocl\n"
 	$(VERBOSE) $(INSTALL) -m 755 bocl $(DESTDIR)$(bindir)/bocl
-	@ printf "#   lib/libbocl.{a,$(SO)} + soname links\n"
-	$(VERBOSE) $(INSTALL) -m 644 libbocl.a $(DESTDIR)$(libdir)/libbocl.a
-	-$(VERBOSE) $(RANLIB) $(DESTDIR)$(libdir)/libbocl.a >/dev/null 2>&1 || true
-	$(VERBOSE) $(INSTALL) -m 755 $(SHLIB) $(DESTDIR)$(libdir)/$(SHLIB)
-	$(VERBOSE) cd $(DESTDIR)$(libdir) && $(LN_S) $(SHLIB) $(SHLIB_MAJOR) && $(LN_S) $(SHLIB) $(SHLIB_LINK)
-	@ printf "#   include/bocl/*.h\n"
-	$(VERBOSE) for h in $(INSTALL_HEADERS) ; do \
-	    $(INSTALL) -m 644 $$h $(DESTDIR)$(boclincdir)/$$h ; done
 	@ printf "#   libexec/bocl/ system Lisp files (+ .cfasl images)\n"
 	$(VERBOSE) for f in $(SYSTEM_LISP) ; do \
 	    $(INSTALL) -m 644 $$f $(DESTDIR)$(bocllibexecdir)/ ; \
@@ -267,20 +277,45 @@ install: build fasls bocl.pc
 	@ printf "#   (touch every installed .cfasl so it is newer than its source:\n"
 	@ printf "#    a type-less LOAD then prefers the byte-compiled image)\n"
 	-$(VERBOSE) find $(DESTDIR)$(bocllibexecdir) -name '*.cfasl' -exec touch {} + 2>/dev/null || true
-	@ printf "#   share/man/man1/bocl.1\n"
-	$(VERBOSE) $(INSTALL) -m 644 $(MAN_PAGE) $(DESTDIR)$(man1dir)/bocl.1
-	@ printf "#   share/info/bocl.info\n"
-	-$(VERBOSE) $(MAKE) $(MFLAGS) $(INFO_FILE) >/dev/null 2>&1 || true
-	-$(VERBOSE) test -f $(INFO_FILE) && $(INSTALL) -m 644 $(INFO_FILE) $(DESTDIR)$(infodir)/bocl.info || \
-	    printf "#   (skipped bocl.info: makeinfo unavailable)\n"
-	@ printf "#   share/doc/bocl/ (org + pdf)\n"
-	$(VERBOSE) for d in $(DOC_ORG) $(DOC_PDF) ; do \
-	    $(INSTALL) -m 644 $$d $(DESTDIR)$(docdir)/ ; done
+
+# libbocl.{a,$(SO)} + soname links, the public headers, and the pkg-config
+# file: everything a C program needs to link against bocl.
+install-libraries: bocl.pc
+	@ printf "# Installing bocl %s libraries into %s\n" "$(VERSION)" "$(DESTDIR)$(PREFIX)"
+	$(VERBOSE) $(INSTALL) -d $(DESTDIR)$(libdir) $(DESTDIR)$(boclincdir) $(DESTDIR)$(pkgconfdir)
+	@ printf "#   lib/libbocl.{a,$(SO)} + soname links\n"
+	$(VERBOSE) $(INSTALL) -m 644 libbocl.a $(DESTDIR)$(libdir)/libbocl.a
+	-$(VERBOSE) $(RANLIB) $(DESTDIR)$(libdir)/libbocl.a >/dev/null 2>&1 || true
+	$(VERBOSE) $(INSTALL) -m 755 $(SHLIB) $(DESTDIR)$(libdir)/$(SHLIB)
+	$(VERBOSE) cd $(DESTDIR)$(libdir) && $(LN_S) $(SHLIB) $(SHLIB_MAJOR) && $(LN_S) $(SHLIB) $(SHLIB_LINK)
+	@ printf "#   include/bocl/*.h\n"
+	$(VERBOSE) for h in $(INSTALL_HEADERS) ; do \
+	    $(INSTALL) -m 644 $$h $(DESTDIR)$(boclincdir)/$$h ; done
 	@ printf "#   lib/pkgconfig/bocl.pc\n"
 	$(VERBOSE) $(INSTALL) -m 644 bocl.pc $(DESTDIR)$(pkgconfdir)/bocl.pc
 
-# Same as install but strip the executable and shared library.
-install-strip: install
+# man page, Info manual, and the .org/.pdf documents.
+install-documentation:
+	@ printf "# Installing bocl %s documentation into %s\n" "$(VERSION)" "$(DESTDIR)$(PREFIX)"
+	$(VERBOSE) $(INSTALL) -d $(DESTDIR)$(man1dir) $(DESTDIR)$(infodir) $(DESTDIR)$(docdir)
+	@ printf "#   share/man/man1/bocl.1\n"
+	$(VERBOSE) $(INSTALL) -m 644 $(MAN_PAGE) $(DESTDIR)$(man1dir)/bocl.1
+	@ printf "#   share/info/bocl.info\n"
+	-$(VERBOSE) test -f $(INFO_FILE) && $(INSTALL) -m 644 $(INFO_FILE) $(DESTDIR)$(infodir)/bocl.info || \
+	    printf "#   (skipped bocl.info: not built — run `make info')\n"
+	@ printf "#   share/doc/bocl/ (org + pdf)\n"
+	$(VERBOSE) for d in $(DOC_ORG) $(DOC_PDF) ; do \
+	    $(INSTALL) -m 644 $$d $(DESTDIR)$(docdir)/ ; done
+
+# Same as install but strip the executable and shared library. Kept for
+# `dist', which stages an install of its own; the root Makefile's
+# install-strip installs from the staged trees and then calls
+# strip-installed here.
+install-strip: install strip-installed
+
+# Strip what is already installed under $(DESTDIR)$(PREFIX). No build, no
+# copy — safe to call after the root Makefile's pure-copy install.
+strip-installed:
 	-$(VERBOSE) $(STRIP) $(DESTDIR)$(bindir)/bocl
 	-$(VERBOSE) $(STRIP) -x $(DESTDIR)$(libdir)/$(SHLIB)
 
@@ -288,7 +323,11 @@ uninstall:
 	@ printf "# Uninstalling bocl from %s\n" "$(DESTDIR)$(PREFIX)"
 	-$(VERBOSE) rm -f $(DESTDIR)$(bindir)/bocl
 	-$(VERBOSE) rm -f $(DESTDIR)$(libdir)/libbocl.a
-	-$(VERBOSE) rm -f $(DESTDIR)$(libdir)/$(SHLIB) $(DESTDIR)$(libdir)/$(SHLIB_MAJOR) $(DESTDIR)$(libdir)/$(SHLIB_LINK)
+	@ # Glob, not $(SHLIB): those names carry the CURRENT version, so after a
+	@ # version bump the previously installed libbocl.<old>.dylib would be
+	@ # orphaned (build-rules.md B9). Everything named libbocl.* is ours.
+	-$(VERBOSE) rm -f $(DESTDIR)$(libdir)/libbocl*.dylib \
+	                  $(DESTDIR)$(libdir)/libbocl.so*
 	-$(VERBOSE) rm -f $(DESTDIR)$(pkgconfdir)/bocl.pc
 	-$(VERBOSE) rm -f $(DESTDIR)$(man1dir)/bocl.1
 	-$(VERBOSE) rm -f $(DESTDIR)$(infodir)/bocl.info
@@ -323,7 +362,10 @@ DIST_EXT  = tar.gz
 DIST_PIPE = gzip -9 -c >
 endif
 
-dist: build bocl.pc
+# `fasls' is explicit here: install no longer builds anything (it is the
+# staging targets that do), so the .cfasl images the tarball ships must
+# be made before install-strip stages them.
+dist: build fasls bocl.pc
 	@ printf "# Packaging %s.%s\n" "$(DIST_NAME)" "$(DIST_EXT)"
 	-$(VERBOSE) rm -rf $(DISTSTAGE)
 	$(VERBOSE) $(MAKE) $(MFLAGS) install-strip DESTDIR=$(CURDIR)/$(DISTSTAGE) PREFIX=/$(DIST_NAME)

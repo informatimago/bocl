@@ -68,3 +68,6 @@ tests/test_clos
 # generated module build artifacts
 modules/asdf/
 modules/asdf-src/build/
+
+# staging area for `make stage` / `make install` (build-rules.md)
+/stage/

@@ -69,6 +69,37 @@ Refresh, in the same commit the tag will point at:
 5. post-release bump of `BOCL_VERSION_PATCH` on master, so no untagged
    commit claims a released version.
 
+## Build, install and release
+
+The Makefile follows the shared
+[`build-rules.md`](https://gitlab.com/informatimago/rules/-/blob/master/build-rules.md):
+three phases — `programs` (bin/bocl plus the `libexec/bocl/` system Lisp
+files and modules it boots from), `libraries` (`libbocl.{a,dylib,so}` +
+soname links, `include/bocl/`, `bocl.pc`), `documentation` (man page,
+Info manual, org/pdf) — crossed with `build-`, `stage-`, `install-`.
+
+`make install` **never compiles**: it copies the staged trees. `sudo
+make install` re-runs the staging half as `$SUDO_USER`, so no compiler
+ever runs as root — this repository had nine root-owned files
+(`sources/bocl.pc`, the bootstrap `.cfasl`s) from before that split.
+
+**`$PREFIX` is compiled in**, unlike most projects: `BOCL_PRELUDE_PATH`
+in the executable, `-install_name` in the shared library, `prefix=` in
+`bocl.pc`. A staged tree is therefore bound to the PREFIX it was built
+for and holds the full prefix path
+(`stage/programs$PREFIX/bin/bocl`); `DESTDIR` only moves where it is
+written. **Changing `PREFIX` means re-staging** — `make clean-stage`
+first.
+
+`sources/Makefile` owns the FHS layout and the three `install-<phase>`
+targets, which are pure copies; the root Makefile owns the build/stage
+half. `make dist` and `make check-lib` keep their own DESTDIR staging
+(they package and link-test a `/usr`-rooted tree) and are unaffected.
+
+Every staged tree carries `share/doc/bocl/manifest-<phase>.txt` naming
+the commit it was built from (`scripts/make-manifest.sh`, vendored from
+the rules repository; `scripts/manifest-versions.sh` is the local hook).
+
 **Verification.** `make check-versions` audits the repository against
 the invariants; run `git fetch --prune --tags` first. It is expected to
 pass on master at all times. `scripts/check-versions.sh` is a vendored
