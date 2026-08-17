@@ -224,6 +224,10 @@ build:freebsd:
 build:macos:
   extends: .macos
   stage: build
+  # Byte-compiling prelude.cfasl on thalassa runs ~40-60 min, right at the 1 h
+  # default — so the job intermittently died at ~59 min (no_updates_running).
+  # 2 h gives cfasl ample headroom.
+  timeout: 2h
   variables:
     # macOS base ships gzip but not zstd; gzip keeps packaging dependency-free.
     # collect gathers this job's dist/ via an OPTIONAL need (see `collect`), so
