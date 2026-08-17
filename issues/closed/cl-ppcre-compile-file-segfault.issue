@@ -1,0 +1,67 @@
+compile-file of cl-ppcre/lexer.lisp SEGFAULTS (the compiled load path)
+=====================================================================
+
+STATUS
+------
+INTERPRETED cl-ppcre now works completely (bug-cl-ppcre cascade fixed through
+v1.9.6): loading the sources with LOAD and calling SCAN / REGEX-REPLACE-ALL /
+ALL-MATCHES-AS-STRINGS / SPLIT all give correct results.  But the ORIGINAL
+ticket's path — (ql:quickload :cl-ppcre), which COMPILE-FILEs each source —
+SIGSEGVs.
+
+REPRO
+-----
+    (dolist (f '("packages" "specials" "util" "errors" "charset" "charmap"
+                 "chartest" "lexer" ...))
+      (compile-file <cl-ppcre>/f.lisp :output-file ...) (load ...))
+crashes (exit 139) while COMPILING lexer.lisp.  packages…chartest compile+load
+fine; lexer is the first to crash.
+
+NARROWING SO FAR
+----------------
+* Interpreted LOAD of lexer.lisp: OK.
+* (compile nil `(lambda () ,form)) for each top-level form of lexer.lisp: does
+  NOT segfault.
+So the crash is specific to COMPILE-FILE (the VM compiler + cfasl writer path,
+or a GC during the larger compile-file operation), not to plain COMPILE or to
+interpretation.  Next step: run under gdb (BOCL_GCSTRESS / a debug build) to
+catch the faulting form/frame in COMPILE-FILE on lexer.lisp; suspect the cfasl
+externaliser or a rooting gap on the compile-file path.
+
+This is the remaining blocker for bug-cl-ppcre's compiled (quicklisp) path;
+the interpreter side is done.  Discovered 2026-07-24.
+
+====================================================================
+RESOLUTION (v1.9.8, 2026-08-17)
+
+Root cause: byte-compiling a function with a many-way CASE / OR (a deep
+OR-of-EQL -> nested-IF; e.g. lexer.lisp UNESCAPE-CHAR's 10-key octal clause)
+makes the INTERPRETED bootstrap analyzer recurse ~linearly in the clause count
+with a large per-clause constant (~700 KiB/clause under the tree-walker), so a
+~10-way clause exceeds the control stack.  The stack-overflow guard (eval.c)
+DID fire, but its reserved margin (512 KiB) was too small: signalling the
+condition — building BOCL:OUT-OF-STACK-MEMORY-ERROR via MAKE-INSTANCE and
+running SIGNAL-CONDITION to reach %VM-COMPILE-FILE-FORM's SERIOUS-CONDITION
+handler — needs more room than that, so it overran the C stack and SEGV'd
+instead of unwinding.  (%VM-COMPILE-FILE-FORM already declines on
+SERIOUS-CONDITION; the recovery just never got there.)
+
+Fix: reserve at least a 2 MiB guard margin (sources/eval.c eval_init_stack_guard).
+Now an over-deep byte-compile signals cleanly and the function is left
+interpreted (a :DECLINED report), the file keeps compiling, and the process
+never crashes.  Verified: `make prelude-image` builds at the default 8 MiB
+stack; every cl-ppcre file COMPILE-FILEs; a compiled cl-ppcre gives correct
+SCAN / REGEX-REPLACE-ALL / SPLIT / ALL-MATCHES results.  Regression test
+"compile-file deep form" in tests/test_conformance.c; full CUnit suite green.
+
+Trade-off / follow-up: the larger margin lowers the usable control stack by
+~1.5 MiB, so the INTERPRETED bootstrap compiler declines a few extra very-deep
+functions (9+-way cases) to interpreted in the cfasl (correct, marginally
+slower boot); the byte-compiled compiler used at run time has ample headroom
+for them.  Reducing the tree-walker's per-frame stack (or a cheaper
+overflow-recovery path that keeps the margin small) would let those compile —
+left as a perf follow-up, not a correctness issue.
+
+NOTE: (ql:quickload :cl-ppcre) now gets past compilation but fails earlier, at
+quicklisp's own setup.lisp (the QL package is not created) — an unrelated
+quicklisp-loader issue, filed as quicklisp-setup-no-ql-package.issue.

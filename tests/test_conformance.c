@@ -240,6 +240,22 @@ static void test_function_type(void){
             e("(progn (defgeneric conf-fk (x) (:method ((x function)) 'fn) (:method (x) 'other))"
               "  (list (conf-fk (let ((n 1)) (lambda () n))) (conf-fk #'car)))"));}
 
+/* ---- COMPILE-FILE of a deeply-nested form must not crash ---------------- */
+static void test_compile_deep_form_no_crash(void){
+    /* A function with a many-way CASE (which the compiler sees as a deep
+       OR-of-EQL / nested-IF) used to exhaust the C control stack while being
+       byte-compiled and SEGFAULT the process (the stack-overflow guard fired
+       with too small a margin to recover).  It must now COMPILE-FILE cleanly —
+       compiling the form, or the guard declining it to interpreted — never
+       crashing.  Returning "ok" proves the process survived. */
+    TEST_EQ(equal, e("\"ok\""),
+            e("(let ((tmp \"/tmp/bocl-deep-case.lisp\"))"
+              "  (with-open-file (s tmp :direction :output :if-exists :supersede)"
+              "    (prin1 '(defun bocl-deep-case (x)"
+              "              (case x ((0 1 2 3 4 5 6 7 8 9 10 11 12 13 14) :hit) (t x))) s))"
+              "  (compile-file tmp :output-file \"/tmp/bocl-deep-case.cfasl\")"
+              "  \"ok\")"));}
+
 TEST_INITIALIZE(test_conformance);
 TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("reader dotted conditionals", test_reader_dotted_conditionals)
@@ -255,4 +271,5 @@ TEST_SUITE(test_conformance, conf_init, conf_fini)
     TEST_CASE("adjustable string is string", test_adjustable_string)
     TEST_CASE("setf THE / macro place",      test_setf_place_forms)
     TEST_CASE("closure is a function",       test_function_type)
+    TEST_CASE("compile-file deep form",      test_compile_deep_form_no_crash)
     TEST_FINALIZE()

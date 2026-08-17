@@ -47,18 +47,21 @@ missing-functions.issue               (residual, deferred items only)
     (live-pool-reroot-audit: DONE v1.8.58 — 72 sites classified, 3
     fresh-object returns fixed, gate green under BOCL_GCSTRESS.)
 
-cl-ppcre-compile-file-segfault.issue  (bug, L — compiler)
-    compile-file of cl-ppcre/lexer.lisp SIGSEGVs (interpreted load + plain
-    COMPILE are fine).  Blocks bug-cl-ppcre's quicklisp (compiled) path.
-    Needs gdb; suspect the cfasl externaliser / a compile-file rooting gap.
+quicklisp-setup-no-ql-package.issue   (bug, M — quicklisp loader)
+    quicklisp setup.lisp loads but the QL package is never created, so
+    (ql:quickload …) can't run.  Independent of the compile-file crash.
+    Remaining blocker for bug-cl-ppcre's quicklisp path.
 
-bug-cl-ppcre.issue                    (bug, interpreter DONE)
-    INTERPRETER SIDE DONE — the whole cascade is fixed (LOOP `= then` +
-    COERCE %MD-ARRAY v1.9.3, adjustable-string type system v1.9.4, SETF of
-    THE + macro places v1.9.5, closure-as-FUNCTION v1.9.6).  cl-ppcre loads
-    with LOAD and SCAN/REGEX-REPLACE-ALL/ALL-MATCHES/SPLIT all work.
-    Remaining: the ql:quickload (compiled) path segfaults — see
-    cl-ppcre-compile-file-segfault.issue.
+bug-cl-ppcre.issue                    (bug, cl-ppcre works; ql path only)
+    cl-ppcre WORKS both interpreted and COMPILED — the whole cascade is
+    fixed (LOOP `= then` + COERCE %MD-ARRAY v1.9.3, adjustable-string type
+    system v1.9.4, SETF of THE + macro places v1.9.5, closure-as-FUNCTION
+    v1.9.6, compile-file deep-form crash v1.9.8).  Compiling + loading the
+    cl-ppcre files directly gives correct SCAN/REGEX-REPLACE-ALL/SPLIT/
+    ALL-MATCHES.  Only the (ql:quickload …) entry point remains, blocked by
+    quicklisp-setup-no-ql-package.issue.
+
+    (cl-ppcre-compile-file-segfault: FIXED v1.9.8 — moved to closed.)
 
     (typep-function-closure: FIXED v1.9.6 — moved to closed.
      setf-the-place: FIXED v1.9.5.  adjustable-string: FIXED v1.9.4.)

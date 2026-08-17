@@ -302,3 +302,15 @@ ALL-MATCHES-AS-STRINGS / SPLIT all give correct results.
 REMAINING: the original (ql:quickload …) path COMPILE-FILEs the sources and
 SIGSEGVs while compiling lexer.lisp — a separate compiler/cfasl bug, filed as
 cl-ppcre-compile-file-segfault.issue.  Keep this open until that is fixed.
+
+--------------------------------------------------------------------
+UPDATE (v1.9.8, 2026-08-17) — cl-ppcre WORKS COMPILED
+The compile-file stack-overflow (cl-ppcre-compile-file-segfault) is fixed: the
+stack-overflow guard now reserves enough margin to recover, so an over-deep
+byte-compile declines to interpreted instead of segfaulting.  `make
+prelude-image` builds at the default 8 MiB stack; every cl-ppcre file
+COMPILE-FILEs; a compiled cl-ppcre gives correct SCAN / REGEX-REPLACE-ALL /
+SPLIT / ALL-MATCHES.  cl-ppcre is thus fully working both interpreted and
+compiled.  The only thing left is the (ql:quickload …) front door, which now
+fails in quicklisp's own setup.lisp (QL package not created) — filed
+separately as quicklisp-setup-no-ql-package.issue.

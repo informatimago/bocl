@@ -1,0 +1,22 @@
+quicklisp setup.lisp loads but does not create the QL package
+=============================================================
+
+    (load "~/quicklisp/setup.lisp")            ; returns, no error signalled
+    (find-symbol "QUICKLOAD" "QL")             ; => ERROR: no such package "QL"
+
+Loading quicklisp's setup.lisp under the compiled prelude completes without
+signalling an ERROR, yet the QUICKLISP-CLIENT package and its QL nickname are
+never established, so (ql:quickload …) cannot run.
+
+This blocks the *quicklisp* path of bug-cl-ppcre, but is INDEPENDENT of the
+compile-file stack-overflow (cl-ppcre-compile-file-segfault, fixed v1.9.8):
+cl-ppcre itself now COMPILE-FILEs and runs correctly when its files are
+compiled + loaded directly.  So the remaining work is purely in how quicklisp's
+setup.lisp bootstraps under bocl.
+
+Earlier in the session (before the versioning/build changes on master and the
+guard fix) an in-session quicklisp run got PAST setup — it reached cl-ppcre
+compilation — so this is a newer divergence; bisect setup.lisp / quicklisp.lisp
+loading under the current prelude (suspect a silently-swallowed condition or an
+ASDF/quicklisp-version incompatibility) to find where QUICKLISP-CLIENT's
+DEFPACKAGE / nickname is lost.  Discovered 2026-08-17.

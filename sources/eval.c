@@ -445,10 +445,16 @@ void eval_init_stack_guard(char* approx_base){
        && rl.rlim_cur!=RLIM_INFINITY && rl.rlim_cur>0){
         total = (size_t)rl.rlim_cur;}
     /* Reserve a generous margin so signalling the condition and running the
-       handler / REPL recovery have room. */
+       handler / recovery have room.  The recovery is not free: the guard fires
+       deep in EVALE, then (interpreted, during a source-boot compile) builds
+       BOCL:OUT-OF-STACK-MEMORY-ERROR via MAKE-INSTANCE and runs SIGNAL-CONDITION
+       to reach the nearest SERIOUS-CONDITION handler (e.g. %VM-COMPILE-FILE-FORM,
+       which then declines the over-deep function to interpreted).  A 512 KiB
+       margin is not enough for that path — it overflowed the C stack instead of
+       unwinding — so reserve at least 2 MiB. */
     size_t margin = total/8;
-    if(margin < 512u*1024){ margin = 512u*1024; }
-    if(margin >= total)   { margin = total/2; }
+    if(margin < 2u*1024*1024){ margin = 2u*1024*1024; }
+    if(margin >= total)      { margin = total/2; }
     g_stack_limit = total - margin;}
 
 /* The guard's limit (bytes) and the current control-stack usage, for filling the
